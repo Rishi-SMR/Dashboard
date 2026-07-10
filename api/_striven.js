@@ -28,11 +28,56 @@ function loadEnv() {
 }
 loadEnv();
 
-const CLIENT_ID = process.env.STRIVEN_CLIENT_ID || '';
-const CLIENT_SECRET = process.env.STRIVEN_CLIENT_SECRET || '';
 const MASK_PHI = (process.env.MASK_PHI ?? 'true') !== 'false';
-export const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD || '';
-export const SESSION_TOKEN = ACCESS_PASSWORD ? crypto.createHash('sha256').update(`${ACCESS_PASSWORD}::smr-session`).digest('hex') : '';
+
+// ---- credential resolution (env → Supabase Vault) -----------------------
+// Creds resolve lazily & are cached. Priority:
+//   1. Environment variables (local striven-server/.env, or Vercel env vars).
+//   2. Supabase Vault — read over the Postgres connection the Vercel↔Supabase
+//      integration injects as POSTGRES_URL. So you can keep secrets in Supabase
+//      and Vercel just reads them; no per-secret env vars needed on Vercel.
+let _cfg = null;
+async function readVault(names) {
+  const conn = process.env.POSTGRES_URL || process.env.POSTGRES_URL_NON_POOLING
+    || process.env.DATABASE_URL || process.env.SUPABASE_DB_URL || process.env.POSTGRES_PRISMA_URL;
+  if (!conn) return {};
+  const { default: pg } = await import('pg');
+  const client = new pg.Client({ connectionString: conn, ssl: { rejectUnauthorized: false } });
+  await client.connect();
+  try {
+    const { rows } = await client.query(
+      'select name, decrypted_secret from vault.decrypted_secrets where name = any($1::text[])',
+      [names],
+    );
+    const out = {};
+    for (const r of rows) out[r.name] = r.decrypted_secret;
+    return out;
+  } finally { await client.end().catch(() => {}); }
+}
+async function getConfig() {
+  if (_cfg) return _cfg;
+  _cfg = (async () => {
+    let clientId = process.env.STRIVEN_CLIENT_ID || '';
+    let clientSecret = process.env.STRIVEN_CLIENT_SECRET || '';
+    let accessPw = process.env.ACCESS_PASSWORD || '';
+    if (!clientId || !clientSecret) {
+      try {
+        const v = await readVault(['STRIVEN_CLIENT_ID', 'STRIVEN_CLIENT_SECRET', 'ACCESS_PASSWORD']);
+        clientId = clientId || v.STRIVEN_CLIENT_ID || '';
+        clientSecret = clientSecret || v.STRIVEN_CLIENT_SECRET || '';
+        accessPw = accessPw || v.ACCESS_PASSWORD || '';
+      } catch (e) { console.error('[config] Supabase Vault read failed:', e.message); }
+    }
+    const sessionToken = accessPw ? crypto.createHash('sha256').update(`${accessPw}::smr-session`).digest('hex') : '';
+    return { clientId, clientSecret, accessPw, sessionToken };
+  })();
+  return _cfg;
+}
+// Auth info for the request handlers (may come from Vault → hence async).
+export async function getAuth() {
+  const { accessPw, sessionToken } = await getConfig();
+  return { ACCESS_PASSWORD: accessPw, SESSION_TOKEN: sessionToken };
+}
 
 const BASE = 'https://api.striven.com';
 // Striven sits behind Cloudflare, which returns "Error 1010 / Access denied" to
@@ -44,8 +89,9 @@ let tokenCache = { token: null, expiresAt: 0 };
 async function getToken(force = false) {
   const now = Date.now();
   if (!force && tokenCache.token && now < tokenCache.expiresAt) return tokenCache.token;
-  if (!CLIENT_ID || !CLIENT_SECRET) throw new Error('Striven credentials not configured (set STRIVEN_CLIENT_ID / STRIVEN_CLIENT_SECRET).');
-  const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: CLIENT_ID, client_secret: CLIENT_SECRET });
+  const { clientId, clientSecret } = await getConfig();
+  if (!clientId || !clientSecret) throw new Error('Striven credentials not configured (env vars or Supabase Vault).');
+  const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret });
   const res = await fetch(`${BASE}/accesstoken`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA, Accept: 'application/json' },
@@ -158,7 +204,8 @@ const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(r
 
 // ---- endpoints ----------------------------------------------------------
 async function getStatus() {
-  if (!CLIENT_ID || !CLIENT_SECRET) return { connected: false, company: null, reason: 'not_configured' };
+  const { clientId, clientSecret } = await getConfig();
+  if (!clientId || !clientSecret) return { connected: false, company: null, reason: 'not_configured' };
   const profile = await companyProfile();
   return { connected: true, company: profile.companyName ?? null, subdomain: profile.subdomain ?? null, currency: null, phiMasked: MASK_PHI };
 }
@@ -328,7 +375,7 @@ async function getProjects() {
 
 // ---- route tables (shared) ----------------------------------------------
 export const ROUTES = {
-  '/api/health': async () => ({ ok: true, configured: Boolean(CLIENT_ID && CLIENT_SECRET), phiMasked: MASK_PHI }),
+  '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
   '/api/status': getStatus,
   '/api/ar': getAR,
   '/api/ap': getAP,

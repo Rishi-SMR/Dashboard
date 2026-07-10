@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, ACCESS_PASSWORD, SESSION_TOKEN } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth } from '../api/_striven.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -19,6 +19,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const pathname = new URL(req.url, `http://localhost:${PORT}`).pathname;
+  const { ACCESS_PASSWORD, SESSION_TOKEN } = await getAuth();
 
   if (ACCESS_PASSWORD) {
     if (pathname === '/api/login' && req.method === 'POST') {

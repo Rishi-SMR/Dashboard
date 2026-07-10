@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, ACCESS_PASSWORD, SESSION_TOKEN } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth } from './_striven.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -11,6 +11,7 @@ const cookieVal = (header, name) => {
 
 export default async function handler(req, res) {
   const pathname = new URL(req.url, 'http://localhost').pathname; // e.g. /api/ar
+  const { ACCESS_PASSWORD, SESSION_TOKEN } = await getAuth();
 
   // ---- access gate (only when ACCESS_PASSWORD is configured) ----
   if (ACCESS_PASSWORD) {
