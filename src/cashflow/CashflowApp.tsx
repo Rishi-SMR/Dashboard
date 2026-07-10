@@ -18,18 +18,19 @@ const LazyLoading = () => <div className="section" style={{ padding: 18, color: 
 export type ViewKey = 'overview' | 'receivables' | 'payables' | 'orders' | 'patients' | 'vendors' | 'catalog' | 'operations' | 'accounts';
 
 export default function App() {
-  // null = checking, true = allowed, false = needs password (gate is enabled
-  // server-side only when ACCESS_PASSWORD is set; local dev is un-gated).
+  // null = checking, true = allowed, false = needs login (gate enabled server-side).
   const [authed, setAuthed] = useState<boolean | null>(null);
   useEffect(() => {
     fetch('/api/status').then((r) => setAuthed(r.status !== 401)).catch(() => setAuthed(true));
   }, []);
+  const signOut = () => { fetch('/api/logout', { method: 'POST' }).catch(() => {}).finally(() => window.location.reload()); };
   if (authed === null) return null;
-  if (!authed) return <PasswordGate onOk={() => setAuthed(true)} />;
-  return <Dashboard onSignOut={() => window.location.reload()} />;
+  if (!authed) return <LoginScreen onOk={() => setAuthed(true)} />;
+  return <Dashboard onSignOut={signOut} />;
 }
 
-function PasswordGate({ onOk }: { onOk: () => void }) {
+function LoginScreen({ onOk }: { onOk: () => void }) {
+  const [username, setUsername] = useState('');
   const [pw, setPw] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -37,25 +38,31 @@ function PasswordGate({ onOk }: { onOk: () => void }) {
     e.preventDefault();
     setBusy(true); setErr(null);
     try {
-      const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) });
-      if (r.ok) onOk(); else setErr('Incorrect password');
+      const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password: pw }) });
+      if (r.ok) onOk(); else setErr('Invalid username or password');
     } catch { setErr('Could not reach the server'); }
     finally { setBusy(false); }
   }
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f7f8fa', padding: 20 }}>
-      <form onSubmit={submit} className="section" style={{ width: 'min(380px,100%)', padding: 28, textAlign: 'center' }}>
-        <div className="brand-logo" style={{ width: 48, height: 48, margin: '0 auto 14px', background: '#fff', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <img src="/SMR%20Logo.png" alt="SMR" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+    <div className="login-screen">
+      <div className="login-shine" />
+      <form className="login-card" onSubmit={submit}>
+        <div className="login-logo"><img src="/SMR%20Logo.png" alt="SMR" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /></div>
+        <div className="login-title">Sports Med Recovery</div>
+        <div className="login-sub">Sign in to your dashboard</div>
+        {err && <div className="login-err">{err}</div>}
+        <div className="login-field">
+          <label>Username</label>
+          <input className="login-input" type="text" autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="name@sportsmedrecovery.com" />
         </div>
-        <h1 className="page-title" style={{ fontSize: 20 }}>SMR Dashboard</h1>
-        <div className="page-sub" style={{ marginBottom: 18 }}>Enter the access password to continue</div>
-        <input
-          type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus placeholder="Password"
-          style={{ width: '100%', padding: '11px 13px', borderRadius: 9, border: '1px solid #cbd5e1', fontSize: 14, marginBottom: 10 }}
-        />
-        {err && <div className="error" style={{ marginBottom: 10 }}>{err}</div>}
-        <button className="btn" type="submit" disabled={busy || !pw} style={{ width: '100%', padding: 11 }}>{busy ? 'Checking…' : 'Enter'}</button>
+        <div className="login-field">
+          <label>Password</label>
+          <input className="login-input" type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" />
+        </div>
+        <button className="login-btn" type="submit" disabled={busy || !username || !pw}>
+          {busy ? <><span className="login-spinner" />Signing in…</> : 'Sign in'}
+        </button>
+        <div className="login-foot">🔒 Secure access · PHI protected</div>
       </form>
     </div>
   );

@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login } from './_striven.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -11,20 +11,25 @@ const cookieVal = (header, name) => {
 
 export default async function handler(req, res) {
   const pathname = new URL(req.url, 'http://localhost').pathname; // e.g. /api/ar
-  const { ACCESS_PASSWORD, SESSION_TOKEN } = await getAuth();
+  const { gateEnabled, sessionToken } = await getAuth();
 
-  // ---- access gate (only when ACCESS_PASSWORD is configured) ----
-  if (ACCESS_PASSWORD) {
+  // ---- access gate (only when a password / users are configured) ----
+  if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {
       let body = req.body;
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
-      if (body && body.password === ACCESS_PASSWORD) {
-        res.setHeader('Set-Cookie', `smr_session=${SESSION_TOKEN}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
+      const r = await login(body?.username, body?.password);
+      if (r.ok) {
+        res.setHeader('Set-Cookie', `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
         return res.status(200).json({ ok: true });
       }
-      return res.status(401).json({ error: 'Incorrect password' });
+      return res.status(401).json({ error: 'Invalid username or password' });
     }
-    if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== SESSION_TOKEN) {
+    if (pathname === '/api/logout') {
+      res.setHeader('Set-Cookie', 'smr_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
+      return res.status(200).json({ ok: true });
+    }
+    if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== sessionToken) {
       return res.status(401).json({ error: 'auth required' });
     }
   }

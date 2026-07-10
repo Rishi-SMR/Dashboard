@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login } from '../api/_striven.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -19,18 +19,23 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const pathname = new URL(req.url, `http://localhost:${PORT}`).pathname;
-  const { ACCESS_PASSWORD, SESSION_TOKEN } = await getAuth();
+  const { gateEnabled, sessionToken } = await getAuth();
 
-  if (ACCESS_PASSWORD) {
+  if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {
       const body = await readBody(req);
-      if (body.password === ACCESS_PASSWORD) {
-        res.setHeader('Set-Cookie', `smr_session=${SESSION_TOKEN}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
+      const r = await login(body.username, body.password);
+      if (r.ok) {
+        res.setHeader('Set-Cookie', `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
         res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
       }
-      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'Incorrect password' }));
+      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'Invalid username or password' }));
     }
-    if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== SESSION_TOKEN) {
+    if (pathname === '/api/logout') {
+      res.setHeader('Set-Cookie', 'smr_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
+      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
+    }
+    if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== sessionToken) {
       res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
     }
   }

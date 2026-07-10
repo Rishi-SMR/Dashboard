@@ -54,29 +54,52 @@ async function readVault(names) {
     return out;
   } finally { await client.end().catch(() => {}); }
 }
+// APP_USERS: JSON [{u,p},…] or compact "user:pass,user:pass". Username match is
+// case-insensitive and tolerant of a trailing ".com".
+function parseUsers(raw) {
+  if (!raw) return [];
+  const s = String(raw).trim();
+  try { const j = JSON.parse(s); if (Array.isArray(j)) return j.map((x) => ({ u: String(x.u ?? x.username ?? ''), p: String(x.p ?? x.password ?? '') })).filter((x) => x.u && x.p); } catch { /* not JSON */ }
+  return s.split(',').map((pair) => { const i = pair.indexOf(':'); return i < 0 ? null : { u: pair.slice(0, i).trim(), p: pair.slice(i + 1).trim() }; }).filter((x) => x && x.u && x.p);
+}
+const normUser = (s) => String(s ?? '').trim().toLowerCase().replace(/\.com$/, '');
+
 async function getConfig() {
   if (_cfg) return _cfg;
   _cfg = (async () => {
     let clientId = process.env.STRIVEN_CLIENT_ID || '';
     let clientSecret = process.env.STRIVEN_CLIENT_SECRET || '';
     let accessPw = process.env.ACCESS_PASSWORD || '';
+    let appUsers = process.env.APP_USERS || '';
     if (!clientId || !clientSecret) {
       try {
-        const v = await readVault(['STRIVEN_CLIENT_ID', 'STRIVEN_CLIENT_SECRET', 'ACCESS_PASSWORD']);
+        const v = await readVault(['STRIVEN_CLIENT_ID', 'STRIVEN_CLIENT_SECRET', 'ACCESS_PASSWORD', 'APP_USERS']);
         clientId = clientId || v.STRIVEN_CLIENT_ID || '';
         clientSecret = clientSecret || v.STRIVEN_CLIENT_SECRET || '';
         accessPw = accessPw || v.ACCESS_PASSWORD || '';
+        appUsers = appUsers || v.APP_USERS || '';
       } catch (e) { console.error('[config] Supabase Vault read failed:', e.message); }
     }
-    const sessionToken = accessPw ? crypto.createHash('sha256').update(`${accessPw}::smr-session`).digest('hex') : '';
-    return { clientId, clientSecret, accessPw, sessionToken };
+    const users = parseUsers(appUsers);
+    const gateEnabled = users.length > 0 || Boolean(accessPw);
+    const basis = users.length ? JSON.stringify(users.map((u) => u.u).sort()) + accessPw : accessPw;
+    const sessionToken = gateEnabled ? crypto.createHash('sha256').update(`${basis}::smr-session`).digest('hex') : '';
+    return { clientId, clientSecret, accessPw, users, gateEnabled, sessionToken };
   })();
   return _cfg;
 }
-// Auth info for the request handlers (may come from Vault → hence async).
+// Gate info for the request handlers.
 export async function getAuth() {
-  const { accessPw, sessionToken } = await getConfig();
-  return { ACCESS_PASSWORD: accessPw, SESSION_TOKEN: sessionToken };
+  const { gateEnabled, sessionToken } = await getConfig();
+  return { gateEnabled, sessionToken };
+}
+// Validate a login (username + password, or password-only fallback). → { ok, sessionToken }.
+export async function login(username, password) {
+  const { users, accessPw, sessionToken } = await getConfig();
+  const pw = String(password ?? '');
+  if (users.length) return { ok: users.some((x) => normUser(x.u) === normUser(username) && x.p === pw), sessionToken };
+  if (accessPw) return { ok: pw === accessPw, sessionToken };
+  return { ok: false, sessionToken };
 }
 
 const BASE = 'https://api.striven.com';
