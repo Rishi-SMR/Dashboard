@@ -45,10 +45,8 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   }
   return (
     <div className="login-screen">
-      <div className="login-shine" />
       <form className="login-card" onSubmit={submit}>
-        <div className="login-logo"><img src="/SMR%20Logo.png" alt="SMR" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /></div>
-        <div className="login-title">Sports Med Recovery</div>
+        <img className="login-logo" src="/SMR%20Logo.png" alt="Sports Med Recovery" />
         <div className="login-sub">Sign in to your dashboard</div>
         {err && <div className="login-err">{err}</div>}
         <div className="login-field">
