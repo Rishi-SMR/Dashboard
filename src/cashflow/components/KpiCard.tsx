@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { statusTone } from '../chartTheme';
 
 export type KpiInfo = { formula: string };
 export type KpiBreakdownRow = { label: string; value: string; sub?: string; strong?: boolean };
@@ -102,18 +103,35 @@ export function KpiCard({
             <div className="kpi-modal-formula">{info.formula}</div>
 
             {(rows || bLoading || bError) && (
-              <div className="kpi-modal-rows">
+              <div className="kpi-modal-breakdown">
                 {bLoading && <div className="kpi-modal-note">Loading live breakdown…</div>}
                 {bError && <div className="kpi-modal-note error">{bError}</div>}
-                {rows && rows.map((r, i) => (
-                  <div key={i} className={`kpi-modal-row${r.strong ? ' strong' : ''}`}>
-                    <span className="kpi-modal-row-label">
-                      {r.label}
-                      {r.sub && <span className="kpi-modal-row-sub">{r.sub}</span>}
-                    </span>
-                    <span className="kpi-modal-row-value">{r.value}</span>
-                  </div>
-                ))}
+                {rows && (() => {
+                  const stats = rows.filter((r) => !r.strong);
+                  const totals = rows.filter((r) => r.strong);
+                  return (
+                    <>
+                      {stats.length > 0 && <div className="kpi-modal-caption">Breakdown</div>}
+                      {stats.length > 0 && (
+                        <div className="kpi-stat-grid">
+                          {stats.map((r, i) => (
+                            <div key={i} className="kpi-stat" data-tone={statusTone(r.label)}>
+                              <span className="kpi-stat-label" title={r.label}>{r.label}</span>
+                              <span className="kpi-stat-value">{r.value}</span>
+                              {r.sub && <span className="kpi-stat-sub">{r.sub}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {totals.map((r, i) => (
+                        <div key={i} className="kpi-stat-total">
+                          <span>{r.label}</span>
+                          <span>{r.value}</span>
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>
