@@ -51,11 +51,11 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
         {err && <div className="login-err">{err}</div>}
         <div className="login-field">
           <label>Username</label>
-          <input className="login-input" type="text" autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="name@sportsmedrecovery.com" />
+          <input className="login-input" type="text" autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="" />
         </div>
         <div className="login-field">
           <label>Password</label>
-          <input className="login-input" type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" />
+          <input className="login-input" type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="" />
         </div>
         <button className="login-btn" type="submit" disabled={busy || !username || !pw}>
           {busy ? <><span className="login-spinner" />Signing in…</> : 'Sign in'}
