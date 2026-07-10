@@ -210,9 +210,9 @@ async function poStatusMap() {
   const stale = (id) => { const e = _poStatus.get(id); return !e || now - e.at > PO_STATUS_TTL; };
   const todo = list.filter((r) => stale(r.id));
   if (todo.length) {
-    let i = 0;
+    let i = 0, stop = false;
     const worker = async () => {
-      while (i < todo.length) {
+      while (i < todo.length && !stop) {
         const r = todo[i++];
         try {
           const d = await cached(`po-${r.id}`, () => striven('GET', `/v1/purchase-orders/${r.id}`), 30 * 60_000);
@@ -220,10 +220,12 @@ async function poStatusMap() {
         } catch { /* leave unclassified; retried next request */ }
       }
     };
-    // Race the batch against a hard 45s cap so we always return under Vercel's 60s
-    // function limit. Whatever isn't done keeps filling the map for the next request.
-    const batch = Promise.all(Array.from({ length: 10 }, worker)).catch(() => {});
-    await Promise.race([batch, new Promise((res) => setTimeout(res, 38_000))]);
+    // Enrich a bounded batch: cap at 15s and modest concurrency so this never
+    // blocks the page for long, nor monopolises Striven's rate limit and starves
+    // other endpoints. Converges over a few loads; each pass classifies more.
+    const batch = Promise.all(Array.from({ length: 5 }, worker)).catch(() => {});
+    await Promise.race([batch, new Promise((res) => setTimeout(res, 15_000))]);
+    stop = true;   // halt the loops; only the ≤5 in-flight calls finish
   }
   return list.map((r) => ({ ...r, statusName: _poStatus.get(r.id)?.name, classified: _poStatus.has(r.id) }));
 }
@@ -262,8 +264,13 @@ const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(r
 async function getStatus() {
   const { clientId, clientSecret } = await getConfig();
   if (!clientId || !clientSecret) return { connected: false, company: null, reason: 'not_configured' };
-  const profile = await companyProfile();
-  return { connected: true, company: profile.companyName ?? null, subdomain: profile.subdomain ?? null, currency: null, phiMasked: MASK_PHI };
+  // The app's auth check waits on this call, so it must NEVER hang — cap the
+  // profile lookup at 4s and fall back to a null company name if Striven is slow.
+  const profile = await Promise.race([
+    companyProfile().catch(() => null),
+    new Promise((res) => setTimeout(() => res(null), 4000)),
+  ]);
+  return { connected: true, company: profile?.companyName ?? null, subdomain: profile?.subdomain ?? null, currency: null, phiMasked: MASK_PHI };
 }
 async function getAR() {
   const inv = openOnly(await allInvoices()).filter(notVoid);
