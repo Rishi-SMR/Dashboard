@@ -168,12 +168,12 @@ async function searchAll(endpoint, filter = {}, cap = 2000) {
 const CACHE_TTL = Number(process.env.CACHE_TTL_MS || 300_000);
 const _cache = new Map();
 const _inflight = new Map();
-function cached(key, fn) {
+function cached(key, fn, ttl = CACHE_TTL) {
   const hit = _cache.get(key);
   if (hit && Date.now() < hit.expiresAt) return Promise.resolve(hit.value);
   if (_inflight.has(key)) return _inflight.get(key);
   const p = Promise.resolve().then(fn)
-    .then((value) => { _cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL }); _inflight.delete(key); return value; })
+    .then((value) => { _cache.set(key, { value, expiresAt: Date.now() + ttl }); _inflight.delete(key); return value; })
     .catch((e) => { _inflight.delete(key); if (hit) return hit.value; throw e; });
   _inflight.set(key, p);
   return p;
@@ -194,6 +194,39 @@ const companyProfile = () => cached('company', () => striven('GET', '/v1/company
 const openOnly = (rows) => rows.filter((r) => Number(r.openBalance ?? 0) > 0);
 const isVoid = (r) => /cancel|void|denied|rejected|fail/i.test(r?.status?.name || '');
 const notVoid = (r) => !isVoid(r);
+
+// The PO *search* endpoint omits `status`, so notVoid() can never exclude
+// cancelled POs from it. Status is only on the detail endpoint, and fetching all
+// of them at once (~100 calls/min ceiling) exceeds Vercel's 60s function limit.
+// So we enrich INCREMENTALLY: each request classifies a bounded batch within a
+// time budget and remembers it in a persistent in-memory map (kept for the life
+// of the warm instance). Over a couple of requests every PO is classified, then
+// it serves instantly. Statuses are re-checked after 6h.
+const _poStatus = new Map();          // id -> { name, at }
+const PO_STATUS_TTL = 6 * 60 * 60_000;
+async function poStatusMap() {
+  const list = await allPO();
+  const now = Date.now();
+  const stale = (id) => { const e = _poStatus.get(id); return !e || now - e.at > PO_STATUS_TTL; };
+  const todo = list.filter((r) => stale(r.id));
+  if (todo.length) {
+    let i = 0;
+    const worker = async () => {
+      while (i < todo.length) {
+        const r = todo[i++];
+        try {
+          const d = await cached(`po-${r.id}`, () => striven('GET', `/v1/purchase-orders/${r.id}`), 30 * 60_000);
+          _poStatus.set(r.id, { name: d?.status?.name ?? '', at: Date.now() });
+        } catch { /* leave unclassified; retried next request */ }
+      }
+    };
+    // Race the batch against a hard 45s cap so we always return under Vercel's 60s
+    // function limit. Whatever isn't done keeps filling the map for the next request.
+    const batch = Promise.all(Array.from({ length: 10 }, worker)).catch(() => {});
+    await Promise.race([batch, new Promise((res) => setTimeout(res, 38_000))]);
+  }
+  return list.map((r) => ({ ...r, statusName: _poStatus.get(r.id)?.name, classified: _poStatus.has(r.id) }));
+}
 
 // ---- helpers ------------------------------------------------------------
 const emptyAging = () => ({ current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 });
@@ -325,15 +358,25 @@ async function getSO() {
     .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), customer: maskName(r.customer?.name), status: r.status?.name ?? '', date: r.dateCreated ?? null }));
   return { count: rows.length, byStatus: Object.entries(byStatus).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count), recent, phiMasked: MASK_PHI };
 }
+const poIsVoid = (r) => /cancel|void|denied|rejected|fail/i.test(r.statusName || '');
 async function getPO() {
-  const rows = (await allPO()).filter(notVoid);
-  const totalValue = round2(rows.reduce((s, r) => s + Number(r.poTotal ?? 0), 0));
+  const all = await poStatusMap();                       // each PO enriched with statusName / classified
+  const rows = all.filter((r) => r.classified && !poIsVoid(r));   // active, known-good
+  const cancelled = all.filter((r) => r.classified && poIsVoid(r));
+  const pending = all.filter((r) => !r.classified);      // not yet classified this session
+  const sum = (list) => round2(list.reduce((s, r) => s + Number(r.poTotal ?? 0), 0));
   const byVendorMap = {};
   for (const r of rows) { const v = r.vendor?.name ?? 'Unknown'; byVendorMap[v] = (byVendorMap[v] || 0) + Number(r.poTotal ?? 0); }
   const byVendor = Object.entries(byVendorMap).map(([vendor, total]) => ({ vendor, total: round2(total) })).sort((a, b) => b.total - a.total).slice(0, 12);
   const recent = rows.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
-    .map((r) => ({ id: r.id, ref: safeRef('PO', r.id, r.poNumber), vendor: r.vendor?.name ?? '', total: Number(r.poTotal ?? 0), date: r.dateCreated ?? null }));
-  return { count: rows.length, totalValue, byVendor, recent, phiMasked: MASK_PHI };
+    .map((r) => ({ id: r.id, ref: safeRef('PO', r.id, r.poNumber), vendor: r.vendor?.name ?? '', total: Number(r.poTotal ?? 0), date: r.dateCreated ?? null, status: r.statusName ?? '' }));
+  return {
+    count: rows.length, totalValue: sum(rows), byVendor, recent,
+    cancelledCount: cancelled.length, cancelledValue: sum(cancelled),
+    pendingCount: pending.length, pendingValue: sum(pending),
+    totalCount: all.length,
+    phiMasked: MASK_PHI,
+  };
 }
 const CUST_STATUS = { 1: 'Prospect', 2: 'Active', 3: 'Deleted', 4: 'Lost' };
 async function getCustomers() {

@@ -14,8 +14,8 @@ export type StrivenStatus = { connected: boolean; company: string | null; subdom
 export type SoRecent = { id: number; ref: string; customer: string; status: string; date: string | null };
 export type SoResult = { count: number; byStatus: { status: string; count: number }[]; recent: SoRecent[]; phiMasked: boolean };
 
-export type PoRecent = { id: number; ref: string; vendor: string; total: number; date: string | null };
-export type PoResult = { count: number; totalValue: number; byVendor: { vendor: string; total: number }[]; recent: PoRecent[]; phiMasked: boolean };
+export type PoRecent = { id: number; ref: string; vendor: string; total: number; date: string | null; status?: string };
+export type PoResult = { count: number; totalValue: number; byVendor: { vendor: string; total: number }[]; recent: PoRecent[]; cancelledCount?: number; cancelledValue?: number; pendingCount?: number; pendingValue?: number; totalCount?: number; phiMasked: boolean };
 
 export type Customer = { id: number; ref: string; name: string; status: string; since: string | null };
 export type CustomersResult = { count: number; customers: Customer[]; phiMasked: boolean };

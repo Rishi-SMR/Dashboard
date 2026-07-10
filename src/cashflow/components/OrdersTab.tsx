@@ -342,22 +342,29 @@ export function OrdersTab() {
             <KpiCard
               label="Purchase Orders"
               value={po.count.toLocaleString()}
-              period={`${po.byVendor.length} vendors`}
-              info={{ formula: 'Count of every purchase order on record in Striven — what was ordered from vendors.' }}
+              period={`active${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''}`}
+              info={{ formula: 'Count of active purchase orders (cancelled/voided POs are excluded from every figure on this tab).' }}
+              breakdown={[
+                { label: 'Active', value: po.count.toLocaleString() },
+                ...(po.cancelledCount ? [{ label: 'Cancelled (excluded)', value: po.cancelledCount.toLocaleString() }] : []),
+                ...(po.pendingCount ? [{ label: 'Still loading', value: po.pendingCount.toLocaleString() }] : []),
+                { label: 'Total on record', value: (po.totalCount ?? po.count).toLocaleString(), strong: true },
+              ]}
               active={openKpi === 0}
               {...kpi(0)}
             />
             <KpiCard
               label="Total PO Value"
               value={formatCurrency(po.totalValue)}
-              period="across all purchase orders"
-              info={{ formula: 'Sum of the total value of every purchase order on record. Top vendors by spend below.' }}
+              period={`active POs only${po.cancelledCount ? ` · excl. ${formatCurrency(po.cancelledValue ?? 0)} cancelled` : ''}`}
+              info={{ formula: 'Sum of the value of every ACTIVE purchase order. Cancelled/voided POs are excluded. Top vendors by spend below.' }}
               breakdown={[
                 ...[...po.byVendor]
                   .sort((a, b) => b.total - a.total)
                   .slice(0, 6)
                   .map((v) => ({ label: v.vendor || '—', value: formatCurrency(v.total) })),
-                { label: 'Total', value: formatCurrency(po.totalValue), strong: true },
+                ...(po.cancelledValue ? [{ label: 'Cancelled (excluded)', value: formatCurrency(po.cancelledValue) }] : []),
+                { label: 'Active total', value: formatCurrency(po.totalValue), strong: true },
               ]}
               active={openKpi === 1}
               {...kpi(1)}
@@ -365,7 +372,10 @@ export function OrdersTab() {
           </div>
 
           <div className="chart-grid">
-            <ChartCard title="Top Vendors by PO Spend" sub="Largest purchase-order suppliers · click a bar to drill in">
+            <ChartCard
+              title="Top Vendors by PO Spend"
+              sub={`Active purchase orders only${po.cancelledCount ? ` · excludes ${po.cancelledCount} cancelled (${formatCurrency(po.cancelledValue ?? 0)})` : ''}${po.pendingCount ? ` · ${po.pendingCount} still loading` : ''} · click a bar to drill in`}
+            >
               <RankBar
                 data={vendorData}
                 money

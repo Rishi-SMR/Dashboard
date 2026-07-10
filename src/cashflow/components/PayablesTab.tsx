@@ -128,14 +128,15 @@ export function PayablesTab() {
             />
             <KpiCard
               label="PO Total"
-              period={`${po?.count ?? 0} purchase orders`}
+              period={`${po?.count ?? 0} active POs${po?.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''}`}
               value={formatCurrency(po?.totalValue ?? 0)}
-              info={{ formula: 'Sum of the total value of every purchase order on record in Striven — what was committed to vendors.' }}
+              info={{ formula: 'Sum of the value of every ACTIVE purchase order in Striven. Cancelled/voided POs are excluded.' }}
               breakdown={[...(po?.byVendor ?? [])]
                 .sort((a, b) => b.total - a.total)
                 .slice(0, 5)
                 .map((v, i) => ({ label: v.vendor || '—', value: formatCurrency(v.total), strong: i === 0 }))
-                .concat([{ label: 'Total PO value', value: formatCurrency(po?.totalValue ?? 0), strong: true } as any])}
+                .concat(po?.cancelledValue ? [{ label: 'Cancelled (excluded)', value: formatCurrency(po.cancelledValue) } as any] : [])
+                .concat([{ label: 'Active total', value: formatCurrency(po?.totalValue ?? 0), strong: true } as any])}
               {...kpi(2)}
             />
             <KpiCard
@@ -154,7 +155,7 @@ export function PayablesTab() {
 
           {/* Uniform 2-col chart grid. */}
           <div className="chart-grid">
-            <ChartCard title="Top Vendors by PO Spend" sub="Largest purchase-order suppliers · click a bar to drill">
+            <ChartCard title="Top Vendors by PO Spend" sub={`Active POs only${po?.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar to drill`}>
               <RankBar data={vendorData} money colorAt={() => C.brand} onSelect={openVendorDrill} />
             </ChartCard>
 

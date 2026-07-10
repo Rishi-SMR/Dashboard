@@ -152,15 +152,15 @@ export function VendorsTab() {
 
           {/* PO spend is a separate (money) metric — kept as its own card. */}
           <div className="kpis">
-            <KpiCard label="PO Spend" period="across all purchase orders" value={formatCurrency(po.totalValue)} trend="up"
-              info={{ formula: 'Total value of every purchase order raised in Striven — what we have committed to spend with vendors. The biggest vendors are listed below.' }}
+            <KpiCard label="PO Spend" period={`active POs only${po.cancelledCount ? ` · excl. ${po.cancelledCount} cancelled` : ''}`} value={formatCurrency(po.totalValue)} trend="up"
+              info={{ formula: 'Total value of every ACTIVE purchase order raised in Striven. Cancelled/voided POs are excluded. The biggest vendors are listed below.' }}
               breakdown={spendBreakdown}
               {...kpi(0)} active={openKpi === 0} />
           </div>
 
           {/* Charts — uniform 2-col grid. Click a bar to drill into that vendor's POs. */}
           <div className="chart-grid">
-            <ChartCard title="PO Spend by Vendor" sub="Largest purchase-order suppliers — click a bar for detail">
+            <ChartCard title="PO Spend by Vendor" sub={`Active POs only${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} — click a bar for detail`}>
               <RankBar data={spendData} money colorAt={() => C.brand} onSelect={openDrillFor} />
             </ChartCard>
           </div>
