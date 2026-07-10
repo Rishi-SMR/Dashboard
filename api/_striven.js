@@ -376,6 +376,15 @@ async function getProjects() {
 // ---- route tables (shared) ----------------------------------------------
 export const ROUTES = {
   '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
+  // TEMPORARY diagnostic — env var NAMES only (no values) + Vault read outcome.
+  '/api/_diag': async () => {
+    const envKeysSeen = Object.keys(process.env).filter((k) => /supabase|postgres|database|striven|access_password/i.test(k)).sort();
+    const out = { envKeysSeen, pg: null, vault: null };
+    try { await import('pg'); out.pg = 'import-ok'; } catch (e) { out.pg = 'import-FAIL: ' + e.message; }
+    try { const v = await readVault(['STRIVEN_CLIENT_ID', 'STRIVEN_CLIENT_SECRET', 'ACCESS_PASSWORD']); out.vault = { found: Object.keys(v).sort() }; }
+    catch (e) { out.vault = 'read-FAIL: ' + String(e.message).slice(0, 200); }
+    return out;
+  },
   '/api/status': getStatus,
   '/api/ar': getAR,
   '/api/ap': getAP,
