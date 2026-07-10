@@ -14,6 +14,14 @@ const VENDOR_CAP = 50;
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
+// A recorded bill payment means the vendor bill HAS been settled — show it as paid,
+// unless Striven explicitly voided/cancelled the charge.
+const isPaid = (status: string) => !/cancel|void|fail|reject|denied/i.test(status || '');
+const PaidBadge = ({ status }: { status: string }) =>
+  isPaid(status)
+    ? <span className="pill-tag tag-ok" style={{ fontWeight: 700 }}>✓ Paid</span>
+    : <StatusPill status={status} />;
+
 export function PayablesTab() {
   const [ap, setAp] = useState<ApResult | null>(null);
   const [vendors, setVendors] = useState<VendorsResult | null>(null);
@@ -61,6 +69,12 @@ export function PayablesTab() {
   const billOpenTotal = useMemo(() => bills.reduce((s, b) => s + (b.open || 0), 0), [bills]);
   const payments = bp?.recent ?? [];
   const payShownTotal = useMemo(() => payments.reduce((s, p) => s + (p.amount || 0), 0), [payments]);
+  const paidCount = useMemo(() => payments.filter((p) => isPaid(p.status)).length, [payments]);
+  const paidByVendor = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of payments) m.set(p.vendor || '—', (m.get(p.vendor || '—') ?? 0) + (p.amount || 0));
+    return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [payments]);
   const vendorRows = (vendors?.vendors ?? []).slice(0, VENDOR_CAP);
   const moreVendors = Math.max(0, (vendors?.vendors.length ?? 0) - vendorRows.length);
 
@@ -125,13 +139,13 @@ export function PayablesTab() {
               {...kpi(2)}
             />
             <KpiCard
-              label="Bill Payments"
-              period={`${bp?.count ?? 0} payments`}
+              label="Bills Paid"
+              period={`${paidCount} of ${bp?.count ?? 0} paid`}
               value={formatCurrency(bp?.total ?? 0)}
               trend="up"
-              info={{ formula: 'Total of all payments made to vendors in Striven — the cash side of payables, summed across every recorded bill payment.' }}
+              info={{ formula: 'Total settled to vendors in Striven — every recorded bill payment is marked paid. The cash side of payables.' }}
               breakdown={[
-                { label: 'Payments recorded', value: String(bp?.count ?? 0) },
+                ...paidByVendor.map((v) => ({ label: v.name, value: formatCurrency(v.value), sub: 'paid' })),
                 { label: 'Total paid', value: formatCurrency(bp?.total ?? 0), strong: true },
               ]}
               {...kpi(3)}
@@ -190,17 +204,28 @@ export function PayablesTab() {
             </div>
           </div>
 
-          {/* ── BILL PAYMENTS ───────────────────────────────────────── */}
+          {/* ── BILLS PAID ──────────────────────────────────────────── */}
           <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head"><h2 className="section-title">Bill Payments</h2></div>
+            <div className="section-head">
+              <div>
+                <h2 className="section-title">Bills Paid</h2>
+                <div className="section-sub">Vendor bills settled through Striven · {formatCurrency(bp?.total ?? 0)} paid</div>
+              </div>
+            </div>
+            {payments.length > 0 && (
+              <div className="paid-banner">
+                <span className="paid-banner-check">✓</span>
+                <span><strong>All settled.</strong> {paidCount === payments.length ? 'Every' : `${paidCount} of ${payments.length}`} recorded bill payment{payments.length === 1 ? ' has' : 's have'} been paid to the vendor — {formatCurrency(payShownTotal)} total.</span>
+              </div>
+            )}
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
                   <tr>
                     <th>Reference</th>
                     <th>Vendor</th>
-                    <th>Account</th>
-                    <th>Date</th>
+                    <th>Paid from</th>
+                    <th>Paid on</th>
                     <th className="num">Amount</th>
                     <th>Status</th>
                   </tr>
@@ -213,15 +238,15 @@ export function PayablesTab() {
                       <td>{p.account || '—'}</td>
                       <td>{fmtDate(p.date)}</td>
                       <td className="num cell-pos">{formatCurrency(p.amount)}</td>
-                      <td><StatusPill status={p.status} /></td>
+                      <td><PaidBadge status={p.status} /></td>
                     </tr>
                   ))}
                   {payments.length === 0 && (
-                    <tr><td colSpan={6} style={{ color: C.muted }}>No recent bill payments.</td></tr>
+                    <tr><td colSpan={6} style={{ color: C.muted }}>No bills paid yet.</td></tr>
                   )}
                   {payments.length > 0 && (
                     <tr className="total-row">
-                      <td><strong>Total</strong></td>
+                      <td><strong>Total paid</strong></td>
                       <td>{payments.length} payment{payments.length === 1 ? '' : 's'}</td>
                       <td></td>
                       <td></td>

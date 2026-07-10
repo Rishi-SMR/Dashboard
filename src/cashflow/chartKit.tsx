@@ -7,10 +7,43 @@ import {
 } from 'recharts';
 import type { ReactNode } from 'react';
 import { formatCurrency } from './format';
-import { C, SERIES, SEVERITY, AGING_LABELS, gridProps, axisProps, tooltipStyle, compactMoney, monthLabel } from './chartTheme';
+import { C, SERIES, SEVERITY, AGING_LABELS, gridProps, axisProps, tooltipStyle, compactMoney, monthLabel, statusTone } from './chartTheme';
 
 const NOANIM = { isAnimationActive: false as const };
 const trunc = (v: string, n = 18) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
+
+// Compact status/category cards — a small, scannable alternative to a bar chart
+// for a handful of categories (e.g. patients/vendors by status). Colour-coded by
+// status tone; pass onSelect to make each card a clickable drill.
+export function StatCards({ data, total, onSelect }: {
+  data: { name: string; value: number }[];
+  total?: number;
+  onSelect?: (name: string) => void;
+}) {
+  const clickable = !!onSelect;
+  return (
+    <div className="stat-cards">
+      {data.map((d, i) => {
+        const pctOf = total && total > 0 ? Math.round((d.value / total) * 100) : null;
+        return (
+          <div
+            key={i}
+            className={`stat-card${clickable ? ' clickable' : ''}`}
+            data-tone={statusTone(d.name)}
+            role={clickable ? 'button' : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            onClick={clickable ? () => onSelect!(d.name) : undefined}
+            onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect!(d.name); } } : undefined}
+          >
+            <span className="stat-card-label" title={d.name}>{d.name}</span>
+            <span className="stat-card-value">{d.value.toLocaleString()}</span>
+            {pctOf != null && <span className="stat-card-sub">{pctOf}% of total</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function ChartCard({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
   return (

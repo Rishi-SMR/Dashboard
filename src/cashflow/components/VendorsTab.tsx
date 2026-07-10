@@ -7,7 +7,7 @@ import { formatCurrency } from '../format';
 import { KpiCard, type KpiBreakdownRow } from './KpiCard';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
-import { ChartCard, RankBar, DrillModal } from '../chartKit';
+import { ChartCard, RankBar, StatCards, DrillModal } from '../chartKit';
 
 const ROW_CAP = 80;
 
@@ -21,7 +21,7 @@ export function VendorsTab() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [openKpi, setOpenKpi] = useState<number | null>(null);
-  const [drill, setDrill] = useState<null | { title: string; sub: string; rows: Record<string, React.ReactNode>[] }>(null);
+  const [drill, setDrill] = useState<null | { title: string; sub: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, React.ReactNode>[] }>(null);
 
   async function load() {
     setLoading(true); setError(null);
@@ -75,7 +75,35 @@ export function VendorsTab() {
       .filter((r) => (r.vendor || '—') === name)
       .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
       .map((r) => ({ ref: r.ref, date: fmtDate(r.date), amt: formatCurrency(r.total) }));
-    setDrill({ title: name, sub: `${rows.length} purchase order${rows.length === 1 ? '' : 's'} · ${formatCurrency((po?.byVendor ?? []).find((v) => (v.vendor || '—') === name)?.total ?? 0)}`, rows });
+    setDrill({
+      title: name,
+      sub: `${rows.length} purchase order${rows.length === 1 ? '' : 's'} · ${formatCurrency((po?.byVendor ?? []).find((v) => (v.vendor || '—') === name)?.total ?? 0)}`,
+      columns: [{ key: 'ref', label: 'PO Ref' }, { key: 'date', label: 'Date' }, { key: 'amt', label: 'Amount', num: true }],
+      rows,
+    });
+  }
+
+  // Click a status card → drill into the vendors carrying that status.
+  function openStatusDrill(status: string) {
+    const rows = vendors
+      .filter((v) => ((v.status || 'Unknown').trim() || 'Unknown') === status)
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      .map((v) => ({
+        name: <strong>{v.name || '—'}</strong>,
+        number: v.number || '—',
+        status: <StatusPill status={v.status} />,
+        terms: v.terms || '—',
+        phone: v.phone || '—',
+      }));
+    setDrill({
+      title: `${status} vendors`,
+      sub: `${rows.length} of ${vendorCount} supplier${rows.length === 1 ? '' : 's'}`,
+      columns: [
+        { key: 'name', label: 'Vendor' }, { key: 'number', label: 'Vendor No' },
+        { key: 'status', label: 'Status' }, { key: 'terms', label: 'Terms' }, { key: 'phone', label: 'Phone' },
+      ],
+      rows,
+    });
   }
 
   // Text filter across name / number / status / terms / phone.
@@ -127,6 +155,11 @@ export function VendorsTab() {
               breakdown={spendBreakdown}
               {...kpi(1)} active={openKpi === 1} />
           </div>
+
+          {/* Vendors by status — compact cards (Active, Prospect, …). Click to drill. */}
+          <ChartCard title="Vendors by Status" sub={`${vendorCount.toLocaleString()} suppliers · click a status to drill in`}>
+            <StatCards data={byStatus} total={vendorCount} onSelect={openStatusDrill} />
+          </ChartCard>
 
           {/* Charts — uniform 2-col grid. Click a bar to drill into that vendor's POs. */}
           <div className="chart-grid">
@@ -196,7 +229,7 @@ export function VendorsTab() {
         <DrillModal
           title={drill.title}
           sub={drill.sub}
-          columns={[{ key: 'ref', label: 'PO Ref' }, { key: 'date', label: 'Date' }, { key: 'amt', label: 'Amount', num: true }]}
+          columns={drill.columns}
           rows={drill.rows}
           onClose={() => setDrill(null)}
         />

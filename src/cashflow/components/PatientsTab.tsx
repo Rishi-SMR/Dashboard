@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import { fetchStrivenCustomers, type CustomersResult, type Customer } from '../strivenApi';
 import { KpiCard, type KpiBreakdownRow } from './KpiCard';
 import { StatusPill } from './StatusPill';
-import { C, SERIES } from '../chartTheme';
-import { ChartCard, RankBar, DrillModal } from '../chartKit';
+import { C } from '../chartTheme';
+import { ChartCard, StatCards, DrillModal } from '../chartKit';
 
 const ROW_CAP = 80;
 
@@ -124,13 +124,9 @@ export function PatientsTab() {
               breakdown={activeBreakdown} {...kpi(1)} />
           </div>
 
-          <div className="chart-grid">
-            <div style={{ gridColumn: '1 / -1' }}>
-              <ChartCard title="Patients by Status" sub={`${total.toLocaleString()} on record · click a bar to drill in`}>
-                <RankBar data={byStatus} colorAt={(i) => SERIES[i % SERIES.length]} onSelect={openDrillFor} />
-              </ChartCard>
-            </div>
-          </div>
+          <ChartCard title="Patients by Status" sub={`${total.toLocaleString()} on record · click a status to drill in`}>
+            <StatCards data={byStatus} total={total} onSelect={openDrillFor} />
+          </ChartCard>
 
           {/* Detail table: patient roster with text filter */}
           <div className="section" style={{ marginTop: 16 }}>
