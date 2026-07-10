@@ -211,8 +211,10 @@ async function striven(method, endpoint, jsonBody) {
   };
   let res = await doCall();
   if (res.status === 401) { await getToken(true); res = await doCall(); }
+  // Cap the Retry-After wait: Striven can send a large value, and 3× a big wait
+  // would blow past Vercel's 60s function limit (→ 504). Fail fast instead.
   for (let attempt = 0; res.status === 429 && attempt < 3; attempt++) {
-    const waitS = Number(res.headers.get('retry-after')) || 5;
+    const waitS = Math.min(Number(res.headers.get('retry-after')) || 2, 6);
     await new Promise((r) => setTimeout(r, waitS * 1000));
     res = await doCall();
   }
@@ -249,19 +251,68 @@ function cached(key, fn, ttl = CACHE_TTL) {
   _inflight.set(key, p);
   return p;
 }
-const allInvoices = () => cached('invoices', () => searchAll('/v1/invoices/search', {}));
-const allBills = () => cached('bills', () => searchAll('/v1/bills/search', {}));
-const allSO = () => cached('so', () => searchAll('/v1/sales-orders/search', {}));
-const allPO = () => cached('po', () => searchAll('/v1/purchase-orders/search', {}));
-const allCustomers = () => cached('customers', () => searchAll('/v1/customers/search', {}));
-const allVendors = () => cached('vendors', () => searchAll('/v1/vendors/search', {}));
-const allItems = () => cached('items', () => searchAll('/v1/items/search', {}));
-const allPayments = () => cached('payments', () => searchAll('/v1/payments/search', {}));
-const allBillPayCC = () => cached('billpaycc', () => searchAll('/v2/bill-payment-cc-charges/search', {}));
-const allTasks = () => cached('tasks', () => searchAll('/v2/tasks/search', {}));
-const allProjects = () => cached('projects', () => searchAll('/v1/projects/search', {}));
-const glAccountsRaw = () => cached('gl', async () => { const b = await striven('POST', '/v1/gl-accounts/search', { Active: true }); return b.data ?? b.Data ?? []; });
-const companyProfile = () => cached('company', () => striven('GET', '/v1/company/profile'));
+
+// Shared, durable cache in the Supabase `striven_cache` table. Cold serverless
+// instances and Striven rate-limit/outage never break loading — we always fall
+// back to the last-known-good copy instead of hanging or erroring.
+async function sbCacheRead(key) {
+  const url = SB_URL(), sk = SB_KEY();
+  if (!url || !sk) return null;
+  try {
+    const res = await fetch(`${url}/rest/v1/striven_cache?key=eq.${encodeURIComponent(key)}&select=data,updated_at`, { headers: { apikey: sk, Authorization: `Bearer ${sk}` } });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } catch { return null; }
+}
+function sbCacheWrite(key, data) {
+  const url = SB_URL(), sk = SB_KEY();
+  if (!url || !sk) return;
+  fetch(`${url}/rest/v1/striven_cache`, {
+    method: 'POST',
+    headers: { apikey: sk, Authorization: `Bearer ${sk}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ key, data, updated_at: new Date().toISOString() }),
+  }).catch(() => {});
+}
+function persistentCached(key, fn, ttl = CACHE_TTL) {
+  const hit = _cache.get(key);
+  if (hit && Date.now() < hit.expiresAt) return Promise.resolve(hit.value);
+  if (_inflight.has(key)) return _inflight.get(key);
+  const p = (async () => {
+    const sb = await sbCacheRead(key);
+    const sbAt = sb?.updated_at ? new Date(sb.updated_at).getTime() : 0;
+    if (sb && Date.now() - sbAt < ttl) {                       // Supabase copy still fresh → use it
+      _cache.set(key, { value: sb.data, expiresAt: Date.now() + ttl });
+      return sb.data;
+    }
+    try {
+      const value = await fn();                                // stale/missing → refresh from Striven
+      _cache.set(key, { value, expiresAt: Date.now() + ttl });
+      sbCacheWrite(key, value);
+      return value;
+    } catch (e) {
+      if (sb) { _cache.set(key, { value: sb.data, expiresAt: Date.now() + 60_000 }); return sb.data; }  // Striven failed → serve stale
+      if (hit) return hit.value;
+      throw e;
+    }
+  })();
+  _inflight.set(key, p);
+  p.catch(() => {}).finally(() => _inflight.delete(key));
+  return p;
+}
+const allInvoices = () => persistentCached('invoices', () => searchAll('/v1/invoices/search', {}));
+const allBills = () => persistentCached('bills', () => searchAll('/v1/bills/search', {}));
+const allSO = () => persistentCached('so', () => searchAll('/v1/sales-orders/search', {}));
+const allPO = () => persistentCached('po', () => searchAll('/v1/purchase-orders/search', {}));
+const allCustomers = () => persistentCached('customers', () => searchAll('/v1/customers/search', {}));
+const allVendors = () => persistentCached('vendors', () => searchAll('/v1/vendors/search', {}));
+const allItems = () => persistentCached('items', () => searchAll('/v1/items/search', {}));
+const allPayments = () => persistentCached('payments', () => searchAll('/v1/payments/search', {}));
+const allBillPayCC = () => persistentCached('billpaycc', () => searchAll('/v2/bill-payment-cc-charges/search', {}));
+const allTasks = () => persistentCached('tasks', () => searchAll('/v2/tasks/search', {}));
+const allProjects = () => persistentCached('projects', () => searchAll('/v1/projects/search', {}));
+const glAccountsRaw = () => persistentCached('gl', async () => { const b = await striven('POST', '/v1/gl-accounts/search', { Active: true }); return b.data ?? b.Data ?? []; });
+const companyProfile = () => persistentCached('company', () => striven('GET', '/v1/company/profile'));
 const openOnly = (rows) => rows.filter((r) => Number(r.openBalance ?? 0) > 0);
 const isVoid = (r) => /cancel|void|denied|rejected|fail/i.test(r?.status?.name || '');
 const notVoid = (r) => !isVoid(r);
