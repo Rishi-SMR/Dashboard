@@ -18,7 +18,7 @@ export default async function handler(req, res) {
     if (pathname === '/api/login' && req.method === 'POST') {
       let body = req.body;
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
-      const r = await login(body?.username, body?.password);
+      const r = await login(body?.username, body?.password, { ip: String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() });
       if (r.ok) {
         res.setHeader('Set-Cookie', `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
         return res.status(200).json({ ok: true });

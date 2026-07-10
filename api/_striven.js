@@ -93,13 +93,46 @@ async function resolveUsers(envAppUsers) {
   return users;
 }
 
+const SB_URL = () => (process.env.SUPABASE_URL || process.env.SUPABASE_REST_URL || '').replace(/\/$/, '');
+const SB_KEY = () => process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+// Striven creds + access password live in the Supabase `app_config` table (key,value).
+async function readConfigTable() {
+  const url = SB_URL(), key = SB_KEY();
+  if (!url || !key) return {};
+  try {
+    const res = await fetch(`${url}/rest/v1/app_config?select=key,value`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+    if (!res.ok) return {};
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return {};
+    const out = {};
+    for (const r of rows) out[r.key] = r.value;
+    return out;
+  } catch { return {}; }
+}
+// Audit every login attempt into the Supabase `login_events` table (best-effort).
+async function logLoginEvent(username, success, ip) {
+  const url = SB_URL(), key = SB_KEY();
+  if (!url || !key) return;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    await fetch(`${url}/rest/v1/login_events`, {
+      method: 'POST', signal: ctrl.signal,
+      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ username: String(username ?? '').slice(0, 200), success: !!success, ip: ip ? String(ip).slice(0, 100) : null }),
+    });
+    clearTimeout(t);
+  } catch { /* audit is best-effort — never block or break login */ }
+}
+
 // Static config (Striven creds + access password) — resolved once and cached.
 async function getStatic() {
   if (_cfg) return _cfg;
   _cfg = (async () => {
-    let clientId = process.env.STRIVEN_CLIENT_ID || '';
-    let clientSecret = process.env.STRIVEN_CLIENT_SECRET || '';
-    let accessPw = process.env.ACCESS_PASSWORD || '';
+    const t = await readConfigTable();   // Supabase app_config = source of truth
+    let clientId = t.STRIVEN_CLIENT_ID || process.env.STRIVEN_CLIENT_ID || '';
+    let clientSecret = t.STRIVEN_CLIENT_SECRET || process.env.STRIVEN_CLIENT_SECRET || '';
+    let accessPw = t.ACCESS_PASSWORD || process.env.ACCESS_PASSWORD || '';
     let appUsers = process.env.APP_USERS || '';
     if (!clientId || !clientSecret) {
       try {
@@ -128,12 +161,15 @@ export async function getAuth() {
   return { gateEnabled, sessionToken };
 }
 // Validate a login (username + password, or password-only fallback). → { ok, sessionToken }.
-export async function login(username, password) {
+// Every attempt is recorded in the Supabase `login_events` audit table.
+export async function login(username, password, meta = {}) {
   const { users, accessPw, sessionToken } = await getConfig();
   const pw = String(password ?? '');
-  if (users.length) return { ok: users.some((x) => normUser(x.u) === normUser(username) && x.p === pw), sessionToken };
-  if (accessPw) return { ok: pw === accessPw, sessionToken };
-  return { ok: false, sessionToken };
+  let ok = false;
+  if (users.length) ok = users.some((x) => normUser(x.u) === normUser(username) && x.p === pw);
+  else if (accessPw) ok = pw === accessPw;
+  await logLoginEvent(username, ok, meta.ip);
+  return { ok, sessionToken };
 }
 
 const BASE = 'https://api.striven.com';

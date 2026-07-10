@@ -24,7 +24,7 @@ const server = http.createServer(async (req, res) => {
   if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {
       const body = await readBody(req);
-      const r = await login(body.username, body.password);
+      const r = await login(body.username, body.password, { ip: (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim() });
       if (r.ok) {
         res.setHeader('Set-Cookie', `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
         res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
