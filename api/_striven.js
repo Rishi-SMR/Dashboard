@@ -65,7 +65,36 @@ function parseUsers(raw) {
 }
 const normUser = (s) => String(s ?? '').trim().toLowerCase().replace(/\.com$/, '');
 
-async function getConfig() {
+// Login users live in the Supabase `dashboard_users` table (username, password) —
+// the human-editable source of truth. Read over PostgREST with the service-role
+// key (RLS keeps the table private to the server). Falls back to the APP_USERS
+// env var if the table is empty/unreachable, so login never breaks.
+let _usersCache = { at: 0, users: null };
+async function readUsersTable() {
+  const url = process.env.SUPABASE_URL || process.env.SUPABASE_REST_URL;
+  const key = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  try {
+    const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/dashboard_users?select=username,password`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return null;
+    return rows.map((r) => ({ u: String(r.username ?? ''), p: String(r.password ?? '') })).filter((x) => x.u && x.p);
+  } catch { return null; }
+}
+async function resolveUsers(envAppUsers) {
+  const now = Date.now();
+  if (_usersCache.users && now - _usersCache.at < 60_000) return _usersCache.users;
+  const fromTable = await readUsersTable();
+  const users = fromTable && fromTable.length ? fromTable : parseUsers(envAppUsers);
+  _usersCache = { at: now, users };
+  return users;
+}
+
+// Static config (Striven creds + access password) — resolved once and cached.
+async function getStatic() {
   if (_cfg) return _cfg;
   _cfg = (async () => {
     let clientId = process.env.STRIVEN_CLIENT_ID || '';
@@ -81,13 +110,17 @@ async function getConfig() {
         appUsers = appUsers || v.APP_USERS || '';
       } catch (e) { console.error('[config] Supabase Vault read failed:', e.message); }
     }
-    const users = parseUsers(appUsers);
-    const gateEnabled = users.length > 0 || Boolean(accessPw);
-    const basis = users.length ? JSON.stringify(users.map((u) => u.u).sort()) + accessPw : accessPw;
-    const sessionToken = gateEnabled ? crypto.createHash('sha256').update(`${basis}::smr-session`).digest('hex') : '';
-    return { clientId, clientSecret, accessPw, users, gateEnabled, sessionToken };
+    return { clientId, clientSecret, accessPw, appUsers };
   })();
   return _cfg;
+}
+async function getConfig() {
+  const s = await getStatic();
+  const users = await resolveUsers(s.appUsers);          // live from the table (60s cache)
+  const gateEnabled = users.length > 0 || Boolean(s.accessPw);
+  const basis = users.length ? JSON.stringify(users.map((u) => u.u).sort()) + s.accessPw : s.accessPw;
+  const sessionToken = gateEnabled ? crypto.createHash('sha256').update(`${basis}::smr-session`).digest('hex') : '';
+  return { clientId: s.clientId, clientSecret: s.clientSecret, accessPw: s.accessPw, users, gateEnabled, sessionToken };
 }
 // Gate info for the request handlers.
 export async function getAuth() {
