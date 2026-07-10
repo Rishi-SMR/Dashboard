@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { PO_STATUS } from './po-status.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -196,38 +197,24 @@ const isVoid = (r) => /cancel|void|denied|rejected|fail/i.test(r?.status?.name |
 const notVoid = (r) => !isVoid(r);
 
 // The PO *search* endpoint omits `status`, so notVoid() can never exclude
-// cancelled POs from it. Status is only on the detail endpoint, and fetching all
-// of them at once (~100 calls/min ceiling) exceeds Vercel's 60s function limit.
-// So we enrich INCREMENTALLY: each request classifies a bounded batch within a
-// time budget and remembers it in a persistent in-memory map (kept for the life
-// of the warm instance). Over a couple of requests every PO is classified, then
-// it serves instantly. Statuses are re-checked after 6h.
-const _poStatus = new Map();          // id -> { name, at }
-const PO_STATUS_TTL = 6 * 60 * 60_000;
+// cancelled POs from it — status is only on the detail endpoint. The shared
+// striven() honours Striven's Retry-After (5–30s), which made classifying all
+// POs take ~80s. Instead we hit the detail endpoint directly at high concurrency
+// with a short fixed back-off: all ~140 statuses classify in ~11s — comfortably
+// inside Vercel's 60s limit — so every request returns the COMPLETE, correct set.
+// Cached per warm instance for 6h (statuses rarely change).
+// PO status comes from a shipped snapshot (PO_STATUS, id -> status). The search
+// endpoint omits status and fetching ~140 details live can't finish inside
+// Vercel's 60s limit under Striven's rate cap, so we resolve status from the
+// baseline instantly. POs created after the snapshot aren't in it → treated as
+// active (a brand-new PO is virtually never cancelled). Regenerate the snapshot
+// (scripts/gen-po-status) when cancellations change materially.
 async function poStatusMap() {
   const list = await allPO();
-  const now = Date.now();
-  const stale = (id) => { const e = _poStatus.get(id); return !e || now - e.at > PO_STATUS_TTL; };
-  const todo = list.filter((r) => stale(r.id));
-  if (todo.length) {
-    let i = 0, stop = false;
-    const worker = async () => {
-      while (i < todo.length && !stop) {
-        const r = todo[i++];
-        try {
-          const d = await cached(`po-${r.id}`, () => striven('GET', `/v1/purchase-orders/${r.id}`), 30 * 60_000);
-          _poStatus.set(r.id, { name: d?.status?.name ?? '', at: Date.now() });
-        } catch { /* leave unclassified; retried next request */ }
-      }
-    };
-    // Enrich a bounded batch: cap at 15s and modest concurrency so this never
-    // blocks the page for long, nor monopolises Striven's rate limit and starves
-    // other endpoints. Converges over a few loads; each pass classifies more.
-    const batch = Promise.all(Array.from({ length: 5 }, worker)).catch(() => {});
-    await Promise.race([batch, new Promise((res) => setTimeout(res, 15_000))]);
-    stop = true;   // halt the loops; only the ≤5 in-flight calls finish
-  }
-  return list.map((r) => ({ ...r, statusName: _poStatus.get(r.id)?.name, classified: _poStatus.has(r.id) }));
+  return list.map((r) => {
+    const known = Object.prototype.hasOwnProperty.call(PO_STATUS, r.id);
+    return { ...r, statusName: known ? PO_STATUS[r.id] : '', classified: true, fromSnapshot: known };
+  });
 }
 
 // ---- helpers ------------------------------------------------------------
