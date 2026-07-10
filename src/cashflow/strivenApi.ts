@@ -62,10 +62,15 @@ export type ArResult = { totalOpen: number; count: number; aging: Aging; invoice
 export type ApBill = { id: number; number: string; vendor: string; vendorId: number | null; dueDate: string | null; total: number; open: number; currency: string };
 export type ApResult = { totalOpen: number; count: number; aging: Aging; bills: ApBill[] };
 
-export type GlAccount = { id: number; name: string; type: string; number: string; active: boolean };
-export type AccountsResult = { count: number; accounts: GlAccount[]; note?: string };
+export type GlAccount = { id: number; name: string; extendedName?: string; type: string; number: string; parent?: string; canPost?: boolean; reconcilable?: boolean; active: boolean };
+export type AccountsResult = { count: number; accounts: GlAccount[]; balancesAvailable?: boolean; note?: string };
 
-export type PlResult = { periodFrom: string; revenue: number; expenses: number; net: number; invoiceCount: number; billCount: number; approximate: boolean };
+export type PlMonth = { month: string; revenue: number; expenses: number; net: number };
+export type PlResult = {
+  periodFrom: string; revenue: number; expenses: number; net: number; margin: number; cashReceived: number;
+  invoiceCount: number; billCount: number; avgInvoice: number; avgBill: number;
+  series: PlMonth[]; byVendor: { name: string; value: number }[]; approximate: boolean;
+};
 
 export const fetchStrivenStatus = () => get<StrivenStatus>('/api/status');
 export const fetchStrivenAR = () => get<ArResult>('/api/ar');

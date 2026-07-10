@@ -262,20 +262,60 @@ const ACCT_TYPE = { 1: 'Income', 2: 'Expense', 3: 'Fixed Asset', 4: 'Bank', 5: '
 async function getAccounts() {
   const data = await glAccountsRaw();
   const accounts = data.map((r) => ({
-    id: r.id, name: r.accountName ?? r.name ?? '',
+    id: r.id,
+    name: r.accountName ?? r.name ?? '',
+    extendedName: r.accountExtendedName ?? '',
     type: r.accountType?.name ?? ACCT_TYPE[r.accountType?.id ?? r.accountTypeId] ?? String(r.accountType ?? ''),
-    number: r.accountNumber ?? '', active: r.active ?? true,
+    number: r.accountNumber ?? '',
+    parent: r.parent?.accountName ?? r.parent?.name ?? '',
+    canPost: !(r.doNotAllowPosting ?? false),
+    reconcilable: r.isReconcilable ?? false,
+    active: r.active ?? true,
   }));
-  return { count: accounts.length, accounts, note: 'Striven has no GL-balance endpoint; balances require a Report Builder API-key report.' };
+  return {
+    count: accounts.length,
+    accounts,
+    balancesAvailable: false,
+    note: "Striven's API does not expose GL account balances — running balances live only inside Striven's Report Builder. Shown here is the complete chart of accounts with every field the API returns.",
+  };
 }
 async function getPL() {
   const yearStart = `${new Date().getFullYear()}-01-01`;
   const inYear = (r) => String(r.dateCreated ?? '').slice(0, 10) >= yearStart;
   const inv = (await allInvoices()).filter((r) => inYear(r) && notVoid(r));
   const bills = (await allBills()).filter((r) => inYear(r) && notVoid(r));
+  const payments = (await allPayments()).filter((r) => notVoid(r) && String(r.paymentDate ?? r.dateCreated ?? '').slice(0, 10) >= yearStart);
+
   const revenue = round2(inv.reduce((s, r) => s + Number(r.invoiceTotal ?? 0), 0));
   const expenses = round2(bills.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0));
-  return { periodFrom: `${yearStart}T00:00:00`, revenue, expenses, net: round2(revenue - expenses), invoiceCount: inv.length, billCount: bills.length, approximate: true };
+  const net = round2(revenue - expenses);
+  const cashReceived = round2(payments.reduce((s, r) => s + Number(r.paymentAmount ?? 0), 0));
+
+  // Monthly Revenue / Expenses / Net.
+  const months = {};
+  const bump = (dateStr, key, amt) => { if (!dateStr) return; const m = String(dateStr).slice(0, 7); months[m] = months[m] || { month: m, revenue: 0, expenses: 0 }; months[m][key] += amt; };
+  for (const r of inv) bump(r.dateCreated, 'revenue', Number(r.invoiceTotal ?? 0));
+  for (const r of bills) bump(r.dateCreated, 'expenses', Number(r.totalAmount ?? 0));
+  const series = Object.values(months)
+    .map((m) => ({ month: m.month, revenue: round2(m.revenue), expenses: round2(m.expenses), net: round2(m.revenue - m.expenses) }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+
+  // Expenses grouped by vendor (bill totals — not PHI).
+  const vmap = {};
+  for (const r of bills) { const v = r.vendor?.name ?? 'Unknown'; vmap[v] = (vmap[v] || 0) + Number(r.totalAmount ?? 0); }
+  const byVendor = Object.entries(vmap).map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 12);
+
+  return {
+    periodFrom: `${yearStart}T00:00:00`,
+    revenue, expenses, net,
+    margin: revenue ? round2((net / revenue) * 100) : 0,
+    cashReceived,
+    invoiceCount: inv.length, billCount: bills.length,
+    avgInvoice: inv.length ? round2(revenue / inv.length) : 0,
+    avgBill: bills.length ? round2(expenses / bills.length) : 0,
+    series, byVendor,
+    approximate: true,
+  };
 }
 async function getSO() {
   const rows = await allSO();

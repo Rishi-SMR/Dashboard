@@ -7,6 +7,7 @@ const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m)
 const OrdersTab = lazy(() => import('./components/OrdersTab').then((m) => ({ default: m.OrdersTab })));
 const ReceivablesTab = lazy(() => import('./components/ReceivablesTab').then((m) => ({ default: m.ReceivablesTab })));
 const PayablesTab = lazy(() => import('./components/PayablesTab').then((m) => ({ default: m.PayablesTab })));
+const PLTab = lazy(() => import('./components/PLTab').then((m) => ({ default: m.PLTab })));
 const CatalogTab = lazy(() => import('./components/CatalogTab').then((m) => ({ default: m.CatalogTab })));
 const PatientsTab = lazy(() => import('./components/PatientsTab').then((m) => ({ default: m.PatientsTab })));
 const VendorsTab = lazy(() => import('./components/VendorsTab').then((m) => ({ default: m.VendorsTab })));
@@ -15,7 +16,7 @@ const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'orders' | 'patients' | 'vendors' | 'catalog' | 'operations' | 'accounts';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'pl' | 'orders' | 'patients' | 'vendors' | 'catalog' | 'operations' | 'accounts';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -66,7 +67,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'orders', 'patients', 'vendors', 'catalog', 'operations', 'accounts'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'pl', 'orders', 'patients', 'vendors', 'catalog', 'operations', 'accounts'];
 const initialView = (): ViewKey => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
   return VIEW_KEYS.includes(h) ? h : 'overview';
@@ -92,6 +93,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     overview: <OverviewCharts />,
     receivables: <ReceivablesTab />,
     payables: <PayablesTab />,
+    pl: <PLTab />,
     orders: <OrdersTab />,
     patients: <PatientsTab />,
     vendors: <VendorsTab />,

@@ -6,6 +6,7 @@ const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'receivables', label: 'Receivables' },
   { key: 'payables', label: 'Payables' },
+  { key: 'pl', label: 'P&L' },
   { key: 'orders', label: 'Orders' },
   { key: 'patients', label: 'Patients' },
   { key: 'vendors', label: 'Vendors' },

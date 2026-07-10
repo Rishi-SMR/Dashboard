@@ -259,12 +259,23 @@ export function AccountsTab() {
             <div className="muted-note">Patient names masked — PHI protected.</div>
           </ChartCard>
 
-          {/* ── Chart of accounts (full ledger) ─────────────────────── */}
-          <ChartCard title="Chart of Accounts" sub={`${accounts.length.toLocaleString()} GL accounts · sorted by type`}>
+          {/* ── Chart of accounts (full ledger, every field) ────────── */}
+          <ChartCard title="Chart of Accounts" sub={`${accounts.length.toLocaleString()} GL accounts · every field Striven's API returns`}>
+            <div className="info-banner">
+              <span className="info-banner-icon">ℹ</span>
+              <span>
+                <strong>No running balances shown — and that's correct.</strong> Striven's API does not expose GL account
+                balances (they live only in Striven's Report Builder), so no balance figure here is invented. Every other
+                account field is pulled live below.
+              </span>
+            </div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>Account No</th><th>Account Name</th><th>Type</th><th>Status</th></tr>
+                  <tr>
+                    <th>Account No</th><th>Account Name</th><th>Type</th><th>Parent</th>
+                    <th>Posts to ledger</th><th>Reconcilable</th><th>Status</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {sortedAccounts.map((a) => (
@@ -272,16 +283,18 @@ export function AccountsTab() {
                       <td>{a.number || '—'}</td>
                       <td><strong>{a.name || '—'}</strong></td>
                       <td>{a.type || '—'}</td>
+                      <td>{a.parent || '—'}</td>
+                      <td>{a.canPost === false ? <span className="pill-tag tag-warn">No</span> : <span className="pill-tag tag-ok">Yes</span>}</td>
+                      <td>{a.reconcilable ? <span className="pill-tag tag-info">Yes</span> : <span className="muted-note" style={{ margin: 0 }}>—</span>}</td>
                       <td>{a.active ? <StatusPill status="Active" /> : <span className="muted-note" style={{ margin: 0 }}>–</span>}</td>
                     </tr>
                   ))}
                   {sortedAccounts.length === 0 && (
-                    <tr><td colSpan={4} className="muted-note">No GL accounts on record.</td></tr>
+                    <tr><td colSpan={7} className="muted-note">No GL accounts on record.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
-            {accts.note && <div className="muted-note">{accts.note}</div>}
           </ChartCard>
         </>
       )}
