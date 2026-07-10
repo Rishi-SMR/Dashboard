@@ -47,12 +47,6 @@ export function VendorsTab() {
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [vendors]);
 
-  const vendorBreakdown: KpiBreakdownRow[] = byStatus.slice(0, 6).map((s) => ({
-    label: s.name,
-    value: String(s.value),
-    sub: vendorCount > 0 ? `${Math.round((s.value / vendorCount) * 100)}%` : undefined,
-  }));
-
   // PO spend ranked by vendor (top 12) — hero chart + the PO-spend breakdown.
   const spendData = useMemo(
     () => [...(po?.byVendor ?? [])]
@@ -83,10 +77,10 @@ export function VendorsTab() {
     });
   }
 
-  // Click a status card → drill into the vendors carrying that status.
+  // Click a status card → drill into the vendors carrying that status ('Total' = all).
   function openStatusDrill(status: string) {
     const rows = vendors
-      .filter((v) => ((v.status || 'Unknown').trim() || 'Unknown') === status)
+      .filter((v) => status === 'Total' || ((v.status || 'Unknown').trim() || 'Unknown') === status)
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
       .map((v) => ({
         name: <strong>{v.name || '—'}</strong>,
@@ -96,7 +90,7 @@ export function VendorsTab() {
         phone: v.phone || '—',
       }));
     setDrill({
-      title: `${status} vendors`,
+      title: status === 'Total' ? 'All vendors' : `${status} vendors`,
       sub: `${rows.length} of ${vendorCount} supplier${rows.length === 1 ? '' : 's'}`,
       columns: [
         { key: 'name', label: 'Vendor' }, { key: 'number', label: 'Vendor No' },
@@ -144,22 +138,25 @@ export function VendorsTab() {
 
       {vendorsData && po && (
         <>
-          {/* Headline KPIs — tap any card for the formula. */}
+          {/* Vendors by status — one line: total + each status (no duplicate cards). */}
+          <ChartCard title="Vendors by Status" sub={`${vendorCount.toLocaleString()} suppliers · click a card to drill in`}>
+            <StatCards
+              data={[
+                { name: 'Total', value: vendorCount, sub: 'all suppliers', tone: 'info', primary: true },
+                ...byStatus.map((s) => ({ name: s.name, value: s.value })),
+              ]}
+              total={vendorCount}
+              onSelect={openStatusDrill}
+            />
+          </ChartCard>
+
+          {/* PO spend is a separate (money) metric — kept as its own card. */}
           <div className="kpis">
-            <KpiCard label="# Vendors" period="suppliers on record" value={vendorCount.toLocaleString()}
-              info={{ formula: 'Count of every vendor (supplier) record returned by Striven, grouped below by their status.' }}
-              breakdown={vendorBreakdown}
-              {...kpi(0)} active={openKpi === 0} />
             <KpiCard label="PO Spend" period="across all purchase orders" value={formatCurrency(po.totalValue)} trend="up"
               info={{ formula: 'Total value of every purchase order raised in Striven — what we have committed to spend with vendors. The biggest vendors are listed below.' }}
               breakdown={spendBreakdown}
-              {...kpi(1)} active={openKpi === 1} />
+              {...kpi(0)} active={openKpi === 0} />
           </div>
-
-          {/* Vendors by status — compact cards (Active, Prospect, …). Click to drill. */}
-          <ChartCard title="Vendors by Status" sub={`${vendorCount.toLocaleString()} suppliers · click a status to drill in`}>
-            <StatCards data={byStatus} total={vendorCount} onSelect={openStatusDrill} />
-          </ChartCard>
 
           {/* Charts — uniform 2-col grid. Click a bar to drill into that vendor's POs. */}
           <div className="chart-grid">

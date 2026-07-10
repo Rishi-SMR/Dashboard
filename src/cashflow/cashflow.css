@@ -482,6 +482,10 @@ code {
 .stat-card[data-tone="warn"] { --tone: #d97706; }
 .stat-card[data-tone="none"] { --tone: #dc2626; }
 .stat-card[data-tone="info"] { --tone: #0A369F; }
+/* Headline "Total" card — brand-tinted, slightly bolder. */
+.stat-card.primary { background: var(--accent-soft); border-color: #bfd3f2; }
+.stat-card.primary .stat-card-value { color: var(--accent); }
+@media (prefers-color-scheme: dark) { .stat-card.primary { background: rgba(10,54,159,0.18); } }
 
 /* P&L income statement. */
 .pl-statement { max-width: 520px; }

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { fetchStrivenCustomers, type CustomersResult, type Customer } from '../strivenApi';
-import { KpiCard, type KpiBreakdownRow } from './KpiCard';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
 import { ChartCard, StatCards, DrillModal } from '../chartKit';
@@ -18,7 +17,6 @@ export function PatientsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [openKpi, setOpenKpi] = useState<number | null>(null);
   const [drill, setDrill] = useState<null | { title: string; sub?: string; rows: Record<string, ReactNode>[] }>(null);
 
   async function load() {
@@ -47,16 +45,6 @@ export function PatientsTab() {
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [patients]);
 
-  const statusBreakdown: KpiBreakdownRow[] = [
-    ...byStatus.slice(0, 6).map((s): KpiBreakdownRow => ({ label: s.name, value: String(s.value), sub: total > 0 ? `${Math.round((s.value / total) * 100)}%` : undefined })),
-    { label: 'Total patients', value: String(total), strong: true },
-  ];
-
-  const activeBreakdown: KpiBreakdownRow[] = [
-    { label: 'Active', value: String(active), sub: `${activeRate}%`, strong: true },
-    { label: 'Not active', value: String(total - active), sub: `${100 - activeRate}%` },
-  ];
-
   // Text filter across ref / masked name / status.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -70,24 +58,19 @@ export function PatientsTab() {
   const shown = filtered.slice(0, ROW_CAP);
   const more = Math.max(0, filtered.length - ROW_CAP);
 
-  const kpi = (i: number) => ({
-    open: openKpi === i, active: openKpi === i,
-    onClick: () => setOpenKpi((o) => (o === i ? null : i)),
-    onClose: () => setOpenKpi(null),
-  });
-
-  // Clicking a status bar drills into that cohort's patient rows.
+  // Clicking a status card drills into that cohort's patient rows ('Total' = all).
   function openDrillFor(status: string) {
     if (!status) return;
-    const rows = patients
-      .filter((p) => ((p.status || 'Unknown').trim() || 'Unknown') === status)
-      .map((p) => ({
-        ref: p.ref || '—',
-        name: <strong>{p.name || '—'}</strong>,
-        status: <StatusPill status={p.status} />,
-        since: fmtDate(p.since),
-      }));
-    setDrill({ title: `${status} patients`, sub: `${rows.length} of ${total} · names masked (PHI protected)`, rows });
+    const list = status === 'Total'
+      ? patients
+      : patients.filter((p) => ((p.status || 'Unknown').trim() || 'Unknown') === status);
+    const rows = list.map((p) => ({
+      ref: p.ref || '—',
+      name: <strong>{p.name || '—'}</strong>,
+      status: <StatusPill status={p.status} />,
+      since: fmtDate(p.since),
+    }));
+    setDrill({ title: status === 'Total' ? 'All patients' : `${status} patients`, sub: `${rows.length} of ${total} · names masked (PHI protected)`, rows });
   }
 
   return (
@@ -114,18 +97,16 @@ export function PatientsTab() {
             <span>Patient names are masked to initials server-side and every identifying detail is withheld — PHI protected (HIPAA). Nothing is un-masked in the browser.</span>
           </div>
 
-          {/* Headline KPIs — tap any card for the formula. */}
-          <div className="kpis">
-            <KpiCard label="Total Patients" period="customers on record in Striven" value={total.toLocaleString()}
-              info={{ formula: 'Count of every customer (patient) record returned by Striven.' }}
-              breakdown={statusBreakdown} {...kpi(0)} />
-            <KpiCard label="Active" period="status = Active" value={active.toLocaleString()} sub={`${activeRate}% of roster`} trend={activeRate >= 50 ? 'up' : 'down'}
-              info={{ formula: 'Count of patients whose status equals "Active", divided by all patients for the rate.' }}
-              breakdown={activeBreakdown} {...kpi(1)} />
-          </div>
-
-          <ChartCard title="Patients by Status" sub={`${total.toLocaleString()} on record · click a status to drill in`}>
-            <StatCards data={byStatus} total={total} onSelect={openDrillFor} />
+          {/* One line: total + each status — no duplicated cards. */}
+          <ChartCard title="Patients by Status" sub={`${total.toLocaleString()} on record · ${activeRate}% active · click a card to drill in`}>
+            <StatCards
+              data={[
+                { name: 'Total', value: total, sub: 'all patients', tone: 'info', primary: true },
+                ...byStatus.map((s) => ({ name: s.name, value: s.value })),
+              ]}
+              total={total}
+              onSelect={openDrillFor}
+            />
           </ChartCard>
 
           {/* Detail table: patient roster with text filter */}

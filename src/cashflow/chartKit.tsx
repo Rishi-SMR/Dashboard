@@ -16,20 +16,21 @@ const trunc = (v: string, n = 18) => (v && v.length > n ? v.slice(0, n - 1) + 'â
 // for a handful of categories (e.g. patients/vendors by status). Colour-coded by
 // status tone; pass onSelect to make each card a clickable drill.
 export function StatCards({ data, total, onSelect }: {
-  data: { name: string; value: number }[];
+  data: { name: string; value: number; sub?: string; tone?: 'ok' | 'warn' | 'none' | 'info'; primary?: boolean }[];
   total?: number;
   onSelect?: (name: string) => void;
 }) {
-  const clickable = !!onSelect;
   return (
     <div className="stat-cards">
       {data.map((d, i) => {
         const pctOf = total && total > 0 ? Math.round((d.value / total) * 100) : null;
+        const subText = d.sub ?? (pctOf != null ? `${pctOf}% of total` : undefined);
+        const clickable = !!onSelect;
         return (
           <div
             key={i}
-            className={`stat-card${clickable ? ' clickable' : ''}`}
-            data-tone={statusTone(d.name)}
+            className={`stat-card${clickable ? ' clickable' : ''}${d.primary ? ' primary' : ''}`}
+            data-tone={d.tone ?? statusTone(d.name)}
             role={clickable ? 'button' : undefined}
             tabIndex={clickable ? 0 : undefined}
             onClick={clickable ? () => onSelect!(d.name) : undefined}
@@ -37,7 +38,7 @@ export function StatCards({ data, total, onSelect }: {
           >
             <span className="stat-card-label" title={d.name}>{d.name}</span>
             <span className="stat-card-value">{d.value.toLocaleString()}</span>
-            {pctOf != null && <span className="stat-card-sub">{pctOf}% of total</span>}
+            {subText && <span className="stat-card-sub">{subText}</span>}
           </div>
         );
       })}
