@@ -1,0 +1,1081 @@
+/* Match the AR Dashboard's palette + typography so both apps feel like
+   the same product. AR uses forest-green (#0A369F) accents and the
+   Inter family - both mirrored here. Original teal/UI-sans-serif tokens
+   are gone; the same variable NAMES stay so all 38 cashflow components
+   pick up the new values without per-component edits. */
+:root {
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text: #0f172a;
+  --muted: #94a3b8;
+  --muted-strong: #475569;
+  --accent: #0A369F;         /* SMR royal blue */
+  --accent-hover: #082B7F;
+  --accent-soft: #E6ECFA;
+  --accent-soft-2: #F2F5FC;
+  --warn: #d97706;
+  --warn-soft: #fef3c7;
+  --danger: #dc2626;
+  --danger-soft: #fee2e2;
+  --info: #2563eb;
+  --info-soft: #dbeafe;
+  --chart-payroll: #0A369F;
+  --chart-nonpayroll: #d97706;
+  --highlight: #fef9c3;
+
+  font-family: 'Inter', -apple-system, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  font-family: inherit;
+}
+
+code {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+
+/* --- App shell --- */
+.shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+}
+.brand-name { font-weight: 600; font-size: 15px; }
+.brand-sub { color: var(--muted); font-size: 11px; margin-top: 1px; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+}
+.nav-item:hover { background: var(--panel-2); color: var(--text); }
+.nav-item.active {
+  background: var(--accent-soft-2);
+  color: var(--accent);
+  font-weight: 600;
+}
+.nav-item .nav-icon {
+  width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  color: currentColor;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.user-chip .avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 12px;
+}
+.user-chip .who { font-size: 12px; }
+.user-chip .who .who-name { font-weight: 600; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-chip .who .who-role { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* --- Main area --- */
+.main {
+  padding: 20px 24px;
+  width: 100%;
+  min-width: 0;          /* allow grid child to shrink so tables can scroll */
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 4px 0; }
+.page-sub { color: var(--muted); font-size: 13px; }
+
+/* --- Buttons / chips / period selector --- */
+.btn {
+  background: var(--accent);
+  color: #ffffff;
+  border: 0;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn:hover { background: var(--accent-hover); }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn.ghost {
+  background: transparent;
+  color: var(--muted-strong);
+  border: 1px solid var(--border-strong);
+}
+.btn.ghost:hover { color: var(--text); border-color: var(--text); background: transparent; }
+
+.segmented {
+  display: inline-flex;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  gap: 2px;
+}
+.segmented button {
+  background: transparent;
+  border: 0;
+  padding: 8px 16px;
+  border-radius: 8px;
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.segmented button:hover { color: var(--text); }
+.segmented button.active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+/* --- Cards / KPI --- */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .kpis { grid-template-columns: 1fr; } }
+
+.kpi {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.kpi.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.kpi.active .kpi-label { color: rgba(255,255,255,0.85); }
+.kpi.active .kpi-sub { color: rgba(255,255,255,0.85); }
+.kpi-label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.kpi-period {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.kpi.active .kpi-period { color: rgba(255,255,255,0.8); }
+.kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.kpi-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.kpi-sub.up { color: #059669; }
+.kpi-sub.down { color: var(--danger); }
+.kpi-sub-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11px;
+  margin-right: 6px;
+}
+.kpi.active .kpi-sub-chip { background: rgba(255,255,255,0.18); color: #ffffff; }
+.kpi-sub-chip.down { background: var(--danger-soft); color: var(--danger); }
+
+/* --- Tappable KPI cards: tap to see how the number is computed + select (green) --- */
+.kpi.clickable {
+  cursor: pointer;
+  position: relative;
+  transition: box-shadow 0.15s ease, transform 0.05s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.kpi.clickable:hover { box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10); }
+.kpi.clickable:active { transform: translateY(1px); }
+.kpi.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.kpi-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  line-height: 1;
+  vertical-align: middle;
+  opacity: 0.5;
+}
+.kpi.clickable:hover .kpi-info-icon { opacity: 0.85; }
+.kpi.active .kpi-info-icon { opacity: 0.9; }
+
+/* Centered modal pop-up (replaces the old drop-below popover) */
+.kpi-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  cursor: default;
+  -webkit-tap-highlight-color: transparent;
+}
+.kpi-modal {
+  background: #ffffff;
+  color: var(--text);
+  width: min(440px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35);
+  padding: 22px 22px 20px;
+  text-align: left;
+  cursor: default;
+  animation: kpiPop 0.14s ease-out;
+}
+@keyframes kpiPop {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+.kpi-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kpi-modal-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kpi-modal-x {
+  border: none;
+  background: transparent;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  margin: -4px -4px 0 0;
+}
+.kpi-modal-x:hover { color: var(--text); }
+.kpi-modal-value {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 6px 0 12px;
+}
+.kpi-modal-formula {
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.kpi-modal-rows {
+  margin: 14px 0 4px;
+  border-top: 1px solid var(--border);
+}
+.kpi-modal-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.kpi-modal-row-label { color: var(--muted-strong); }
+.kpi-modal-row-sub { color: var(--muted); margin-left: 6px; font-size: 12px; }
+.kpi-modal-row-value {
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.kpi-modal-row.strong .kpi-modal-row-label { color: var(--text); font-weight: 700; }
+.kpi-modal-row.strong .kpi-modal-row-value { color: var(--accent); }
+.kpi-modal-note { font-size: 13px; color: var(--muted); padding: 12px 2px; }
+.kpi-modal-note.error { color: var(--danger); }
+.kpi-modal-detail {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted-strong);
+  margin-top: 14px;
+}
+
+/* --- Section card / chart --- */
+.section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  margin-bottom: 20px;
+}
+/* Collapsible variant: when closed, drop section-head bottom margin so the
+   collapsed bar feels tight rather than padded for absent content. */
+.section.collapsible.collapsed { padding-bottom: 14px; }
+.section.collapsible.collapsed .section-head { margin-bottom: 0; }
+.section.collapsible .section-head {
+  cursor: pointer;
+  user-select: none;
+}
+.section.collapsible .section-head:hover .section-title { color: var(--accent); }
+.section-toggle {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.section-sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* --- Filter tabs (Orders Included style) --- */
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-tab {
+  background: transparent;
+  border: 0;
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.filter-tab:hover { background: var(--panel-2); color: var(--text); }
+.filter-tab.active { background: var(--accent); color: white; }
+
+/* --- Empty / error states --- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  text-align: center;
+  gap: 12px;
+}
+.empty p { color: var(--muted); max-width: 480px; line-height: 1.5; }
+
+.error {
+  background: var(--danger-soft);
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+/* --- Table --- */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.data-table th, .data-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.data-table th {
+  background: var(--panel-2);
+  color: var(--muted-strong);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  position: sticky;
+  top: 0;
+}
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.data-table tbody tr:hover { background: var(--panel-2); }
+.data-table tr.group-row td {
+  background: #f0fdfa;
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.data-table tr.subtotal-row td {
+  background: var(--panel-2);
+  font-weight: 700;
+}
+.data-table tr.total-row td {
+  background: var(--accent);
+  color: white;
+  font-weight: 700;
+  font-size: 14px;
+}
+/* Total rows are solid green with white text. Some cells set an inline color
+   (e.g. green "received" numbers) which would render green-on-green / low
+   contrast - force white so every total-row figure stays readable. */
+.data-table tr.total-row td,
+.data-table tr.total-row td strong,
+.data-table tr.total-row td span { color: #ffffff !important; }
+
+/* --- Pills (audit etc.) --- */
+.pill-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  white-space: nowrap;
+}
+.pill-tag.tag-strong { background: var(--accent-soft); border-color: #99e6d8; color: #047857; }
+.pill-tag.tag-fuzzy { background: var(--warn-soft); border-color: #fde68a; color: #92400e; }
+.pill-tag.tag-line { background: var(--info-soft); border-color: #bfdbfe; color: #1e40af; }
+.pill-tag.tag-none { background: var(--danger-soft); border-color: #fecaca; color: #991b1b; }
+.pill-tag.tag-ok { background: var(--accent-soft); border-color: #99e6d8; color: #047857; }
+.pill-tag.tag-warn { background: var(--warn-soft); border-color: #fde68a; color: #92400e; }
+.pill-tag.tag-muted { color: var(--muted); }
+
+/* --- Audit specific --- */
+.audit-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; gap: 12px; }
+.audit-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.audit-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.audit-pill:hover:not(:disabled) { border-color: var(--text); }
+.audit-pill.static, .audit-pill:disabled { cursor: default; opacity: 0.85; }
+.audit-pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+.audit-pill-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; font-weight: 600; }
+.audit-pill.active .audit-pill-label { color: rgba(255,255,255,0.8); }
+.audit-pill-value { font-weight: 700; font-size: 13px; }
+.audit-pill.tone-ok { border-color: #99e6d8; }
+.audit-pill.tone-warn { border-color: #fde68a; }
+.audit-pill.tone-info { border-color: #bfdbfe; }
+.audit-pill.tone-danger { border-color: #fecaca; }
+
+.data-table tr.row-none { background: #fff7f7; }
+.data-table tr.row-fuzzy { background: #fffbeb; }
+
+.vendor-name { font-weight: 500; }
+.vendor-note { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+.audit-unexpected { margin-top: 18px; }
+.audit-unexpected summary {
+  cursor: pointer;
+  color: var(--muted-strong);
+  font-size: 13px;
+  padding: 8px 0;
+  font-weight: 500;
+}
+.audit-unexpected summary:hover { color: var(--text); }
+.audit-unexpected[open] summary { color: var(--text); }
+
+/* --- Expenses hub tabs --- */
+.expenses-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+.expenses-tab {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  padding: 10px 16px;
+  border-radius: 8px;
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.expenses-tab:hover { background: var(--panel-2); color: var(--text); }
+.expenses-tab.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* --- Chart card --- */
+.chart-card { padding: 20px; }
+.chart-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+.chart-subtitle { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+
+/* --- Mobile shell --- */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { position: relative; height: auto; flex-direction: row; overflow-x: auto; gap: 6px; }
+  .brand { border-bottom: 0; padding: 0; margin: 0 4px 0 0; border-right: 1px solid var(--border); padding-right: 12px; }
+  .sidebar-footer { display: none; }
+  .nav-item { flex: 0 0 auto; }
+  .main { padding: 14px; }
+  .section { padding: 16px; border-radius: 10px; }
+  .section-head { flex-wrap: wrap; }
+  .page-head { flex-wrap: wrap; }
+  .data-table th, .data-table td { padding: 8px 8px; font-size: 12px; }
+}
+
+/* --- Narrower phones --- */
+@media (max-width: 640px) {
+  .main { padding: 10px; }
+  .section { padding: 12px; margin-bottom: 12px; }
+  .section-title { font-size: 14px; }
+  .section-sub { font-size: 11px; }
+}
+
+/* --- Wide screens: keep readable max-width but let cashflow tables go wider --- */
+.main > .page-head,
+.main > .kpis,
+.main > .section { max-width: 1600px; margin-left: auto; margin-right: auto; }
+
+/* --- Tables always overflow horizontally cleanly inside any wrapper --- */
+.section .table-wrap { max-width: 100%; }
+.section table { max-width: 100%; }
+.data-table .num { white-space: nowrap; }
+
+/* =========================================================================
+   CASHFLOW DASHBOARD - comprehensive mobile pass (≤ 768px)
+   ========================================================================= */
+@media (max-width: 768px) {
+  /* App shell - sidebar collapses, main content goes full-width */
+  .shell {
+    display: flex;
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100% !important;
+    min-height: auto !important;
+    flex-direction: row;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--panel);
+  }
+  .sidebar > * { flex-shrink: 0; }
+
+  .main {
+    padding: 14px 12px 40px !important;
+  }
+
+  /* Page head - title + sub stack, refresh button moves below */
+  .page-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 0 0 12px;
+  }
+  .page-title { font-size: 18px; }
+  .page-sub { font-size: 12px; }
+
+  /* KPI grid - already responsive but tighter on phone */
+  .kpis { gap: 10px; }
+  .kpi { padding: 14px 16px; border-radius: 10px; }
+  .kpi-label { font-size: 12px; }
+  .kpi-period { font-size: 11px; }
+  .kpi-value { font-size: 22px; }
+  .kpi-sub { font-size: 11px; }
+
+  /* Sections */
+  .section { padding: 14px; border-radius: 10px; }
+  .section-head { flex-direction: column; align-items: flex-start; gap: 6px; padding: 0 0 10px; }
+  .section-title { font-size: 14px; }
+  .section-sub { font-size: 11.5px; }
+
+  /* Tables - horizontal scroll, smaller font */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -14px; }
+  .data-table { font-size: 12px; }
+  .data-table th, .data-table td { padding: 8px 10px; }
+  .data-table th { font-size: 10.5px; letter-spacing: 0.03em; }
+
+  /* Expenses sub-tab strip - horizontal scroll */
+  .expenses-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 4px 0;
+    gap: 4px;
+  }
+  .expenses-tab {
+    flex: 0 0 auto;
+    padding: 8px 12px;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  /* Empty + error states */
+  .empty { padding: 24px 14px; }
+
+  /* Buttons easier to tap */
+  .btn, .btn.ghost {
+    min-height: 38px;
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+}
+
+/* Extra-small phones (≤ 380px) */
+@media (max-width: 380px) {
+  .main { padding: 12px 10px 32px !important; }
+  .page-title { font-size: 16px; }
+  .kpi-value { font-size: 20px; }
+}
+
+/* ============================================================
+   Commission tab: colourful KPI cards + drill-down pop-up modal
+   ============================================================ */
+
+/* Colourful, lift-on-hover KPI cards. --cm-accent / --cm-accent-2 are set
+   inline per rep. */
+.cm-kpi {
+  position: relative;
+  overflow: hidden;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.cm-kpi::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 5px;
+  background: linear-gradient(90deg, var(--cm-accent, var(--accent)), var(--cm-accent-2, var(--accent-hover)));
+}
+.cm-kpi:not(.cm-total):hover {
+  transform: translateY(-4px);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+}
+.cm-kpi.is-active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--cm-accent, var(--accent)), var(--cm-accent-2, var(--accent-hover)));
+}
+.cm-kpi.is-active::before { opacity: 0; }
+.cm-kpi.is-active .kpi-label,
+.cm-kpi.is-active .kpi-period,
+.cm-kpi.is-active .kpi-sub { color: rgba(255, 255, 255, 0.92); }
+.cm-total { cursor: default; }
+
+/* Anchor the corner InfoTip on commission tables (main view + drill modal) */
+.commission-tab .section,
+.cm-modal-body .section { position: relative; }
+
+/* NEW / OLD / WL count chips inside KPI cards */
+.cm-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  margin-right: 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.cm-chip-new { background: #dcfce7; color: #0A369F; }
+.cm-chip-old { background: #e2e8f0; color: #475569; }
+.cm-chip-wl  { background: #fef3c7; color: #b45309; }
+.cm-kpi.is-active .cm-chip { background: rgba(255, 255, 255, 0.22); color: #fff; }
+
+/* Drill-down modal */
+.cm-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 20px;
+  overflow-y: auto;
+  animation: cmFade .18s ease;
+}
+.cm-modal {
+  background: var(--bg);
+  border-radius: 16px;
+  width: min(1180px, 100%);
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.38);
+  overflow: hidden;
+  animation: cmRise .24s cubic-bezier(.2, .8, .2, 1);
+}
+.cm-modal-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px;
+  color: #fff;
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+}
+.cm-head-left { display: flex; align-items: center; gap: 14px; }
+.cm-rep-dot {
+  flex: none;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.12);
+}
+.cm-modal-head .cm-title { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.cm-modal-head .cm-sub { font-size: 12px; opacity: .8; margin-top: 3px; }
+
+/* Drill navigation: month rows + back button */
+.cm-month-row { transition: background .12s ease; }
+.cm-month-row:hover { background: var(--accent-soft, #e6f4ef); }
+.cm-back { margin-bottom: 14px; font-size: 12px; }
+.cm-modal-close {
+  flex: none;
+  border: none;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  width: 34px; height: 34px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  transition: background .15s ease;
+}
+.cm-modal-close:hover { background: rgba(255, 255, 255, 0.34); }
+.cm-modal-body { padding: 20px 24px 28px; }
+.cm-modal-body .section:last-child { margin-bottom: 0; }
+
+@keyframes cmFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cmRise {
+  from { opacity: 0; transform: translateY(18px) scale(.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ============================================================
+   Commission tab: overall polish (scoped to .commission-tab so
+   other dashboard tabs are untouched)
+   ============================================================ */
+
+/* --- Header band --- */
+.cm-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(21, 128, 61, 0.06), transparent 55%),
+    linear-gradient(180deg, #ffffff, #fbfdfc);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.commission-tab .page-title { display: flex; align-items: center; margin: 0; }
+.cm-live-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  margin-left: 12px;
+}
+.cm-refreshing { font-size: 11px; font-weight: 600; color: #b45309; margin-left: 10px; }
+
+/* --- Rule chips (replaces the run-on rules sentence) --- */
+.cm-rules { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.cm-rule-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: var(--muted-strong);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.cm-rule-new { background: #dcfce7; color: #0A369F; border-color: #bbf7d0; }
+.cm-rule-old { background: #e2e8f0; color: #475569; border-color: #cbd5e1; }
+.cm-rule-wl  { background: #fef3c7; color: #b45309; border-color: #fde68a; }
+.cm-rule-muted { background: #f8fafc; color: var(--muted); }
+
+/* --- KPI cards: tighten the count-chip row --- */
+.commission-tab .kpi-value { margin-top: 2px; }
+.commission-tab .kpi-sub .cm-chip { margin-top: 4px; }
+
+/* --- Tables: zebra striping + calmer hover + crisper headers --- */
+.commission-tab .section { border-radius: 16px; }
+.commission-tab .section-title { display: flex; align-items: center; gap: 9px; }
+.commission-tab .section-title::before {
+  content: '';
+  width: 4px; height: 15px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-hover));
+}
+.commission-tab .table-wrap { border-radius: 12px; }
+.commission-tab .data-table thead th {
+  background: #f8fafc;
+  border-bottom: 1px solid var(--border-strong);
+  letter-spacing: 0.045em;
+}
+.commission-tab .data-table tbody td { border-bottom: 1px solid #f1f5f9; }
+/* Zebra: special rows (.total-row/.subtotal-row/.group-row) paint their own
+   <td> background, which covers this <tr> stripe - so no extra exclusion. */
+.commission-tab .data-table tbody tr:nth-child(even) { background: #fafbfc; }
+.commission-tab .data-table tbody tr:hover:not(.total-row) { background: var(--accent-soft-2, #f0fdf4); }
+.commission-tab .data-table .num { font-variant-numeric: tabular-nums; }
+.commission-tab .data-table tr.total-row td {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+}
+
+/* Same table polish inside the drill modal */
+.cm-modal-body .data-table thead th { background: #f8fafc; }
+.cm-modal-body .data-table tbody tr:hover:not(.total-row) { background: var(--accent-soft-2, #f0fdf4); }
+
+/* 13-week row labels: clean bold like OPENING CASH; clickability shown on hover */
+.cf-rowlabel {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  cursor: pointer;
+}
+.cf-rowlabel:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ============================================================================
+   SMR animations — subtle entrance + hover polish for the Striven tabs.
+   ========================================================================== */
+@keyframes smrFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes smrPop    { from { opacity: 0; transform: scale(.96); }        to { opacity: 1; transform: scale(1); } }
+
+/* Tabs mount into .main — fade their sections/KPIs up, with a gentle stagger. */
+.main .section { animation: smrFadeUp .5s cubic-bezier(.16,.84,.44,1) both; }
+.main .kpis { animation: smrFadeUp .45s cubic-bezier(.16,.84,.44,1) both; }
+.main .kpi { animation: smrPop .5s cubic-bezier(.16,.84,.44,1) both; transition: transform .18s ease, box-shadow .18s ease; }
+.main .kpi:nth-child(2) { animation-delay: .05s; }
+.main .kpi:nth-child(3) { animation-delay: .1s; }
+.main .kpi:nth-child(4) { animation-delay: .15s; }
+.main .kpi:nth-child(5) { animation-delay: .2s; }
+.main .section:nth-child(2) { animation-delay: .06s; }
+.main .section:nth-child(3) { animation-delay: .12s; }
+.main .section:nth-child(4) { animation-delay: .18s; }
+
+/* Hover lift on KPI cards + table rows. */
+.main .kpi:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(15,23,42,0.10); }
+.main table.data-table tbody tr { transition: background .14s ease; }
+.main table.data-table tbody tr:hover { background: #f8fafc; }
+
+/* Segmented sub-tab toggle used inside tabs (SO/PO, etc.). */
+.smr-seg { display: inline-flex; gap: 4px; padding: 4px; background: #f1f5f9; border-radius: 10px; margin-bottom: 14px; }
+.smr-seg button { border: 0; background: transparent; padding: 6px 16px; border-radius: 7px; font-weight: 600; font-size: 13px; color: #475569; cursor: pointer; transition: all .16s ease; }
+.smr-seg button.active { background: #fff; color: #0A369F; box-shadow: 0 1px 3px rgba(15,23,42,0.12); }
+
+/* Smoother nav transitions. */
+.nav-item { transition: background .16s ease, color .16s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .main .section, .main .kpis, .main .kpi { animation: none !important; }
+}
+
+/* ---- Design-system atoms the Striven tabs rely on ---- */
+:root { --pos: #059669; }
+
+/* Center + constrain page content on wide screens. */
+.main .page-head, .main .kpis, .main .section { max-width: 1600px; margin-left: auto; margin-right: auto; }
+
+/* Numeric table cells: right-aligned, tabular. */
+.data-table .num, .data-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cell-pos { color: var(--pos); font-weight: 600; }
+.cell-neg { color: var(--danger); font-weight: 600; }
+.data-table th { text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
+.muted-note { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
+
+/* Inline spread bar for share/severity columns. */
+.spread-bar { height: 9px; min-width: 2px; border-radius: 3px; background: var(--accent); display: inline-block; }
+
+/* Live-dot in page subtitles. */
+.live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pos); margin-right: 6px; vertical-align: middle; }
+
+/* Drill-down modal (click a row/bar to see the underlying detail). */
+.drill-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgba(15,23,42,0.55); backdrop-filter: blur(3px);
+  display: flex; align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto; animation: smrFadeUp .18s ease; }
+.drill { background: var(--bg); border-radius: 16px; width: min(1020px, 100%); box-shadow: 0 28px 70px rgba(15,23,42,0.38); overflow: hidden; animation: smrPop .22s cubic-bezier(.2,.8,.2,1); }
+.drill-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 16px 22px; color: #fff; background: linear-gradient(135deg, #082B7F, #0f172a); }
+.drill-head .title { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+.drill-head .sub { font-size: 12px; opacity: .82; margin-top: 3px; }
+.drill-close { border: 0; background: rgba(255,255,255,0.18); color: #fff; width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 20px; }
+.drill-close:hover { background: rgba(255,255,255,0.34); }
+.drill-body { padding: 20px 22px 26px; }
+
+/* ---- Uniform chart grid + summary stat tiles (Overview & tabs) ---- */
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+@media (max-width: 1000px) { .chart-grid { grid-template-columns: 1fr; } }
+.chart-grid > .section, .chart-card { margin: 0 !important; display: flex; flex-direction: column; }
+.chart-card { padding: 18px; }
+.chart-card .chart-box { width: 100%; height: 260px; }
+
+/* Section-summary mini stat tiles: one per app area. */
+.mini-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 20px; }
+@media (max-width: 1200px) { .mini-stats { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 640px)  { .mini-stats { grid-template-columns: repeat(2, 1fr); } }
+.mini-stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px;
+  box-shadow: 0 1px 2px rgba(15,23,42,0.04); transition: transform .16s ease, box-shadow .16s ease;
+  text-align: left; width: 100%; font: inherit; color: inherit; cursor: pointer; display: block; }
+.mini-stat:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(15,23,42,0.08); border-color: var(--accent); }
+.mini-stat .n { font-size: 21px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
+.mini-stat .l { font-size: 11.5px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+
+/* Status pills — semantic colors, independent of the (blue) brand accent. */
+.pill-tag.tag-ok, .pill-tag.tag-strong { background: #dcfce7; border-color: #bbf7d0; color: #166534; }
+.pill-tag.tag-warn, .pill-tag.tag-fuzzy { background: #fef3c7; border-color: #fde68a; color: #92400e; }
+.pill-tag.tag-info, .pill-tag.tag-line  { background: #dbeafe; border-color: #bfdbfe; color: #1e40af; }
+.pill-tag.tag-none, .pill-tag.tag-danger { background: #fee2e2; border-color: #fecaca; color: #991b1b; }

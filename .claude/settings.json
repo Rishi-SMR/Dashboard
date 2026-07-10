@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sort -t: -k2 -n)",
+      "Bash(awk '/\\\\.expenses-tabs \\\\{/,/^\\\\}/' cashflow.css)",
+      "Bash(awk '/\\\\.expenses-tab\\\\.active/,/^\\\\}/' cashflow.css)",
+      "Bash(grep -rEno \"['\\\\\"][A-Za-z0-9_-]{40,}['\\\\\"]\" src/ar/lib/sheets.js cashflow-server/src/config.ts cashflow-server/src/qbConfig.ts)",
+      "Bash(python3 -c ' *)",
+      "Bash(find . -iname \"*smr*\" -not -path \"./node_modules/*\")",
+      "Bash(find public *)",
+      "Bash(grep -rnE \"from ['\\\\\"].*\\(\\\\.\\\\./ar|/ar/\\)\" src/cashflow)",
+      "Bash(grep -rniE \"hero\\\\.jpg|Bot\\\\.png|robots\" src index.html cashflow.html)",
+      "Bash(cp \"src/ar/dashboard/components/InfoTip.jsx\" \"src/cashflow/components/InfoTip.jsx\")",
+      "Bash(rm -rf src/ar)",
+      "Bash(rm -f public/hero.jpg public/robots.txt)",
+      "Bash(cd \"/Users/rishiarora/.claude/projects/-Users-rishiarora-Documents-Vs-Code-SMR/eb4d409b-8372-49c1-ac77-1c24c27b7f7c/subagents/workflows/wf_1f2b449e-d27\")",
+      "Bash(grep -c '\"type\":\"result\"' journal.jsonl)",
+      "Bash(tail -c 1200 journal.jsonl)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(curl -s \"http://localhost:5173/src/cashflow/main.tsx\")",
+      "WebFetch(domain:api.striven.com)",
+      "WebFetch(domain:dlthub.com)",
+      "Bash(tee /tmp/tsc_out.txt)",
+      "Bash(tee /private/tmp/claude-501/-Users-rishiarora-Documents-Vs-Code-SMR/eb4d409b-8372-49c1-ac77-1c24c27b7f7c/scratchpad/tsc.log)",
+      "Bash(curl -s -L -A \"Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36\" \"https://api.striven.com/help\" -o /private/tmp/claude-501/-Users-rishiarora-Documents-Vs-Code-SMR/eb4d409b-8372-49c1-ac77-1c24c27b7f7c/scratchpad/striven_help.html -w \"HTTP %{http_code} size=%{size_download}\\\\n\")",
+      "Bash(echo \"---exit:$?---\")",
+      "Bash(curl -s -L -A \"Mozilla/5.0\" \"https://api.striven.com/swagger/v1/swagger.json\" -o striven_swagger.json -w \"HTTP %{http_code} size=%{size_download}\\\\n\")",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(timeout 180 node_modules/.bin/tsc --noEmit -p tsconfig.json)"
+    ]
+  }
+}
