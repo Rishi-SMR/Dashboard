@@ -57,7 +57,7 @@ export type SoDetail = { id: number; ref: string; customer: string; date: string
 export type Aging = { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
 
 export type ArInvoice = { id: number; number: string; customer: string; customerId: number | null; dueDate: string | null; total: number; open: number; currency: string; memo: string };
-export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[] };
+export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number };
 
 export type ApBill = { id: number; number: string; vendor: string; vendorId: number | null; dueDate: string | null; total: number; open: number; currency: string };
 export type ApResult = { totalOpen: number; count: number; aging: Aging; bills: ApBill[] };

@@ -328,18 +328,73 @@ async function getStatus() {
   ]);
   return { connected: true, company: profile?.companyName ?? null, subdomain: profile?.subdomain ?? null, currency: null, phiMasked: MASK_PHI };
 }
+const isVoidStatus = (s) => /cancel|void|denied|rejected|fail/i.test(s || '');
+// Invoice status is only on the detail endpoint (search omits it). Enrich the
+// small OPEN set so we can drop VOIDED invoices that still carry an open balance
+// — exactly what Striven's A/R aging excludes. Fast direct fetch, cached 30 min.
+async function fetchInvStatus(id) {
+  for (let a = 0; a < 5; a++) {
+    const tok = await getToken();
+    const res = await fetch(`${BASE}/v1/invoices/${id}`, { headers: { Authorization: `Bearer ${tok}`, 'User-Agent': UA, Accept: 'application/json' } });
+    if (res.status === 429) { await new Promise((x) => setTimeout(x, 400)); continue; }
+    if (res.status === 401) { await getToken(true); continue; }
+    if (!res.ok) return null;
+    const j = await res.json().catch(() => null);
+    return j?.status?.name ?? '';
+  }
+  return null;
+}
+const _invStatus = new Map();
+async function enrichInvoiceStatus(list) {
+  const todo = list.filter((r) => !_invStatus.has(r.id));
+  if (todo.length) {
+    let i = 0;
+    const worker = async () => { while (i < todo.length) { const r = todo[i++]; const s = await fetchInvStatus(r.id); if (s !== null) _invStatus.set(r.id, s); } };
+    await Promise.all(Array.from({ length: 12 }, worker));
+  }
+  return list.map((r) => ({ ...r, statusName: _invStatus.get(r.id) }));
+}
 async function getAR() {
-  const inv = openOnly(await allInvoices()).filter(notVoid);
-  const invoices = inv.map((r) => ({
+  const openInv = openOnly(await allInvoices());                          // openBalance > 0
+  const enriched = await enrichInvoiceStatus(openInv);
+  const live = enriched.filter((r) => !isVoidStatus(r.statusName));       // drop VOIDED invoices
+  const voidedExcluded = round2(enriched.filter((r) => isVoidStatus(r.statusName)).reduce((s, r) => s + Number(r.openBalance || 0), 0));
+
+  // Unapplied customer credits (payment.openBalance) — money the customer has paid
+  // that isn't applied to a specific invoice. Striven nets these against the
+  // customer's open invoices in the aging, so we do the same.
+  const payments = await allPayments();
+  const creditByCust = new Map();
+  for (const p of payments) { const c = p.customer?.id; const un = Number(p.openBalance || 0); if (c && un > 0) creditByCust.set(c, (creditByCust.get(c) || 0) + un); }
+  const unappliedCredits = round2([...creditByCust.values()].reduce((s, v) => s + v, 0));
+
+  // Net each customer's credit against their open invoices, oldest due first.
+  const byCust = new Map();
+  for (const r of live) { const c = r.customer?.id ?? 0; if (!byCust.has(c)) byCust.set(c, []); byCust.get(c).push(r); }
+  const netRows = [];
+  for (const [, invs] of byCust) {
+    let credit = creditByCust.get(invs[0].customer?.id) || 0;
+    invs.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+    for (const r of invs) {
+      const open = Number(r.openBalance || 0);
+      const applied = Math.min(open, credit); credit -= applied;
+      netRows.push({ ...r, netOpen: round2(open - applied) });
+    }
+  }
+  const invoices = netRows.filter((r) => r.netOpen > 0.005).map((r) => ({
     id: r.id, number: r.txnNumber ?? String(r.id),
     customer: maskName(r.customer?.name), customerId: r.customer?.id ?? null,
-    dueDate: r.dueDate ?? null, total: Number(r.invoiceTotal ?? 0), open: Number(r.openBalance ?? 0),
+    dueDate: r.dueDate ?? null, total: Number(r.invoiceTotal ?? 0), open: r.netOpen,
     currency: r.currency?.currencyISOCode ?? 'USD',
   }));
   const totalOpen = round2(invoices.reduce((s, i) => s + i.open, 0));
-  const aging = bucketAging(inv, 'dueDate', 'openBalance');
+  const aging = bucketAging(invoices, 'dueDate', 'open');
   for (const k of Object.keys(aging)) aging[k] = round2(aging[k]);
-  return { totalOpen, count: invoices.length, aging, invoices: invoices.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')) };
+  return {
+    totalOpen, count: invoices.length, aging,
+    unappliedCredits, voidedExcluded,
+    invoices: invoices.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')),
+  };
 }
 async function getAP() {
   const bills = openOnly(await allBills()).filter(notVoid);

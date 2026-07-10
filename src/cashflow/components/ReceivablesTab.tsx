@@ -76,8 +76,6 @@ export function ReceivablesTab() {
   const invoices = ar?.invoices ?? [];
   const invTotal = invoices.reduce((s, i) => s + (i.total || 0), 0);
   const invOpen = invoices.reduce((s, i) => s + (i.open || 0), 0);
-  const invReceived = invTotal - invOpen;                               // money already paid on still-open invoices
-  const partPaid = invoices.filter((i) => (i.total || 0) - (i.open || 0) > 0.005).length;
   const payRows = payments?.recent ?? [];
   const payShownTotal = payRows.reduce((s, p) => s + (p.amount || 0), 0);
 
@@ -145,8 +143,9 @@ export function ReceivablesTab() {
           {/* Open Invoices */}
           <div className="section" style={{ marginTop: 16 }}>
             <div className="section-head"><div><h2 className="section-title">Open Invoices</h2><div className="section-sub">
-              Unpaid patient invoices with a remaining balance
-              {invReceived > 0.005 && <> · <span style={{ color: '#047857', fontWeight: 700 }}>{formatCurrency(invReceived)} already received</span> on these{partPaid ? ` (${partPaid} part-paid)` : ''}</>}
+              Unpaid patient invoices with a remaining balance — matches Striven's A/R aging
+              {(ar.unappliedCredits ?? 0) > 0.005 && <> · <span style={{ color: '#047857', fontWeight: 700 }}>{formatCurrency(ar.unappliedCredits!)}</span> paid but unapplied (netted out)</>}
+              {(ar.voidedExcluded ?? 0) > 0.005 && <> · {formatCurrency(ar.voidedExcluded!)} voided excluded</>}
             </div></div></div>
             <div className="table-wrap">
               <table className="data-table">
@@ -184,7 +183,7 @@ export function ReceivablesTab() {
                     <tr className="total-row">
                       <td colSpan={3}>TOTAL</td>
                       <td className="num">{formatCurrency(invTotal)}</td>
-                      <td className="num">{formatCurrency(invReceived)}</td>
+                      <td className="num">{formatCurrency(invTotal - invOpen)}</td>
                       <td className="num">{formatCurrency(invOpen)}</td>
                     </tr>
                   )}
