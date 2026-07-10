@@ -61,6 +61,7 @@ export function ReceivablesTab() {
         customer: inv.customer || '—',
         due: fmtDate(inv.dueDate),
         total: formatCurrency(inv.total),
+        received: (inv.total || 0) - (inv.open || 0) > 0.005 ? formatCurrency((inv.total || 0) - (inv.open || 0)) : '—',
         open: formatCurrency(inv.open),
       }));
     setDrill({
@@ -75,6 +76,8 @@ export function ReceivablesTab() {
   const invoices = ar?.invoices ?? [];
   const invTotal = invoices.reduce((s, i) => s + (i.total || 0), 0);
   const invOpen = invoices.reduce((s, i) => s + (i.open || 0), 0);
+  const invReceived = invTotal - invOpen;                               // money already paid on still-open invoices
+  const partPaid = invoices.filter((i) => (i.total || 0) - (i.open || 0) > 0.005).length;
   const payRows = payments?.recent ?? [];
   const payShownTotal = payRows.reduce((s, p) => s + (p.amount || 0), 0);
 
@@ -141,7 +144,10 @@ export function ReceivablesTab() {
 
           {/* Open Invoices */}
           <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head"><div><h2 className="section-title">Open Invoices</h2><div className="section-sub">Unpaid patient invoices with a remaining balance</div></div></div>
+            <div className="section-head"><div><h2 className="section-title">Open Invoices</h2><div className="section-sub">
+              Unpaid patient invoices with a remaining balance
+              {invReceived > 0.005 && <> · <span style={{ color: '#047857', fontWeight: 700 }}>{formatCurrency(invReceived)} already received</span> on these{partPaid ? ` (${partPaid} part-paid)` : ''}</>}
+            </div></div></div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -150,26 +156,35 @@ export function ReceivablesTab() {
                     <th>Patient</th>
                     <th>Due</th>
                     <th className="num">Total</th>
+                    <th className="num">Received</th>
                     <th className="num">Open</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {invoices.map((inv) => (
-                    <tr key={inv.id}>
-                      <td><strong>#{inv.number}</strong></td>
-                      <td>{inv.customer || '—'}</td>
-                      <td>{fmtDate(inv.dueDate)}</td>
-                      <td className="num">{formatCurrency(inv.total)}</td>
-                      <td className="num cell-neg">{formatCurrency(inv.open)}</td>
-                    </tr>
-                  ))}
+                  {invoices.map((inv) => {
+                    const recv = (inv.total || 0) - (inv.open || 0);
+                    return (
+                      <tr key={inv.id}>
+                        <td>
+                          <strong>#{inv.number}</strong>
+                          {recv > 0.005 && <span className="pill-tag tag-ok" style={{ marginLeft: 8, fontSize: 10.5 }}>part-paid</span>}
+                        </td>
+                        <td>{inv.customer || '—'}</td>
+                        <td>{fmtDate(inv.dueDate)}</td>
+                        <td className="num">{formatCurrency(inv.total)}</td>
+                        <td className="num cell-pos">{recv > 0.005 ? formatCurrency(recv) : '—'}</td>
+                        <td className="num cell-neg">{formatCurrency(inv.open)}</td>
+                      </tr>
+                    );
+                  })}
                   {invoices.length === 0 && (
-                    <tr><td colSpan={5} style={{ color: C.muted }}>No open invoices.</td></tr>
+                    <tr><td colSpan={6} style={{ color: C.muted }}>No open invoices.</td></tr>
                   )}
                   {invoices.length > 0 && (
                     <tr className="total-row">
                       <td colSpan={3}>TOTAL</td>
                       <td className="num">{formatCurrency(invTotal)}</td>
+                      <td className="num">{formatCurrency(invReceived)}</td>
                       <td className="num">{formatCurrency(invOpen)}</td>
                     </tr>
                   )}
@@ -230,6 +245,7 @@ export function ReceivablesTab() {
             { key: 'customer', label: 'Patient' },
             { key: 'due', label: 'Due' },
             { key: 'total', label: 'Total', num: true },
+            { key: 'received', label: 'Received', num: true },
             { key: 'open', label: 'Open', num: true },
           ]}
           rows={drill.rows}
