@@ -12,6 +12,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { PO_STATUS } from './po-status.js';
+import { INVOICE_STATUS } from './invoice-status.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -329,36 +330,14 @@ async function getStatus() {
   return { connected: true, company: profile?.companyName ?? null, subdomain: profile?.subdomain ?? null, currency: null, phiMasked: MASK_PHI };
 }
 const isVoidStatus = (s) => /cancel|void|denied|rejected|fail/i.test(s || '');
-// Invoice status is only on the detail endpoint (search omits it). Enrich the
-// small OPEN set so we can drop VOIDED invoices that still carry an open balance
-// — exactly what Striven's A/R aging excludes. Fast direct fetch, cached 30 min.
-async function fetchInvStatus(id) {
-  for (let a = 0; a < 5; a++) {
-    const tok = await getToken();
-    const res = await fetch(`${BASE}/v1/invoices/${id}`, { headers: { Authorization: `Bearer ${tok}`, 'User-Agent': UA, Accept: 'application/json' } });
-    if (res.status === 429) { await new Promise((x) => setTimeout(x, 400)); continue; }
-    if (res.status === 401) { await getToken(true); continue; }
-    if (!res.ok) return null;
-    const j = await res.json().catch(() => null);
-    return j?.status?.name ?? '';
-  }
-  return null;
-}
-const _invStatus = new Map();
-async function enrichInvoiceStatus(list) {
-  const todo = list.filter((r) => !_invStatus.has(r.id));
-  if (todo.length) {
-    let i = 0;
-    const worker = async () => { while (i < todo.length) { const r = todo[i++]; const s = await fetchInvStatus(r.id); if (s !== null) _invStatus.set(r.id, s); } };
-    await Promise.all(Array.from({ length: 12 }, worker));
-  }
-  return list.map((r) => ({ ...r, statusName: _invStatus.get(r.id) }));
-}
+// Invoice status is only on the detail endpoint (search omits it) and fetching
+// it live per request times out on Vercel, so voided invoices are resolved from a
+// shipped snapshot (INVOICE_STATUS). Invoices missing from it default to active.
 async function getAR() {
   const openInv = openOnly(await allInvoices());                          // openBalance > 0
-  const enriched = await enrichInvoiceStatus(openInv);
-  const live = enriched.filter((r) => !isVoidStatus(r.statusName));       // drop VOIDED invoices
-  const voidedExcluded = round2(enriched.filter((r) => isVoidStatus(r.statusName)).reduce((s, r) => s + Number(r.openBalance || 0), 0));
+  const statusOf = (r) => INVOICE_STATUS[r.id] ?? '';
+  const live = openInv.filter((r) => !isVoidStatus(statusOf(r)));         // drop VOIDED invoices
+  const voidedExcluded = round2(openInv.filter((r) => isVoidStatus(statusOf(r))).reduce((s, r) => s + Number(r.openBalance || 0), 0));
 
   // Unapplied customer credits (payment.openBalance) — money the customer has paid
   // that isn't applied to a specific invoice. Striven nets these against the
