@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk } from './_striven.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -10,7 +10,18 @@ const cookieVal = (header, name) => {
 };
 
 export default async function handler(req, res) {
-  const pathname = new URL(req.url, 'http://localhost').pathname; // e.g. /api/ar
+  const url = new URL(req.url, 'http://localhost');
+  const pathname = url.pathname; // e.g. /api/ar
+
+  // ---- out-of-band cache refresh (pg_cron every 6h) — token-guarded, no cookie ----
+  if (pathname === '/api/refresh') {
+    if (!refreshTokenOk(url.searchParams.get('token') || req.headers['x-refresh-token'])) {
+      return res.status(401).json({ error: 'bad token' });
+    }
+    try { return res.status(200).json({ ok: true, refreshed: await refreshAll() }); }
+    catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
   const { gateEnabled, sessionToken } = await getAuth();
 
   // ---- access gate (only when a password / users are configured) ----

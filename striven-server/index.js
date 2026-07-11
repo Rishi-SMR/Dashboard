@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk } from '../api/_striven.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -18,7 +18,17 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
-  const pathname = new URL(req.url, `http://localhost:${PORT}`).pathname;
+  const reqUrl = new URL(req.url, `http://localhost:${PORT}`);
+  const pathname = reqUrl.pathname;
+
+  if (pathname === '/api/refresh') {
+    if (!refreshTokenOk(reqUrl.searchParams.get('token') || req.headers['x-refresh-token'])) {
+      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'bad token' }));
+    }
+    try { const refreshed = await refreshAll(); res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, refreshed })); }
+    catch (e) { res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message })); }
+  }
+
   const { gateEnabled, sessionToken } = await getAuth();
 
   if (gateEnabled) {
