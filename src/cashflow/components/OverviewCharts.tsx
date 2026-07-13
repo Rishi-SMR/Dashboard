@@ -37,16 +37,17 @@ const momDelta = (series: { month: string; value: number }[]): { pct: number; up
 const completeVals = (series: { month: string; value: number }[]): number[] =>
   series.filter((p) => p.month < nowYm).map((p) => p.value ?? 0);
 
-// 7 KPI hues — reuse the shipped chart palette so cards + charts read as one system.
+// 7 KPI hues — the gradient top-rail per card; reused verbatim as the chart
+// palette so the strip + charts read as one system (premium light board-deck).
 type Hue = { from: string; to: string; glow: string };
 const HUE = {
-  purple: { from: '#8B5CF6', to: '#5A2FCE', glow: 'rgba(139,92,246,.45)' } as Hue,
-  blue: { from: '#5B8DEF', to: '#2E5FD0', glow: 'rgba(91,141,239,.45)' } as Hue,
-  teal: { from: '#2ED3E8', to: '#0E9BB8', glow: 'rgba(46,211,232,.42)' } as Hue,
-  green: { from: '#86E05C', to: '#3C8A18', glow: 'rgba(134,224,92,.42)' } as Hue,
-  orange: { from: '#F7B24C', to: '#EA6A0C', glow: 'rgba(247,178,76,.42)' } as Hue,
-  violet: { from: '#B58CFB', to: '#7C3AED', glow: 'rgba(181,140,251,.45)' } as Hue,
-  red: { from: '#FB7793', to: '#E11D48', glow: 'rgba(251,119,147,.45)' } as Hue,
+  revenue: { from: '#3B82F6', to: '#2563EB', glow: 'rgba(37,99,235,0.28)' } as Hue,
+  cash: { from: '#22C55E', to: '#16A34A', glow: 'rgba(22,163,74,0.26)' } as Hue,
+  ar: { from: '#14B8A6', to: '#0D9488', glow: 'rgba(13,148,136,0.26)' } as Hue,
+  ap: { from: '#A855F7', to: '#7C3AED', glow: 'rgba(124,58,237,0.28)' } as Hue,
+  sales: { from: '#FBBF24', to: '#D97706', glow: 'rgba(217,119,6,0.28)' } as Hue,
+  po: { from: '#EC4899', to: '#BE185D', glow: 'rgba(190,24,93,0.26)' } as Hue,
+  exc: { from: '#FB7185', to: '#E11D48', glow: 'rgba(225,29,72,0.28)' } as Hue,
 };
 
 function Sparkline({ values }: { values: number[] }) {
@@ -170,17 +171,23 @@ export function OverviewCharts() {
 
   const ready = ar && ap && pl && payments && so && po;
 
+  const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <div className="page-head">
+    <div className="exec-deck" style={{ padding: '4px 2px' }}>
+      <div className="page-head deck-head">
         <div>
-          <h1 className="page-title">Executive Overview</h1>
-          <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · financials from Striven (6-hourly sync)
-            <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--border-strong)' }}>🔒 PHI masked</span>
+          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Financial Overview</h1>
+          <div className="page-sub">Sports Med Recovery · executive summary</div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
+          <div className="deck-pills">
+            <span className="deck-pill"><span className="live-dot" /> Live sync</span>
+            <span className="deck-pill muted">🔒 PHI masked</span>
+            <span className="deck-pill muted">As of {asOf}</span>
           </div>
         </div>
-        <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -188,31 +195,34 @@ export function OverviewCharts() {
 
       {ready && (
         <>
-          {/* ── vivid KPI strip (the visual hero) ── */}
+          <div className="kpi-eyebrow">
+            <span className="ey-label">Key Metrics</span>
+            <span className="ey-pill">FY2026 · YTD</span>
+          </div>
           <div className="kpi-strip">
-            <KpiGrad label="Revenue YTD" value={formatCurrency(pl.revenue)} period="invoiced this year" hue={HUE.purple}
+            <KpiGrad label="Revenue YTD" value={formatCurrency(pl.revenue)} period="invoiced this year" hue={HUE.revenue}
               delta={momDelta(revSeries)} spark={completeVals(revSeries)} onClick={go('pl')} />
-            <KpiGrad label="Cash Received" value={formatCurrency(payments.total)} period={`${payments.count} payments`} hue={HUE.blue}
+            <KpiGrad label="Cash Received" value={formatCurrency(payments.total)} period={`${payments.count} payments`} hue={HUE.cash}
               delta={momDelta(cashSeries)} spark={completeVals(cashSeries)} onClick={go('accounts')} />
-            <KpiGrad label="AR Open" value={formatCurrency(ar.totalOpen)} period="unpaid invoices" hue={HUE.teal}
+            <KpiGrad label="AR Open" value={formatCurrency(ar.totalOpen)} period="unpaid invoices" hue={HUE.ar}
               chip={`${ar.count} invoices`} onClick={go('receivables')} />
-            <KpiGrad label="AP Open" value={formatCurrency(ap.totalOpen)} period="unpaid bills" hue={HUE.green}
+            <KpiGrad label="AP Open" value={formatCurrency(ap.totalOpen)} period="unpaid bills" hue={HUE.ap}
               chip={`${ap.count} bills`} onClick={go('payables')} />
-            <KpiGrad label="Sales Orders" value={formatCurrency(so.totalValue)} period="order book (not revenue)" hue={HUE.orange}
+            <KpiGrad label="Sales Orders" value={formatCurrency(so.totalValue)} period="order book (not revenue)" hue={HUE.sales}
               chip={`${so.count} orders`} onClick={go('orders')} />
-            <KpiGrad label="PO Spend" value={formatCurrency(po.totalValue)} period="committed · active only" hue={HUE.violet}
+            <KpiGrad label="PO Spend" value={formatCurrency(po.totalValue)} period="committed · active only" hue={HUE.po}
               chip={`${po.count} POs`} onClick={go('tracking')} />
-            <KpiGrad label="Open Exceptions" value={String(exc?.totalOpen ?? 0)} period="data-quality items" hue={HUE.red}
+            <KpiGrad label="Open Exceptions" value={String(exc?.totalOpen ?? 0)} period="data-quality items" hue={HUE.exc}
               chip="needs review" onClick={go('exceptions')} />
           </div>
 
           {/* ── dense analytics grid ── */}
           <div className="exec-grid">
             <ChartCard span={1} title="Cash Collection Rate" sub="Cash received ÷ revenue YTD">
-              <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.info} height={150} />
-              <div style={{ textAlign: 'center', fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>
-                {formatCurrency(payments.total)} of {formatCurrency(pl.revenue)}
-                {dsoApprox != null && <><br />DSO ≈ {dsoApprox} days <span style={{ opacity: 0.7 }}>(approx)</span></>}
+              <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.brand} height={168} />
+              <div className="gauge-foot">
+                <div className="gf">Collected<b>{formatCurrency(payments.total)}</b></div>
+                <div className="gf right">DSO ≈ <b>{dsoApprox != null ? `${dsoApprox} days` : '—'}</b></div>
               </div>
             </ChartCard>
 
@@ -267,12 +277,12 @@ export function OverviewCharts() {
               ) : <div className="qb-placeholder"><span className="qb-icon">✓</span>No open exceptions</div>}
             </ChartCard>
 
-            {/* Honest placeholders — these need the accounting source (QuickBooks) that Striven's API doesn't expose. */}
-            <ChartCard span={2} title="Margins & Working Capital" sub="Balance sheet, EBITDA, cash-on-hand">
+            {/* Honest placeholder — these need the accounting source (QuickBooks) that Striven's API doesn't expose. */}
+            <ChartCard span={4} title="Margins &amp; Working Capital" sub="Balance sheet · EBITDA · cash-on-hand">
               <div className="qb-placeholder">
                 <span className="qb-icon">🔗</span>
-                <div>Bank balance, real P&amp;L and working-capital metrics aren't in Striven's API.</div>
-                <div className="qb-cta">Connect QuickBooks to unlock</div>
+                <span>Bank balance, real P&amp;L and working-capital metrics aren't in Striven's API.</span>
+                <span className="qb-cta">Connect QuickBooks to unlock →</span>
               </div>
             </ChartCard>
           </div>
