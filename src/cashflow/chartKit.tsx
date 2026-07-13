@@ -4,6 +4,7 @@
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, LabelList,
+  PieChart, Pie, RadialBarChart, RadialBar, PolarAngleAxis,
 } from 'recharts';
 import type { ReactNode } from 'react';
 import { formatCurrency } from './format';
@@ -46,11 +47,30 @@ export function StatCards({ data, total, onSelect }: {
   );
 }
 
-export function ChartCard({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
+export function ChartCard({ title, sub, span, right, children }: { title: string; sub?: string; span?: number; right?: ReactNode; children: ReactNode }) {
   return (
-    <div className="section chart-card">
-      <div className="section-head"><div><h2 className="section-title">{title}</h2>{sub && <div className="section-sub">{sub}</div>}</div></div>
+    <div className={`section chart-card${span ? ` span-${span}` : ''}`}>
+      <div className="section-head"><div><h2 className="section-title">{title}</h2>{sub && <div className="section-sub">{sub}</div>}</div>{right}</div>
       {children}
+    </div>
+  );
+}
+
+// Grouped vertical bars per month — e.g. revenue vs expenses side-by-side.
+export function GroupedBars({ data, series }: { data: Record<string, number | string>[]; series: { key: string; name: string; color: string }[] }) {
+  return (
+    <div className="chart-box">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 14, right: 16, left: 4, bottom: 2 }} barGap={3} barCategoryGap="26%">
+          <CartesianGrid {...gridProps} />
+          <XAxis dataKey="month" {...axisProps} tickFormatter={(m: string) => monthLabel(String(m))} />
+          <YAxis {...axisProps} width={54} tickFormatter={compactMoney} />
+          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.08)' }} formatter={(v: number | string, n: string) => [formatCurrency(Number(v)), n]} />
+          {series.map((s) => (
+            <Bar key={s.key} {...NOANIM} dataKey={s.key} name={s.name} fill={s.color} radius={[4, 4, 0, 0]} maxBarSize={26} />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -152,6 +172,58 @@ export function TrendArea({ data, series, idPrefix }: { data: Record<string, num
           ))}
         </AreaChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+// Donut with a value in the hole. For share-of-total breakdowns (revenue mix, etc.).
+export function Donut({ data, centerValue, centerLabel, onSelect }: {
+  data: { name: string; value: number; color: string }[];
+  centerValue?: string; centerLabel?: string; onSelect?: (name: string) => void;
+}) {
+  return (
+    <div className="chart-box" style={{ position: 'relative' }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie data={data} dataKey="value" nameKey="name" innerRadius="60%" outerRadius="88%" paddingAngle={2} stroke="none"
+            cursor={onSelect ? 'pointer' : undefined} onClick={onSelect ? (p: any) => onSelect(p?.name) : undefined} {...NOANIM}>
+            {data.map((d, i) => <Cell key={i} fill={d.color} />)}
+          </Pie>
+          <Tooltip {...tooltipStyle} formatter={(v: number | string, n: string) => [formatCurrency(Number(v)), n]} />
+        </PieChart>
+      </ResponsiveContainer>
+      {(centerValue || centerLabel) && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          {centerValue && <div style={{ fontSize: 21, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text)' }}>{centerValue}</div>}
+          {centerLabel && <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600, marginTop: 2 }}>{centerLabel}</div>}
+        </div>
+      )}
+      <div className="donut-legend">
+        {data.map((d) => (
+          <div key={d.name} className="donut-legend-item"><span className="donut-dot" style={{ background: d.color }} />{d.name}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// A single radial gauge ring (0–max) with a big value in the centre.
+export function GaugeRing({ value, max = 100, color, centerValue, centerLabel, height = 150 }: {
+  value: number; max?: number; color: string; centerValue: string; centerLabel: string; height?: number;
+}) {
+  const pct = Math.max(0, Math.min(100, (value / (max || 1)) * 100));
+  return (
+    <div style={{ position: 'relative', height }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <RadialBarChart innerRadius="72%" outerRadius="100%" data={[{ value: pct, fill: color }]} startAngle={90} endAngle={-270}>
+          <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
+          <RadialBar background={{ fill: 'var(--gauge-track)' }} dataKey="value" cornerRadius={20} {...NOANIM} />
+        </RadialBarChart>
+      </ResponsiveContainer>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text)' }}>{centerValue}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2, textAlign: 'center' }}>{centerLabel}</div>
+      </div>
     </div>
   );
 }

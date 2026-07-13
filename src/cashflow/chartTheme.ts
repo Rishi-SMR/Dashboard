@@ -3,27 +3,28 @@
 
 // Brand + semantic colors.
 // Sports Med Recovery brand: royal blue primary, lime-green + teal accents.
+// Dark premium theme — bright, high-contrast hues that read on a near-black bg.
 export const C = {
-  brand: '#0A369F',       // SMR royal blue (primary / interactive)
-  brandDark: '#082B7F',
-  brandLight: '#E6ECFA',
-  positive: '#6EB60A',    // SMR lime green (money in / good)
-  negative: '#dc2626',
-  warning: '#d97706',
-  info: '#009EB7',        // SMR teal
-  purple: '#8b5cf6',
-  ink: '#0f172a',
-  sub: '#475569',
-  muted: '#64748b',
-  grid: '#e2e8f0',
-  surface: '#ffffff',
+  brand: '#5B8DEF',       // luminous blue (primary / interactive)
+  brandDark: '#4C86F5',
+  brandLight: 'rgba(91,141,239,0.14)',
+  positive: '#86E05C',    // lime-green (money in / good)
+  negative: '#F76C7A',    // rose
+  warning: '#F5A524',     // amber
+  info: '#2ED3E8',        // teal
+  purple: '#B58CFB',
+  ink: '#EAF0FA',
+  sub: '#B4C1D6',
+  muted: '#7E8CA6',
+  grid: '#1E2A40',
+  surface: '#121A2B',
 };
 
-// Categorical series palette — brand blue / green / teal lead, then distinct hues.
-export const SERIES = ['#0A369F', '#6EB60A', '#009EB7', '#f59e0b', '#dc2626', '#8b5cf6', '#ec4899', '#eab308', '#14b8a6', '#6366f1'];
+// Categorical series palette — vivid hues for a dark canvas.
+export const SERIES = ['#5B8DEF', '#86E05C', '#2ED3E8', '#F5A524', '#F76C7A', '#B58CFB', '#EC4899', '#EAB308', '#2DD4BF', '#818CF8'];
 
-// AR/AP aging ramp: current (green) → 90+ (red).
-export const AGING = ['#15803d', '#65a30d', '#ca8a04', '#ea580c', '#dc2626'];
+// AR/AP aging ramp: current → 90+ (brightened for dark).
+export const AGING = ['#38BDF8', '#4ADE80', '#A3E635', '#FBBF24', '#F87171'];
 export const AGING_LABELS: { key: 'current' | 'd1_30' | 'd31_60' | 'd61_90' | 'd90plus'; label: string }[] = [
   { key: 'current', label: 'Current' },
   { key: 'd1_30', label: '1–30' },
@@ -39,8 +40,9 @@ export const ANIM = { isAnimationActive: true, animationDuration: 900, animation
 export const axisProps = { tick: { fill: C.muted, fontSize: 11 }, tickLine: false, axisLine: { stroke: C.grid } };
 export const gridProps = { stroke: C.grid, strokeDasharray: '3 3', vertical: false };
 export const tooltipStyle = {
-  contentStyle: { borderRadius: 10, border: `1px solid ${C.grid}`, boxShadow: '0 8px 24px rgba(15,23,42,0.12)', fontSize: 12 },
+  contentStyle: { borderRadius: 10, border: '1px solid #2C3B57', background: '#0E1626', boxShadow: '0 12px 30px rgba(0,0,0,0.5)', fontSize: 12 },
   labelStyle: { color: C.ink, fontWeight: 600 },
+  itemStyle: { color: C.sub },
 };
 
 // Compact currency for axis ticks: 12345 -> "$12k".
@@ -64,10 +66,10 @@ export const compactMoney = kCurrency; // axis ticks
 
 // Severity/aging ramp keyed by the visible bucket label (sky→green→…→red).
 export const SEVERITY: Record<string, string> = {
-  Current: '#0ea5e9', '1–30': '#16a34a', '31–60': '#84cc16', '61–90': '#f59e0b', '90+': '#dc2626',
+  Current: '#38BDF8', '1–30': '#4ADE80', '31–60': '#A3E635', '61–90': '#FBBF24', '90+': '#F87171',
 };
 // Generic 6-color categorical ramp when keys are arbitrary.
-export const CAT6 = ['#0A369F', '#6EB60A', '#009EB7', '#d97706', '#dc2626', '#7c3aed'];
+export const CAT6 = ['#5B8DEF', '#86E05C', '#2ED3E8', '#F5A524', '#F76C7A', '#B58CFB'];
 
 // Map any Striven status string to a pill tone: ok | warn | none | info.
 export const statusTone = (status: string): 'ok' | 'warn' | 'none' | 'info' => {
