@@ -186,23 +186,26 @@ export function OrdersTab() {
     .slice(0, 12)
     .map((v) => ({ name: v.vendor || '—', value: v.total }));
 
-  // Chart drill: SO rows for the clicked status.
+  // Chart drill: SO rows for the clicked status (no patient — ref/type/rep/value).
   function drillSoStatus(status: string) {
     const list = (so?.recent ?? []).filter((o) => (o.status || '—') === status);
+    const sum = list.reduce((t, o) => t + (o.value || 0), 0);
     setDrill({
       title: `Sales Orders — ${status}`,
-      sub: `${list.length} recent order${list.length === 1 ? '' : 's'} in this status`,
+      sub: `${list.length} order${list.length === 1 ? '' : 's'} · ${formatCurrency(sum)}`,
       columns: [
-        { key: 'ref', label: 'Order ref' },
-        { key: 'patient', label: 'Patient' },
-        { key: 'status', label: 'Status' },
-        { key: 'created', label: 'Created' },
+        { key: 'ref', label: 'Order #' },
+        { key: 'type', label: 'PI/VA' },
+        { key: 'rep', label: 'Sales Rep' },
+        { key: 'value', label: 'Value', num: true },
+        { key: 'inv', label: 'Invoiced' },
       ],
       rows: list.map((o) => ({
         ref: <strong>{o.ref}</strong>,
-        patient: o.customer || '—',
-        status: <StatusPill status={o.status} />,
-        created: fmtDate(o.date),
+        type: <StatusPill status={o.type} />,
+        rep: o.rep || '—',
+        value: formatCurrency(o.value),
+        inv: o.invStatus || '—',
       })),
     });
   }
@@ -278,59 +281,67 @@ export function OrdersTab() {
         <>
           <div className="kpis" style={{ marginTop: 16 }}>
             <KpiCard
-              label="Sales Orders"
-              value={so.count.toLocaleString()}
-              period={`${so.byStatus.length} distinct statuses`}
-              info={{ formula: 'Count of every sales order on record in Striven — patient orders, broken out by status.' }}
+              label="Total Order Value" value={formatCurrency(so.totalValue)} period={`${so.count.toLocaleString()} orders · ${so.demoCount} demo excluded`}
+              info={{ formula: 'Sum of order value across all live sales orders (DEMO/test orders excluded), broken out by PI / VA / Tri-Care.' }}
               breakdown={[
-                ...[...so.byStatus]
-                  .sort((a, b) => b.count - a.count)
-                  .map((b) => ({ label: b.status || '—', value: b.count.toLocaleString() })),
-                { label: 'Total', value: so.count.toLocaleString(), strong: true },
+                ...so.byType.map((t) => ({ label: t.type, value: formatCurrency(t.value) })),
+                { label: 'Total', value: formatCurrency(so.totalValue), strong: true },
               ]}
-              active={openKpi === 0}
-              {...kpi(0)}
+              active={openKpi === 0} {...kpi(0)}
             />
+            <KpiCard label="PI Orders" value={so.piva.PI.count.toLocaleString()} period={formatCurrency(so.piva.PI.value)} trend="up"
+              info={{ formula: 'Personal-Injury sales orders (order type = "PI Order"). Count and total order value.' }}
+              breakdown={[{ label: 'PI orders', value: so.piva.PI.count.toLocaleString() }, { label: 'PI value', value: formatCurrency(so.piva.PI.value), strong: true }]}
+              active={openKpi === 1} {...kpi(1)} />
+            <KpiCard label="VA Orders" value={so.piva.VA.count.toLocaleString()} period={formatCurrency(so.piva.VA.value)} trend="up"
+              info={{ formula: 'Veterans Affairs sales orders (order type = "VA Order"). Count and total order value.' }}
+              breakdown={[{ label: 'VA orders', value: so.piva.VA.count.toLocaleString() }, { label: 'VA value', value: formatCurrency(so.piva.VA.value), strong: true }]}
+              active={openKpi === 2} {...kpi(2)} />
+            <KpiCard label="Tri-Care Orders" value={so.piva.TriCare.count.toLocaleString()} period={formatCurrency(so.piva.TriCare.value)}
+              info={{ formula: 'A third order type "Tri-Care" exists in Striven (military health) beyond PI/VA — flagged for confirmation.' }}
+              breakdown={[{ label: 'Tri-Care orders', value: so.piva.TriCare.count.toLocaleString() }, { label: 'Tri-Care value', value: formatCurrency(so.piva.TriCare.value), strong: true }]}
+              active={openKpi === 3} {...kpi(3)} />
           </div>
 
+          {!so.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order type / rep / value enrichment is still populating — numbers will fill in shortly.</span></div>}
+
           <div className="chart-grid">
+            <ChartCard title="Order Value by Type" sub="PI vs VA vs Tri-Care · DEMO excluded">
+              <RankBar data={so.byType.map((t) => ({ name: t.type, value: t.value }))} money colorAt={(i) => SERIES[i % SERIES.length]} />
+            </ChartCard>
             <ChartCard title="Sales Orders by Status" sub={`${so.count.toLocaleString()} orders · click a bar to drill in`}>
-              <RankBar
-                data={statusData}
-                colorAt={(i) => SERIES[i % SERIES.length]}
-                onSelect={drillSoStatus}
-              />
+              <RankBar data={statusData} colorAt={(i) => SERIES[i % SERIES.length]} onSelect={drillSoStatus} />
             </ChartCard>
           </div>
 
+          <ChartCard title="Top Sales Reps by Order Value" sub="Referring group / rep on the sales order (not patient)">
+            <RankBar data={so.byRep.map((r) => ({ name: r.rep, value: r.value }))} money colorAt={() => C.brand} />
+          </ChartCard>
+
           <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head"><h2 className="section-title">Recent Sales Orders</h2></div>
+            <div className="section-head"><div><h2 className="section-title">Recent Sales Orders</h2><div className="section-sub">Referenced by order number · PI/VA + sales rep · no patient data</div></div></div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr>
-                    <th>Order ref</th>
-                    <th>Patient</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                  </tr>
+                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th className="num">Value</th><th>Status</th><th>Invoiced</th></tr>
                 </thead>
                 <tbody>
                   {so.recent.map((o) => (
-                    <tr key={o.id} onClick={() => openSo(o.id)} style={{ cursor: 'pointer' }}>
+                    <tr key={o.id}>
                       <td><strong>{o.ref}</strong></td>
-                      <td>{o.customer || '—'}</td>
+                      <td><StatusPill status={o.type} /></td>
+                      <td>{o.rep || '—'}</td>
+                      <td className="num">{formatCurrency(o.value)}</td>
                       <td><StatusPill status={o.status} /></td>
-                      <td>{fmtDate(o.date)}</td>
+                      <td>{o.invStatus || '—'}</td>
                     </tr>
                   ))}
                   {so.recent.length === 0 && (
-                    <tr><td colSpan={4} className="muted-note">No recent sales orders.</td></tr>
+                    <tr><td colSpan={6} className="muted-note">No sales orders.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
-            <div className="muted-note">Patient names masked — PHI protected. Click a row for order totals.</div>
           </div>
         </>
       )}

@@ -375,13 +375,12 @@ function bucketAging(rows, dueField, openField) {
 }
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// PHI: patient names/initials must NEVER leave the backend. When masking is on we
+// emit nothing — the UI references transactions by invoice/order number, sales rep,
+// clinic/hospital and payer instead (per the data-privacy requirement).
 function maskName(name, mask = MASK_PHI) {
-  if (!name) return '';
-  if (!mask) return String(name);
-  const parts = String(name).trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '—';
-  if (parts.length === 1) return parts[0][0].toUpperCase() + '.';
-  return `${parts[0][0].toUpperCase()}.${parts[parts.length - 1][0].toUpperCase()}.`;
+  if (!mask) return String(name || '');
+  return '';
 }
 const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(rawNumber ?? '')) ? `${prefix}-${id}` : String(rawNumber));
 
@@ -515,13 +514,36 @@ async function getPL() {
     approximate: true,
   };
 }
+// SO type/rep/value come from the offline 'so_detail' enrichment (search omits them).
+async function soDetailMap() { const sb = await sbCacheRead('so_detail'); return (sb && sb.data) || {}; }
+const soClass = (t) => { const s = (t || '').toLowerCase(); if (/pi/.test(s)) return 'PI'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/tri.?care/.test(s)) return 'TriCare'; return 'Other'; };
+const isDemoType = (t) => /demo|test|sample/i.test(t || '');
 async function getSO() {
   const rows = await allSO();
-  const byStatus = {};
-  for (const r of rows) { const s = r.status?.name ?? 'Unknown'; byStatus[s] = (byStatus[s] || 0) + 1; }
-  const recent = rows.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || '')).slice(0, 25)
-    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), customer: maskName(r.customer?.name), status: r.status?.name ?? '', date: r.dateCreated ?? null }));
-  return { count: rows.length, byStatus: Object.entries(byStatus).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count), recent, phiMasked: MASK_PHI };
+  const det = await soDetailMap();
+  const enriched = rows.map((r) => ({ ...r, d: det[r.id] || {} }));
+  const live = enriched.filter((r) => !isDemoType(r.d.type));        // exclude DEMO / test orders
+  const totalValue = round2(live.reduce((s, r) => s + Number(r.d.total || 0), 0));
+
+  const piva = { PI: { count: 0, value: 0 }, VA: { count: 0, value: 0 }, TriCare: { count: 0, value: 0 }, Other: { count: 0, value: 0 } };
+  for (const r of live) { const c = soClass(r.d.type); piva[c].count++; piva[c].value = round2(piva[c].value + Number(r.d.total || 0)); }
+  // raw type breakdown (PI Order / VA Order / Tri-Care …) minus demo
+  const byTypeMap = {};
+  for (const r of live) { const t = r.d.type || 'Unclassified'; byTypeMap[t] = byTypeMap[t] || { count: 0, value: 0 }; byTypeMap[t].count++; byTypeMap[t].value += Number(r.d.total || 0); }
+  const byType = Object.entries(byTypeMap).map(([type, v]) => ({ type, count: v.count, value: round2(v.value) })).sort((a, b) => b.value - a.value);
+
+  const byStatusMap = {};
+  for (const r of live) { const s = r.status?.name ?? r.d.status ?? 'Unknown'; byStatusMap[s] = (byStatusMap[s] || 0) + 1; }
+  const byStatus = Object.entries(byStatusMap).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
+
+  const byRepMap = {};
+  for (const r of live) { const rep = r.d.rep || 'Unassigned'; byRepMap[rep] = (byRepMap[rep] || 0) + Number(r.d.total || 0); }
+  const byRep = Object.entries(byRepMap).map(([rep, value]) => ({ rep, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 15);
+
+  const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || '')).slice(0, 60)
+    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: r.d.rep || '', value: Number(r.d.total || 0), status: r.status?.name ?? r.d.status ?? '', invStatus: r.d.invStatus || '', date: r.dateCreated ?? null }));
+
+  return { count: live.length, totalValue, piva, byType, byStatus, byRep, recent, demoCount: enriched.length - live.length, enriched: Object.keys(det).length > 0, phiMasked: MASK_PHI };
 }
 const poIsVoid = (r) => /cancel|void|denied|rejected|fail/i.test(r.statusName || '');
 async function getPO() {
@@ -631,6 +653,38 @@ const countBy = (rows, field) => {
   for (const r of rows) { const k = r[field]?.name ?? 'Unknown'; m[k] = (m[k] || 0) + 1; }
   return Object.entries(m).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
 };
+// Data-quality / reconciliation exceptions — all computed from the cached datasets.
+async function getExceptions() {
+  const groups = [];
+  const push = (o) => { if (o.count > 0) groups.push(o); };
+
+  const payments = await allPayments();
+  const unapplied = payments.filter((p) => Number(p.openBalance || 0) > 0);
+  push({ key: 'unapplied_payments', severity: 'warn', title: 'Unapplied customer payments', count: unapplied.length, value: round2(unapplied.reduce((s, p) => s + Number(p.openBalance || 0), 0)), note: 'Customer paid but the payment is not applied to a specific invoice — inflates open AR until applied.', columns: ['ref', 'paid', 'unapplied', 'date'], rows: unapplied.slice(0, 25).map((p) => ({ ref: `PMT-${p.id}`, paid: round2(Number(p.paymentAmount || 0)), unapplied: round2(Number(p.openBalance || 0)), date: (p.paymentDate || p.dateCreated || '').slice(0, 10) })) });
+
+  const invs = await allInvoices();
+  const voidedOpen = invs.filter((r) => Number(r.openBalance || 0) > 0 && isVoidStatus(INVOICE_STATUS[r.id]));
+  push({ key: 'voided_open_invoices', severity: 'high', title: 'Voided invoices still carrying an open balance', count: voidedOpen.length, value: round2(voidedOpen.reduce((s, r) => s + Number(r.openBalance || 0), 0)), note: 'Voided in Striven but still shows open — excluded from AR here. Should be cleared in Striven.', columns: ['ref', 'open', 'status'], rows: voidedOpen.slice(0, 25).map((r) => ({ ref: `#${r.txnNumber || r.id}`, open: round2(Number(r.openBalance || 0)), status: 'Voided' })) });
+
+  const po = await poStatusMap();
+  const cancelledPO = po.filter((r) => r.classified && poIsVoid(r));
+  push({ key: 'cancelled_pos', severity: 'info', title: 'Cancelled POs excluded from PO spend', count: cancelledPO.length, value: round2(cancelledPO.reduce((s, r) => s + Number(r.poTotal || 0), 0)), note: 'Correctly excluded from PO Spend — listed for transparency.', columns: ['ref', 'vendor', 'value'], rows: cancelledPO.slice(0, 25).map((r) => ({ ref: `PO-${r.id}`, vendor: r.vendor?.name || '—', value: round2(Number(r.poTotal || 0)) })) });
+
+  const sos = await allSO(); const det = await soDetailMap();
+  const demo = sos.filter((r) => isDemoType(det[r.id]?.type));
+  push({ key: 'demo_orders', severity: 'warn', title: 'DEMO / test sales orders', count: demo.length, value: round2(demo.reduce((s, r) => s + Number(det[r.id]?.total || 0), 0)), note: 'Test orders — excluded from sales totals. Should be archived in Striven.', columns: ['ref', 'type', 'value'], rows: demo.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '', value: round2(Number(det[r.id]?.total || 0)) })) });
+  const noRep = sos.filter((r) => { const t = det[r.id]?.type; const rep = det[r.id]?.rep; return t && !isDemoType(t) && (!rep || /house account/i.test(rep)); });
+  push({ key: 'missing_rep', severity: 'warn', title: 'Sales orders with no sales rep', count: noRep.length, note: 'Rep is blank or "House Account" — needed for rep reporting.', columns: ['ref', 'rep', 'type'], rows: noRep.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, rep: det[r.id]?.rep || '(none)', type: det[r.id]?.type || '' })) });
+  const unclassified = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && soClass(t) === 'Other'; });
+  push({ key: 'missing_pi_va', severity: 'warn', title: 'Sales orders not classified PI / VA / Tri-Care', count: unclassified.length, note: 'Order type does not map to PI, VA or Tri-Care.', columns: ['ref', 'type'], rows: unclassified.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '(none)' })) });
+
+  const items = await allItems();
+  const noPrice = items.filter((i) => (i.active ?? false) && (Number(i.price || 0) === 0 || Number(i.cost || 0) === 0));
+  push({ key: 'item_price', severity: 'info', title: 'Active items missing a cost or price', count: noPrice.length, note: 'Needed for margin / COGS. Not every missing value is an error.', columns: ['item', 'cost', 'price'], rows: noPrice.slice(0, 25).map((i) => ({ item: i.name || '—', cost: round2(Number(i.cost || 0)), price: round2(Number(i.price || 0)) })) });
+
+  const totalOpen = groups.reduce((s, g) => s + g.count, 0);
+  return { totalOpen, groups, note: 'Reconciliation with bank/card, QuickBooks, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources — pending client input.' };
+}
 async function getTasks() {
   const rows = await allTasks();
   const recent = rows.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || '')).slice(0, 40)
@@ -662,6 +716,7 @@ export const ROUTES = {
   '/api/billpayments': getBillPayments,
   '/api/tasks': getTasks,
   '/api/projects': getProjects,
+  '/api/exceptions': getExceptions,
 };
 export const DYNAMIC = [
   { re: /^\/api\/po\/(\d+)$/, handler: (m) => getPODetail(m[1]) },

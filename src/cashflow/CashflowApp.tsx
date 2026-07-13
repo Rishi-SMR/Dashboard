@@ -9,14 +9,13 @@ const ReceivablesTab = lazy(() => import('./components/ReceivablesTab').then((m)
 const PayablesTab = lazy(() => import('./components/PayablesTab').then((m) => ({ default: m.PayablesTab })));
 const PLTab = lazy(() => import('./components/PLTab').then((m) => ({ default: m.PLTab })));
 const CatalogTab = lazy(() => import('./components/CatalogTab').then((m) => ({ default: m.CatalogTab })));
-const PatientsTab = lazy(() => import('./components/PatientsTab').then((m) => ({ default: m.PatientsTab })));
 const VendorsTab = lazy(() => import('./components/VendorsTab').then((m) => ({ default: m.VendorsTab })));
-const OperationsTab = lazy(() => import('./components/OperationsTab').then((m) => ({ default: m.OperationsTab })));
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
+const ExceptionsTab = lazy(() => import('./components/ExceptionsTab').then((m) => ({ default: m.ExceptionsTab })));
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'pl' | 'orders' | 'patients' | 'vendors' | 'catalog' | 'operations' | 'accounts';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'pl' | 'orders' | 'vendors' | 'catalog' | 'accounts' | 'exceptions';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -67,7 +66,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'pl', 'orders', 'patients', 'vendors', 'catalog', 'operations', 'accounts'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'pl', 'orders', 'vendors', 'catalog', 'accounts', 'exceptions'];
 const initialView = (): ViewKey => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
   return VIEW_KEYS.includes(h) ? h : 'overview';
@@ -95,11 +94,10 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     payables: <PayablesTab />,
     pl: <PLTab />,
     orders: <OrdersTab />,
-    patients: <PatientsTab />,
     vendors: <VendorsTab />,
     catalog: <CatalogTab />,
-    operations: <OperationsTab />,
     accounts: <AccountsTab />,
+    exceptions: <ExceptionsTab />,
   };
 
   return (

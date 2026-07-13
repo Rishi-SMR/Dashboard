@@ -8,11 +8,10 @@ const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'payables', label: 'Payables' },
   { key: 'pl', label: 'P&L' },
   { key: 'orders', label: 'Orders' },
-  { key: 'patients', label: 'Patients' },
   { key: 'vendors', label: 'Vendors' },
   { key: 'catalog', label: 'Catalog' },
-  { key: 'operations', label: 'Operations' },
   { key: 'accounts', label: 'Accounts' },
+  { key: 'exceptions', label: 'Exceptions' },
 ];
 
 // Optional profile-photo + title fallbacks keyed by username. Left empty in the

@@ -11,8 +11,16 @@ async function get<T>(path: string): Promise<T> {
 
 export type StrivenStatus = { connected: boolean; company: string | null; subdomain?: string | null; reason?: string; phiMasked?: boolean };
 
-export type SoRecent = { id: number; ref: string; customer: string; status: string; date: string | null };
-export type SoResult = { count: number; byStatus: { status: string; count: number }[]; recent: SoRecent[]; phiMasked: boolean };
+export type SoRecent = { id: number; ref: string; type: string; rep: string; value: number; status: string; invStatus: string; date: string | null };
+export type SoPivaKey = 'PI' | 'VA' | 'TriCare' | 'Other';
+export type SoResult = {
+  count: number; totalValue: number;
+  piva: Record<SoPivaKey, { count: number; value: number }>;
+  byType: { type: string; count: number; value: number }[];
+  byStatus: { status: string; count: number }[];
+  byRep: { rep: string; value: number }[];
+  recent: SoRecent[]; demoCount: number; enriched: boolean; phiMasked: boolean;
+};
 
 export type PoRecent = { id: number; ref: string; vendor: string; total: number; date: string | null; status?: string };
 export type PoResult = { count: number; totalValue: number; byVendor: { vendor: string; total: number }[]; recent: PoRecent[]; cancelledCount?: number; cancelledValue?: number; pendingCount?: number; pendingValue?: number; totalCount?: number; phiMasked: boolean };
@@ -89,3 +97,7 @@ export const fetchStrivenPayments = () => get<PaymentsResult>('/api/payments');
 export const fetchStrivenBillPayments = () => get<BillPaymentsResult>('/api/billpayments');
 export const fetchStrivenTasks = () => get<TasksResult>('/api/tasks');
 export const fetchStrivenProjects = () => get<ProjectsResult>('/api/projects');
+
+export type ExceptionGroup = { key: string; severity: 'high' | 'warn' | 'info'; title: string; count: number; value?: number; note: string; columns: string[]; rows: Record<string, string | number>[] };
+export type ExceptionsResult = { totalOpen: number; groups: ExceptionGroup[]; note: string };
+export const fetchStrivenExceptions = () => get<ExceptionsResult>('/api/exceptions');

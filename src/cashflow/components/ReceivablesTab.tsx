@@ -66,7 +66,7 @@ export function ReceivablesTab() {
       }));
     setDrill({
       title: `Open Invoices · ${label}`,
-      sub: `${rows.length} invoice${rows.length === 1 ? '' : 's'} in this aging bucket · patient names masked`,
+      sub: `${rows.length} invoice${rows.length === 1 ? '' : 's'} in this aging bucket · referenced by invoice #`,
       rows,
     });
   }
@@ -100,14 +100,14 @@ export function ReceivablesTab() {
           {/* Headline KPIs — tap any card for the formula. */}
           <div className="kpis">
             <KpiCard label="AR Open" period={`${ar.count} open invoices`} value={formatCurrency(ar.totalOpen)}
-              info={{ formula: 'Total unpaid balance across open patient invoices — the sum of each invoice’s remaining Open amount, split by how overdue it is.' }}
+              info={{ formula: 'Total unpaid balance across open invoices — the sum of each invoice’s remaining Open amount, split by how overdue it is.' }}
               breakdown={([
                 ...AGING_LABELS.map((b) => ({ label: b.label, value: formatCurrency(ar.aging[b.key] || 0) })),
                 { label: 'Total', value: formatCurrency(ar.totalOpen), strong: true },
               ]) as KpiBreakdownRow[]}
               {...kpi(0)} active={openKpi === 0} />
             <KpiCard label="Open Invoices" period="awaiting payment" value={String(ar.count)}
-              info={{ formula: 'Count of patient invoices that still carry a remaining balance (not yet fully paid).' }}
+              info={{ formula: 'Count of invoices that still carry a remaining balance (not yet fully paid).' }}
               breakdown={[
                 { label: 'Open invoices', value: String(ar.count) },
                 { label: 'Total open', value: formatCurrency(ar.totalOpen), strong: true },
@@ -120,11 +120,11 @@ export function ReceivablesTab() {
                 { label: 'Total received', value: formatCurrency(payments.total), strong: true },
               ]}
               {...kpi(2)} active={openKpi === 2} />
-            <KpiCard label="Patients" period="on record" value={String(customers.count)}
-              info={{ formula: 'Count of distinct patients (customers) on record in Striven.' }}
+            <KpiCard label="Accounts" period="on record" value={String(customers.count)}
+              info={{ formula: 'Count of accounts on record in Striven.' }}
               breakdown={[
                 { label: 'Active', value: String(customers.customers.filter((c) => /active/i.test(c.status)).length) },
-                { label: 'Total patients', value: String(customers.count), strong: true },
+                { label: 'Total accounts', value: String(customers.count), strong: true },
               ]}
               {...kpi(3)} active={openKpi === 3} />
           </div>
@@ -143,7 +143,7 @@ export function ReceivablesTab() {
           {/* Open Invoices */}
           <div className="section" style={{ marginTop: 16 }}>
             <div className="section-head"><div><h2 className="section-title">Open Invoices</h2><div className="section-sub">
-              Unpaid patient invoices with a remaining balance — matches Striven's A/R aging
+              Unpaid invoices with a remaining balance — matches Striven's A/R aging
               {(ar.unappliedCredits ?? 0) > 0.005 && <> · <span style={{ color: '#047857', fontWeight: 700 }}>{formatCurrency(ar.unappliedCredits!)}</span> paid but unapplied (netted out)</>}
               {(ar.voidedExcluded ?? 0) > 0.005 && <> · {formatCurrency(ar.voidedExcluded!)} voided excluded</>}
             </div></div></div>
@@ -152,7 +152,7 @@ export function ReceivablesTab() {
                 <thead>
                   <tr>
                     <th>Invoice #</th>
-                    <th>Patient</th>
+                    <th>Payer</th>
                     <th>Due</th>
                     <th className="num">Total</th>
                     <th className="num">Received</th>
@@ -190,7 +190,7 @@ export function ReceivablesTab() {
                 </tbody>
               </table>
             </div>
-            <div className="muted-note">Patient names masked — PHI protected.</div>
+            <div className="muted-note">Referenced by invoice number · patient data removed (HIPAA) · Payer mapping pending Payer Master.</div>
           </div>
 
           {/* Recent Payments */}
@@ -201,7 +201,7 @@ export function ReceivablesTab() {
                 <thead>
                   <tr>
                     <th>Payment Ref</th>
-                    <th>Patient</th>
+                    <th>Payer</th>
                     <th>Date</th>
                     <th className="num">Amount</th>
                     <th>Status</th>
@@ -230,7 +230,7 @@ export function ReceivablesTab() {
                 </tbody>
               </table>
             </div>
-            <div className="muted-note">Patient names masked — PHI protected.</div>
+            <div className="muted-note">Referenced by invoice number · patient data removed (HIPAA) · Payer mapping pending Payer Master.</div>
           </div>
         </>
       )}
@@ -241,7 +241,7 @@ export function ReceivablesTab() {
           sub={drill.sub}
           columns={[
             { key: 'number', label: 'Invoice #' },
-            { key: 'customer', label: 'Patient' },
+            { key: 'customer', label: 'Payer' },
             { key: 'due', label: 'Due' },
             { key: 'total', label: 'Total', num: true },
             { key: 'received', label: 'Received', num: true },
