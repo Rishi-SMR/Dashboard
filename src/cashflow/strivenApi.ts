@@ -101,3 +101,9 @@ export const fetchStrivenProjects = () => get<ProjectsResult>('/api/projects');
 export type ExceptionGroup = { key: string; severity: 'high' | 'warn' | 'info'; title: string; count: number; value?: number; note: string; columns: string[]; rows: Record<string, string | number>[] };
 export type ExceptionsResult = { totalOpen: number; groups: ExceptionGroup[]; note: string };
 export const fetchStrivenExceptions = () => get<ExceptionsResult>('/api/exceptions');
+
+export type OrderPo = { ref: string; vendor: string; value: number; status: string };
+export type OrderInv = { ref: string; total: number; open: number; status: string };
+export type OrderRow = { ref: string; pi: string; type: string; rep: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };
+export type OrdersResult = { count: number; orders: OrderRow[]; enriched: boolean; phiMasked: boolean };
+export const fetchStrivenOrders = () => get<OrdersResult>('/api/orders');

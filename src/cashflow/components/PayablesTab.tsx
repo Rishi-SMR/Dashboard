@@ -3,7 +3,7 @@ import {
   fetchStrivenAP, fetchStrivenVendors, fetchStrivenPO, fetchStrivenBillPayments,
   type ApResult, type VendorsResult, type PoResult, type BillPaymentsResult,
 } from '../strivenApi';
-import { formatCurrency } from '../format';
+import { formatCurrency, formatPhone } from '../format';
 import { KpiCard } from './KpiCard';
 import { StatusPill } from './StatusPill';
 import { C, AGING_LABELS } from '../chartTheme';
@@ -279,7 +279,7 @@ export function PayablesTab() {
                       <td><strong>{v.name || '—'}</strong></td>
                       <td><StatusPill status={v.status} /></td>
                       <td>{v.terms || '—'}</td>
-                      <td>{v.phone || '—'}</td>
+                      <td>{formatPhone(v.phone)}</td>
                     </tr>
                   ))}
                   {vendorRows.length === 0 && (

@@ -545,6 +545,23 @@ async function getSO() {
 
   return { count: live.length, totalValue, piva, byType, byStatus, byRep, recent, demoCount: enriched.length - live.length, enriched: Object.keys(det).length > 0, phiMasked: MASK_PHI };
 }
+// Order-to-cash chain (SO -> linked POs + invoices), keyed by order number, no PHI.
+async function getOrders() {
+  const sb = await sbCacheRead('order_chain');
+  const chain = (sb && sb.data) || {};
+  const orders = Object.values(chain)
+    .filter((o) => !isDemoType(o.type))
+    .map((o) => ({
+      ref: o.ref, pi: soClass(o.type), type: o.type, rep: o.rep || '', value: round2(Number(o.value || 0)),
+      status: o.status || '', invStatus: o.invStatus || '',
+      pos: (o.pos || []).map((p) => ({ ...p, value: round2(Number(p.value || 0)) })),
+      invoices: (o.invoices || []).map((i) => ({ ...i, total: round2(Number(i.total || 0)), open: round2(Number(i.open || 0)) })),
+      poValue: round2((o.pos || []).reduce((s, p) => s + Number(p.value || 0), 0)),
+      invOpen: round2((o.invoices || []).reduce((s, i) => s + Number(i.open || 0), 0)),
+    }))
+    .sort((a, b) => b.value - a.value);
+  return { count: orders.length, orders, enriched: Object.keys(chain).length > 0, phiMasked: MASK_PHI };
+}
 const poIsVoid = (r) => /cancel|void|denied|rejected|fail/i.test(r.statusName || '');
 async function getPO() {
   const all = await poStatusMap();                       // each PO enriched with statusName / classified
@@ -717,6 +734,7 @@ export const ROUTES = {
   '/api/tasks': getTasks,
   '/api/projects': getProjects,
   '/api/exceptions': getExceptions,
+  '/api/orders': getOrders,
 };
 export const DYNAMIC = [
   { re: /^\/api\/po\/(\d+)$/, handler: (m) => getPODetail(m[1]) },

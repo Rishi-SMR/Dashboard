@@ -3,7 +3,7 @@ import {
   fetchStrivenVendors, fetchStrivenPO,
   type VendorsResult, type PoResult, type Vendor,
 } from '../strivenApi';
-import { formatCurrency } from '../format';
+import { formatCurrency, formatPhone } from '../format';
 import { KpiCard, type KpiBreakdownRow } from './KpiCard';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
@@ -87,7 +87,7 @@ export function VendorsTab() {
         number: v.number || '—',
         status: <StatusPill status={v.status} />,
         terms: v.terms || '—',
-        phone: v.phone || '—',
+        phone: formatPhone(v.phone),
       }));
     setDrill({
       title: status === 'Total' ? 'All vendors' : `${status} vendors`,
@@ -195,7 +195,7 @@ export function VendorsTab() {
                       <td>{v.number || '—'}</td>
                       <td><StatusPill status={v.status} /></td>
                       <td>{v.terms || '—'}</td>
-                      <td>{v.phone || '—'}</td>
+                      <td>{formatPhone(v.phone)}</td>
                     </tr>
                   ))}
                   {shown.length === 0 && (
