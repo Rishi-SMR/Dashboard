@@ -90,7 +90,8 @@ const server = http.createServer(async (req, res) => {
   // QuickBooks Online (OAuth + posting) — behind the session gate.
   if (pathname.startsWith('/api/qb/')) {
     try {
-      const out = await qbHandle(pathname, Object.fromEntries(reqUrl.searchParams), req.method);
+      const body = req.method === 'POST' ? await readBody(req) : null;
+      const out = await qbHandle(pathname, Object.fromEntries(reqUrl.searchParams), req.method, body);
       if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
       if (out) { res.writeHead(out.status ?? 200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out.json)); }
     } catch (e) {

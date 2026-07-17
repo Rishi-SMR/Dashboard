@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  fetchQbStatus, fetchQbReconcile, qbCreateMissing, fetchQbInvoices,
+  fetchQbStatus, fetchQbReconcile, qbCreateMissing, qbCreateSelected, fetchQbInvoices,
   qbPrepareInvoiceDoc, qbPostInvoiceDoc,
   type QbStatus, type QbReconcile, type QbEntityKind,
   type QbInvoicesResult, type QbInvoiceRow, type QbInvoiceDocPlan, type QbPostResult,
@@ -156,15 +156,21 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
   const [err, setErr] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());
   const cancel = useRef(false);
 
   async function load() {
     setLoading(true); setErr(null);
-    try { setRec(await fetchQbReconcile(kind)); }
+    try { setRec(await fetchQbReconcile(kind)); setSel(new Set()); }
     catch (e) { setErr(e instanceof Error ? e.message : 'Failed to reconcile.'); }
     finally { setLoading(false); }
   }
   useEffect(() => { cancel.current = false; load(); return () => { cancel.current = true; }; }, [kind]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const missing = rec?.missingInQb ?? [];
+  const allSelected = missing.length > 0 && missing.every((c) => sel.has(c.name));
+  const toggle = (name: string) => setSel((s) => { const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n; });
+  const toggleAll = () => setSel(allSelected ? new Set() : new Set(missing.map((c) => c.name)));
 
   async function createAll() {
     if (!rec || rec.missingCount === 0) return;
@@ -183,6 +189,23 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
       }
     } catch (e) { setErr(e instanceof Error ? e.message : 'Bulk create failed.'); }
     finally { setRunning(false); await load(); }
+  }
+
+  async function createSelected() {
+    const names = [...sel];
+    if (!names.length) return;
+    if (!confirm(`Create ${names.length} selected ${title.toLowerCase()} in QuickBooks?`)) return;
+    setRunning(true); cancel.current = false;
+    let done = 0, failed = 0;
+    setProgress({ done: 0, total: names.length, failed: 0 });
+    for (let i = 0; i < names.length; i += 30) {
+      if (cancel.current) break;
+      const chunk = names.slice(i, i + 30);
+      try { const r = await qbCreateSelected(kind, chunk); done += r.createdCount; failed += r.failed.length; }
+      catch { failed += chunk.length; }
+      setProgress({ done, total: names.length, failed });
+    }
+    setRunning(false); await load();
   }
 
   return (
@@ -206,11 +229,16 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
             <KpiR ico="clock" tint="#F59E0B" label="Not in QuickBooks" value={rec.missingCount} foot="ready to create" deltaText="Striven only" />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button className="btn" onClick={createAll} disabled={running || rec.missingCount === 0}
               style={{ background: rec.missingCount === 0 ? 'var(--muted)' : 'var(--accent)', color: '#fff' }}>
-              {running ? 'Creating…' : rec.missingCount === 0 ? 'All synced ✓' : `Create ${rec.missingCount} missing in QuickBooks`}
+              {running ? 'Creating…' : rec.missingCount === 0 ? 'All synced ✓' : `Create all ${rec.missingCount} missing`}
             </button>
+            {sel.size > 0 && (
+              <button className="btn" onClick={createSelected} disabled={running} style={{ background: '#16A34A', color: '#fff' }}>
+                Create {sel.size} selected
+              </button>
+            )}
             {running && <button className="btn ghost" onClick={() => { cancel.current = true; }}>Stop</button>}
             {progress && (
               <span className="page-sub" style={{ margin: 0, fontSize: 13 }}>
@@ -219,17 +247,24 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
             )}
           </div>
 
-          {rec.missingInQb.length > 0 && (
+          {missing.length > 0 && (
             <div className="table-wrap" style={{ marginTop: 14 }}>
               <table className="data-table">
-                <thead><tr><th>{title.replace(/s$/, '')}</th><th>QuickBooks</th></tr></thead>
+                <thead><tr>
+                  <th style={{ width: 34 }}><input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all shown" /></th>
+                  <th>{title.replace(/s$/, '')}</th><th>QuickBooks</th>
+                </tr></thead>
                 <tbody>
-                  {rec.missingInQb.map((c, i) => (
-                    <tr key={i}><td style={{ fontWeight: 600 }}>{c.name}</td><td><span className="pill-tag" style={{ background: 'rgba(245,158,11,.12)', color: '#92400E' }}>○ Not in QuickBooks</span></td></tr>
+                  {missing.map((c, i) => (
+                    <tr key={i} onClick={() => toggle(c.name)} style={{ cursor: 'pointer', background: sel.has(c.name) ? 'var(--accent-soft-2)' : undefined }}>
+                      <td><input type="checkbox" checked={sel.has(c.name)} onChange={() => toggle(c.name)} onClick={(e) => e.stopPropagation()} /></td>
+                      <td style={{ fontWeight: 600 }}>{c.name}</td>
+                      <td><span className="pill-tag" style={{ background: 'rgba(245,158,11,.12)', color: '#92400E' }}>○ Not in QuickBooks</span></td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
-              {rec.missingCount > rec.missingInQb.length && <div className="page-sub" style={{ marginTop: 6, fontSize: 12 }}>Showing {rec.missingInQb.length} of {rec.missingCount}.</div>}
+              {rec.missingCount > missing.length && <div className="page-sub" style={{ marginTop: 6, fontSize: 12 }}>Showing {missing.length} of {rec.missingCount}.</div>}
             </div>
           )}
         </>
@@ -246,13 +281,14 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<'pending' | 'posted' | 'all'>('pending');
   const [selected, setSelected] = useState<QbInvoiceRow | null>(null);
+  const [sel, setSel] = useState<Set<number>>(new Set());
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
   const cancel = useRef(false);
 
   async function load() {
     setLoading(true); setErr(null);
-    try { setData(await fetchQbInvoices()); }
+    try { setData(await fetchQbInvoices()); setSel(new Set()); }
     catch (e) { setErr(e instanceof Error ? e.message : 'Failed to load invoices.'); }
     finally { setLoading(false); }
   }
@@ -272,20 +308,27 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
     }).slice(0, 100);
   }, [invoices, q, filter]);
 
-  async function postAllPending() {
-    if (!pending.length) return;
-    if (!confirm(`Post ${pending.length} pending invoices to QuickBooks?\n\nEach is created with its ORIGINAL Striven invoice date. This creates ${pending.length} real invoices${prod ? ' in your live company' : ''}.`)) return;
+  const pendingRows = rows.filter((r) => !r.posted);
+  const allSelected = pendingRows.length > 0 && pendingRows.every((r) => sel.has(r.id));
+  const toggle = (id: number) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleAll = () => setSel(allSelected ? new Set() : new Set(pendingRows.map((r) => r.id)));
+
+  async function postIds(ids: number[], label: string) {
+    if (!ids.length) return;
+    if (!confirm(`Post ${ids.length} ${label} to QuickBooks?\n\nEach is created with its ORIGINAL Striven invoice date. This creates ${ids.length} real invoices${prod ? ' in your live company' : ''}.`)) return;
     setRunning(true); cancel.current = false;
     let done = 0, failed = 0;
-    setProgress({ done: 0, total: pending.length, failed: 0 });
-    for (const inv of pending) {
+    setProgress({ done: 0, total: ids.length, failed: 0 });
+    for (const id of ids) {
       if (cancel.current) break;
-      try { const r = await qbPostInvoiceDoc(inv.id); if (!r.ok) failed++; else done++; }
+      try { const r = await qbPostInvoiceDoc(id); if (!r.ok) failed++; else done++; }
       catch { failed++; }
-      setProgress({ done, total: pending.length, failed });
+      setProgress({ done, total: ids.length, failed });
     }
     setRunning(false); await load();
   }
+  const postAllPending = () => postIds(pending.map((r) => r.id), 'pending invoices');
+  const postSelected = () => postIds([...sel], 'selected invoices');
 
   const seg = (k: 'pending' | 'posted' | 'all', label: string) => (
     <button className="btn ghost" onClick={() => setFilter(k)}
@@ -315,9 +358,15 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {seg('pending', 'Pending')}{seg('posted', 'Posted')}{seg('all', 'All')}
+          {sel.size > 0 && (
+            <button className="btn" onClick={postSelected} disabled={running}
+              style={{ marginLeft: 8, background: '#16A34A', color: '#fff', padding: '6px 14px', fontSize: 13, fontWeight: 700 }}>
+              {running ? 'Posting…' : `Post ${sel.size} selected`}
+            </button>
+          )}
           {pending.length > 0 && (
             <button className="btn" onClick={postAllPending} disabled={running}
-              style={{ marginLeft: 8, background: 'var(--accent)', color: '#fff', padding: '6px 14px', fontSize: 13, fontWeight: 700 }}>
+              style={{ background: 'var(--accent)', color: '#fff', padding: '6px 14px', fontSize: 13, fontWeight: 700 }}>
               {running ? 'Posting…' : `Post all ${pending.length} pending`}
             </button>
           )}
@@ -331,11 +380,15 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
       {!loading && (
         <div className="table-wrap">
           <table className="data-table">
-            <thead><tr><th>Invoice</th><th>Customer</th><th>Date</th><th className="num">Total</th><th className="num">Open</th><th>QuickBooks</th><th></th></tr></thead>
+            <thead><tr>
+              <th style={{ width: 34 }}><input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all pending shown" /></th>
+              <th>Invoice</th><th>Customer</th><th>Date</th><th className="num">Total</th><th className="num">Open</th><th>QuickBooks</th><th></th>
+            </tr></thead>
             <tbody>
-              {rows.length === 0 && <tr><td colSpan={7} style={{ color: C.muted }}>No invoices in this view.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No invoices in this view.</td></tr>}
               {rows.map((r) => (
-                <tr key={r.id}>
+                <tr key={r.id} style={{ background: !r.posted && sel.has(r.id) ? 'var(--accent-soft-2)' : undefined }}>
+                  <td>{!r.posted && <input type="checkbox" checked={sel.has(r.id)} onChange={() => toggle(r.id)} />}</td>
                   <td style={{ fontWeight: 700 }}>#{r.number}</td>
                   <td>{r.customer || '—'}</td>
                   <td>{fmtDate(r.date)}</td>

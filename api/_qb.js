@@ -455,6 +455,28 @@ export async function qbCreateMissing(kind, limit = 30) {
   return { kind, created, createdCount: created.length, failed, remaining: Math.max(0, totalMissing - created.length), totalMissing };
 }
 
+// Create only the SPECIFIC names the user selected (each ≤30-item QB batch).
+export async function qbCreateSelected(kind, names) {
+  const list = (Array.isArray(names) ? names : []).map((n) => String(n)).filter((n) => n.trim());
+  if (!list.length) return { kind, created: [], createdCount: 0, failed: [] };
+  let qbEntity, buildPayload;
+  if (kind === 'customers') { qbEntity = 'Customer'; buildPayload = (n) => ({ DisplayName: cap(n, 100) }); }
+  else if (kind === 'vendors') { qbEntity = 'Vendor'; buildPayload = (n) => ({ DisplayName: cap(n, 100) }); }
+  else if (kind === 'items') {
+    const inc = await defaultIncomeAccountRef();
+    const priceByName = new Map((await allItems()).map((r) => [normName(r.name), Number(r.price || 0)]));
+    qbEntity = 'Item';
+    buildPayload = (n) => { const p = priceByName.get(normName(n)) || 0; return { Name: cap(itemName(n), 100), Type: 'Service', IncomeAccountRef: { value: inc.value }, ...(p ? { UnitPrice: money(p) } : {}) }; };
+  } else throw new Error('unknown kind: ' + kind);
+  const created = [], failed = [];
+  for (let i = 0; i < list.length; i += 30) {
+    const chunk = list.slice(i, i + 30).map((n) => ({ name: n, payload: buildPayload(n) }));
+    const r = await qbBatchCreate(qbEntity, chunk);
+    created.push(...r.created); failed.push(...r.failed);
+  }
+  return { kind, created, createdCount: created.length, failed };
+}
+
 // ── Striven Invoices → QuickBooks Invoices (ORIGINAL date preserved) ────────
 // Keyed by Striven invoice id in striven_cache 'qb_posted_inv' (separate from the
 // SO-based map). This is the accurate revenue path per the migration research.
@@ -551,7 +573,7 @@ export async function qbPostInvoiceDoc(invId, { force = false } = {}) {
 }
 
 // ── route glue (shared by the local server and the Vercel function) ─────────
-export async function qbHandle(pathname, q, method = 'GET') {
+export async function qbHandle(pathname, q, method = 'GET', body = null) {
   if (pathname === '/api/qb/status') return { json: await qbStatus() };
   if (pathname === '/api/qb/connect') return { redirect: await qbAuthUrl() };
   if (pathname === '/api/qb/disconnect') return { json: await qbDisconnect() };
@@ -567,6 +589,10 @@ export async function qbHandle(pathname, q, method = 'GET') {
   if (pathname === '/api/qb/create-missing') {
     if (method !== 'POST') return { json: { error: 'POST required' }, status: 405 };
     return { json: await qbCreateMissing(q.kind, q.limit) };
+  }
+  if (pathname === '/api/qb/create-selected') {
+    if (method !== 'POST') return { json: { error: 'POST required' }, status: 405 };
+    return { json: await qbCreateSelected(q.kind, body?.names || []) };
   }
   if (pathname === '/api/qb/invoices') return { json: await qbInvoiceList() };
   if (pathname === '/api/qb/prepare-invoice-doc') return { json: await qbPrepareInvoiceDoc(q.inv) };

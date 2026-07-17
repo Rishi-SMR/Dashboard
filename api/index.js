@@ -80,7 +80,9 @@ export default async function handler(req, res) {
   // ---- QuickBooks Online (OAuth + posting) — behind the session gate ----
   if (pathname.startsWith('/api/qb/')) {
     try {
-      const out = await qbHandle(pathname, Object.fromEntries(url.searchParams), req.method);
+      let body = req.body;
+      if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+      const out = await qbHandle(pathname, Object.fromEntries(url.searchParams), req.method, body);
       if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
       if (out) return res.status(out.status ?? 200).json(out.json);
     } catch (e) { return res.status(500).json({ error: e.message }); }
