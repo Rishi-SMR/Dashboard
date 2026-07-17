@@ -15,8 +15,9 @@ import {
   type PoDetail,
 } from '../strivenApi';
 import { StatusPill } from './StatusPill';
+import { OrderTrackingTab } from './OrderTrackingTab';
 
-type Mode = 'sales' | 'purchase';
+type Mode = 'sales' | 'purchase' | 'tracking';
 
 // Fixed category colors — PI/VA/Tri-Care read the same on every SMR surface.
 const TYPE_COLOR = (name: string): string => {
@@ -142,8 +143,8 @@ function DetailModal({
   );
 }
 
-export function OrdersTab() {
-  const [mode, setMode] = useState<Mode>('sales');
+export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [so, setSo] = useState<SoResult | null>(null);
   const [po, setPo] = useState<PoResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -321,7 +322,7 @@ export function OrdersTab() {
     });
   }
 
-  const records = mode === 'sales' ? so?.count ?? 0 : po?.count ?? 0;
+  const records = mode === 'sales' ? so?.count ?? 0 : mode === 'purchase' ? po?.count ?? 0 : null;
   const soDetail = expandedSoId != null ? soDetails[expandedSoId] : undefined;
   const poDetail = expandedPoId != null ? poDetails[expandedPoId] : undefined;
 
@@ -333,7 +334,7 @@ export function OrdersTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Orders</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · live from Striven · {records.toLocaleString()} records{agoText ? ` · updated ${agoText}` : ''}
+            <span className="live-dot" /> Sports Med Recovery · live from Striven{records != null ? ` · ${records.toLocaleString()} records` : ' · SO → PO → invoice chain'}{agoText ? ` · updated ${agoText}` : ''}
             <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>
               🔒 PHI masked
             </span>
@@ -351,6 +352,9 @@ export function OrdersTab() {
         </button>
         <button className={`ov-tab${mode === 'purchase' ? ' active' : ''}`} onClick={() => switchMode('purchase')}>
           Purchase Orders
+        </button>
+        <button className={`ov-tab${mode === 'tracking' ? ' active' : ''}`} onClick={() => switchMode('tracking')}>
+          Order Tracking
         </button>
       </div>
 
@@ -575,6 +579,9 @@ export function OrdersTab() {
           </div>
         </>
       )}
+
+      {/* ── ORDER TRACKING (embedded, full chain) ────────────────── */}
+      {mode === 'tracking' && <OrderTrackingTab embedded />}
 
       {/* ── CHART DRILL (shared kit modal) ───────────────────────── */}
       {drill && (

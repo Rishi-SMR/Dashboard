@@ -27,7 +27,6 @@ const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'payables', label: 'Payables' },
   { key: 'pl', label: 'P&L' },
   { key: 'orders', label: 'Orders' },
-  { key: 'tracking', label: 'Order Tracking' },
   { key: 'vendors', label: 'Vendors' },
   { key: 'catalog', label: 'Catalog' },
   { key: 'accounts', label: 'Accounts' },

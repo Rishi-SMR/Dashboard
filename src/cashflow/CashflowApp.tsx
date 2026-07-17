@@ -12,7 +12,6 @@ const CatalogTab = lazy(() => import('./components/CatalogTab').then((m) => ({ d
 const VendorsTab = lazy(() => import('./components/VendorsTab').then((m) => ({ default: m.VendorsTab })));
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
 const ExceptionsTab = lazy(() => import('./components/ExceptionsTab').then((m) => ({ default: m.ExceptionsTab })));
-const OrderTrackingTab = lazy(() => import('./components/OrderTrackingTab').then((m) => ({ default: m.OrderTrackingTab })));
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
@@ -101,7 +100,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     payables: <PayablesTab />,
     pl: <PLTab />,
     orders: <OrdersTab />,
-    tracking: <OrderTrackingTab />,
+    tracking: <OrdersTab initialMode="tracking" />,
     vendors: <VendorsTab />,
     catalog: <CatalogTab />,
     accounts: <AccountsTab />,

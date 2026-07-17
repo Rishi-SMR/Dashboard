@@ -28,7 +28,7 @@ function pageList(cur: number, total: number): (number | '…')[] {
   return out;
 }
 
-export function OrderTrackingTab() {
+export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = {}) {
   const [data, setData] = useState<OrdersResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -109,20 +109,22 @@ export function OrderTrackingTab() {
   const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
-    <div className="exec-deck" style={{ padding: '4px 2px' }}>
-      <div className="page-head deck-head" style={{ marginBottom: 16 }}>
-        <div>
-          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Order Tracking</h1>
-          <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · Sales Order → Purchase Order → Invoice, by number{agoText ? ` · updated ${agoText}` : ''}
-            <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>🔒 no patient data</span>
+    <div className={embedded ? undefined : 'exec-deck'} style={embedded ? undefined : { padding: '4px 2px' }}>
+      {!embedded && (
+        <div className="page-head deck-head" style={{ marginBottom: 16 }}>
+          <div>
+            <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Order Tracking</h1>
+            <div className="page-sub">
+              <span className="live-dot" /> Sports Med Recovery · Sales Order → Purchase Order → Invoice, by number{agoText ? ` · updated ${agoText}` : ''}
+              <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>🔒 no patient data</span>
+            </div>
+          </div>
+          <div className="ov-headright">
+            <span className="ov-filter"><span className="fl">📅</span><b>{asOf}</b></span>
+            <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
           </div>
         </div>
-        <div className="ov-headright">
-          <span className="ov-filter"><span className="fl">📅</span><b>{asOf}</b></span>
-          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
-        </div>
-      </div>
+      )}
 
       {error && <div className="error">{error}</div>}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
