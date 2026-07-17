@@ -22,20 +22,21 @@ export default async function handler(req, res) {
     catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  // ---- auto-PO (SO placed → PO raised) — token-guarded, no cookie ----
+  const { gateEnabled, sessionToken } = await getAuth();
+
+  // ---- auto-PO (SO placed → PO raised) — cron token OR a logged-in session ----
   if (pathname === '/api/auto-po') {
-    if (!autoPoTokenOk(url.searchParams.get('key') || req.headers['x-auto-po-key'])) {
-      return res.status(401).json({ error: 'bad key' });
-    }
+    const keyOk = autoPoTokenOk(url.searchParams.get('key') || req.headers['x-auto-po-key']);
+    const sessionOk = !gateEnabled || cookieVal(req.headers.cookie, 'smr_session') === sessionToken;
+    if (!keyOk && !sessionOk) return res.status(401).json({ error: 'auth required' });
     try {
       return res.status(200).json(await autoPoRun({
         so: url.searchParams.get('so') || undefined,
         mode: url.searchParams.get('mode') || undefined,
+        action: url.searchParams.get('action') || undefined,
       }));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
-
-  const { gateEnabled, sessionToken } = await getAuth();
 
   // ---- access gate (only when a password / users are configured) ----
   if (gateEnabled) {

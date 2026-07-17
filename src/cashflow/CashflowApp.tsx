@@ -13,10 +13,11 @@ const VendorsTab = lazy(() => import('./components/VendorsTab').then((m) => ({ d
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
 const ExceptionsTab = lazy(() => import('./components/ExceptionsTab').then((m) => ({ default: m.ExceptionsTab })));
 const OrderTrackingTab = lazy(() => import('./components/OrderTrackingTab').then((m) => ({ default: m.OrderTrackingTab })));
+const AutomationTab = lazy(() => import('./components/AutomationTab').then((m) => ({ default: m.AutomationTab })));
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'pl' | 'orders' | 'tracking' | 'vendors' | 'catalog' | 'accounts' | 'exceptions';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'pl' | 'orders' | 'tracking' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'automation';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -67,7 +68,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'pl', 'orders', 'tracking', 'vendors', 'catalog', 'accounts', 'exceptions'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'pl', 'orders', 'tracking', 'vendors', 'catalog', 'accounts', 'exceptions', 'automation'];
 const initialView = (): ViewKey => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
   return VIEW_KEYS.includes(h) ? h : 'overview';
@@ -100,6 +101,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     catalog: <CatalogTab />,
     accounts: <AccountsTab />,
     exceptions: <ExceptionsTab />,
+    automation: <AutomationTab />,
   };
 
   return (

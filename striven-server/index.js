@@ -29,20 +29,26 @@ const server = http.createServer(async (req, res) => {
     catch (e) { res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message })); }
   }
 
-  // Auto-PO (SO placed → PO raised) — token-guarded, no cookie needed.
+  const { gateEnabled, sessionToken } = await getAuth();
+
+  // Auto-PO (SO placed → PO raised) — cron token OR a logged-in session (UI).
   if (pathname === '/api/auto-po') {
-    if (!autoPoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-po-key'])) {
-      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'bad key' }));
+    const keyOk = autoPoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-po-key']);
+    const sessionOk = !gateEnabled || cookieVal(req.headers.cookie, 'smr_session') === sessionToken;
+    if (!keyOk && !sessionOk) {
+      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
     }
     try {
-      const out = await autoPoRun({ so: reqUrl.searchParams.get('so') || undefined, mode: reqUrl.searchParams.get('mode') || undefined });
+      const out = await autoPoRun({
+        so: reqUrl.searchParams.get('so') || undefined,
+        mode: reqUrl.searchParams.get('mode') || undefined,
+        action: reqUrl.searchParams.get('action') || undefined,
+      });
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
     }
   }
-
-  const { gateEnabled, sessionToken } = await getAuth();
 
   if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {

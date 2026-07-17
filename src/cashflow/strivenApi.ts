@@ -102,6 +102,18 @@ export type ExceptionGroup = { key: string; severity: 'high' | 'warn' | 'info'; 
 export type ExceptionsResult = { totalOpen: number; groups: ExceptionGroup[]; note: string };
 export const fetchStrivenExceptions = () => get<ExceptionsResult>('/api/exceptions');
 
+// Auto-PO automation (SO placed → PO raised). Dry-run returns the plan only.
+export type AutoPoLine = {
+  itemId: number | null; itemName: string; qty: number; vendor?: string; result: string; poId?: number | null;
+  plan?: { vendor: string; qty: number; unitPrice: number | null; title: string; dropShipTo: string | null };
+};
+export type AutoPoEntry = { at: string; soId: number; soNumber: string; type: string; mode: string; skipped?: string; lines: AutoPoLine[] };
+export type AutoPoResult = {
+  ok: boolean; mode: 'dry' | 'live'; demoOnly?: boolean; note?: string;
+  processed?: AutoPoEntry[]; checkpoint?: number; processedCount?: number; log?: AutoPoEntry[];
+};
+export const runAutoPo = (q: Record<string, string>) => get<AutoPoResult>(`/api/auto-po?${new URLSearchParams(q).toString()}`);
+
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
 export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };

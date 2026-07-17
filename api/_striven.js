@@ -898,6 +898,12 @@ async function autoPoProcessSo(soId, mode) {
 export async function autoPoRun(params = {}) {
   const mode = params.mode === 'live' ? 'live' : (process.env.AUTO_PO_MODE === 'live' ? 'live' : 'dry');
   const state = await autoPoState();
+  if (params.action === 'status') {
+    return {
+      ok: true, mode, demoOnly: autoPoDemoOnly(), checkpoint: state.lastSoId,
+      processedCount: state.processed.length, log: state.log.slice(0, 20),
+    };
+  }
   const results = [];
   if (params.so) {
     // Debug/demo: push ONE specific SO through the pipeline.
