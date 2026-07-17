@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { C, SERIES } from '../chartTheme';
+import { C } from '../chartTheme';
 import { formatCurrency } from '../format';
-import { ChartCard, RankBar, DrillModal } from '../chartKit';
+import { ChartCard, RankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 import {
   fetchStrivenSO,
   fetchStrivenPO,
@@ -14,10 +14,26 @@ import {
   type SoDetail,
   type PoDetail,
 } from '../strivenApi';
-import { KpiCard } from './KpiCard';
 import { StatusPill } from './StatusPill';
 
 type Mode = 'sales' | 'purchase';
+
+// Fixed category colors — PI/VA/Tri-Care read the same on every SMR surface.
+const TYPE_COLOR = (name: string): string => {
+  const s = (name || '').toLowerCase();
+  if (/pi/.test(s)) return '#2563EB';
+  if (/\bva\b|veteran/.test(s)) return '#16A34A';
+  if (/tri.?care/.test(s)) return '#7C3AED';
+  return C.muted;
+};
+// Status hue: in-progress blue, completed green, cancelled red.
+const STATUS_COLOR = (name: string): string => {
+  const s = (name || '').toLowerCase();
+  if (/complete|closed|done|accepted|approved|paid/.test(s)) return C.positive;
+  if (/cancel|void|lost|denied|rejected/.test(s)) return '#EF4444';
+  if (/progress|open|pending|await|review/.test(s)) return C.brand;
+  return C.info;
+};
 
 // Chart-click drill payload (rendered by the shared kit DrillModal).
 type Drill = {
@@ -106,7 +122,12 @@ export function OrdersTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
-  const [openKpi, setOpenKpi] = useState<number | null>(null);
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  const agoText = useSyncAgo(lastSync);
+
+  // Dynamic chart toggles.
+  const [typeMode, setTypeMode] = useState<'value' | 'count'>('value');
+  const [repsShown, setRepsShown] = useState(8);
 
   // Chart-click drill (shared kit DrillModal).
   const [drill, setDrill] = useState<Drill | null>(null);
@@ -117,26 +138,28 @@ export function OrdersTab() {
   const [expandedPoId, setExpandedPoId] = useState<number | null>(null);
   const [poDetails, setPoDetails] = useState<Record<number, PoDetail>>({});
 
-  async function load() {
-    setLoading(true);
-    setError(null);
+  async function load(silent = false) {
+    if (!silent) { setLoading(true); setError(null); }
     try {
       const [s, p] = await Promise.all([fetchStrivenSO(), fetchStrivenPO()]);
       setSo(s);
       setPo(p);
+      setLastSync(Date.now());
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load orders. Is the backend running on :4747?');
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load orders. Is the backend running on :4747?');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
+  // Initial load + silent live refresh every 90s.
   useEffect(() => {
     load();
+    const r = setInterval(() => load(true), 90_000);
+    return () => clearInterval(r);
   }, []);
 
   function switchMode(m: Mode) {
     setMode(m);
-    setOpenKpi(null);
     setDrill(null);
     setExpandedSoId(null);
     setExpandedPoId(null);
@@ -167,13 +190,13 @@ export function OrdersTab() {
     }
   }
 
-  const kpi = (i: number) => ({
-    open: openKpi === i,
-    onClick: () => setOpenKpi((o) => (o === i ? null : i)),
-    onClose: () => setOpenKpi(null),
+  // KPI tap-to-explain drills (label/value rows in the shared modal).
+  const kv = (rows: { k: string; v: string }[]) => ({
+    columns: [{ key: 'k', label: 'Item' }, { key: 'v', label: 'Value', num: true }],
+    rows: rows.map((r) => ({ k: r.k, v: r.v })),
   });
 
-  // SO by status — ranked bar (per-cell SERIES), sorted desc, empties dropped.
+  // SO by status — ranked bar (status-hued), sorted desc, empties dropped.
   const statusData = [...(so?.byStatus ?? [])]
     .filter((b) => b.count > 0)
     .sort((a, b) => b.count - a.count)
@@ -238,39 +261,31 @@ export function OrdersTab() {
   const soDetail = expandedSoId != null ? soDetails[expandedSoId] : undefined;
   const poDetail = expandedPoId != null ? poDetails[expandedPoId] : undefined;
 
+  const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <div className="page-head">
+    <div className="exec-deck" style={{ padding: '4px 2px' }}>
+      <div className="page-head deck-head" style={{ marginBottom: 12 }}>
         <div>
-          <h1 className="page-title">ORDERS</h1>
+          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Orders</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · live from Striven · {records.toLocaleString()} records
-            <span
-              style={{
-                marginLeft: 10,
-                padding: '2px 8px',
-                borderRadius: 999,
-                fontSize: 11,
-                fontWeight: 600,
-                background: C.brandLight,
-                color: C.brandDark,
-                border: '1px solid #bfd3f2',
-              }}
-            >
+            <span className="live-dot" /> Sports Med Recovery · live from Striven · {records.toLocaleString()} records{agoText ? ` · updated ${agoText}` : ''}
+            <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>
               🔒 PHI masked
             </span>
           </div>
         </div>
-        <button className="btn ghost" onClick={load} disabled={loading}>
-          ↻ Refresh
-        </button>
+        <div className="ov-headright">
+          <span className="ov-filter"><span className="fl">📅</span><b>{asOf}</b></span>
+          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
+        </div>
       </div>
 
-      <div className="segmented" style={{ marginTop: 6 }}>
-        <button className={mode === 'sales' ? 'active' : ''} onClick={() => switchMode('sales')}>
+      <div className="ov-tabs">
+        <button className={`ov-tab${mode === 'sales' ? ' active' : ''}`} onClick={() => switchMode('sales')}>
           Sales Orders
         </button>
-        <button className={mode === 'purchase' ? 'active' : ''} onClick={() => switchMode('purchase')}>
+        <button className={`ov-tab${mode === 'purchase' ? ' active' : ''}`} onClick={() => switchMode('purchase')}>
           Purchase Orders
         </button>
       </div>
@@ -281,44 +296,52 @@ export function OrdersTab() {
       {/* ── SALES ORDERS ─────────────────────────────────────────── */}
       {mode === 'sales' && so && (
         <>
-          <div className="kpis" style={{ marginTop: 16 }}>
-            <KpiCard
-              label="Total Order Value" value={formatCurrency(so.totalValue)} period={`${so.count.toLocaleString()} orders · ${so.demoCount} demo excluded`}
-              info={{ formula: 'Sum of order value across all live sales orders (DEMO/test orders excluded), broken out by PI / VA / Tri-Care.' }}
-              breakdown={[
-                ...so.byType.map((t) => ({ label: t.type, value: formatCurrency(t.value) })),
-                { label: 'Total', value: formatCurrency(so.totalValue), strong: true },
-              ]}
-              active={openKpi === 0} {...kpi(0)}
-            />
-            <KpiCard label="PI Orders" value={so.piva.PI.count.toLocaleString()} period={formatCurrency(so.piva.PI.value)} trend="up"
-              info={{ formula: 'Personal-Injury sales orders (order type = "PI Order"). Count and total order value.' }}
-              breakdown={[{ label: 'PI orders', value: so.piva.PI.count.toLocaleString() }, { label: 'PI value', value: formatCurrency(so.piva.PI.value), strong: true }]}
-              active={openKpi === 1} {...kpi(1)} />
-            <KpiCard label="VA Orders" value={so.piva.VA.count.toLocaleString()} period={formatCurrency(so.piva.VA.value)} trend="up"
-              info={{ formula: 'Veterans Affairs sales orders (order type = "VA Order"). Count and total order value.' }}
-              breakdown={[{ label: 'VA orders', value: so.piva.VA.count.toLocaleString() }, { label: 'VA value', value: formatCurrency(so.piva.VA.value), strong: true }]}
-              active={openKpi === 2} {...kpi(2)} />
-            <KpiCard label="Tri-Care Orders" value={so.piva.TriCare.count.toLocaleString()} period={formatCurrency(so.piva.TriCare.value)}
-              info={{ formula: 'A third order type "Tri-Care" exists in Striven (military health) beyond PI/VA — flagged for confirmation.' }}
-              breakdown={[{ label: 'Tri-Care orders', value: so.piva.TriCare.count.toLocaleString() }, { label: 'Tri-Care value', value: formatCurrency(so.piva.TriCare.value), strong: true }]}
-              active={openKpi === 3} {...kpi(3)} />
+          <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <KpiR ico="bag" tint="#2563EB" label="Total Order Value" value={so.totalValue} format={formatCurrency}
+              deltaText={`${so.count.toLocaleString()} orders`} foot={`${so.demoCount} DEMO/test orders excluded`}
+              onClick={() => setDrill({
+                title: 'Total Order Value', sub: 'Live sales orders by type — DEMO/test excluded',
+                ...kv([...so.byType.map((t) => ({ k: t.type, v: formatCurrency(t.value) })), { k: 'Total', v: formatCurrency(so.totalValue) }]),
+              })} />
+            <KpiR ico="doc" tint="#16A34A" label="PI Orders" value={so.piva.PI.count}
+              deltaText={formatCurrency(so.piva.PI.value)} foot="personal-injury orders" />
+            <KpiR ico="users" tint="#7C3AED" label="VA Orders" value={so.piva.VA.count}
+              deltaText={formatCurrency(so.piva.VA.value)} foot="Veterans Affairs orders" />
+            <KpiR ico="shield" tint="#D97706" label="Tri-Care Orders" value={so.piva.TriCare.count}
+              deltaText={formatCurrency(so.piva.TriCare.value)} foot="military health orders" />
           </div>
 
           {!so.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order type / rep / value enrichment is still populating — numbers will fill in shortly.</span></div>}
 
-          <div className="chart-grid">
-            <ChartCard title="Order Value by Type" sub="PI vs VA vs Tri-Care · DEMO excluded">
-              <RankBar data={so.byType.map((t) => ({ name: t.type, value: t.value }))} money colorAt={(i) => SERIES[i % SERIES.length]} />
+          <div className="exec-grid12">
+            <ChartCard className="g12-6" title="Order Value by Type" sub="PI vs VA vs Tri-Care · DEMO excluded"
+              right={
+                <div className="smr-seg" style={{ margin: 0 }}>
+                  <button className={typeMode === 'value' ? 'active' : ''} onClick={() => setTypeMode('value')}>By Order Value</button>
+                  <button className={typeMode === 'count' ? 'active' : ''} onClick={() => setTypeMode('count')}>By Count</button>
+                </div>
+              }>
+              <RankBar
+                data={[...so.byType].sort((a, b) => (typeMode === 'value' ? b.value - a.value : b.count - a.count))
+                  .map((t) => ({ name: t.type, value: typeMode === 'value' ? t.value : t.count }))}
+                money={typeMode === 'value'}
+                colorAt={(i) => TYPE_COLOR([...so.byType].sort((a, b) => (typeMode === 'value' ? b.value - a.value : b.count - a.count))[i]?.type ?? '')} />
             </ChartCard>
-            <ChartCard title="Sales Orders by Status" sub={`${so.count.toLocaleString()} orders · click a bar to drill in`}>
-              <RankBar data={statusData} colorAt={(i) => SERIES[i % SERIES.length]} onSelect={drillSoStatus} />
+
+            <ChartCard className="g12-6" title="Sales Orders by Status" sub={`${so.count.toLocaleString()} orders · click a bar to drill in`}
+              right={<span className="deck-pill muted">by count</span>}>
+              <RankBar data={statusData} colorAt={(i) => STATUS_COLOR(statusData[i]?.name ?? '')} onSelect={drillSoStatus} />
+            </ChartCard>
+
+            <ChartCard className="g12-12" title="Top Sales Reps by Order Value" sub="Sales rep on the sales order — referral group removed, no patient data">
+              <RankBar data={so.byRep.slice(0, repsShown).map((r) => ({ name: r.rep, value: r.value }))} money colorAt={() => C.brand} />
+              {so.byRep.length > repsShown && (
+                <button className="card-link" style={{ margin: '10px auto 0' }} onClick={() => setRepsShown(so.byRep.length)}>
+                  View all sales reps →
+                </button>
+              )}
             </ChartCard>
           </div>
-
-          <ChartCard title="Top Sales Reps by Order Value" sub="Sales rep on the sales order — referral group removed, no patient data">
-            <RankBar data={so.byRep.map((r) => ({ name: r.rep, value: r.value }))} money colorAt={() => C.brand} />
-          </ChartCard>
 
           <div className="section" style={{ marginTop: 16 }}>
             <div className="section-head"><div><h2 className="section-title">Recent Sales Orders</h2><div className="section-sub">Order # · sales rep · payer (law firm / VA / TriCare) · no patient data</div></div></div>
@@ -352,43 +375,37 @@ export function OrdersTab() {
       {/* ── PURCHASE ORDERS ──────────────────────────────────────── */}
       {mode === 'purchase' && po && (
         <>
-          <div className="kpis" style={{ marginTop: 16 }}>
-            <KpiCard
-              label="Purchase Orders"
-              value={po.count.toLocaleString()}
-              period={`active${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''}`}
-              info={{ formula: 'Count of active purchase orders (cancelled/voided POs are excluded from every figure on this tab).' }}
-              breakdown={[
-                { label: 'Active', value: po.count.toLocaleString() },
-                ...(po.cancelledCount ? [{ label: 'Cancelled (excluded)', value: po.cancelledCount.toLocaleString() }] : []),
-                ...(po.pendingCount ? [{ label: 'Still loading', value: po.pendingCount.toLocaleString() }] : []),
-                { label: 'Total on record', value: (po.totalCount ?? po.count).toLocaleString(), strong: true },
-              ]}
-              active={openKpi === 0}
-              {...kpi(0)}
-            />
-            <KpiCard
-              label="Total PO Value"
-              value={formatCurrency(po.totalValue)}
-              period={`active POs only${po.cancelledCount ? ` · excl. ${formatCurrency(po.cancelledValue ?? 0)} cancelled` : ''}`}
-              info={{ formula: 'Sum of the value of every ACTIVE purchase order. Cancelled/voided POs are excluded. Top vendors by spend below.' }}
-              breakdown={[
-                ...[...po.byVendor]
-                  .sort((a, b) => b.total - a.total)
-                  .slice(0, 6)
-                  .map((v) => ({ label: v.vendor || '—', value: formatCurrency(v.total) })),
-                ...(po.cancelledValue ? [{ label: 'Cancelled (excluded)', value: formatCurrency(po.cancelledValue) }] : []),
-                { label: 'Active total', value: formatCurrency(po.totalValue), strong: true },
-              ]}
-              active={openKpi === 1}
-              {...kpi(1)}
-            />
+          <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <KpiR ico="box" tint="#2563EB" label="Purchase Orders" value={po.count}
+              deltaText="active POs" foot={`${(po.totalCount ?? po.count).toLocaleString()} on record`}
+              onClick={() => setDrill({
+                title: 'Purchase Orders', sub: 'Active vs excluded purchase orders',
+                ...kv([
+                  { k: 'Active', v: po.count.toLocaleString() },
+                  ...(po.cancelledCount ? [{ k: 'Cancelled (excluded)', v: po.cancelledCount.toLocaleString() }] : []),
+                  ...(po.pendingCount ? [{ k: 'Still loading', v: po.pendingCount.toLocaleString() }] : []),
+                  { k: 'Total on record', v: (po.totalCount ?? po.count).toLocaleString() },
+                ]),
+              })} />
+            <KpiR ico="cash" tint="#16A34A" label="Total PO Value" value={po.totalValue} format={formatCurrency}
+              deltaText="committed spend" foot="active POs only"
+              onClick={() => setDrill({
+                title: 'Total PO Value', sub: 'Committed spend by vendor — active POs only',
+                ...kv([
+                  ...[...po.byVendor].sort((a, b) => b.total - a.total).slice(0, 6).map((v) => ({ k: v.vendor || '—', v: formatCurrency(v.total) })),
+                  { k: 'Active total', v: formatCurrency(po.totalValue) },
+                ]),
+              })} />
+            <KpiR ico="trend" tint="#DC2626" label="Cancelled Excluded" value={po.cancelledCount ?? 0}
+              deltaText={po.cancelledValue ? formatCurrency(po.cancelledValue) : '—'} foot="removed from every figure" />
+            <KpiR ico="users" tint="#7C3AED" label="Vendors on POs" value={(po.byVendor ?? []).filter((v) => v.total > 0).length}
+              deltaText="with active spend" foot="see Top Vendors below" />
           </div>
 
-          <div className="chart-grid">
-            <ChartCard
+          <div className="exec-grid12">
+            <ChartCard className="g12-12"
               title="Top Vendors by PO Spend"
-              sub={`Active purchase orders only${po.cancelledCount ? ` · excludes ${po.cancelledCount} cancelled (${formatCurrency(po.cancelledValue ?? 0)})` : ''}${po.pendingCount ? ` · ${po.pendingCount} still loading` : ''} · click a bar to drill in`}
+              sub={`Active purchase orders only${po.cancelledCount ? ` · excludes ${po.cancelledCount} cancelled (${formatCurrency(po.cancelledValue ?? 0)})` : ''} · click a bar to drill in`}
             >
               <RankBar
                 data={vendorData}
