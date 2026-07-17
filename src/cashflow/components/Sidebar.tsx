@@ -40,12 +40,17 @@ const PHOTOS: Record<string, string> = {};
 const TITLES: Record<string, string> = {};
 
 function readIdentity() {
-  const get = (k: string) => (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(k) : '') || '';
+  // The login screen stores the signed-in username in localStorage (cleared on
+  // sign-out); sessionStorage keys are a legacy fallback.
+  const get = (k: string) => {
+    try { return localStorage.getItem(k) || sessionStorage.getItem(k) || ''; } catch { return ''; }
+  };
   const email = get('smr_user');
-  const name = get('smr_name') || (email ? email.split('@')[0].split(/[._]/)[0] : 'User');
+  const raw = get('smr_name') || (email ? email.split('@')[0].split(/[._]/)[0] : 'User');
+  const name = raw.charAt(0).toUpperCase() + raw.slice(1);
   const emailUser = email ? email.split('@')[0].toLowerCase() : '';
-  const title = get('smr_title') || TITLES[name.toLowerCase()] || 'Full access';
-  const photo = get('smr_photo') || PHOTOS[name.toLowerCase()] || PHOTOS[emailUser] || '';
+  const title = get('smr_title') || TITLES[raw.toLowerCase()] || 'Full access';
+  const photo = get('smr_photo') || PHOTOS[raw.toLowerCase()] || PHOTOS[emailUser] || '';
   const initial = (name || 'U').trim().charAt(0).toUpperCase();
   return { name, title, photo, initial };
 }

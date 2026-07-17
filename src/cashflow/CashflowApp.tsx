@@ -24,7 +24,10 @@ export default function App() {
   useEffect(() => {
     fetch('/api/status').then((r) => setAuthed(r.status !== 401)).catch(() => setAuthed(true));
   }, []);
-  const signOut = () => { fetch('/api/logout', { method: 'POST' }).catch(() => {}).finally(() => window.location.reload()); };
+  const signOut = () => {
+    try { localStorage.removeItem('smr_user'); } catch { /* ignore */ }
+    fetch('/api/logout', { method: 'POST' }).catch(() => {}).finally(() => window.location.reload());
+  };
   if (authed === null) return null;
   if (!authed) return <LoginScreen onOk={() => setAuthed(true)} />;
   return <Dashboard onSignOut={signOut} />;
@@ -40,7 +43,10 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
     setBusy(true); setErr(null);
     try {
       const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password: pw }) });
-      if (r.ok) onOk(); else setErr('Invalid username or password');
+      if (r.ok) {
+        try { localStorage.setItem('smr_user', username.trim()); } catch { /* storage may be blocked */ }
+        onOk();
+      } else setErr('Invalid username or password');
     } catch { setErr('Could not reach the server'); }
     finally { setBusy(false); }
   }
