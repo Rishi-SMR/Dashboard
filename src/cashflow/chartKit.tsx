@@ -1,17 +1,49 @@
 // Shared chart components for every SMR tab — guarantees one consistent look
-// (no donuts, no clipping, integer count axes, Recharts animation off so charts
-// render instantly and reliably). Import these instead of hand-rolling charts.
+// (no clipping, integer count axes, one palette). Import these instead of
+// hand-rolling charts. Charts animate on mount (ease-out) so the dashboard
+// feels live rather than a printed image.
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, LabelList,
   PieChart, Pie, RadialBarChart, RadialBar, PolarAngleAxis,
   ComposedChart, Line,
 } from 'recharts';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { formatCurrency } from './format';
 import { C, SERIES, SEVERITY, AGING_LABELS, gridProps, axisProps, tooltipStyle, compactMoney, monthLabel, statusTone } from './chartTheme';
 
-const NOANIM = { isAnimationActive: false as const };
+// Skip animations for reduced-motion users AND automated (webdriver/headless)
+// sessions — Recharts mount animations are flaky under headless capture.
+const REDUCED = typeof window !== 'undefined' &&
+  (!!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || !!navigator.webdriver);
+const NOANIM = REDUCED
+  ? { isAnimationActive: false as const }
+  : { isAnimationActive: true as const, animationDuration: 900, animationEasing: 'ease-out' as const };
+
+// Count-up number — animates 0 → value on mount and between value changes.
+export function AnimatedNumber({ value, format, duration = 900 }: {
+  value: number; format?: (n: number) => string; duration?: number;
+}) {
+  const [shown, setShown] = useState(REDUCED ? value : 0);
+  const fromRef = useRef(REDUCED ? value : 0);
+  useEffect(() => {
+    if (REDUCED) { setShown(value); return; }
+    const from = fromRef.current;
+    const t0 = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - t0) / duration);
+      const e = 1 - Math.pow(1 - t, 3);
+      setShown(from + (value - from) * e);
+      if (t < 1) raf = requestAnimationFrame(step);
+      else fromRef.current = value;
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration]);
+  const fmt = format ?? ((n: number) => Math.round(n).toLocaleString());
+  return <>{fmt(shown)}</>;
+}
 const trunc = (v: string, n = 18) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 
 // Compact status/category cards — a small, scannable alternative to a bar chart
@@ -205,20 +237,23 @@ export function RankBar({ data, money = false, colorAt, onSelect }: { data: { na
   );
 }
 
-// Vertical aging bar — accepts the shared aging object; per-bucket severity color.
-export function AgingBar({ aging, onSelect }: { aging: Record<string, number>; onSelect?: (label: string) => void }) {
+// Vertical aging bar — accepts the shared aging object; per-bucket severity
+// color. money=false renders counts (integer axis) instead of $.
+export function AgingBar({ aging, onSelect, money = true }: { aging: Record<string, number>; onSelect?: (label: string) => void; money?: boolean }) {
   const data = AGING_LABELS.map((b) => ({ label: b.label, value: aging[b.key] || 0 }));
+  const fmt = (v: number) => (money ? formatCurrency(v) : v.toLocaleString());
+  const tick = (v: number) => (money ? compactMoney(v) : String(v));
   return (
     <div className="chart-box">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 20, right: 16, left: 4, bottom: 2 }}>
           <CartesianGrid {...gridProps} />
           <XAxis dataKey="label" {...axisProps} />
-          <YAxis {...axisProps} width={54} tickFormatter={compactMoney} />
-          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.10)' }} formatter={(v: number | string) => formatCurrency(Number(v))} />
+          <YAxis {...axisProps} width={54} tickFormatter={tick} allowDecimals={false} />
+          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.10)' }} formatter={(v: number | string) => fmt(Number(v))} />
           <Bar {...NOANIM} dataKey="value" radius={[6, 6, 0, 0]} barSize={46} cursor={onSelect ? 'pointer' : undefined} onClick={onSelect ? (p: any) => onSelect(p?.label) : undefined}>
             {data.map((d) => <Cell key={d.label} fill={SEVERITY[d.label] ?? C.brand} />)}
-            <LabelList dataKey="value" position="top" formatter={(v: number) => (v ? compactMoney(Number(v)) : '')} style={{ fill: C.muted, fontSize: 10.5, fontWeight: 600 }} />
+            <LabelList dataKey="value" position="top" formatter={(v: number) => (v ? (money ? compactMoney(Number(v)) : String(v)) : '')} style={{ fill: C.muted, fontSize: 10.5, fontWeight: 600 }} />
           </Bar>
         </BarChart>
       </ResponsiveContainer>
@@ -313,20 +348,27 @@ export function Donut({ data, centerValue, centerLabel, onSelect }: {
   );
 }
 
-// A single radial gauge ring (0–max) with a big value in the centre.
-export function GaugeRing({ value, max = 100, color, centerValue, centerLabel, height = 150 }: {
-  value: number; max?: number; color: string; centerValue: string; centerLabel: string; height?: number;
+// A single radial gauge (0–max) with a big value in the centre.
+// arc='full' is a closed ring; arc='semi' is the dial/health-score shape.
+export function GaugeRing({ value, max = 100, color, centerValue, centerLabel, height = 150, arc = 'full' }: {
+  value: number; max?: number; color: string; centerValue: string; centerLabel: string; height?: number; arc?: 'full' | 'semi';
 }) {
   const pct = Math.max(0, Math.min(100, (value / (max || 1)) * 100));
+  const semi = arc === 'semi';
   return (
     <div style={{ position: 'relative', height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <RadialBarChart innerRadius="72%" outerRadius="100%" data={[{ value: pct, fill: color }]} startAngle={90} endAngle={-270}>
+        <RadialBarChart
+          innerRadius={semi ? '86%' : '72%'} outerRadius={semi ? '118%' : '100%'}
+          cy={semi ? '72%' : '50%'}
+          data={[{ value: pct, fill: color }]}
+          startAngle={semi ? 205 : 90} endAngle={semi ? -25 : -270}
+        >
           <PolarAngleAxis type="number" domain={[0, 100]} tick={false} axisLine={false} />
           <RadialBar background={{ fill: 'var(--gauge-track)' }} dataKey="value" cornerRadius={20} {...NOANIM} />
         </RadialBarChart>
       </ResponsiveContainer>
-      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingTop: semi ? 16 : 0, pointerEvents: 'none' }}>
         <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text)' }}>{centerValue}</div>
         <div style={{ fontSize: 10.5, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2, textAlign: 'center' }}>{centerLabel}</div>
       </div>

@@ -10,7 +10,7 @@ import {
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone } from '../chartTheme';
-import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing } from '../chartKit';
+import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber } from '../chartKit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
@@ -58,8 +58,8 @@ function Spark({ values, color }: { values: number[]; color: string }) {
   );
 }
 
-function KpiExec({ label, value, hue, delta, sub, chip, spark, onClick }: {
-  label: string; value: string; hue: Hue;
+function KpiExec({ label, value, format, hue, delta, sub, chip, spark, onClick }: {
+  label: string; value: number; format?: (n: number) => string; hue: Hue;
   delta?: { pct: number; up: boolean } | null; sub?: string; chip?: string; spark?: number[]; onClick?: () => void;
 }) {
   return (
@@ -71,7 +71,7 @@ function KpiExec({ label, value, hue, delta, sub, chip, spark, onClick }: {
     >
       <div className="ke-label">{label}</div>
       <div className="ke-row">
-        <div className="ke-value">{value}</div>
+        <div className="ke-value"><AnimatedNumber value={value} format={format} /></div>
         {spark && spark.length > 1 && <Spark values={spark} color={hue.to} />}
       </div>
       <div className="ke-delta">
@@ -297,19 +297,19 @@ export function OverviewCharts() {
           )}
 
           <div className="kpi-strip">
-            <KpiExec label="Revenue YTD" value={formatCurrency(pl.revenue)} hue={HUE.revenue}
+            <KpiExec label="Revenue YTD" value={pl.revenue} format={formatCurrency} hue={HUE.revenue}
               delta={revD} sub="invoiced this year" spark={completeVals(revSeries)} chip={`${pl.invoiceCount} invoices`} onClick={go('pl')} />
-            <KpiExec label="Cash Received" value={formatCurrency(payments.total)} hue={HUE.cash}
+            <KpiExec label="Cash Received" value={payments.total} format={formatCurrency} hue={HUE.cash}
               delta={cashD} sub="customer payments" spark={completeVals(cashSeries)} chip={`${payments.count} payments`} onClick={go('accounts')} />
-            <KpiExec label="AR Open" value={formatCurrency(ar.totalOpen)} hue={HUE.ar}
+            <KpiExec label="AR Open" value={ar.totalOpen} format={formatCurrency} hue={HUE.ar}
               sub={`${ar.count} unpaid invoices`} chip={dsoApprox != null ? `Avg DSO: ${dsoApprox} days` : undefined} onClick={go('receivables')} />
-            <KpiExec label="AP Open" value={formatCurrency(ap.totalOpen)} hue={HUE.ap}
+            <KpiExec label="AP Open" value={ap.totalOpen} format={formatCurrency} hue={HUE.ap}
               sub="unpaid bills" chip={`${ap.count} bills`} onClick={go('payables')} />
-            <KpiExec label="Sales Orders" value={formatCurrency(so.totalValue)} hue={HUE.sales}
+            <KpiExec label="Sales Orders" value={so.totalValue} format={formatCurrency} hue={HUE.sales}
               sub="order book (not revenue)" chip={`${so.count} orders`} onClick={go('orders')} />
-            <KpiExec label="PO Spend" value={formatCurrency(po.totalValue)} hue={HUE.po}
+            <KpiExec label="PO Spend" value={po.totalValue} format={formatCurrency} hue={HUE.po}
               sub="committed · active only" chip={`${po.count} POs`} onClick={go('tracking')} />
-            <KpiExec label="Open Exceptions" value={String(exc?.totalOpen ?? 0)} hue={HUE.exc}
+            <KpiExec label="Open Exceptions" value={exc?.totalOpen ?? 0} hue={HUE.exc}
               sub="data-quality items" chip="Needs review" onClick={go('exceptions')} />
           </div>
 
@@ -339,52 +339,10 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <div className="exec-rail">
-              <div className="section chart-card">
-                <div className="section-head"><div><h2 className="section-title">Top Payers (by AR)</h2><div className="section-sub">Largest open balances</div></div></div>
-                <div className="rank-list">
-                  {topCust.map((c) => (
-                    <div key={c.name} className="rk-row">
-                      <span className="rk-ico">{initials(c.name)}</span>
-                      <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
-                      <span className="rk-val">{formatCurrency(c.open)}</span>
-                    </div>
-                  ))}
-                  {topCust.length === 0 && <div className="muted-note">No open receivables.</div>}
-                </div>
-                <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('receivables')}>View all receivables →</button>
-              </div>
-
-              <div className="section chart-card">
-                <div className="section-head"><div><h2 className="section-title">Top Vendors (by Spend)</h2><div className="section-sub">Committed PO spend</div></div></div>
-                <div className="rank-list">
-                  {topVend.map((v) => (
-                    <div key={v.vendor} className="rk-row">
-                      <span className="rk-ico" style={{ background: 'rgba(124,58,237,0.10)', color: '#7C3AED' }}>{initials(v.vendor)}</span>
-                      <span className="rk-name" title={v.vendor}>{trunc(v.vendor, 26)}</span>
-                      <span className="rk-val">{formatCurrency(v.total)}</span>
-                    </div>
-                  ))}
-                  {topVend.length === 0 && <div className="muted-note">No active POs.</div>}
-                </div>
-                <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('vendors')}>View all vendors →</button>
-              </div>
-
-              <div className="section chart-card">
-                <div className="section-head"><div><h2 className="section-title">Financial Insights</h2><div className="section-sub">Computed from live data</div></div></div>
-                <div className="ins-list">
-                  {insights.map((ins, i) => (
-                    <div key={i} className="ins-item">
-                      <span className="ins-dot" style={{ background: INS_TONES[ins.tone].bg, color: INS_TONES[ins.tone].fg }}>{ins.ico}</span>
-                      <span>{ins.text}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
             <ChartCard className="g12-3" title="Collection Rate" sub="Cash received ÷ revenue YTD">
-              <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.positive} height={150} />
+              <div className="card-body">
+                <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.positive} height={150} />
+              </div>
               <div className="cfoot">
                 <div className="cf-i"><div className="l">Collected</div><div className="v pos">{formatCurrency(payments.total)}</div></div>
                 <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding</div><div className="v">{formatCurrency(ar.totalOpen)}</div></div>
@@ -403,21 +361,69 @@ export function OverviewCharts() {
               <DonutList data={agingData(ap.aging)} totalLabel="Total" />
             </ChartCard>
 
-            <ChartCard className="g12-6" title="Sales Orders by Program" sub={`${so.count} orders · PI / VA / Tri-Care split`}>
-              <BarList data={programBars} money={false} onSelect={go('orders')} />
+            <div className="section chart-card g12-3">
+              <div className="section-head"><div><h2 className="section-title">Top Payers (by AR)</h2><div className="section-sub">Largest open balances</div></div></div>
+              <div className="rank-list">
+                {topCust.map((c) => (
+                  <div key={c.name} className="rk-row">
+                    <span className="rk-ico">{initials(c.name)}</span>
+                    <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
+                    <span className="rk-val">{formatCurrency(c.open)}</span>
+                  </div>
+                ))}
+                {topCust.length === 0 && <div className="muted-note">No open receivables.</div>}
+              </div>
+              <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('receivables')}>View all receivables →</button>
+            </div>
+
+            <div className="section chart-card g12-3">
+              <div className="section-head"><div><h2 className="section-title">Top Vendors (by Spend)</h2><div className="section-sub">Committed PO spend</div></div></div>
+              <div className="rank-list">
+                {topVend.map((v) => (
+                  <div key={v.vendor} className="rk-row">
+                    <span className="rk-ico" style={{ background: 'rgba(124,58,237,0.10)', color: '#7C3AED' }}>{initials(v.vendor)}</span>
+                    <span className="rk-name" title={v.vendor}>{trunc(v.vendor, 26)}</span>
+                    <span className="rk-val">{formatCurrency(v.total)}</span>
+                  </div>
+                ))}
+                {topVend.length === 0 && <div className="muted-note">No active POs.</div>}
+              </div>
+              <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('vendors')}>View all vendors →</button>
+            </div>
+
+            <ChartCard className="g12-4" title="Sales Orders by Program" sub={`${so.count} orders · PI / VA / Tri-Care split`}>
+              <div className="card-body">
+                <BarList data={programBars} money={false} onSelect={go('orders')} />
+              </div>
               <div className="cfoot">
                 <div className="cf-i"><div className="l">Total Orders</div><div className="v">{so.count.toLocaleString()}</div></div>
                 <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Order Book</div><div className="v accent">{formatCurrency(so.totalValue)}</div></div>
               </div>
             </ChartCard>
 
-            <ChartCard className="g12-6" title="PO Spend by Vendor (Top 5)" sub="Committed spend · active POs only">
-              <BarList data={vendorBars} showPct={false} onSelect={go('tracking')} />
+            <ChartCard className="g12-4" title="PO Spend by Vendor (Top 5)" sub="Committed spend · active POs only">
+              <div className="card-body">
+                <BarList data={vendorBars} showPct={false} onSelect={go('tracking')} />
+              </div>
               <div className="cfoot">
                 <div className="cf-i"><div className="l">Total Spend</div><div className="v">{formatCurrency(po.totalValue)}</div></div>
                 <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Active POs</div><div className="v accent">{po.count.toLocaleString()}</div></div>
               </div>
             </ChartCard>
+
+            <div className="section chart-card g12-4">
+              <div className="section-head"><div><h2 className="section-title">Financial Insights</h2><div className="section-sub">Computed from live data</div></div></div>
+              <div className="card-body" style={{ justifyContent: 'flex-start' }}>
+                <div className="ins-list">
+                  {insights.map((ins, i) => (
+                    <div key={i} className="ins-item">
+                      <span className="ins-dot" style={{ background: INS_TONES[ins.tone].bg, color: INS_TONES[ins.tone].fg }}>{ins.ico}</span>
+                      <span>{ins.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
 
             <ChartCard className="g12-5" title="Recent Activity" sub="Payments · orders · POs"
               right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('accounts')}>View all →</button>}>
