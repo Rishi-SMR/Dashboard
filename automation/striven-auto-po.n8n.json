@@ -1,0 +1,1127 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\n\nconst salesOrderId =\n  body.salesOrderId ??\n  body.salesOrderID ??\n  body.id ??\n  body.orderId ??\n  body.data?.salesOrderId ??\n  body.data?.id ??\n  '';\n\nif (!salesOrderId) {\n  throw new Error('Sales Order ID was not found in webhook payload.');\n}\n\nreturn [\n  {\n    json: {\n      salesOrderId: String(salesOrderId)\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1088,
+        1424
+      ],
+      "id": "bcfcbe91-76e7-4a55-a779-b3209ebf7d87",
+      "name": "Prepare Sales Order ID"
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.striven.com/v1/purchase-orders/' + String($json.data?.[0]?.id ?? $json.data?.[0]?.purchaseOrderId ?? '') }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Access Token SMR').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        592,
+        1312
+      ],
+      "id": "de674e14-bf96-4f2b-a285-f66d5f099fab",
+      "name": "Get Previous PO Detail",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "=infineedsolutions@gmail.com",
+        "subject": "={{ 'No previous PO found for item ' + $('Loop Order Lines1').item.json.itemName }}",
+        "message": "={{ 'No previous purchase order was found for item: ' + $('Loop Order Lines1').item.json.itemName + ' | Item ID: ' + $('Loop Order Lines1').item.json.itemId + ' | Sales Order: ' + $('Loop Order Lines1').item.json.salesOrderNumber + '. Vendor could not be selected automatically.' }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        592,
+        1552
+      ],
+      "id": "f42fe805-3f84-48b-a0bf-e1757701b5b8",
+      "name": "No Previous PO Alert",
+      "webhookId": "no-previous-po-alert",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GR3RkE7el4NYl7sm",
+          "name": "INFIAUTOMATION GMAIL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "=infineedsolutions@gmail.com",
+        "subject": "={{ 'No vendor contact found for item ' + $('Loop Order Lines1').item.json.itemName }}",
+        "message": "={{ 'A previous PO was found, but no vendor contact was found for item: ' + $('Loop Order Lines1').item.json.itemName + ' | Item ID: ' + $('Loop Order Lines1').item.json.itemId + ' | Sales Order: ' + $('Loop Order Lines1').item.json.salesOrderNumber + '. Please add or correct the vendor contact in Striven.' }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1312,
+        1424
+      ],
+      "id": "14ece5b1-7197-4593-93b8-e24c1c2eae34",
+      "name": "No Vendor Contact Alert",
+      "webhookId": "no-vendor-contact-alert",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GR3RkE7el4NYl7sm",
+          "name": "INFIAUTOMATION GMAIL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.striven.com/v1/purchase-orders",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Access Token SMR').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.poPayload }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2032,
+        1232
+      ],
+      "id": "9f4a9bec-55ce-4481-93f2-3c065ba7beb2",
+      "name": "Create Purchase Order",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "striven-sales-order-created",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1408,
+        1424
+      ],
+      "id": "c9f02e5b-30a4-4248-8965-eaa74db03b9",
+      "name": "Webhook1",
+      "webhookId": "c83dec7b-1d49-4341-9744-8cea74db03b9"
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = [];\n\nfor (let sourceIndex = 0; sourceIndex < items.length; sourceIndex++) {\n  const orderRaw = items[sourceIndex].json ?? {};\n  const order = orderRaw.data && !Array.isArray(orderRaw.data) ? orderRaw.data : orderRaw;\n\n  const salesOrderId =\n    order.id ??\n    order.salesOrderId ??\n    order.orderId ??\n    $('Prepare Sales Order ID').first().json.salesOrderId ??\n    '';\n\n  const salesOrderNumber =\n    order.orderNumber ??\n    order.number ??\n    order.salesOrderNumber ??\n    salesOrderId;\n\n  const customerName =\n    order.customer?.name ??\n    order.customerName ??\n    order.account?.name ??\n    order.accountName ??\n    '';\n\n  let lines =\n    order.lineItems ??\n    order.lines ??\n    order.items ??\n    order.salesOrderItems ??\n    order.salesOrderLines ??\n    order.orderLines ??\n    order.details ??\n    [];\n\n  if (lines && !Array.isArray(lines) && Array.isArray(lines.data)) {\n    lines = lines.data;\n  }\n\n  if (!Array.isArray(lines) || lines.length === 0) {\n    throw new Error(`No sales-order lines found for order ${salesOrderNumber}`);\n  }\n\n  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {\n    const line = lines[lineIndex];\n\n    const itemId =\n      line.item?.id ??\n      line.itemId ??\n      line.inventoryItemId ??\n      line.product?.id ??\n      line.productId ??\n      '';\n\n    const itemName =\n      line.item?.name ??\n      line.itemName ??\n      line.product?.name ??\n      line.productName ??\n      line.name ??\n      line.description ??\n      `Line ${lineIndex + 1}`;\n\n    const itemCode =\n      line.item?.code ??\n      line.itemCode ??\n      line.sku ??\n      line.itemSku ??\n      line.productCode ??\n      '';\n\n    const itemDescription =\n      line.item?.description ??\n      line.itemDescription ??\n      line.productDescription ??\n      line.description ??\n      '';\n\n    const unitOfMeasure =\n      line.unitOfMeasure ??\n      line.uom ??\n      line.unit ??\n      '';\n\n    const orderedQuantity = Number(\n      line.quantity ??\n      line.qty ??\n      line.Quantity ??\n      line.Qty ??\n      0\n    );\n\n    if (!itemId) {\n      throw new Error(`Missing item ID in order ${salesOrderNumber}, line ${lineIndex + 1}`);\n    }\n\n    if (!Number.isFinite(orderedQuantity) || orderedQuantity <= 0) {\n      throw new Error(`Invalid quantity in order ${salesOrderNumber}, line ${lineIndex + 1}`);\n    }\n\n    output.push({\n      json: {\n        salesOrderId: String(salesOrderId),\n        salesOrderNumber: String(salesOrderNumber),\n        customerName: String(customerName),\n        lineNumber: lineIndex + 1,\n        itemId: String(itemId),\n        itemName: String(itemName),\n        itemCode: String(itemCode),\n        itemDescription: String(itemDescription),\n        unitOfMeasure: String(unitOfMeasure),\n        orderedQuantity\n      }\n    });\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        1424
+      ],
+      "id": "85fed502-39f3-4d22-bb54-7a8000ca6fdb",
+      "name": "Extract Sales Order Lines1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -128,
+        1424
+      ],
+      "id": "6cac7f00-06e3-4ed5-a0df-1abb92c32085",
+      "name": "Loop Order Lines1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.striven.com/v1/purchase-orders/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Access Token SMR').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  {\n    ItemId: Number($json.itemId),\n    PageIndex: 0,\n    PageSize: 25,\n    SortExpression: 'PurchaseOrderDate',\n    SortOrder: '2'\n  }\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        112,
+        1424
+      ],
+      "id": "d4eec614-bb89-4aee-9abf-645ce16765d1",
+      "name": "Search Previous PO for Item1",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.striven.com/v1/contacts/' + String($json.data?.[0]?.id ?? '') }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Access Token SMR').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1312,
+        1232
+      ],
+      "id": "88d3e388-85b1-4603-8c0c-81d7e06a1274",
+      "name": "Get Vendor Contact Detail1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const line = $('Loop Order Lines1').item.json ?? {};\nconst rawPreviousPO = $('Get Previous PO Detail').item.json ?? {};\nconst previousPO = rawPreviousPO.data && !Array.isArray(rawPreviousPO.data) ? rawPreviousPO.data : rawPreviousPO;\nconst contact = $input.first().json ?? {};\n\nconst vendor =\n  previousPO.vendor ??\n  previousPO.vendorAccount ??\n  previousPO.account ??\n  previousPO.supplier ??\n  {};\n\nconst vendorId =\n  vendor.id ??\n  previousPO.vendorId ??\n  previousPO.vendorAccountId ??\n  previousPO.accountId ??\n  previousPO.supplierId ??\n  '';\n\nconst vendorName =\n  vendor.name ??\n  previousPO.vendorName ??\n  previousPO.vendorAccountName ??\n  previousPO.accountName ??\n  previousPO.supplierName ??\n  '';\n\nif (!vendorId) {\n  throw new Error(`Vendor ID was not found on the previous purchase order for item ${line.itemName}.`);\n}\n\nconst emails = Array.isArray(contact.emails)\n  ? contact.emails.filter((email) => email.active !== false)\n  : [];\n\nconst selectedEmail =\n  emails.find((email) => email.isPrimary === true) ??\n  emails[0] ??\n  {};\n\nconst vendorEmail = String(\n  selectedEmail.email ??\n  selectedEmail.emailAddress ??\n  contact.email ??\n  contact.emailAddress ??\n  contact.primaryEmail ??\n  ''\n).trim();\n\nif (!vendorEmail) {\n  throw new Error(`No email address was found for vendor ${vendorName || vendorId}.`);\n}\n\nconst vendorContactId =\n  contact.id ??\n  contact.contactId ??\n  contact.accountContactId ??\n  null;\n\nconst vendorContactName =\n  [contact.firstName, contact.lastName]\n    .filter(Boolean)\n    .join(' ')\n    .trim() ||\n  contact.name ||\n  vendorName ||\n  'Vendor';\n\nconst previousLines =\n  previousPO.lineItems ??\n  previousPO.lines ??\n  previousPO.items ??\n  previousPO.purchaseOrderItems ??\n  previousPO.purchaseOrderLines ??\n  [];\n\nconst lineArray = Array.isArray(previousLines)\n  ? previousLines\n  : (Array.isArray(previousLines?.data) ? previousLines.data : []);\n\nconst previousLine =\n  lineArray.find((poLine) => {\n    const poItemId =\n      poLine.item?.id ??\n      poLine.itemId ??\n      poLine.inventoryItemId ??\n      poLine.product?.id ??\n      poLine.productId ??\n      '';\n\n    return String(poItemId) === String(line.itemId);\n  }) ??\n  {};\n\nconst previousUnitPrice = Number(\n  previousLine.unitPrice ??\n  previousLine.price ??\n  previousLine.cost ??\n  previousLine.unitCost ??\n  previousLine.rate ??\n  0\n);\n\nreturn [{\n  json: {\n    ...line,\n    vendorId: String(vendorId),\n    vendorName: String(vendorName),\n    vendorEmail,\n    vendorContactId,\n    vendorContactName,\n    previousUnitPrice: Number.isFinite(previousUnitPrice) ? previousUnitPrice : 0,\n    purchaseOrderTypeId:\n      previousPO.purchaseOrderType?.id ??\n      previousPO.purchaseOrderTypeId ??\n      previousPO.poType?.id ??\n      previousPO.poTypeId ??\n      null,\n    paymentTermId:\n      previousPO.paymentTerm?.id ??\n      previousPO.paymentTerms?.id ??\n      previousPO.paymentTermId ??\n      previousPO.paymentTermsId ??\n      null,\n    shippingMethodId:\n      previousPO.shippingMethod?.id ??\n      previousPO.shippingMethodId ??\n      previousPO.shipVia?.id ??\n      previousPO.shipViaId ??\n      null,\n    shipToAddressId:\n      previousPO.shipToAddress?.id ??\n      previousPO.shipToAddressId ??\n      previousPO.deliveryAddress?.id ??\n      previousPO.deliveryAddressId ??\n      null,\n    requestedById:\n      previousPO.requestedBy?.id ??\n      previousPO.requestedById ??\n      null,\n    currencyId:\n      previousPO.currency?.id ??\n      previousPO.currencyId ??\n      null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        1232
+      ],
+      "id": "ca3727e3-1f67-4e43-a70c-c08817b36a6e",
+      "name": "Select Vendor Contact1",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json ?? {};\nconst rawPreviousPO = $('Get Previous PO Detail').item.json ?? {};\nconst previousPO = rawPreviousPO.data && !Array.isArray(rawPreviousPO.data) ? rawPreviousPO.data : rawPreviousPO;\n\nconst clone = (value) => JSON.parse(JSON.stringify(value));\nconst poPayload = clone(previousPO);\n\nconst previousPOType =\n  previousPO.type ??\n  previousPO.poType ??\n  previousPO.purchaseOrderType ??\n  null;\n\nconst previousPOTypeId = Number(\n  previousPOType?.id ??\n  previousPO.typeId ??\n  previousPO.poTypeId ??\n  previousPO.purchaseOrderTypeId ??\n  0\n);\n\nif (!previousPOType || !Number.isFinite(previousPOTypeId) || previousPOTypeId <= 0) {\n  throw new Error(`The previous PO does not contain a valid PO Type. Available previous PO fields: ${Object.keys(previousPO).join(', ')}`);\n}\n\npoPayload.type = clone(previousPOType);\npoPayload.poType = clone(previousPOType);\npoPayload.purchaseOrderType = clone(previousPOType);\npoPayload.typeId = previousPOTypeId;\npoPayload.poTypeId = previousPOTypeId;\npoPayload.purchaseOrderTypeId = previousPOTypeId;\n\nconst previousVendor =\n  previousPO.vendor ??\n  previousPO.vendorAccount ??\n  previousPO.account ??\n  previousPO.supplier ??\n  null;\n\nconst vendorId = Number(\n  previousVendor?.id ??\n  previousPO.vendorId ??\n  previousPO.vendorAccountId ??\n  previousPO.accountId ??\n  previousPO.supplierId ??\n  row.vendorId ??\n  0\n);\n\nif (!previousVendor || !Number.isFinite(vendorId) || vendorId <= 0) {\n  throw new Error('The previous PO does not contain a valid Vendor.');\n}\n\npoPayload.vendor = clone(previousVendor);\n\nif (row.vendorContactId) {\n  poPayload.vendorContactId = Number(row.vendorContactId);\n}\n\npoPayload.id = 0;\ndelete poPayload.purchaseOrderId;\ndelete poPayload.poId;\ndelete poPayload.purchaseOrderNumber;\ndelete poPayload.poNumber;\ndelete poPayload.number;\ndelete poPayload.dateCreated;\ndelete poPayload.createdDate;\ndelete poPayload.createdBy;\ndelete poPayload.lastUpdatedDate;\ndelete poPayload.lastUpdatedBy;\ndelete poPayload.total;\ndelete poPayload.subtotal;\ndelete poPayload.subTotal;\ndelete poPayload.taxTotal;\ndelete poPayload.balance;\n\nconst now = new Date();\nconst promiseDate = new Date(now);\npromiseDate.setUTCDate(promiseDate.getUTCDate() + 7);\n\npoPayload.purchaseOrderDate = now.toISOString();\npoPayload.promiseDate = promiseDate.toISOString();\n\nconst lineKey = [\n  'lineItems',\n  'purchaseOrderLineItems',\n  'purchaseOrderItems',\n  'purchaseOrderLines',\n  'lines',\n  'items'\n].find((key) => Array.isArray(previousPO[key]) || Array.isArray(previousPO[key]?.data));\n\nif (!lineKey) {\n  throw new Error('The previous PO line-item field could not be identified.');\n}\n\nconst previousLines = Array.isArray(previousPO[lineKey])\n  ? previousPO[lineKey]\n  : previousPO[lineKey].data;\n\nconst itemId = Number(row.itemId);\nconst quantity = Number(row.orderedQuantity);\n\nif (!Number.isFinite(itemId) || itemId <= 0) {\n  throw new Error('Invalid item ID.');\n}\n\nif (!Number.isFinite(quantity) || quantity <= 0) {\n  throw new Error('Invalid ordered quantity.');\n}\n\nconst previousLine =\n  previousLines.find((line) => {\n    const previousItemId = Number(\n      line.item?.id ??\n      line.itemId ??\n      line.inventoryItemId ??\n      line.product?.id ??\n      line.productId ??\n      0\n    );\n\n    return previousItemId === itemId;\n  }) ?? previousLines[0];\n\nif (!previousLine) {\n  throw new Error('No usable line item was found on the previous PO.');\n}\n\nconst newLine = clone(previousLine);\nnewLine.id = 0;\ndelete newLine.purchaseOrderLineItemId;\ndelete newLine.purchaseOrderId;\ndelete newLine.quantityReceived;\ndelete newLine.quantityBilled;\ndelete newLine.amountReceived;\ndelete newLine.amountBilled;\n\nnewLine.item = {\n  ...(newLine.item ?? {}),\n  id: itemId,\n  name: String(row.itemName ?? '')\n};\n\nnewLine.itemId = itemId;\nnewLine.quantity = quantity;\n\nif ('qty' in newLine) {\n  newLine.qty = quantity;\n}\n\nif ('orderedQuantity' in newLine) {\n  newLine.orderedQuantity = quantity;\n}\n\nconst previousUnitPrice = Number(\n  row.previousUnitPrice ??\n  newLine.unitPrice ??\n  newLine.price ??\n  newLine.unitCost ??\n  newLine.cost ??\n  newLine.rate ??\n  0\n);\n\nif ('unitPrice' in newLine) {\n  newLine.unitPrice = previousUnitPrice;\n} else if ('price' in newLine) {\n  newLine.price = previousUnitPrice;\n} else if ('unitCost' in newLine) {\n  newLine.unitCost = previousUnitPrice;\n} else {\n  newLine.unitPrice = previousUnitPrice;\n}\n\nif (newLine.status) {\n  newLine.status = {\n    ...newLine.status,\n    id: 113,\n    name: 'Pending'\n  };\n}\n\nif ('statusId' in newLine) {\n  newLine.statusId = 113;\n}\n\npoPayload[lineKey] = [newLine];\n\nif (poPayload.status) {\n  poPayload.status = {\n    ...poPayload.status,\n    id: 109,\n    name: 'In Progress'\n  };\n}\n\nif ('statusId' in poPayload) {\n  poPayload.statusId = 109;\n}\n\n// Link the new PO to the CURRENT sales order and drop-ship to the CURRENT customer.\nconst soRaw2 = $('Get Sales Order Detail').first().json ?? {};\nconst so2 = soRaw2.data && !Array.isArray(soRaw2.data) ? soRaw2.data : soRaw2;\nconst soCustomer = so2.customer ?? null;\nif (soCustomer && 'dropShipCustomer' in poPayload) poPayload.dropShipCustomer = clone(soCustomer);\nif (soCustomer?.id && 'dropShipCustomerId' in poPayload) poPayload.dropShipCustomerId = Number(soCustomer.id);\npoPayload.title = 'Auto PO for SO ' + String(row.salesOrderNumber ?? '');\nif ('memo' in poPayload) poPayload.memo = 'Auto-created from Sales Order ' + String(row.salesOrderNumber ?? '');\n// Previous order's custom fields must never leak onto the new PO.\ndelete poPayload.customFields;\n\nreturn [\n  {\n    json: {\n      ...row,\n      poPayload\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        1232
+      ],
+      "id": "d9aeda60-8d93-45bf-ad21-29941731ceeb",
+      "name": "Build Striven PO Payload1",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "infineedsolutions@gmail.com",
+        "subject": "={{ (() => {\n  const line = $('Select Vendor Contact1').item.json || {};\n  const createdPO = $('Create Purchase Order').item.json || {};\n  const poNumber = createdPO.number ?? createdPO.purchaseOrderNumber ?? createdPO.poNumber ?? createdPO.id ?? createdPO.data?.number ?? createdPO.data?.id ?? `PO-${Date.now()}`;\n  const itemName = line.itemName ?? 'Requested Item';\n  const orderedQuantity = Number(line.orderedQuantity ?? 0);\n  return `Purchase Order ${poNumber} | ${itemName} | Quantity: ${orderedQuantity}`;\n})() }}",
+        "message": "={{ (() => {\n  const line = $('Select Vendor Contact1').item.json || {};\n  const createdPO = $('Create Purchase Order').item.json || {};\n  const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\\"/g, '&quot;').replace(/'/g, '&#039;');\n  const formatNumber = (value) => { const number = Number(value ?? 0); return Number.isFinite(number) ? number.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : '0'; };\n  const poNumber = createdPO.number ?? createdPO.purchaseOrderNumber ?? createdPO.poNumber ?? createdPO.id ?? createdPO.data?.number ?? createdPO.data?.id ?? `PO-${Date.now()}`;\n  const purchaseOrderDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });\n  const itemName = line.itemName ?? 'Item';\n  const itemCode = line.itemCode ?? 'N/A';\n  const itemDescription = line.itemDescription ?? '';\n  const orderedQuantity = Number(line.orderedQuantity ?? 0);\n  const unitOfMeasure = line.unitOfMeasure || 'Units';\n  const vendorName = line.vendorName || 'Vendor';\n  const greetingName = line.vendorContactName || vendorName;\n  const salesOrderNumber = line.salesOrderNumber || 'N/A';\n  return `\n  <div style=\"margin:0;padding:24px;background-color:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#222222;\">\n    <div style=\"max-width:760px;margin:0 auto;background-color:#ffffff;border:1px solid #dddddd;\">\n      <div style=\"padding:24px 30px;border-bottom:4px solid #1f4e78;\">\n        <table style=\"width:100%;border-collapse:collapse;\">\n          <tr>\n            <td style=\"width:60%;vertical-align:top;\">\n              <div style=\"font-size:26px;font-weight:bold;color:#1f4e78;letter-spacing:0.5px;\">PURCHASE ORDER</div>\n              <div style=\"margin-top:7px;font-size:13px;color:#666666;\">Purchase Order Confirmation Required</div>\n            </td>\n            <td style=\"vertical-align:top;text-align:right;font-size:13px;line-height:1.8;\">\n              <strong>PO Number:</strong> ${escapeHtml(poNumber)}<br>\n              <strong>PO Date:</strong> ${escapeHtml(purchaseOrderDate)}<br>\n              <strong>Sales Order:</strong> ${escapeHtml(salesOrderNumber)}\n            </td>\n          </tr>\n        </table>\n      </div>\n      <div style=\"padding:26px 30px;\">\n        <p style=\"margin:0 0 18px 0;font-size:14px;line-height:1.6;\">Dear ${escapeHtml(greetingName)},</p>\n        <p style=\"margin:0 0 22px 0;font-size:14px;line-height:1.7;\">Please process the attached Purchase Order and confirm acceptance, expected dispatch date, and expected delivery date.</p>\n        <table style=\"width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;\">\n          <tr><td style=\"width:30%;padding:10px;border:1px solid #d6d6d6;background-color:#f2f5f8;font-weight:bold;\">Vendor</td><td style=\"padding:10px;border:1px solid #d6d6d6;\">${escapeHtml(vendorName)}</td></tr>\n          <tr><td style=\"padding:10px;border:1px solid #d6d6d6;background-color:#f2f5f8;font-weight:bold;\">Item</td><td style=\"padding:10px;border:1px solid #d6d6d6;\">${escapeHtml(itemName)}</td></tr>\n          <tr><td style=\"padding:10px;border:1px solid #d6d6d6;background-color:#f2f5f8;font-weight:bold;\">Item Code</td><td style=\"padding:10px;border:1px solid #d6d6d6;\">${escapeHtml(itemCode)}</td></tr>\n          <tr><td style=\"padding:10px;border:1px solid #d6d6d6;background-color:#f2f5f8;font-weight:bold;\">Quantity</td><td style=\"padding:10px;border:1px solid #d6d6d6;font-weight:bold;\">${formatNumber(orderedQuantity)} ${escapeHtml(unitOfMeasure)}</td></tr>\n        </table>\n        ${itemDescription && itemDescription !== itemName ? `<p style=\"font-size:13px;line-height:1.6;color:#555555;\"><strong>Description:</strong> ${escapeHtml(itemDescription)}</p>` : ''}\n        <p style=\"margin:0 0 18px 0;font-size:14px;line-height:1.7;\">Please reply to this email confirming acceptance of Purchase Order <strong>${escapeHtml(poNumber)}</strong>.</p>\n        <p style=\"margin:0 0 20px 0;padding:12px;background-color:#eef6fc;border-left:4px solid #1f4e78;font-size:12px;line-height:1.6;color:#555555;\">Please mention Purchase Order number <strong>${escapeHtml(poNumber)}</strong> on all invoices, delivery documents, and related communication.</p>\n        <p style=\"margin:0;font-size:14px;line-height:1.7;\">Regards,<br><strong>Purchasing Team</strong></p>\n      </div>\n      <div style=\"padding:14px 30px;background-color:#f2f5f8;border-top:1px solid #dddddd;text-align:center;font-size:11px;color:#666666;line-height:1.5;\">This is an automatically generated Purchase Order email.</div>\n    </div>\n  </div>`;\n})() }}",
+        "options": {
+          "appendAttribution": false,
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "data"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2512,
+        1232
+      ],
+      "id": "cbf627e2-bea9-48ee-a8d8-5eb0420e383a",
+      "name": "Email Vendor with Gmail1",
+      "webhookId": "627b3f8e-d7a7-4988-bacd-1c6372a39faf",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GR3RkE7el4NYl7sm",
+          "name": "INFIAUTOMATION GMAIL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.striven.com/accesstoken",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "client_credentials"
+            },
+            {
+              "name": "ClientId",
+              "value": "946B150DF6DE426DBB2BCAF43CE1C7B7"
+            }
+          ]
+        },
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -848,
+        1424
+      ],
+      "id": "1c9bc1b4-ec0d-4496-a3cf-eaea205c6333",
+      "name": "Access Token SMR",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "80r3k5k1mtEFss5D",
+          "name": "SMR Striven"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.striven.com/v1/sales-orders/' + $('Prepare Sales Order ID').first().json.salesOrderId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Access Token SMR').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -608,
+        1424
+      ],
+      "id": "be6b7c47-26f3-48a4-8585-6f1c18efdb58",
+      "name": "Get Sales Order Detail"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fb1fc4ff-4dc3-44ef-863c-c529b10338f4",
+              "leftValue": "={{ Number($json.totalCount ?? ($json.data?.length ?? 0)) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        352,
+        1424
+      ],
+      "id": "df8339b3-6448-4671-a87f-faa5149bcab9",
+      "name": "Previous PO Found?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.striven.com/v1/contacts/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Access Token SMR').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  const rawPO = $('Get Previous PO Detail').item.json ?? {};\n  const po = rawPO.data && !Array.isArray(rawPO.data) ? rawPO.data : rawPO;\n  const vendorName = po.vendor?.name ?? po.vendorName ?? po.vendorAccount?.name ?? po.vendorAccountName ?? po.account?.name ?? po.accountName ?? po.supplier?.name ?? po.supplierName ?? '';\n  return {\n    accountName: vendorName,\n    pageIndex: 0,\n    pageSize: 100\n  };\n})() }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        832,
+        1312
+      ],
+      "id": "4cef36dc-7ef7-48fa-90ae-5df49a1c6ee4",
+      "name": "Search Vendor Contact"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ef278a9c-60f1-4c2c-a4af-47d9858b36bb",
+              "leftValue": "={{ Number($json.totalCount ?? ($json.data?.length ?? 0)) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1072,
+        1312
+      ],
+      "id": "3c52ad5d-2c32-46f2-bfdc-93aecd5241e9",
+      "name": "Vendor Contact Found?"
+    },
+    {
+      "parameters": {
+        "url": "={{\n  'https://api.striven.com/v1/purchase-orders/' +\n  String(\n    $('Create Purchase Order').item.json.id ??\n    $('Create Purchase Order').item.json.purchaseOrderId ??\n    $('Create Purchase Order').item.json.poId ??\n    $('Create Purchase Order').item.json.data?.id ??\n    $('Create Purchase Order').item.json.data?.purchaseOrderId\n  ) +\n  '/format/15'\n}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Access Token SMR').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/octet-stream,application/pdf,*/*"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2272,
+        1232
+      ],
+      "id": "7b34eeda-9662-4424-ba38-c74ac9ac1ddb",
+      "name": "Download PO PDF",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1888,
+        1744
+      ],
+      "id": "auto-1326844195",
+      "name": "Every 5 Minutes"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.striven.com/accesstoken",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "client_credentials"
+            },
+            {
+              "name": "ClientId",
+              "value": "946B150DF6DE426DBB2BCAF43CE1C7B7"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1648,
+        1744
+      ],
+      "id": "auto-6312708508",
+      "name": "Poll Access Token",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "80r3k5k1mtEFss5D",
+          "name": "SMR Striven"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.striven.com/v1/sales-orders/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Poll Access Token').first().json.access_token }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { PageIndex: 0, PageSize: 25, SortExpression: 'DateCreated', SortOrder: '2' } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1408,
+        1744
+      ],
+      "id": "auto-5332907016",
+      "name": "Poll New Sales Orders"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Checkpoint poller: remembers the highest SO id it has seen and emits\n// ONE new sales order per run (oldest unseen first). First run only\n// baselines the checkpoint so ancient orders are never reprocessed.\nconst sd = $getWorkflowStaticData('global');\nconst rows = ($json.data ?? []).map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);\nif (!rows.length) return [];\nconst maxId = Math.max(...rows);\nconst last = Number(sd.lastSoId ?? 0);\nif (!last) { sd.lastSoId = maxId; return []; }\nconst fresh = rows.filter((n) => n > last).sort((a, b) => a - b);\nif (!fresh.length) return [];\nsd.lastSoId = fresh[0];\nreturn [{ json: { salesOrderId: String(fresh[0]) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1168,
+        1744
+      ],
+      "id": "auto-6710620191",
+      "name": "Pick New Sales Order"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Idempotency: one SO -> one automation run, ever. Webhook + poller both pass through here.\nconst sd = $getWorkflowStaticData('global');\nif (!Array.isArray(sd.processedSoIds)) sd.processedSoIds = [];\nconst id = String($json.salesOrderId ?? '');\nif (!id) return [];\nif (sd.processedSoIds.includes(id)) return [];\nsd.processedSoIds.push(id);\nif (sd.processedSoIds.length > 500) sd.processedSoIds = sd.processedSoIds.slice(-500);\nreturn [{ json: { salesOrderId: id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -968,
+        1592
+      ],
+      "id": "auto-6602421537",
+      "name": "Already Processed?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "demo-gate-1",
+              "leftValue": "={{ (($json.type?.name ?? '') + ' ' + ($json.name ?? '') + ' ' + ($json.customer?.name ?? '')).toLowerCase() }}",
+              "rightValue": "demo",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "demo-gate-2",
+              "leftValue": "={{ (($json.type?.name ?? '') + ' ' + ($json.name ?? '') + ' ' + ($json.customer?.name ?? '')).toLowerCase() }}",
+              "rightValue": "test",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -496,
+        1592
+      ],
+      "id": "auto-7486773842",
+      "name": "DEMO Only Gate (PILOT)"
+    },
+    {
+      "parameters": {
+        "sendTo": "infineedsolutions@gmail.com",
+        "subject": "={{ 'Auto-PO error on SO ' + String($('Prepare Sales Order ID').first().json.salesOrderId ?? '?') }}",
+        "message": "={{ 'Auto-PO automation hit an error and skipped this line.\\n\\nError: ' + String($json.error?.message ?? $json.message ?? JSON.stringify($json).slice(0, 500)) }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1792,
+        1728
+      ],
+      "id": "auto-6681955001",
+      "name": "Automation Error Alert",
+      "webhookId": "auto-po-error-alert",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GR3RkE7el4NYl7sm",
+          "name": "INFIAUTOMATION GMAIL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 0. POLLING TRIGGER (THE REAL AUTO)\n\nStriven has NO outbound webhooks, so the webhook alone never fires.\n\nThis branch polls new Sales Orders every 5 minutes and feeds one new SO per run into the same pipeline.",
+        "height": 300,
+        "width": 260,
+        "color": "#FFD8A8"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1952,
+        1616
+      ],
+      "id": "auto-6901559116",
+      "name": "Note - Polling Trigger"
+    },
+    {
+      "parameters": {
+        "content": "## GUARDS\n\nAlready Processed? = one SO can never create two POs.\n\nEvery Striven HTTP node now sends a browser User-Agent - without it Cloudflare blocks Striven API calls with error 1010.",
+        "height": 300,
+        "width": 260,
+        "color": "#B2F2BB"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1032,
+        1464
+      ],
+      "id": "auto-3022635396",
+      "name": "Note - Idempotency + UA"
+    },
+    {
+      "parameters": {
+        "content": "## DEMO-ONLY PILOT\n\nOnly SOs whose type/name/customer contains DEMO or TEST pass through.\n\nGo-live: delete this IF node (or route False into Extract) once testing is done.",
+        "height": 300,
+        "width": 260,
+        "color": "#FFB3C1"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        1464
+      ],
+      "id": "auto-9190258642",
+      "name": "Note - PILOT gate"
+    }
+  ],
+  "connections": {
+    "Prepare Sales Order ID": {
+      "main": [
+        [
+          {
+            "node": "Already Processed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Previous PO Detail": {
+      "main": [
+        [
+          {
+            "node": "Search Vendor Contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Automation Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Previous PO Alert": {
+      "main": [
+        [
+          {
+            "node": "Loop Order Lines1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Vendor Contact Alert": {
+      "main": [
+        [
+          {
+            "node": "Loop Order Lines1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Purchase Order": {
+      "main": [
+        [
+          {
+            "node": "Download PO PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Automation Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "Prepare Sales Order ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Sales Order Lines1": {
+      "main": [
+        [
+          {
+            "node": "Loop Order Lines1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Order Lines1": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Search Previous PO for Item1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Previous PO for Item1": {
+      "main": [
+        [
+          {
+            "node": "Previous PO Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Vendor Contact Detail1": {
+      "main": [
+        [
+          {
+            "node": "Select Vendor Contact1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Vendor Contact1": {
+      "main": [
+        [
+          {
+            "node": "Build Striven PO Payload1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Automation Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Striven PO Payload1": {
+      "main": [
+        [
+          {
+            "node": "Create Purchase Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Automation Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Vendor with Gmail1": {
+      "main": [
+        [
+          {
+            "node": "Loop Order Lines1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Access Token SMR": {
+      "main": [
+        [
+          {
+            "node": "Get Sales Order Detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sales Order Detail": {
+      "main": [
+        [
+          {
+            "node": "DEMO Only Gate (PILOT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Previous PO Found?": {
+      "main": [
+        [
+          {
+            "node": "Get Previous PO Detail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Previous PO Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Vendor Contact": {
+      "main": [
+        [
+          {
+            "node": "Vendor Contact Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vendor Contact Found?": {
+      "main": [
+        [
+          {
+            "node": "Get Vendor Contact Detail1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Vendor Contact Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PO PDF": {
+      "main": [
+        [
+          {
+            "node": "Email Vendor with Gmail1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Automation Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Poll Access Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Access Token": {
+      "main": [
+        [
+          {
+            "node": "Poll New Sales Orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll New Sales Orders": {
+      "main": [
+        [
+          {
+            "node": "Pick New Sales Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick New Sales Order": {
+      "main": [
+        [
+          {
+            "node": "Prepare Sales Order ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Processed?": {
+      "main": [
+        [
+          {
+            "node": "Access Token SMR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DEMO Only Gate (PILOT)": {
+      "main": [
+        [
+          {
+            "node": "Extract Sales Order Lines1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Automation Error Alert": {
+      "main": [
+        [
+          {
+            "node": "Loop Order Lines1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7c47851536d62a55829a185611d858f86e19ba100b00585710d5aa57b686b705"
+  }
+}
