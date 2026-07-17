@@ -61,11 +61,14 @@ export const KPI_ICONS = {
   clock: kIcon(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.2 1.8" /></>),
   box: kIcon(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="M12 12 20 7.5" /><path d="M12 12v9" /><path d="M12 12 4 7.5" /></>),
   wallet: kIcon(<><path d="M20 7H5a2 2 0 0 1 0-4h13v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16V7" /><path d="M16 14h.01" /></>),
+  trend: kIcon(<><polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></>),
+  pie: kIcon(<><path d="M21.2 15.9A10 10 0 1 1 8 2.8" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></>),
 };
-export function KpiR({ ico, tint, label, value, format, delta, deltaText, foot, onClick }: {
+export function KpiR({ ico, tint, label, value, format, delta, deltaInvert = false, deltaText, foot, onClick }: {
   ico: keyof typeof KPI_ICONS; tint: string; label: string;
   value: number; format?: (n: number) => string;
-  delta?: { pct: number; up: boolean } | null; deltaText?: string; foot: string; onClick?: () => void;
+  // deltaInvert: metric where UP is bad (expenses) — flips the delta color only.
+  delta?: { pct: number; up: boolean } | null; deltaInvert?: boolean; deltaText?: string; foot: string; onClick?: () => void;
 }) {
   return (
     <div className={`kpi-r${onClick ? ' clickable' : ''}`} onClick={onClick}
@@ -78,7 +81,7 @@ export function KpiR({ ico, tint, label, value, format, delta, deltaText, foot, 
       <div className="kr-value"><AnimatedNumber value={value} format={format} /></div>
       <div className="kr-delta">
         {delta
-          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}%</b><span> vs prior month</span></>
+          ? <><b className={(delta.up !== deltaInvert) ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}%</b><span> vs prior month</span></>
           : <span>{deltaText ?? '—'}</span>}
       </div>
       <div className="kr-foot">{foot}</div>
@@ -346,7 +349,8 @@ export function DrillModal({ title, sub, columns, rows, onClose }: {
 }
 
 // Money trend over months. series: which keys to draw (green revenue, red expenses, …).
-export function TrendArea({ data, series, idPrefix }: { data: Record<string, number | string>[]; series: { key: string; name: string; color: string }[]; idPrefix: string }) {
+// dots=true marks each month with a filled point (reference "P&L" look).
+export function TrendArea({ data, series, idPrefix, dots = false }: { data: Record<string, number | string>[]; series: { key: string; name: string; color: string }[]; idPrefix: string; dots?: boolean }) {
   return (
     <div className="chart-box">
       <ResponsiveContainer width="100%" height="100%">
@@ -363,7 +367,8 @@ export function TrendArea({ data, series, idPrefix }: { data: Record<string, num
           <YAxis {...axisProps} width={54} tickFormatter={compactMoney} />
           <Tooltip {...tooltipStyle} formatter={(v: number | string) => formatCurrency(Number(v))} />
           {series.map((s) => (
-            <Area key={s.key} {...NOANIM} type="monotone" dataKey={s.key} name={s.name} stroke={s.color} strokeWidth={2.5} fill={`url(#${idPrefix}-${s.key})`} />
+            <Area key={s.key} {...NOANIM} type="monotone" dataKey={s.key} name={s.name} stroke={s.color} strokeWidth={2.5}
+              fill={`url(#${idPrefix}-${s.key})`} dot={dots ? { r: 3.5, fill: s.color, strokeWidth: 0 } : false} />
           ))}
         </AreaChart>
       </ResponsiveContainer>
