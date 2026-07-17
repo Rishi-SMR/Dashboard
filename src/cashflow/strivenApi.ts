@@ -172,6 +172,16 @@ export const qbPostInvoice = (soId: number, force = false) =>
   fetch(`/api/qb/post-invoice?so=${soId}${force ? '&force=1' : ''}`, { method: 'POST', headers: { Accept: 'application/json' } })
     .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error((j as { error?: string })?.error || `Post failed: ${r.status}`); return j as QbPostResult; });
 
+// ── Reports (vendor purchases, patient orders) — cancelled excluded ─────────
+export type ReportVendorItem = { item: string; qty: number; cost: number; poCount: number };
+export type ReportVendor = { vendor: string; poCount: number; totalCost: number; items: ReportVendorItem[] };
+export type VendorItemsReport = { vendors: ReportVendor[]; count: number; generatedAt: string | null; note: string };
+export type ReportPatientItem = { item: string; qty: number; value: number; soCount: number };
+export type ReportPatient = { patient: string; soCount: number; totalValue: number; items: ReportPatientItem[] };
+export type PatientItemsReport = { patients: ReportPatient[]; count: number; generatedAt: string | null; note: string };
+export const fetchVendorItemsReport = () => get<VendorItemsReport>('/api/reports/vendor-items');
+export const fetchPatientItemsReport = () => get<PatientItemsReport>('/api/reports/patient-items');
+
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
 export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };

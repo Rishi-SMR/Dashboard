@@ -843,8 +843,21 @@ async function getProjects() {
 }
 
 // ---- route tables (shared) ----------------------------------------------
+// Aggregation reports (vendor→items from POs, patient→items from SOs). Computed
+// offline by scripts/gen-reports.mjs into these cache keys; cancelled excluded.
+async function getReportVendorItems() {
+  const r = await sbCacheRead('report_vendor_items');
+  return r?.data ?? { vendors: [], count: 0, generatedAt: null, note: 'Report not generated yet.' };
+}
+async function getReportPatientItems() {
+  const r = await sbCacheRead('report_patient_items');
+  return r?.data ?? { patients: [], count: 0, generatedAt: null, note: 'Report not generated yet.' };
+}
+
 export const ROUTES = {
   '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
+  '/api/reports/vendor-items': getReportVendorItems,
+  '/api/reports/patient-items': getReportPatientItems,
   '/api/status': getStatus,
   '/api/ar': getAR,
   '/api/ap': getAP,
