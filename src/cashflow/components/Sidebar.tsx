@@ -19,7 +19,6 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   catalog: svg(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="M12 12 20 7.5" /><path d="M12 12v9" /><path d="M12 12 4 7.5" /></>),
   accounts: svg(<><path d="m3 9 9-6 9 6" /><path d="M5 9v9" /><path d="M9.7 9v9" /><path d="M14.3 9v9" /><path d="M19 9v9" /><path d="M3 21h18" /></>),
   exceptions: svg(<><path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" /></>),
-  automation: svg(<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />),
 };
 
 const ITEMS: Array<{ key: ViewKey; label: string }> = [
@@ -33,7 +32,6 @@ const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'catalog', label: 'Catalog' },
   { key: 'accounts', label: 'Accounts' },
   { key: 'exceptions', label: 'Exceptions' },
-  { key: 'automation', label: 'Automation' },
 ];
 
 // Optional profile-photo + title fallbacks keyed by username. Left empty in the
