@@ -695,6 +695,11 @@ async function getPODetail(id) {
     approvedDate: r.approvedDate ?? null, reviewedDate: r.reviewedDate ?? null, acceptedBy: nm(r.acceptedByContact), lastUpdatedBy: nm(r.lastUpdatedBy),
     paymentTerm: nm(r.paymentTerm), account: nm(r.apglAccount),
     dropShipCustomer: r.dropShipCustomer ? maskName(r.dropShipCustomer.name) : '',
+    // full operational detail (addresses/notes withheld under PHI)
+    shipVia: nm(r.shipVia), lastUpdatedDate: r.lastUpdatedDate ?? null,
+    notesLogCount: Number(r.notesLogCount ?? 0), attachmentCount: Number(r.attachmentCount ?? 0),
+    isDropShip: !!r.dropShipPO, isBlanket: !!r.isBlanketPO, isFixedCost: !!r.isFixedCostPO,
+    allowPartial: !!r.allowPartialFulfilment, isRecurring: !!r.isRecurring, needsReview: !!r.requiresInternalReview,
     total: Number(r.poTotal ?? 0), lineItems: mapLineItems(r.lineItems),
   };
 }

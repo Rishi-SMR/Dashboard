@@ -62,6 +62,8 @@ export type PoDetail = {
   requestedBy: string; contact: string; createdBy: string; createdDate: string | null;
   approvedDate: string | null; reviewedDate: string | null; acceptedBy: string; lastUpdatedBy: string;
   paymentTerm: string; account: string; dropShipCustomer: string;
+  shipVia: string; lastUpdatedDate: string | null; notesLogCount: number; attachmentCount: number;
+  isDropShip: boolean; isBlanket: boolean; isFixedCost: boolean; allowPartial: boolean; isRecurring: boolean; needsReview: boolean;
   total: number; lineItems: LineItem[];
 };
 export type SoLineItem = { item: string; description: string; qty: number; unit: number; amount: number; shipping: number; taxable: boolean; ordered: boolean | null };

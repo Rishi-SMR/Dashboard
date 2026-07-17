@@ -161,6 +161,9 @@ export function OrdersTab() {
   const [soProgF, setSoProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'Other'>('All');
   const [soQuery, setSoQuery] = useState('');
   const [soPage, setSoPage] = useState(1);
+  const [poQuery, setPoQuery] = useState('');
+  const [poStatusF, setPoStatusF] = useState('All');
+  const [poPage, setPoPage] = useState(1);
   const soTableRef = useRef<HTMLDivElement | null>(null);
   const filterTo = (g: 'All' | SoGroup) => {
     setSoStatusF(g); setSoPage(1);
@@ -242,6 +245,17 @@ export function OrdersTab() {
       (soProgF === 'All' || o.type === soProgF) &&
       (!q || o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q)));
   }, [so, soStatusF, soProgF, soQuery]);
+  const poStatuses = useMemo(() => [...new Set((po?.recent ?? []).map((r) => r.status || 'Active'))].sort(), [po]);
+  const poRecentFiltered = useMemo(() => {
+    const q = poQuery.trim().toLowerCase();
+    return (po?.recent ?? []).filter((r) =>
+      (poStatusF === 'All' || (r.status || 'Active') === poStatusF) &&
+      (!q || r.ref.toLowerCase().includes(q) || (r.vendor || '').toLowerCase().includes(q)));
+  }, [po, poQuery, poStatusF]);
+  const poPages = Math.max(1, Math.ceil(poRecentFiltered.length / SO_PAGE));
+  const poPageSafe = Math.min(poPage, poPages);
+  const poShown = poRecentFiltered.slice((poPageSafe - 1) * SO_PAGE, poPageSafe * SO_PAGE);
+
   const soPages = Math.max(1, Math.ceil(soRecentFiltered.length / SO_PAGE));
   const soPageSafe = Math.min(soPage, soPages);
   const soShown = soRecentFiltered.slice((soPageSafe - 1) * SO_PAGE, soPageSafe * SO_PAGE);
@@ -506,8 +520,17 @@ export function OrdersTab() {
             </ChartCard>
           </div>
 
-          <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head"><h2 className="section-title">Recent Purchase Orders</h2></div>
+          <div className="section chart-card" style={{ marginTop: 16 }}>
+            <div className="section-head">
+              <div><h2 className="section-title">All Purchase Orders</h2><div className="section-sub">{poRecentFiltered.length} of {(po.recent ?? []).length} active POs · click a row for full detail</div></div>
+              <div className="tbl-controls">
+                <input className="tbl-search" style={{ width: 180 }} value={poQuery} onChange={(e) => { setPoQuery(e.target.value); setPoPage(1); }} placeholder="Search PO / vendor" />
+                <select className="tbl-select" value={poStatusF} onChange={(e) => { setPoStatusF(e.target.value); setPoPage(1); }}>
+                  <option value="All">All statuses</option>
+                  {poStatuses.map((st) => <option key={st} value={st}>{st}</option>)}
+                </select>
+              </div>
+            </div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
@@ -520,7 +543,7 @@ export function OrdersTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {po.recent.map((o) => (
+                  {poShown.map((o) => (
                     <tr key={o.id} onClick={() => openPo(o.id)} style={{ cursor: 'pointer' }}>
                       <td><strong>{o.ref}</strong></td>
                       <td>{o.vendor || '—'}</td>
@@ -529,13 +552,24 @@ export function OrdersTab() {
                       <td>{fmtDate(o.date)}</td>
                     </tr>
                   ))}
-                  {po.recent.length === 0 && (
-                    <tr><td colSpan={5} className="muted-note">No recent purchase orders.</td></tr>
+                  {poShown.length === 0 && (
+                    <tr><td colSpan={5} className="muted-note">No purchase orders match.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
-            <div className="muted-note">Click a PO to open its full detail — what was purchased from the vendor.</div>
+            <div className="pgn">
+              <span className="pgn-info">Showing {poRecentFiltered.length === 0 ? 0 : (poPageSafe - 1) * SO_PAGE + 1} to {Math.min(poPageSafe * SO_PAGE, poRecentFiltered.length)} of {poRecentFiltered.length.toLocaleString()} POs</span>
+              <div className="pgn-pages">
+                <button disabled={poPageSafe <= 1} onClick={() => setPoPage(poPageSafe - 1)}>‹</button>
+                {pageList(poPageSafe, poPages).map((pg, i) => (
+                  pg === '…'
+                    ? <button key={`e${i}`} disabled>…</button>
+                    : <button key={pg} className={pg === poPageSafe ? 'active' : ''} onClick={() => setPoPage(pg)}>{pg}</button>
+                ))}
+                <button disabled={poPageSafe >= poPages} onClick={() => setPoPage(poPageSafe + 1)}>›</button>
+              </div>
+            </div>
           </div>
         </>
       )}
@@ -674,10 +708,22 @@ export function OrdersTab() {
                   <KV label="Approved Date">{fmtDate(poDetail.approvedDate)}</KV>
                   <KV label="Reviewed Date">{fmtDate(poDetail.reviewedDate)}</KV>
                   <KV label="Accepted by">{poDetail.acceptedBy || '—'}</KV>
-                  <KV label="Last updated by">{poDetail.lastUpdatedBy || '—'}</KV>
                   <KV label="Payment Term">{poDetail.paymentTerm || '—'}</KV>
                   <KV label="Account">{poDetail.account || '—'}</KV>
+                  <KV label="Ship Via">{poDetail.shipVia || '—'}</KV>
                   <KV label="Drop-ship">{poDetail.dropShipCustomer || '—'}</KV>
+                  <KV label="Last Updated">{fmtDateTime(poDetail.lastUpdatedDate)}{poDetail.lastUpdatedBy ? ` · by ${poDetail.lastUpdatedBy}` : ''}</KV>
+                  <KV label="Notes / Attachments">{poDetail.notesLogCount} notes · {poDetail.attachmentCount} files</KV>
+                  {(poDetail.isDropShip || poDetail.isBlanket || poDetail.isFixedCost || poDetail.allowPartial || poDetail.isRecurring || poDetail.needsReview) && (
+                    <KV label="Flags">
+                      {poDetail.isDropShip ? <span className="pill-tag tag-info" style={{ marginRight: 6 }}>Drop-ship</span> : null}
+                      {poDetail.isBlanket ? <span className="pill-tag tag-muted" style={{ marginRight: 6 }}>Blanket</span> : null}
+                      {poDetail.isFixedCost ? <span className="pill-tag tag-muted" style={{ marginRight: 6 }}>Fixed cost</span> : null}
+                      {poDetail.allowPartial ? <span className="pill-tag tag-ok" style={{ marginRight: 6 }}>Partial OK</span> : null}
+                      {poDetail.isRecurring ? <span className="pill-tag tag-info" style={{ marginRight: 6 }}>Recurring</span> : null}
+                      {poDetail.needsReview ? <span className="pill-tag tag-warn">Needs review</span> : null}
+                    </KV>
+                  )}
                 </div>
                 <div className="muted-note">Drop-ship customer masked — PHI protected.</div>
               </div>
