@@ -97,7 +97,7 @@ async function resolveUsers(envAppUsers) {
 const SB_URL = () => (process.env.SUPABASE_URL || process.env.SUPABASE_REST_URL || '').replace(/\/$/, '');
 const SB_KEY = () => process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 // Striven creds + access password live in the Supabase `app_config` table (key,value).
-async function readConfigTable() {
+export async function readConfigTable() {
   const url = SB_URL(), key = SB_KEY();
   if (!url || !key) return {};
   try {

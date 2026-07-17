@@ -5,18 +5,29 @@
 // Tokens persist in Supabase striven_cache (key 'qb_tokens'). Intuit ROTATES the
 // refresh token on every refresh, so the newest pair must always be persisted.
 import crypto from 'node:crypto';
-import { sbCacheRead, sbCacheWrite } from './_striven.js';
+import { sbCacheRead, sbCacheWrite, readConfigTable } from './_striven.js';
 
 const QB_OAUTH = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const QB_REVOKE = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke';
-const qbEnvName = () => (process.env.QB_ENV === 'production' ? 'production' : 'sandbox');
-const qbApiBase = () => (qbEnvName() === 'production' ? 'https://quickbooks.api.intuit.com' : 'https://sandbox-quickbooks.api.intuit.com');
-const qbCreds = () => ({
-  id: (process.env.QB_CLIENT_ID || '').trim(),
-  secret: (process.env.QB_CLIENT_SECRET || '').trim(),
-  redirect: (process.env.QB_REDIRECT_URI || '').trim(),
-});
-const basic = () => { const { id, secret } = qbCreds(); return 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64'); };
+
+// Credentials live in the Supabase `app_config` table (same source of truth as
+// the Striven creds) — env vars are only a fallback. So QB can be provisioned
+// without ever touching the Vercel dashboard.
+let _creds = null;
+async function qbCreds() {
+  if (_creds) return _creds;
+  const t = await readConfigTable().catch(() => ({}));
+  _creds = {
+    id: (t.QB_CLIENT_ID || process.env.QB_CLIENT_ID || '').trim(),
+    secret: (t.QB_CLIENT_SECRET || process.env.QB_CLIENT_SECRET || '').trim(),
+    redirect: (t.QB_REDIRECT_URI || process.env.QB_REDIRECT_URI || '').trim(),
+    env: (t.QB_ENV || process.env.QB_ENV || 'sandbox') === 'production' ? 'production' : 'sandbox',
+  };
+  return _creds;
+}
+async function qbEnvName() { return (await qbCreds()).env; }
+async function qbApiBase() { return (await qbEnvName()) === 'production' ? 'https://quickbooks.api.intuit.com' : 'https://sandbox-quickbooks.api.intuit.com'; }
+async function basic() { const { id, secret } = await qbCreds(); return 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64'); }
 
 let _tok = null; // in-memory copy of the persisted token record
 
@@ -31,7 +42,7 @@ async function writeTokens(t) { _tok = t; await sbCacheWrite('qb_tokens', t); }
 async function tokenRequest(form) {
   const res = await fetch(QB_OAUTH, {
     method: 'POST',
-    headers: { Authorization: basic(), Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { Authorization: await basic(), Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(form).toString(),
   });
   const json = await res.json().catch(() => ({}));
@@ -41,7 +52,7 @@ async function tokenRequest(form) {
 
 // ── OAuth flow ──────────────────────────────────────────────────────────────
 export async function qbAuthUrl() {
-  const { id, redirect } = qbCreds();
+  const { id, redirect } = await qbCreds();
   if (!id || !redirect) throw new Error('QB_CLIENT_ID / QB_REDIRECT_URI not configured');
   const state = crypto.randomBytes(16).toString('hex');
   await sbCacheWrite('qb_oauth_state', { state });
@@ -54,10 +65,10 @@ export async function qbCallback(q) {
   if (!code || !realmId) throw new Error('missing code/realmId in callback');
   const saved = (await sbCacheRead('qb_oauth_state'))?.data?.state;
   if (!saved || saved !== state) throw new Error('state mismatch — restart the connect flow');
-  const t = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: qbCreds().redirect });
+  const t = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: (await qbCreds()).redirect });
   await writeTokens({
     realmId: String(realmId),
-    env: qbEnvName(),
+    env: await qbEnvName(),
     accessToken: t.access_token,
     refreshToken: t.refresh_token,
     accessExpiresAt: Date.now() + (t.expires_in ?? 3600) * 1000,
@@ -88,7 +99,7 @@ async function accessToken() {
 export async function qbApi(pathname, { method = 'GET', body } = {}) {
   const t = await accessToken();
   const sep = pathname.includes('?') ? '&' : '?';
-  const res = await fetch(`${qbApiBase()}/v3/company/${t.realmId}/${pathname}${sep}minorversion=75`, {
+  const res = await fetch(`${await qbApiBase()}/v3/company/${t.realmId}/${pathname}${sep}minorversion=75`, {
     method,
     headers: { Authorization: `Bearer ${t.accessToken}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
@@ -103,13 +114,15 @@ export async function qbApi(pathname, { method = 'GET', body } = {}) {
 
 export async function qbStatus() {
   const t = await readTokens();
-  if (!t?.refreshToken) return { connected: false, env: qbEnvName() };
+  const env = await qbEnvName();
+  const configured = Boolean((await qbCreds()).id);
+  if (!t?.refreshToken) return { connected: false, env, configured };
   try {
     const info = await qbApi(`companyinfo/${t.realmId}`);
     const c = info?.CompanyInfo ?? {};
-    return { connected: true, env: t.env ?? qbEnvName(), realmId: t.realmId, company: c.CompanyName || c.LegalName || '', country: c.Country || '', connectedAt: t.connectedAt ?? null };
+    return { connected: true, env: t.env ?? env, configured, realmId: t.realmId, company: c.CompanyName || c.LegalName || '', country: c.Country || '', connectedAt: t.connectedAt ?? null };
   } catch (e) {
-    return { connected: false, env: qbEnvName(), realmId: t.realmId, error: e.message };
+    return { connected: false, env, configured, realmId: t.realmId, error: e.message };
   }
 }
 
@@ -118,7 +131,7 @@ export async function qbDisconnect() {
   if (t?.refreshToken) {
     await fetch(QB_REVOKE, {
       method: 'POST',
-      headers: { Authorization: basic(), 'Content-Type': 'application/json' },
+      headers: { Authorization: await basic(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: t.refreshToken }),
     }).catch(() => {});
   }
