@@ -3,6 +3,7 @@
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
 import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from './_striven.js';
+import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -63,6 +64,15 @@ export default async function handler(req, res) {
     if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== sessionToken) {
       return res.status(401).json({ error: 'auth required' });
     }
+  }
+
+  // ---- QuickBooks Online (OAuth connect/callback/status) — behind the session gate ----
+  if (pathname.startsWith('/api/qb/')) {
+    try {
+      const out = await qbHandle(pathname, Object.fromEntries(url.searchParams));
+      if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
+      if (out) return res.status(200).json(out.json);
+    } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
   let fn = ROUTES[pathname];

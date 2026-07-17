@@ -255,7 +255,7 @@ function cached(key, fn, ttl = CACHE_TTL) {
 // Shared, durable cache in the Supabase `striven_cache` table. Cold serverless
 // instances and Striven rate-limit/outage never break loading — we always fall
 // back to the last-known-good copy instead of hanging or erroring.
-async function sbCacheRead(key) {
+export async function sbCacheRead(key) {
   const url = SB_URL(), sk = SB_KEY();
   if (!url || !sk) return null;
   try {
@@ -265,7 +265,7 @@ async function sbCacheRead(key) {
     return Array.isArray(rows) && rows[0] ? rows[0] : null;
   } catch { return null; }
 }
-function sbCacheWrite(key, data) {
+export function sbCacheWrite(key, data) {
   const url = SB_URL(), sk = SB_KEY();
   if (!url || !sk) return Promise.resolve();
   return fetch(`${url}/rest/v1/striven_cache`, {

@@ -4,6 +4,7 @@
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
 import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from '../api/_striven.js';
+import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -72,6 +73,17 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== sessionToken) {
       res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
+    }
+  }
+
+  // QuickBooks Online (OAuth connect/callback/status) — behind the session gate.
+  if (pathname.startsWith('/api/qb/')) {
+    try {
+      const out = await qbHandle(pathname, Object.fromEntries(reqUrl.searchParams));
+      if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
+      if (out) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out.json)); }
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
     }
   }
 
