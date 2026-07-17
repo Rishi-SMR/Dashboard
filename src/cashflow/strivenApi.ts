@@ -135,12 +135,38 @@ export type QbPlan = {
 export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: string; action: string; name: string; id: string }[]; soNumber?: string; alreadyPosted?: QbPosted; message?: string };
 
 export type QbPostedList = { count: number; posted: Record<string, QbPosted> };
-export type QbReconcileCustomers = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string }[]; matched: { name: string }[] };
+export type QbReconcile = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string }[] };
+export type QbReconcileCustomers = QbReconcile & { matched: { name: string }[] };
+export type QbCreateMissingResult = { kind: string; created: { name: string; id: string }[]; createdCount: number; failed: { name: string; error: string }[]; remaining: number; totalMissing: number };
+export type QbEntityKind = 'customers' | 'vendors' | 'items';
+
+export type QbInvoiceRow = { id: number; number: string; customer: string; date: string | null; total: number; open: number; posted: QbPosted | null };
+export type QbInvoicesResult = { count: number; postedCount: number; invoices: QbInvoiceRow[] };
+export type QbInvoiceDocPlan = {
+  invoice: { id: number; number: string; date: string | null; dueDate: string | null; customerName: string; order: string };
+  customer: { status: 'matched' | 'create'; name: string; id?: string; qbName?: string };
+  lines: QbPlanLine[];
+  computedTotal: number;
+  alreadyPosted: QbPosted | null;
+  warnings: string[];
+};
 
 export const fetchQbStatus = () => get<QbStatus>('/api/qb/status');
 export const fetchQbCustomers = (q: string) => get<QbCustomersResult>(`/api/qb/customers?q=${encodeURIComponent(q)}`);
 export const fetchQbPosted = () => get<QbPostedList>('/api/qb/posted');
 export const fetchQbReconcileCustomers = () => get<QbReconcileCustomers>('/api/qb/reconcile-customers');
+export const fetchQbReconcile = (kind: QbEntityKind) =>
+  get<QbReconcile>(kind === 'customers' ? '/api/qb/reconcile-customers' : `/api/qb/reconcile-${kind}`);
+const post = async <T>(path: string): Promise<T> => {
+  const r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json' } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { error?: string })?.error || `Request failed: ${r.status}`);
+  return j as T;
+};
+export const qbCreateMissing = (kind: QbEntityKind, limit = 30) => post<QbCreateMissingResult>(`/api/qb/create-missing?kind=${kind}&limit=${limit}`);
+export const fetchQbInvoices = () => get<QbInvoicesResult>('/api/qb/invoices');
+export const qbPrepareInvoiceDoc = (invId: number) => get<QbInvoiceDocPlan>(`/api/qb/prepare-invoice-doc?inv=${invId}`);
+export const qbPostInvoiceDoc = (invId: number, force = false) => post<QbPostResult>(`/api/qb/post-invoice-doc?inv=${invId}${force ? '&force=1' : ''}`);
 export const qbPrepareInvoice = (soId: number) => get<QbPlan>(`/api/qb/prepare-invoice?so=${soId}`);
 export const qbPostInvoice = (soId: number, force = false) =>
   fetch(`/api/qb/post-invoice?so=${soId}${force ? '&force=1' : ''}`, { method: 'POST', headers: { Accept: 'application/json' } })
