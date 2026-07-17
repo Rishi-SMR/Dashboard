@@ -1,18 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   fetchStrivenVendors, fetchStrivenPO,
   type VendorsResult, type PoResult, type Vendor,
 } from '../strivenApi';
 import { formatCurrency, formatPhone } from '../format';
-import { KpiCard, type KpiBreakdownRow } from './KpiCard';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
-import { ChartCard, RankBar, StatCards, DrillModal } from '../chartKit';
+import { ChartCard, RankBar, BarList, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 
-const ROW_CAP = 80;
+const PAGE_SIZE = 10;
+type SortKey = 'name' | 'number' | 'status' | 'terms';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+
+const STATUS_HUE = (name: string): string => {
+  const s = (name || '').toLowerCase();
+  if (/active/.test(s)) return '#16A34A';
+  if (/prospect/.test(s)) return '#2563EB';
+  if (/inactive|hold|blocked/.test(s)) return '#DC2626';
+  return C.muted;
+};
+
+// Windowed page list: 1 2 3 … N.
+function pageList(cur: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const keep = new Set([1, 2, 3, cur - 1, cur, cur + 1, total]);
+  const nums = [...keep].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out: (number | '…')[] = [];
+  for (let i = 0; i < nums.length; i++) {
+    if (i > 0 && nums[i] - nums[i - 1] > 1) out.push('…');
+    out.push(nums[i]);
+  }
+  return out;
+}
 
 export function VendorsTab() {
   const [vendorsData, setVendorsData] = useState<VendorsResult | null>(null);
@@ -20,24 +41,32 @@ export function VendorsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [openKpi, setOpenKpi] = useState<number | null>(null);
-  const [drill, setDrill] = useState<null | { title: string; sub: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, React.ReactNode>[] }>(null);
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'name', dir: 1 });
+  const [page, setPage] = useState(1);
+  const [drill, setDrill] = useState<null | { title: string; sub: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] }>(null);
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  const agoText = useSyncAgo(lastSync);
 
-  async function load() {
-    setLoading(true); setError(null);
+  async function load(silent = false) {
+    if (!silent) { setLoading(true); setError(null); }
     try {
       const [v, p] = await Promise.all([fetchStrivenVendors(), fetchStrivenPO()]);
       setVendorsData(v); setPo(p);
+      setLastSync(Date.now());
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load vendor data. Is the backend running?');
-    } finally { setLoading(false); }
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load vendor data. Is the backend running?');
+    } finally { if (!silent) setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  // Initial load + silent live refresh every 90s.
+  useEffect(() => {
+    load();
+    const r = setInterval(() => load(true), 90_000);
+    return () => clearInterval(r);
+  }, []);
 
   const vendors: Vendor[] = vendorsData?.vendors ?? [];
   const vendorCount = vendorsData?.count ?? vendors.length;
 
-  // Vendors grouped by status → drives the "# Vendors" tap-to-explain breakdown.
   const byStatus = useMemo(() => {
     const m = new Map<string, number>();
     for (const v of vendors) {
@@ -46,8 +75,12 @@ export function VendorsTab() {
     }
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [vendors]);
+  const statusCount = (re: RegExp) => byStatus.filter((s) => re.test(s.name.toLowerCase())).reduce((t, s) => t + s.value, 0);
+  const activeCount = statusCount(/active/);
+  const prospectCount = statusCount(/prospect/);
+  const pctOf = (n: number) => (vendorCount ? Math.round((n / vendorCount) * 100) : 0);
 
-  // PO spend ranked by vendor (top 12) — hero chart + the PO-spend breakdown.
+  // PO spend ranked by vendor — hero chart, click a bar to drill into that vendor's POs.
   const spendData = useMemo(
     () => [...(po?.byVendor ?? [])]
       .filter((v) => v.total > 0)
@@ -56,14 +89,6 @@ export function VendorsTab() {
       .map((v) => ({ name: v.vendor || '—', value: v.total })),
     [po],
   );
-
-  const spendBreakdown: KpiBreakdownRow[] = useMemo(() => {
-    const rows: KpiBreakdownRow[] = spendData.slice(0, 5).map((v) => ({ label: v.name, value: formatCurrency(v.value) }));
-    rows.push({ label: 'Total PO spend', value: formatCurrency(po?.totalValue ?? 0), strong: true });
-    return rows;
-  }, [spendData, po]);
-
-  // Click a vendor bar → drill into that vendor's purchase orders (from PO.recent).
   function openDrillFor(name: string) {
     const rows = (po?.recent ?? [])
       .filter((r) => (r.vendor || '—') === name)
@@ -77,7 +102,7 @@ export function VendorsTab() {
     });
   }
 
-  // Click a status card → drill into the vendors carrying that status ('Total' = all).
+  // Click a status (KPI or bar) → the vendors carrying that status ('Total' = all).
   function openStatusDrill(status: string) {
     const rows = vendors
       .filter((v) => status === 'Total' || ((v.status || 'Unknown').trim() || 'Unknown') === status)
@@ -100,7 +125,7 @@ export function VendorsTab() {
     });
   }
 
-  // Text filter across name / number / status / terms / phone.
+  // Directory: text filter → sort → paginate.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return vendors;
@@ -111,26 +136,44 @@ export function VendorsTab() {
       (v.terms || '').toLowerCase().includes(q) ||
       (v.phone || '').toLowerCase().includes(q));
   }, [vendors, query]);
+  const sorted = useMemo(() => {
+    const v = (x: Vendor): string => (sort.key === 'number' ? x.number : sort.key === 'status' ? x.status : sort.key === 'terms' ? x.terms : x.name) || '';
+    return [...filtered].sort((a, b) => v(a).localeCompare(v(b), undefined, { numeric: true }) * sort.dir);
+  }, [filtered, sort]);
+  const pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, pages);
+  const shown = sorted.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+  const setSortKey = (key: SortKey) => { setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 })); setPage(1); };
+  const sortInd = (key: SortKey) => <span className="sort-ind">{sort.key === key ? (sort.dir === 1 ? '↑' : '↓') : '⇅'}</span>;
 
-  const shown = filtered.slice(0, ROW_CAP);
-  const more = Math.max(0, filtered.length - ROW_CAP);
+  // Export the filtered directory as CSV (client-side only).
+  function exportCsv() {
+    const esc = (s: string | number) => `"${String(s).replace(/"/g, '""')}"`;
+    const lines = [
+      ['Vendor', 'Vendor no', 'Status', 'Terms', 'Phone'].map(esc).join(','),
+      ...sorted.map((v) => [v.name || '', v.number || '', v.status || '', v.terms || '', v.phone || ''].map(esc).join(',')),
+    ];
+    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'vendors.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
 
-  const kpi = (i: number) => ({
-    open: openKpi === i,
-    onClick: () => setOpenKpi((o) => (o === i ? null : i)),
-    onClose: () => setOpenKpi(null),
-  });
+  const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <div className="page-head">
+    <div className="exec-deck" style={{ padding: '4px 2px' }}>
+      <div className="page-head deck-head" style={{ marginBottom: 16 }}>
         <div>
-          <h1 className="page-title">VENDORS</h1>
+          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Vendors</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Striven · {vendorCount.toLocaleString()} suppliers on record
+            <span className="live-dot" /> Striven · {vendorCount.toLocaleString()} suppliers on record{agoText ? ` · updated ${agoText}` : ''}
           </div>
         </div>
-        <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
+        <div className="ov-headright">
+          <span className="ov-filter"><span className="fl">📅</span><b>{asOf}</b></span>
+          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
+        </div>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -138,86 +181,88 @@ export function VendorsTab() {
 
       {vendorsData && po && (
         <>
-          {/* Vendors by status — one line: total + each status (no duplicate cards). */}
-          <ChartCard title="Vendors by Status" sub={`${vendorCount.toLocaleString()} suppliers · click a card to drill in`}>
-            <StatCards
-              data={[
-                { name: 'Total', value: vendorCount, sub: 'all suppliers', tone: 'info', primary: true },
-                ...byStatus.map((s) => ({ name: s.name, value: s.value })),
-              ]}
-              total={vendorCount}
-              onSelect={openStatusDrill}
-            />
-          </ChartCard>
-
-          {/* PO spend is a separate (money) metric — kept as its own card. */}
-          <div className="kpis">
-            <KpiCard label="PO Spend" period={`active POs only${po.cancelledCount ? ` · excl. ${po.cancelledCount} cancelled` : ''}`} value={formatCurrency(po.totalValue)} trend="up"
-              info={{ formula: 'Total value of every ACTIVE purchase order raised in Striven. Cancelled/voided POs are excluded. The biggest vendors are listed below.' }}
-              breakdown={spendBreakdown}
-              {...kpi(0)} active={openKpi === 0} />
+          <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <KpiR ico="users" tint="#2563EB" label="Suppliers" value={vendorCount}
+              deltaText="on record" foot="all vendors in Striven" onClick={() => openStatusDrill('Total')} />
+            <KpiR ico="shield" tint="#16A34A" label="Active" value={activeCount}
+              deltaText={`${pctOf(activeCount)}% of total`} foot="currently trading" onClick={() => openStatusDrill('Active')} />
+            <KpiR ico="clip" tint="#D97706" label="Prospect" value={prospectCount}
+              deltaText={`${pctOf(prospectCount)}% of total`} foot="not yet active" onClick={() => openStatusDrill('Prospect')} />
+            <KpiR ico="cash" tint="#7C3AED" label="PO Spend" value={po.totalValue} format={formatCurrency}
+              deltaText={`${po.count} active POs`} foot={po.cancelledCount ? `${po.cancelledCount} cancelled excluded` : 'active POs only'} />
           </div>
 
-          {/* Charts — uniform 2-col grid. Click a bar to drill into that vendor's POs. */}
-          <div className="chart-grid">
-            <ChartCard title="PO Spend by Vendor" sub={`Active POs only${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} — click a bar for detail`}>
+          <div className="exec-grid12">
+            <ChartCard className="g12-7" title="PO Spend by Vendor" sub={`Active POs only${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar for detail`}>
               <RankBar data={spendData} money colorAt={() => C.brand} onSelect={openDrillFor} />
             </ChartCard>
-          </div>
 
-          {/* Vendor directory — text filter + row cap. */}
-          <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <h2 className="section-title">Vendor Directory</h2>
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Filter by name, number, status, terms…"
-                style={{ fontSize: 13, padding: '6px 10px', border: `1px solid ${C.grid}`, borderRadius: 8, color: C.ink, minWidth: 220 }}
+            <ChartCard className="g12-5" title="Vendors by Status" sub={`${vendorCount.toLocaleString()} suppliers · click a row to drill in`}>
+              <BarList
+                data={byStatus.map((s) => ({ name: s.name, value: s.value, color: STATUS_HUE(s.name), meta: `${s.value} vendors` }))}
+                money={false}
+                onSelect={openStatusDrill}
               />
-            </div>
-            <div className="table-wrap" style={{ marginTop: 8 }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Vendor</th>
-                    <th>Vendor No</th>
-                    <th>Status</th>
-                    <th>Terms</th>
-                    <th>Phone</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((v) => (
-                    <tr key={v.id}>
-                      <td><strong>{v.name || '—'}</strong></td>
-                      <td>{v.number || '—'}</td>
-                      <td><StatusPill status={v.status} /></td>
-                      <td>{v.terms || '—'}</td>
-                      <td>{formatPhone(v.phone)}</td>
-                    </tr>
-                  ))}
-                  {shown.length === 0 && (
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Total Suppliers</div><div className="v">{vendorCount.toLocaleString()}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">With PO Spend</div><div className="v accent">{spendData.length}</div></div>
+              </div>
+            </ChartCard>
+
+            <div className="section chart-card g12-12">
+              <div className="section-head">
+                <div><h2 className="section-title">Vendor Directory</h2><div className="section-sub">{filtered.length.toLocaleString()} suppliers</div></div>
+                <div className="tbl-controls">
+                  <input className="tbl-search" style={{ width: 230 }} type="text" value={query}
+                    onChange={(e) => { setQuery(e.target.value); setPage(1); }}
+                    placeholder="Filter by name, number, status, terms…" />
+                  <button className="btn ghost" style={{ padding: '7px 11px' }} title="Download CSV of the filtered vendors" onClick={exportCsv}>⤓ CSV</button>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
                     <tr>
-                      <td colSpan={5} className="muted-note" style={{ padding: '12px 10px' }}>
-                        {query.trim() ? 'No vendors match your filter.' : 'No vendors on record.'}
-                      </td>
+                      <th className="sortable" onClick={() => setSortKey('name')}>Vendor {sortInd('name')}</th>
+                      <th className="sortable" onClick={() => setSortKey('number')}>Vendor No {sortInd('number')}</th>
+                      <th className="sortable" onClick={() => setSortKey('status')}>Status {sortInd('status')}</th>
+                      <th className="sortable" onClick={() => setSortKey('terms')}>Terms {sortInd('terms')}</th>
+                      <th>Phone</th>
                     </tr>
-                  )}
-                  {filtered.length > 0 && (
-                    <tr className="total-row">
-                      <td>Total</td>
-                      <td colSpan={4}>
-                        {filtered.length.toLocaleString()} vendor{filtered.length === 1 ? '' : 's'}
-                        {more > 0 ? ` (showing first ${ROW_CAP})` : ''}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {shown.map((v) => (
+                      <tr key={v.id}>
+                        <td><strong>{v.name || '—'}</strong></td>
+                        <td>{v.number || '—'}</td>
+                        <td><StatusPill status={v.status} /></td>
+                        <td>{v.terms || '—'}</td>
+                        <td>{formatPhone(v.phone)}</td>
+                      </tr>
+                    ))}
+                    {shown.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="muted-note" style={{ padding: '12px 10px' }}>
+                          {query.trim() ? 'No vendors match your filter.' : 'No vendors on record.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="pgn">
+                <span className="pgn-info">Showing {sorted.length === 0 ? 0 : (pageSafe - 1) * PAGE_SIZE + 1} to {Math.min(pageSafe * PAGE_SIZE, sorted.length)} of {sorted.length.toLocaleString()} entries</span>
+                <div className="pgn-pages">
+                  <button disabled={pageSafe <= 1} onClick={() => setPage(pageSafe - 1)}>‹</button>
+                  {pageList(pageSafe, pages).map((p, i) => (
+                    p === '…'
+                      ? <button key={`e${i}`} disabled>…</button>
+                      : <button key={p} className={p === pageSafe ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
+                  ))}
+                  <button disabled={pageSafe >= pages} onClick={() => setPage(pageSafe + 1)}>›</button>
+                </div>
+              </div>
             </div>
-            {more > 0 && <div className="muted-note">+{more.toLocaleString()} more</div>}
           </div>
         </>
       )}
