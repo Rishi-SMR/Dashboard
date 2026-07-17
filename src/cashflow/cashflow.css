@@ -1534,3 +1534,49 @@ code {
 .exc-badge.info { background:var(--info-soft); color:var(--info); }
 .exc-title { flex:1; min-width:0; font-size:12px; font-weight:600; color:var(--muted-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .exc-val { flex:none; font-size:11.5px; font-weight:700; color:var(--muted-strong); font-variant-numeric:tabular-nums; }
+
+/* ---- Living dashboard: entrance cascade + continuous live pulse ---- */
+.ov-filters { animation: smrFadeUp .45s cubic-bezier(.16,.84,.44,1) both; }
+.action-center { animation: smrFadeUp .5s .06s cubic-bezier(.16,.84,.44,1) both; }
+.kpi-strip > *, .kpi-r-strip > * { animation: smrPop .55s cubic-bezier(.16,.84,.44,1) both; }
+.kpi-strip > *:nth-child(1), .kpi-r-strip > *:nth-child(1) { animation-delay:.10s; }
+.kpi-strip > *:nth-child(2), .kpi-r-strip > *:nth-child(2) { animation-delay:.16s; }
+.kpi-strip > *:nth-child(3), .kpi-r-strip > *:nth-child(3) { animation-delay:.22s; }
+.kpi-strip > *:nth-child(4), .kpi-r-strip > *:nth-child(4) { animation-delay:.28s; }
+.kpi-strip > *:nth-child(5), .kpi-r-strip > *:nth-child(5) { animation-delay:.34s; }
+.kpi-strip > *:nth-child(6) { animation-delay:.40s; }
+.kpi-strip > *:nth-child(7) { animation-delay:.46s; }
+.exec-grid12 > .section { animation: smrFadeUp .6s cubic-bezier(.16,.84,.44,1) both; }
+.exec-grid12 > .section:nth-child(1) { animation-delay:.30s; }
+.exec-grid12 > .section:nth-child(2) { animation-delay:.36s; }
+.exec-grid12 > .section:nth-child(3) { animation-delay:.42s; }
+.exec-grid12 > .section:nth-child(4) { animation-delay:.48s; }
+.exec-grid12 > .section:nth-child(5) { animation-delay:.54s; }
+.exec-grid12 > .section:nth-child(6) { animation-delay:.60s; }
+.exec-grid12 > .section:nth-child(7) { animation-delay:.66s; }
+.exec-grid12 > .section:nth-child(8) { animation-delay:.72s; }
+.exec-grid12 > .section:nth-child(9) { animation-delay:.78s; }
+.exec-grid12 > .section:nth-child(10) { animation-delay:.84s; }
+.exec-grid12 > .section:nth-child(11) { animation-delay:.90s; }
+.exec-grid12 > .section:nth-child(12) { animation-delay:.96s; }
+.exec-grid12 > .section:nth-child(13) { animation-delay:1.02s; }
+/* Live dot: continuous radar ping so the page always reads as "live". */
+.live-dot { animation: ldPulse 2.2s ease-out infinite; }
+@keyframes ldPulse {
+  0% { box-shadow: 0 0 0 0 rgba(5,150,105,.45); }
+  70% { box-shadow: 0 0 0 7px rgba(5,150,105,0); }
+  100% { box-shadow: 0 0 0 0 rgba(5,150,105,0); }
+}
+/* KPI sparklines draw themselves in, then the area fill fades up. */
+.ke-spark polyline { stroke-dasharray: 240; stroke-dashoffset: 240; animation: sparkDraw 1.5s .55s ease-out forwards; }
+.ke-spark polygon { opacity: 0; animation: sparkFill .6s 1.55s ease-out forwards; }
+@keyframes sparkDraw { to { stroke-dashoffset: 0; } }
+@keyframes sparkFill { to { opacity: .12; } }
+/* Delta pills pop in after the value lands. */
+.ke-delta b, .kr-delta b { display:inline-block; animation: smrPop .45s .6s cubic-bezier(.16,.84,.44,1) backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .ov-filters, .action-center, .kpi-strip > *, .kpi-r-strip > *, .exec-grid12 > .section,
+  .ke-spark polyline, .ke-spark polygon, .ke-delta b, .kr-delta b, .live-dot { animation: none !important; }
+  .ke-spark polyline { stroke-dashoffset: 0; }
+  .ke-spark polygon { opacity: .12; }
+}

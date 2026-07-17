@@ -18,10 +18,10 @@ const REDUCED = typeof window !== 'undefined' &&
   (!!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || !!navigator.webdriver);
 const NOANIM = REDUCED
   ? { isAnimationActive: false as const }
-  : { isAnimationActive: true as const, animationDuration: 900, animationEasing: 'ease-out' as const };
+  : { isAnimationActive: true as const, animationDuration: 1100, animationEasing: 'ease-out' as const };
 
 // Count-up number — animates 0 → value on mount and between value changes.
-export function AnimatedNumber({ value, format, duration = 900 }: {
+export function AnimatedNumber({ value, format, duration = 1300 }: {
   value: number; format?: (n: number) => string; duration?: number;
 }) {
   const [shown, setShown] = useState(REDUCED ? value : 0);
@@ -43,6 +43,19 @@ export function AnimatedNumber({ value, format, duration = 900 }: {
   }, [value, duration]);
   const fmt = format ?? ((n: number) => Math.round(n).toLocaleString());
   return <>{fmt(shown)}</>;
+}
+
+// Live-sync heartbeat: re-renders every second and returns "Xs ago" for the
+// header pill, so the page visibly ticks between silent data refreshes.
+export function useSyncAgo(lastSync: number | null): string {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (!lastSync) return '';
+  const s = Math.max(0, Math.round((Date.now() - lastSync) / 1000));
+  return s < 5 ? 'just now' : s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ago`;
 }
 const trunc = (v: string, n = 18) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 

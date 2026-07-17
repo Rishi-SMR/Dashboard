@@ -10,7 +10,7 @@ import {
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone } from '../chartTheme';
-import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber } from '../chartKit';
+import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, useSyncAgo } from '../chartKit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
@@ -105,9 +105,11 @@ export function OverviewCharts() {
   const [exc, setExc] = useState<ExceptionsResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  const agoText = useSyncAgo(lastSync);
 
-  async function load() {
-    setLoading(true); setError(null);
+  async function load(silent = false) {
+    if (!silent) { setLoading(true); setError(null); }
     try {
       const [a, b, p, s, o, t, pay, bp, ord, ex] = await Promise.all([
         fetchStrivenAR(), fetchStrivenAP(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
@@ -116,11 +118,17 @@ export function OverviewCharts() {
       ]);
       setAr(a); setAp(b); setPl(p); setSo(s); setPo(o); setTrends(t); setPayments(pay);
       setBillpay(bp); setOrders(ord); setExc(ex);
+      setLastSync(Date.now());
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load Striven data.');
-    } finally { setLoading(false); }
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load Striven data.');
+    } finally { if (!silent) setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  // Initial load + silent live refresh every 90s (charts/count-ups animate to new values).
+  useEffect(() => {
+    load();
+    const r = setInterval(() => load(true), 90_000);
+    return () => clearInterval(r);
+  }, []);
 
   const go = (v: string) => () => { location.hash = v; };
 
@@ -245,8 +253,8 @@ export function OverviewCharts() {
           <div className="page-sub">Executive Summary Dashboard · Sports Med Recovery</div>
         </div>
         <div className="ov-headright">
-          <span className="deck-pill"><span className="live-dot" /> Live sync</span>
-          <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
+          <span className="deck-pill"><span className="live-dot" /> Live{agoText ? ` · ${agoText}` : ' sync'}</span>
+          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
           <button className="ov-bell" onClick={go('exceptions')} aria-label="Notifications" title="Items needing attention">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 8a6 6 0 0 0-12 0c0 7-3 8-3 8h18s-3-1-3-8" /><path d="M13.7 20a2 2 0 0 1-3.4 0" />

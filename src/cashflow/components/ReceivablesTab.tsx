@@ -6,7 +6,7 @@ import {
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING, AGING_LABELS } from '../chartTheme';
-import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, AnimatedNumber } from '../chartKit';
+import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, AnimatedNumber, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
@@ -106,18 +106,27 @@ export function ReceivablesTab() {
   const [query, setQuery] = useState('');
   const tableRef = useRef<HTMLDivElement | null>(null);
 
-  async function load() {
-    setLoading(true); setError(null);
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  const agoText = useSyncAgo(lastSync);
+
+  async function load(silent = false) {
+    if (!silent) { setLoading(true); setError(null); }
     try {
       const [a, pay, cust, p] = await Promise.all([
         fetchStrivenAR(), fetchStrivenPayments(), fetchStrivenCustomers(), fetchStrivenPL().catch(() => null),
       ]);
       setAr(a); setPayments(pay); setCustomers(cust); setPl(p);
+      setLastSync(Date.now());
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load Receivables data.');
-    } finally { setLoading(false); }
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load Receivables data.');
+    } finally { if (!silent) setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  // Initial load + silent live refresh every 90s.
+  useEffect(() => {
+    load();
+    const r = setInterval(() => load(true), 90_000);
+    return () => clearInterval(r);
+  }, []);
 
   const invoices = ar?.invoices ?? [];
   const cashSeries = (payments?.byMonth ?? []).map((m) => ({ month: m.month, value: m.amount }));
@@ -227,13 +236,13 @@ export function ReceivablesTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Receivables</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · live from Striven
+            <span className="live-dot" /> Sports Med Recovery · live from Striven{agoText ? ` · updated ${agoText}` : ''}
             <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>🔒 PHI masked</span>
           </div>
         </div>
         <div className="ov-headright">
           <span className="ov-filter"><span className="fl">📅</span><b>{rangeChip}</b></span>
-          <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
+          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
         </div>
       </div>
 
