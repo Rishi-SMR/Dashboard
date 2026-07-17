@@ -5,7 +5,7 @@ import {
 } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
-import { C, AGING, AGING_LABELS } from '../chartTheme';
+import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTheme';
 import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
@@ -65,6 +65,7 @@ export function ReceivablesTab() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'due', dir: 1 });
   const [page, setPage] = useState(1);
   const [bucketFilter, setBucketFilter] = useState<string>('All');
+  const [progFilter, setProgFilter] = useState<'All' | Program>('All');
   const [query, setQuery] = useState('');
   const tableRef = useRef<HTMLDivElement | null>(null);
 
@@ -141,8 +142,9 @@ export function ReceivablesTab() {
     const q = query.trim().toLowerCase();
     return invoices.filter((i) =>
       (bucketFilter === 'All' || bucketOf(i.dueDate) === bucketFilter) &&
+      (progFilter === 'All' || programOfPayer(i.payer || i.customer) === progFilter) &&
       (!q || String(i.number).toLowerCase().includes(q) || (i.payer || '').toLowerCase().includes(q)));
-  }, [invoices, bucketFilter, query]);
+  }, [invoices, bucketFilter, progFilter, query]);
   const sorted = useMemo(() => {
     const v = (i: typeof invoices[number]): number => sort.key === 'total' ? i.total : sort.key === 'open' ? i.open
       : sort.key === 'days' ? daysPast(i.dueDate) : (i.dueDate ? new Date(i.dueDate).getTime() : 0);
@@ -320,6 +322,13 @@ export function ReceivablesTab() {
                     onChange={(e) => { setQuery(e.target.value); setPage(1); }} />
                   <select className="tbl-select" value={bucketFilter} onChange={(e) => { setBucketFilter(e.target.value); setPage(1); }}>
                     {['All', 'Current', '1–30', '31–60', '61–90', '90+'].map((b) => <option key={b} value={b}>{b === 'All' ? 'All buckets' : b}</option>)}
+                  </select>
+                  <select className="tbl-select" value={progFilter} onChange={(e) => { setProgFilter(e.target.value as 'All' | Program); setPage(1); }}>
+                    <option value="All">All programs</option>
+                    <option value="PI">PI</option>
+                    <option value="VA">VA</option>
+                    <option value="TriCare">Tri-Care</option>
+                    <option value="Unassigned">Unassigned</option>
                   </select>
                 </div>
               </div>

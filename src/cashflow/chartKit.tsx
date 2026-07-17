@@ -223,7 +223,7 @@ export function DonutList({ data, totalLabel = 'Total', money = true }: {
 // CSS progress-bar ranking (label · share bar · value) — for program splits and
 // top-N vendor spend, matching the exec board-deck look without an SVG chart.
 export function BarList({ data, money = true, showPct = true, onSelect }: {
-  data: { name: string; value: number; color: string; meta?: string }[];
+  data: { name: string; value: number; color: string; meta?: string; dim?: boolean }[];
   money?: boolean; showPct?: boolean; onSelect?: (name: string) => void;
 }) {
   const total = data.reduce((s, d) => s + d.value, 0);
@@ -234,6 +234,7 @@ export function BarList({ data, money = true, showPct = true, onSelect }: {
         const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
         return (
           <div key={d.name} className={`hbar-row${onSelect ? ' clickable' : ''}`}
+            style={d.dim ? { opacity: 0.35 } : undefined}
             onClick={onSelect ? () => onSelect(d.name) : undefined}
             role={onSelect ? 'button' : undefined} tabIndex={onSelect ? 0 : undefined}
             onKeyDown={onSelect ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(d.name); } } : undefined}>

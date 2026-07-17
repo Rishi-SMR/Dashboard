@@ -9,13 +9,25 @@ import {
 } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
-import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone } from '../chartTheme';
+import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone, programOfPayer, type Program } from '../chartTheme';
 import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, useSyncAgo } from '../chartKit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
 const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '•';
+const PROG_LABEL: Record<string, string> = { All: 'All programs', PI: 'PI', VA: 'VA', TriCare: 'Tri-Care' };
+
+// Aging bucket for one invoice (mirrors the server buckets).
+const bucketKeyOf = (dueDate: string | null): keyof Aging => {
+  if (!dueDate) return 'current';
+  const d = Math.floor((Date.now() - new Date(dueDate).getTime()) / 86_400_000);
+  if (Number.isNaN(d) || d <= 0) return 'current';
+  if (d <= 30) return 'd1_30';
+  if (d <= 60) return 'd31_60';
+  if (d <= 90) return 'd61_90';
+  return 'd90plus';
+};
 
 // Honest MoM: compare the two most-recent COMPLETE months (never the partial current month).
 const nowYm = new Date().toISOString().slice(0, 7);
@@ -132,43 +144,68 @@ export function OverviewCharts() {
 
   const go = (v: string) => () => { location.hash = v; };
 
-  // ---- derived views (real data only) ----
-  const revSeries = (trends?.series ?? []).map((s) => ({ month: s.month, value: s.revenue }));
-  const cashSeries = (payments?.byMonth ?? []).map((m) => ({ month: m.month, value: m.amount }));
+  // ---- FY + Program scope (the header filters actually re-slice the data) ----
+  const [fyPick, setFyPick] = useState<string | null>(null);
+  const [prog, setProg] = useState<'All' | Program>('All');
+  const years = Array.from(new Set([
+    ...(trends?.series ?? []).map((s) => s.month.slice(0, 4)),
+    ...(payments?.byMonth ?? []).map((m) => m.month.slice(0, 4)),
+  ])).sort();
+  const fy = fyPick && years.includes(fyPick) ? fyPick : years[years.length - 1] ?? String(new Date().getFullYear());
+  const fyLatest = fy === (years[years.length - 1] ?? fy);
+  const inFy = (m: string) => m.startsWith(fy);
+
+  // ---- derived views (real data only, FY-scoped where the data is monthly) ----
+  const revSeries = (trends?.series ?? []).filter((s) => inFy(s.month)).map((s) => ({ month: s.month, value: s.revenue }));
+  const cashSeries = (payments?.byMonth ?? []).filter((m) => inFy(m.month)).map((m) => ({ month: m.month, value: m.amount }));
   const revD = momDelta(revSeries);
   const cashD = momDelta(cashSeries);
+  const cashFY = cashSeries.reduce((s, p) => s + p.value, 0);
 
-  // Cash flow: customer payments in vs vendor bill payments out, by month.
+  // Cash flow: customer payments in vs vendor bill payments out, by month (FY-scoped).
   const cashOutBy: Record<string, number> = {};
   for (const r of billpay?.recent ?? []) {
     const m = String(r.date ?? '').slice(0, 7);
     if (m) cashOutBy[m] = (cashOutBy[m] || 0) + r.amount;
   }
   const inBy: Record<string, number> = Object.fromEntries((payments?.byMonth ?? []).map((m) => [m.month, m.amount]));
-  const cfMonths = Array.from(new Set([...Object.keys(inBy), ...Object.keys(cashOutBy)])).sort().slice(-12);
+  const cfMonths = Array.from(new Set([...Object.keys(inBy), ...Object.keys(cashOutBy)])).filter(inFy).sort().slice(-12);
   const cashData = cfMonths.map((m) => ({
     month: m, cashIn: inBy[m] || 0, cashOut: Math.round(cashOutBy[m] || 0), net: Math.round((inBy[m] || 0) - (cashOutBy[m] || 0)),
   }));
   const cfIn = cashData.reduce((s, d) => s + d.cashIn, 0);
   const cfOut = cashData.reduce((s, d) => s + d.cashOut, 0);
 
-  // Revenue vs expense with profit line.
-  const finData = (trends?.series ?? []).map((s) => ({ month: s.month, revenue: s.revenue, expenses: s.expenses, profit: s.net }));
+  // Revenue vs expense with profit line (FY-scoped).
+  const finData = (trends?.series ?? []).filter((s) => inFy(s.month)).map((s) => ({ month: s.month, revenue: s.revenue, expenses: s.expenses, profit: s.net }));
   const fRev = finData.reduce((s, d) => s + d.revenue, 0);
   const fExp = finData.reduce((s, d) => s + d.expenses, 0);
   const margin = fRev > 0 ? Math.round(((fRev - fExp) / fRev) * 1000) / 10 : 0;
 
-  const collectionPct = pl && pl.revenue > 0 ? Math.round((payments?.total ?? 0) / pl.revenue * 100) : 0;
-  const dsoApprox = pl && pl.revenue > 0 ? Math.round((ar?.totalOpen ?? 0) / (pl.revenue / (revSeries.filter((r) => r.value > 0).length * 30 || 30))) : null;
+  // Program-scoped AR: payer (law firm / VA / TriCare) classifies each invoice.
+  const arInv = (ar?.invoices ?? []).filter((i) => i.open > 0 && (prog === 'All' || programOfPayer(i.payer) === prog));
+  const arOpenF = arInv.reduce((s, i) => s + i.open, 0);
+  const arAging: Aging = prog === 'All' && ar
+    ? ar.aging
+    : arInv.reduce((acc, i) => { acc[bucketKeyOf(i.dueDate)] += i.open; return acc; },
+      { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 } as Aging);
+
+  // Program-scoped sales orders.
+  const soCount = so ? (prog === 'All' ? so.count : so.piva[prog === 'Unassigned' ? 'Other' : prog].count) : 0;
+  const soValue = so ? (prog === 'All' ? so.totalValue : so.piva[prog === 'Unassigned' ? 'Other' : prog].value) : 0;
+
+  const collectionPct = fRev > 0 ? Math.round((cashFY / fRev) * 100) : 0;
+  const dsoApprox = fRev > 0 ? Math.round(arOpenF / (fRev / (revSeries.filter((r) => r.value > 0).length * 30 || 30))) : null;
 
   // Action Center — items derived live from the same datasets.
   const now = Date.now();
   const soon = now + 7 * 86_400_000;
-  const overdue = (ar?.invoices ?? []).filter((i) => i.open > 0 && i.dueDate && new Date(i.dueDate).getTime() < now);
+  const overdue = arInv.filter((i) => i.dueDate && new Date(i.dueDate).getTime() < now);
   const overdueSum = overdue.reduce((s, i) => s + i.open, 0);
   const billsDue = (ap?.bills ?? []).filter((b) => b.open > 0 && b.dueDate && new Date(b.dueDate).getTime() <= soon);
   const billsDueSum = billsDue.reduce((s, b) => s + b.open, 0);
-  const waitingPo = (orders?.orders ?? []).filter((o) => o.pos.length === 0 && !/cancel|void|complete|closed/i.test(o.status));
+  const waitingPo = (orders?.orders ?? []).filter((o) =>
+    (prog === 'All' || o.pi === prog) && o.pos.length === 0 && !/cancel|void|complete|closed/i.test(o.status));
   type AcItem = { n: string; l1: string; l2: string; view: string; ico: ReactNode };
   const acItems: AcItem[] = [];
   if (overdue.length) acItems.push({ n: String(overdue.length), l1: 'Invoices Overdue', l2: formatCurrency(overdueSum), view: 'receivables', ico: '!' });
@@ -181,23 +218,26 @@ export function OverviewCharts() {
   const agingData = (a: Aging) =>
     AGING_LABELS.map((b, i) => ({ name: b.label, value: Math.round(a[b.key] || 0), color: AGING[i] })).filter((d) => d.value > 0);
 
-  // Sales orders by program (real classification off SO type).
+  // Sales orders by program (real classification off SO type). When a program
+  // filter is active the other bars dim so the selection reads instantly.
   const programBars = so ? ([
-    { name: 'PI', ...so.piva.PI, color: SERIES[0] },
-    { name: 'VA', ...so.piva.VA, color: SERIES[1] },
-    { name: 'Tri-Care', ...so.piva.TriCare, color: SERIES[2] },
-    ...(so.piva.Other.count > 0 ? [{ name: 'Other', ...so.piva.Other, color: SERIES[3] }] : []),
-  ].filter((d) => d.count > 0).map((d) => ({ name: d.name, value: d.count, color: d.color, meta: `${d.count} orders` }))) : [];
+    { key: 'PI', name: 'PI', ...so.piva.PI, color: SERIES[0] },
+    { key: 'VA', name: 'VA', ...so.piva.VA, color: SERIES[1] },
+    { key: 'TriCare', name: 'Tri-Care', ...so.piva.TriCare, color: SERIES[2] },
+    ...(so.piva.Other.count > 0 ? [{ key: 'Other', name: 'Other', ...so.piva.Other, color: SERIES[3] }] : []),
+  ].filter((d) => d.count > 0).map((d) => ({
+    name: d.name, value: d.count, color: d.color, meta: `${d.count} orders`,
+    dim: prog !== 'All' && d.key !== prog,
+  }))) : [];
 
   // PO spend by vendor (top 5) — slices sum to committed spend.
   const vendorBars = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5)
     .map((v, i) => ({ name: trunc(v.vendor), value: v.total, color: CAT6[i % CAT6.length] }));
 
   // Top payers by open AR — payer (law firm / VA / insurer) is the non-PHI
-  // counterparty; patient customer names arrive masked.
+  // counterparty; patient customer names arrive masked. Program-scoped.
   const custAgg = new Map<string, number>();
-  for (const i of ar?.invoices ?? []) {
-    if (i.open <= 0) continue;
+  for (const i of arInv) {
     const who = i.payer || i.customer || 'Unassigned';
     custAgg.set(who, (custAgg.get(who) || 0) + i.open);
   }
@@ -206,7 +246,7 @@ export function OverviewCharts() {
   const topVend = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5);
 
   // Financial insights — every line computed from the data above.
-  const doneRev = (trends?.series ?? []).filter((s) => s.month < nowYm && s.revenue > 0);
+  const doneRev = (trends?.series ?? []).filter((s) => inFy(s.month) && s.month < nowYm && s.revenue > 0);
   const bestMonth = doneRev.length ? doneRev.reduce((m, s) => (s.revenue > m.revenue ? s : m)) : null;
   type Ins = { tone: keyof typeof INS_TONES; ico: string; text: ReactNode };
   const insights: Ins[] = [];
@@ -243,7 +283,6 @@ export function OverviewCharts() {
 
   const ready = ar && ap && pl && payments && so && po && trends;
   const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const fy = new Date().getFullYear();
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -265,9 +304,20 @@ export function OverviewCharts() {
       </div>
 
       <div className="ov-filters">
-        <span className="ov-filter"><span className="fl">Fiscal Year</span><b>FY{fy}</b></span>
+        <label className="ov-filter"><span className="fl">Fiscal Year</span>
+          <select value={fy} onChange={(e) => setFyPick(e.target.value)}>
+            {(years.length ? years : [fy]).map((y) => <option key={y} value={y}>FY{y}</option>)}
+          </select>
+        </label>
+        <label className="ov-filter"><span className="fl">Program</span>
+          <select value={prog} onChange={(e) => setProg(e.target.value as 'All' | Program)}>
+            <option value="All">All</option>
+            <option value="PI">PI</option>
+            <option value="VA">VA</option>
+            <option value="TriCare">Tri-Care</option>
+          </select>
+        </label>
         <span className="ov-filter"><span className="fl">As of</span><b>{asOf}</b></span>
-        <span className="ov-filter"><span className="fl">Programs</span><b>PI · VA · Tri-Care</b></span>
         <span className="ov-filter"><span className="fl">🔒</span><b>PHI masked</b></span>
       </div>
 
@@ -305,16 +355,18 @@ export function OverviewCharts() {
           )}
 
           <div className="kpi-strip">
-            <KpiExec label="Revenue YTD" value={pl.revenue} format={formatCurrency} hue={HUE.revenue}
-              delta={revD} sub="invoiced this year" spark={completeVals(revSeries)} chip={`${pl.invoiceCount} invoices`} onClick={go('pl')} />
-            <KpiExec label="Cash Received" value={payments.total} format={formatCurrency} hue={HUE.cash}
-              delta={cashD} sub="customer payments" spark={completeVals(cashSeries)} chip={`${payments.count} payments`} onClick={go('accounts')} />
-            <KpiExec label="AR Open" value={ar.totalOpen} format={formatCurrency} hue={HUE.ar}
-              sub={`${ar.count} unpaid invoices`} chip={dsoApprox != null ? `Avg DSO: ${dsoApprox} days` : undefined} onClick={go('receivables')} />
+            <KpiExec label={fyLatest ? 'Revenue YTD' : `Revenue FY${fy}`} value={fRev} format={formatCurrency} hue={HUE.revenue}
+              delta={revD} sub={`invoiced · FY${fy}`} spark={completeVals(revSeries)}
+              chip={fyLatest ? `${pl.invoiceCount} invoices` : `FY${fy}`} onClick={go('pl')} />
+            <KpiExec label="Cash Received" value={cashFY} format={formatCurrency} hue={HUE.cash}
+              delta={cashD} sub={`customer payments · FY${fy}`} spark={completeVals(cashSeries)}
+              chip={fyLatest ? `${payments.count} payments` : `FY${fy}`} onClick={go('accounts')} />
+            <KpiExec label="AR Open" value={arOpenF} format={formatCurrency} hue={HUE.ar}
+              sub={`${arInv.length} unpaid · ${PROG_LABEL[prog]}`} chip={dsoApprox != null ? `Avg DSO: ${dsoApprox} days` : undefined} onClick={go('receivables')} />
             <KpiExec label="AP Open" value={ap.totalOpen} format={formatCurrency} hue={HUE.ap}
-              sub="unpaid bills" chip={`${ap.count} bills`} onClick={go('payables')} />
-            <KpiExec label="Sales Orders" value={so.totalValue} format={formatCurrency} hue={HUE.sales}
-              sub="order book (not revenue)" chip={`${so.count} orders`} onClick={go('orders')} />
+              sub="unpaid bills · snapshot" chip={`${ap.count} bills`} onClick={go('payables')} />
+            <KpiExec label="Sales Orders" value={soValue} format={formatCurrency} hue={HUE.sales}
+              sub={`order book · ${PROG_LABEL[prog]}`} chip={`${soCount} orders`} onClick={go('orders')} />
             <KpiExec label="PO Spend" value={po.totalValue} format={formatCurrency} hue={HUE.po}
               sub="committed · active only" chip={`${po.count} POs`} onClick={go('tracking')} />
             <KpiExec label="Open Exceptions" value={exc?.totalOpen ?? 0} hue={HUE.exc}
@@ -322,7 +374,7 @@ export function OverviewCharts() {
           </div>
 
           <div className="exec-grid12">
-            <ChartCard className="g12-5" title="Cash Flow Overview" sub="Customer payments in vs vendor bill payments out · monthly">
+            <ChartCard className="g12-5" title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · FY${fy}`}>
               <LegendDots items={[{ name: 'Cash In', color: C.positive }, { name: 'Cash Out', color: C.negative }, { name: 'Net Cash', color: C.brand }]} />
               <BarsLine data={cashData}
                 bars={[{ key: 'cashIn', name: 'Cash In', color: C.positive }, { key: 'cashOut', name: 'Cash Out', color: C.negative }]}
@@ -334,7 +386,7 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <ChartCard className="g12-4" title="Revenue vs Expense" sub="Invoiced revenue vs billed expenses · monthly">
+            <ChartCard className="g12-4" title="Revenue vs Expense" sub={`Invoiced revenue vs billed expenses · FY${fy}`}>
               <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />
               <BarsLine data={finData}
                 bars={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expense', color: C.negative }]}
@@ -347,13 +399,13 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <ChartCard className="g12-3" title="Collection Rate" sub="Cash received ÷ revenue YTD">
+            <ChartCard className="g12-3" title="Collection Rate" sub={`Cash received ÷ revenue · FY${fy}`}>
               <div className="card-body">
                 <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.positive} height={150} />
               </div>
               <div className="cfoot">
-                <div className="cf-i"><div className="l">Collected</div><div className="v pos">{formatCurrency(payments.total)}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding</div><div className="v">{formatCurrency(ar.totalOpen)}</div></div>
+                <div className="cf-i"><div className="l">Collected</div><div className="v pos">{formatCurrency(cashFY)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding</div><div className="v">{formatCurrency(arOpenF)}</div></div>
               </div>
               <div className="cfoot" style={{ marginTop: 0 }}>
                 <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${Math.abs(cashD.pct)}%` : '—'}</div></div>
@@ -361,8 +413,8 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <ChartCard className="g12-3" title="AR Aging Summary" sub="Open receivables · days past due">
-              <DonutList data={agingData(ar.aging)} totalLabel="Total" />
+            <ChartCard className="g12-3" title="AR Aging Summary" sub={`Open receivables · ${PROG_LABEL[prog]}`}>
+              <DonutList data={agingData(arAging)} totalLabel="Total" />
             </ChartCard>
 
             <ChartCard className="g12-3" title="AP Aging Summary" sub="Open bills · days past due">
@@ -370,7 +422,7 @@ export function OverviewCharts() {
             </ChartCard>
 
             <div className="section chart-card g12-3">
-              <div className="section-head"><div><h2 className="section-title">Top Payers (by AR)</h2><div className="section-sub">Largest open balances</div></div></div>
+              <div className="section-head"><div><h2 className="section-title">Top Payers (by AR)</h2><div className="section-sub">Largest open balances · {PROG_LABEL[prog]}</div></div></div>
               <div className="rank-list">
                 {topCust.map((c) => (
                   <div key={c.name} className="rk-row">
@@ -399,13 +451,17 @@ export function OverviewCharts() {
               <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('vendors')}>View all vendors →</button>
             </div>
 
-            <ChartCard className="g12-4" title="Sales Orders by Program" sub={`${so.count} orders · PI / VA / Tri-Care split`}>
+            <ChartCard className="g12-4" title="Sales Orders by Program" sub={`${so.count} orders · click a program to filter`}>
               <div className="card-body">
-                <BarList data={programBars} money={false} onSelect={go('orders')} />
+                <BarList data={programBars} money={false}
+                  onSelect={(name) => setProg((p) => {
+                    const key = name === 'Tri-Care' ? 'TriCare' : name;
+                    return p === key ? 'All' : (key === 'PI' || key === 'VA' || key === 'TriCare' ? key : p);
+                  })} />
               </div>
               <div className="cfoot">
-                <div className="cf-i"><div className="l">Total Orders</div><div className="v">{so.count.toLocaleString()}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Order Book</div><div className="v accent">{formatCurrency(so.totalValue)}</div></div>
+                <div className="cf-i"><div className="l">{prog === 'All' ? 'Total Orders' : `${PROG_LABEL[prog]} Orders`}</div><div className="v">{soCount.toLocaleString()}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Order Book</div><div className="v accent">{formatCurrency(soValue)}</div></div>
               </div>
             </ChartCard>
 

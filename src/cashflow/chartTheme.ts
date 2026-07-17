@@ -73,6 +73,17 @@ export const SEVERITY: Record<string, string> = {
 // Generic 6-color categorical ramp when keys are arbitrary (mirrors the KPI hues).
 export const CAT6 = ['#2563EB', '#16A34A', '#0D9488', '#D97706', '#7C3AED', '#DB2777'];
 
+// Which program pays: payer text → PI (law firm) / VA / TriCare. Payers are
+// non-PHI (law firms, Veterans Affairs, TriCare) so this is safe to classify on.
+export type Program = 'PI' | 'VA' | 'TriCare' | 'Unassigned';
+export const programOfPayer = (payer: string | null | undefined): Program => {
+  const s = String(payer ?? '').trim();
+  if (!s) return 'Unassigned';
+  if (/tri.?care/i.test(s)) return 'TriCare';
+  if (/veteran|\bva\b/i.test(s)) return 'VA';
+  return 'PI';
+};
+
 // Map any Striven status string to a pill tone: ok | warn | none | info.
 export const statusTone = (status: string): 'ok' | 'warn' | 'none' | 'info' => {
   const s = String(status || '').toLowerCase();
