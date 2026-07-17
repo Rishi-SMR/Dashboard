@@ -5,10 +5,9 @@ import {
   type AccountsResult, type GlAccount, type PaymentsResult, type BillPaymentsResult,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
-import { KpiCard } from './KpiCard';
 import { StatusPill } from './StatusPill';
 import { C, SERIES, monthLabel } from '../chartTheme';
-import { ChartCard, RankBar, TrendArea, DrillModal } from '../chartKit';
+import { ChartCard, RankBar, TrendArea, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
@@ -29,21 +28,28 @@ export function AccountsTab() {
   const [bp, setBp] = useState<BillPaymentsResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [openKpi, setOpenKpi] = useState<number | null>(null);
   const [drill, setDrill] = useState<Drill | null>(null);
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  const agoText = useSyncAgo(lastSync);
 
-  async function load() {
-    setLoading(true); setError(null);
+  async function load(silent = false) {
+    if (!silent) { setLoading(true); setError(null); }
     try {
       const [a, p, b] = await Promise.all([
         fetchStrivenAccounts(), fetchStrivenPayments(), fetchStrivenBillPayments(),
       ]);
       setAccts(a); setPay(p); setBp(b);
+      setLastSync(Date.now());
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load accounts.');
-    } finally { setLoading(false); }
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load accounts.');
+    } finally { if (!silent) setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  // Initial load + silent live refresh every 90s.
+  useEffect(() => {
+    load();
+    const r = setInterval(() => load(true), 90_000);
+    return () => clearInterval(r);
+  }, []);
 
   const accounts: GlAccount[] = accts?.accounts ?? [];
   const activeCount = useMemo(() => accounts.filter((a) => a.active).length, [accounts]);
@@ -113,27 +119,30 @@ export function AccountsTab() {
     });
   }
 
-  const kpi = (i: number) => ({ open: openKpi === i, onClick: () => setOpenKpi((o) => (o === i ? null : i)), onClose: () => setOpenKpi(null) });
+  // KPI tap-to-explain drills.
+  const kv = (rows: { k: string; v: string }[]) => ({
+    columns: [{ key: 'k', label: 'Item' }, { key: 'v', label: 'Value', num: true }],
+    rows: rows.map((r) => ({ k: r.k, v: r.v })),
+  });
   const ready = accts && pay && bp;
+  const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <div className="page-head">
+    <div className="exec-deck" style={{ padding: '4px 2px' }}>
+      <div className="page-head deck-head" style={{ marginBottom: 16 }}>
         <div>
-          <h1 className="page-title">Accounts</h1>
+          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Accounts</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · chart of accounts &amp; money movement · live from Striven
-            <span
-              style={{
-                marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
-                background: C.brandLight, color: C.brandDark, border: '1px solid #bfd3f2',
-              }}
-            >
+            <span className="live-dot" /> Sports Med Recovery · chart of accounts &amp; money movement · live from Striven{agoText ? ` · updated ${agoText}` : ''}
+            <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>
               🔒 PHI masked
             </span>
           </div>
         </div>
-        <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
+        <div className="ov-headright">
+          <span className="ov-filter"><span className="fl">📅</span><b>{asOf}</b></span>
+          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
+        </div>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -141,55 +150,36 @@ export function AccountsTab() {
 
       {ready && (
         <>
-          {/* ── KPIs — every card opens a sub-KPI breakdown ─────────── */}
-          <div className="kpis" style={{ marginTop: 8 }}>
-            <KpiCard
-              label="GL Accounts" period={`${typeData.length} account types`} value={accounts.length.toLocaleString()}
-              info={{ formula: 'Count of every general-ledger account in the Striven chart of accounts, broken out by type.' }}
-              breakdown={[
-                ...typeData.slice(0, 8).map((t) => ({ label: t.name, value: t.value.toLocaleString() })),
-                { label: 'Total accounts', value: accounts.length.toLocaleString(), strong: true },
-              ]}
-              active={openKpi === 0} {...kpi(0)}
-            />
-            <KpiCard
-              label="Payments Received" period={`${pay.count.toLocaleString()} payments`} value={formatCurrency(pay.total)} trend="up"
-              info={{ formula: 'Sum of every customer payment received (money in), excluding voided. Broken out by month.' }}
-              breakdown={[
-                ...pay.byMonth.map((m) => ({ label: monthLabel(m.month), value: formatCurrency(m.amount) })),
-                { label: 'Total received', value: formatCurrency(pay.total), strong: true },
-              ]}
-              active={openKpi === 1} {...kpi(1)}
-            />
-            <KpiCard
-              label="Bills Paid" period={`${paidCount} of ${bp.count} paid`} value={formatCurrency(bp.total)} trend="up"
-              info={{ formula: 'Vendor bills settled through Striven (money out). Every recorded bill payment is marked paid.' }}
-              breakdown={[
-                ...bpByVendor.map((v) => ({ label: v.name, value: formatCurrency(v.value), sub: 'paid' })),
-                { label: 'Total paid', value: formatCurrency(bp.total), strong: true },
-              ]}
-              active={openKpi === 2} {...kpi(2)}
-            />
-            <KpiCard
-              label="Active Accounts" period={accounts.length ? `${Math.round((activeCount / accounts.length) * 100)}% of ledger` : ''} value={activeCount.toLocaleString()}
-              trend={activeCount >= inactiveCount ? 'up' : 'down'}
-              info={{ formula: 'GL accounts flagged active in Striven — these post to the ledger. Inactive are archived.' }}
-              breakdown={[
-                { label: 'Active', value: activeCount.toLocaleString() },
-                { label: 'Inactive', value: inactiveCount.toLocaleString() },
-                { label: 'Total', value: accounts.length.toLocaleString(), strong: true },
-              ]}
-              active={openKpi === 3} {...kpi(3)}
-            />
+          <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <KpiR ico="bank" tint="#2563EB" label="GL Accounts" value={accounts.length}
+              deltaText={`${typeData.length} account types`} foot="chart of accounts"
+              onClick={() => setDrill({
+                title: 'GL Accounts', sub: 'Every general-ledger account by type',
+                ...kv([...typeData.map((t) => ({ k: t.name, v: t.value.toLocaleString() })), { k: 'Total accounts', v: accounts.length.toLocaleString() }]),
+              })} />
+            <KpiR ico="cash" tint="#16A34A" label="Payments Received" value={pay.total} format={formatCurrency}
+              deltaText={`${pay.count.toLocaleString()} payments`} foot="money in · voided excluded"
+              onClick={() => setDrill({
+                title: 'Payments Received', sub: 'Customer payments by month',
+                ...kv([...pay.byMonth.map((m) => ({ k: monthLabel(m.month), v: formatCurrency(m.amount) })), { k: 'Total received', v: formatCurrency(pay.total) }]),
+              })} />
+            <KpiR ico="wallet" tint="#D97706" label="Bills Paid" value={bp.total} format={formatCurrency}
+              deltaText={`${paidCount} of ${bp.count} paid`} foot="money out · settled to vendors"
+              onClick={() => setDrill({
+                title: 'Bills Paid', sub: 'Vendor bill payments by vendor',
+                ...kv([...bpByVendor.map((v) => ({ k: v.name, v: formatCurrency(v.value) })), { k: 'Total paid', v: formatCurrency(bp.total) }]),
+              })} />
+            <KpiR ico="users" tint="#7C3AED" label="Active Accounts" value={activeCount}
+              deltaText={accounts.length ? `${Math.round((activeCount / accounts.length) * 100)}% of ledger` : '—'}
+              foot={`${inactiveCount} archived`} />
           </div>
 
-          {/* ── Charts row: accounts mix + money received ───────────── */}
-          <div className="chart-grid">
-            <ChartCard title="Accounts by Type" sub={`${accounts.length.toLocaleString()} GL accounts · click a bar to drill in`}>
+          <div className="exec-grid12">
+            <ChartCard className="g12-5" title="Accounts by Type" sub={`${accounts.length.toLocaleString()} GL accounts · click a bar to drill in`}>
               <RankBar data={typeData} colorAt={(i) => SERIES[i % SERIES.length]} onSelect={openTypeDrill} />
             </ChartCard>
-            <ChartCard title="Payments Received by Month" sub={`${formatCurrency(pay.total)} across ${pay.count.toLocaleString()} payments`}>
-              <TrendArea data={pay.byMonth} series={[{ key: 'amount', name: 'Received', color: C.positive }]} idPrefix="acct-pay" />
+            <ChartCard className="g12-7" title="Payments Received by Month" sub={`${formatCurrency(pay.total)} across ${pay.count.toLocaleString()} payments`}>
+              <TrendArea data={pay.byMonth} series={[{ key: 'amount', name: 'Received', color: C.positive }]} idPrefix="acct-pay" dots />
             </ChartCard>
           </div>
 

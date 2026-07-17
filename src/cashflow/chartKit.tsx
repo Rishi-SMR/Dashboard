@@ -65,6 +65,7 @@ export const KPI_ICONS = {
   pie: kIcon(<><path d="M21.2 15.9A10 10 0 1 1 8 2.8" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></>),
   bag: kIcon(<><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" /></>),
   shield: kIcon(<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></>),
+  bank: kIcon(<><path d="m3 9 9-6 9 6" /><path d="M5 9v9" /><path d="M9.7 9v9" /><path d="M14.3 9v9" /><path d="M19 9v9" /><path d="M3 21h18" /></>),
 };
 export function KpiR({ ico, tint, label, value, format, delta, deltaInvert = false, deltaText, foot, onClick }: {
   ico: keyof typeof KPI_ICONS; tint: string; label: string;
