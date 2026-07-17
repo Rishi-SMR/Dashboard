@@ -1,6 +1,29 @@
 # SMR Automations
 
-## striven-auto-po.n8n.json — Auto-PO on new Sales Order
+## Auto-PO — native endpoint (THE live path; n8n version below is deprecated)
+
+`/api/auto-po?key=<AUTO_PO_KEY>` runs the SO→PO automation inside our own
+backend (same code locally via striven-server and in production via Vercel).
+No n8n needed.
+
+- **Modes:** `AUTO_PO_MODE=dry` (default — returns the exact PO *plan*, creates
+  nothing) or `live` (creates the PO in Striven). `?mode=live` overrides per call.
+- **Pilot gate:** `AUTO_PO_DEMO_ONLY=true` (default) — only DEMO/test orders pass.
+- **Safety:** checkpoint baseline (old orders never touched), idempotency
+  (one SO → one run), skip if the SO already has a linked PO, max 3 SOs/run.
+- **Vendor choice:** latest previous PO that *contains* the item → its vendor,
+  terms and line template; drop-ship is overwritten to the current SO's customer.
+- **Calls:**
+  - poll (cron): `GET /api/auto-po?key=K` — first call only baselines
+  - one SO (demo/debug): `GET /api/auto-po?key=K&so=315`
+  - state/log lives in Supabase `striven_cache` key `auto_po_state`
+- **Go-live:** set `AUTO_PO_KEY`, `AUTO_PO_MODE=live`, `AUTO_PO_DEMO_ONLY=false`
+  in Vercel env, then schedule `GET https://cfovaani.in/api/auto-po?key=K`
+  every 5 min (GitHub Actions cron / cron-job.org).
+- Note: the endpoint's JSON log includes drop-ship customer names — it is
+  key-guarded and for ops only, never surfaced in the dashboard.
+
+## striven-auto-po.n8n.json — n8n version (DEPRECATED, kept for reference)
 
 Fixed version of the n8n workflow that raises a vendor Purchase Order automatically
 when a Sales Order is created in Striven. Import into n8n (Workflows → Import from file),

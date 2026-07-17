@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from '../api/_striven.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -27,6 +27,19 @@ const server = http.createServer(async (req, res) => {
     }
     try { const refreshed = await refreshAll(); res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true, refreshed })); }
     catch (e) { res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message })); }
+  }
+
+  // Auto-PO (SO placed → PO raised) — token-guarded, no cookie needed.
+  if (pathname === '/api/auto-po') {
+    if (!autoPoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-po-key'])) {
+      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'bad key' }));
+    }
+    try {
+      const out = await autoPoRun({ so: reqUrl.searchParams.get('so') || undefined, mode: reqUrl.searchParams.get('mode') || undefined });
+      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
   }
 
   const { gateEnabled, sessionToken } = await getAuth();

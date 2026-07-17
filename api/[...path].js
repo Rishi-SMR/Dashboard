@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from './_striven.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -20,6 +20,19 @@ export default async function handler(req, res) {
     }
     try { return res.status(200).json({ ok: true, refreshed: await refreshAll() }); }
     catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  // ---- auto-PO (SO placed → PO raised) — token-guarded, no cookie ----
+  if (pathname === '/api/auto-po') {
+    if (!autoPoTokenOk(url.searchParams.get('key') || req.headers['x-auto-po-key'])) {
+      return res.status(401).json({ error: 'bad key' });
+    }
+    try {
+      return res.status(200).json(await autoPoRun({
+        so: url.searchParams.get('so') || undefined,
+        mode: url.searchParams.get('mode') || undefined,
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
   const { gateEnabled, sessionToken } = await getAuth();

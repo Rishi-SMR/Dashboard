@@ -791,3 +791,143 @@ export const DYNAMIC = [
 // Out-of-band cache refresh (called by pg_cron every 6h). Guarded by a secret token.
 export { refreshAll };
 export const refreshTokenOk = (t) => { const want = process.env.REFRESH_TOKEN || ''; return Boolean(want) && String(t ?? '') === want; };
+
+// ============================================================================
+// AUTO-PO — raise a vendor Purchase Order automatically when a Sales Order is
+// placed. DEMO-gated pilot + dry-run by default; nothing is created unless
+// AUTO_PO_MODE=live (or ?mode=live) AND the order passes the gate.
+// Trigger:  /api/auto-po?key=<AUTO_PO_KEY>[&so=<id>][&mode=dry|live]
+// State:    striven_cache key 'auto_po_state' { lastSoId, processed[], log[] }
+// ============================================================================
+export const autoPoTokenOk = (t) => { const want = process.env.AUTO_PO_KEY || ''; return Boolean(want) && String(t ?? '') === want; };
+const autoPoDemoOnly = () => (process.env.AUTO_PO_DEMO_ONLY ?? 'true') !== 'false';
+
+async function autoPoState() {
+  const sb = await sbCacheRead('auto_po_state');
+  const s = (sb && sb.data) || {};
+  return {
+    lastSoId: Number(s.lastSoId || 0),
+    processed: Array.isArray(s.processed) ? s.processed : [],
+    log: Array.isArray(s.log) ? s.log : [],
+  };
+}
+
+// Latest active PO that actually CONTAINS this item → vendor + a template line.
+// The containment check means we stay correct even if the search filter is
+// ignored by the API — we just scan the most recent POs.
+async function previousPoForItem(itemId) {
+  const b = await striven('POST', '/v1/purchase-orders/search', {
+    ItemId: Number(itemId), PageIndex: 0, PageSize: 25, SortExpression: 'PurchaseOrderDate', SortOrder: '2',
+  });
+  const rows = b.data ?? b.Data ?? [];
+  for (const r of rows.slice(0, 25)) {
+    try {
+      const po = await striven('GET', `/v1/purchase-orders/${r.id}`);
+      if (/cancel|void|reject|denied/i.test(po.status?.name ?? '')) continue;
+      const lines = po.lineItems ?? [];
+      const line = lines.find((l) => Number(l.item?.id ?? l.itemId ?? 0) === Number(itemId));
+      if (line && po.vendor?.id) return { po, line };
+    } catch { /* skip unreadable PO */ }
+  }
+  return null;
+}
+
+function buildAutoPoPayload(prevPo, prevLine, { itemId, itemName, qty, soNumber, soCustomer }) {
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const p = clone(prevPo);
+  p.id = 0;
+  for (const k of ['purchaseOrderNumber', 'poNumber', 'number', 'dateCreated', 'createdDate', 'createdBy',
+    'lastUpdatedDate', 'lastUpdatedBy', 'total', 'subTotal', 'subtotal', 'taxTotal', 'balance', 'customFields']) delete p[k];
+  const now = new Date();
+  p.purchaseOrderDate = now.toISOString();
+  p.promiseDate = new Date(now.getTime() + 7 * 86_400_000).toISOString();
+  // Drop-ship to the CURRENT order's customer — never the previous order's.
+  if (soCustomer && 'dropShipCustomer' in p) p.dropShipCustomer = clone(soCustomer);
+  p.title = `Auto PO for SO ${soNumber}`;
+  if ('memo' in p) p.memo = `Auto-created from Sales Order ${soNumber}`;
+  const nl = clone(prevLine);
+  nl.id = 0;
+  for (const k of ['purchaseOrderLineItemId', 'purchaseOrderId', 'quantityReceived', 'quantityBilled',
+    'amountReceived', 'amountBilled']) delete nl[k];
+  nl.item = { ...(nl.item ?? {}), id: Number(itemId), name: String(itemName ?? nl.item?.name ?? '') };
+  nl.quantity = Number(qty);
+  p.lineItems = [nl];
+  return p;
+}
+
+async function autoPoProcessSo(soId, mode) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const soNumber = String(so.orderNumber ?? so.number ?? soId);
+  const typeName = so.type?.name ?? '';
+  const entry = { at: new Date().toISOString(), soId: Number(soId), soNumber, type: typeName, mode, lines: [] };
+  const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
+  if (autoPoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test order (pilot gate)'; return entry; }
+  const chainSb = await sbCacheRead('order_chain');
+  const chain = (chainSb && chainSb.data) || {};
+  if ((chain[String(soId)]?.pos ?? []).length) { entry.skipped = 'SO already has a linked PO'; return entry; }
+  const lines = so.lineItems ?? [];
+  if (!lines.length) { entry.skipped = 'no line items on SO'; return entry; }
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const itemId = l.item?.id ?? l.itemId ?? null;
+    const itemName = l.item?.name ?? l.itemName ?? `Line ${i + 1}`;
+    const qty = Number(l.quantity ?? l.qty ?? 0);
+    const li = { itemId, itemName, qty };
+    entry.lines.push(li);
+    if (!itemId || qty <= 0) { li.result = 'skipped: missing item id or quantity'; continue; }
+    const prev = await previousPoForItem(itemId);
+    if (!prev) { li.result = 'no previous PO contains this item — vendor unknown (add mapping later)'; continue; }
+    li.vendor = prev.po.vendor?.name ?? '';
+    const payload = buildAutoPoPayload(prev.po, prev.line, { itemId, itemName, qty, soNumber, soCustomer: so.customer ?? null });
+    if (mode === 'live') {
+      const created = await striven('POST', '/v1/purchase-orders', payload);
+      li.result = 'PO CREATED';
+      li.poId = created?.id ?? created?.data?.id ?? null;
+    } else {
+      li.result = 'DRY-RUN: PO would be created';
+      li.plan = {
+        vendor: li.vendor, qty,
+        unitPrice: payload.lineItems?.[0]?.unitPrice ?? payload.lineItems?.[0]?.price ?? null,
+        title: payload.title, dropShipTo: payload.dropShipCustomer?.name ?? null,
+      };
+    }
+  }
+  return entry;
+}
+
+export async function autoPoRun(params = {}) {
+  const mode = params.mode === 'live' ? 'live' : (process.env.AUTO_PO_MODE === 'live' ? 'live' : 'dry');
+  const state = await autoPoState();
+  const results = [];
+  if (params.so) {
+    // Debug/demo: push ONE specific SO through the pipeline.
+    const soId = Number(params.so);
+    if (mode === 'live' && state.processed.includes(soId)) {
+      return { ok: true, mode, note: `SO ${soId} already processed — idempotency guard`, checkpoint: state.lastSoId };
+    }
+    const entry = await autoPoProcessSo(soId, mode);
+    results.push(entry);
+    if (mode === 'live' && !entry.skipped) state.processed.push(soId);
+  } else {
+    // Poll: process new SOs beyond the checkpoint (max 3 per run).
+    const b = await striven('POST', '/v1/sales-orders/search', { PageIndex: 0, PageSize: 25, SortExpression: 'DateCreated', SortOrder: '2' });
+    const ids = (b.data ?? b.Data ?? []).map((r) => Number(r.id)).filter((n) => n > 0);
+    if (!ids.length) return { ok: true, mode, note: 'no sales orders returned' };
+    if (!state.lastSoId) {
+      state.lastSoId = Math.max(...ids);
+      await sbCacheWrite('auto_po_state', state);
+      return { ok: true, mode, note: `baselined checkpoint at SO id ${state.lastSoId} — nothing processed, older orders are safe` };
+    }
+    const fresh = ids.filter((n) => n > state.lastSoId && !state.processed.includes(n)).sort((a, b) => a - b).slice(0, 3);
+    for (const soId of fresh) {
+      const entry = await autoPoProcessSo(soId, mode);
+      results.push(entry);
+      state.lastSoId = Math.max(state.lastSoId, soId);
+      if (mode === 'live' && !entry.skipped) state.processed.push(soId);
+    }
+  }
+  state.processed = state.processed.slice(-500);
+  state.log = [...results, ...state.log].slice(0, 50);
+  await sbCacheWrite('auto_po_state', state);
+  return { ok: true, mode, demoOnly: autoPoDemoOnly(), processed: results, checkpoint: state.lastSoId };
+}
