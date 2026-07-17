@@ -70,6 +70,10 @@ const fmtDate = (s: string | null) =>
   s
     ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     : '—';
+const fmtDateTime = (s: string | null) =>
+  s
+    ? new Date(s).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '—';
 
 const infoGrid: React.CSSProperties = {
   display: 'grid',
@@ -551,25 +555,90 @@ export function OrdersTab() {
       {mode === 'sales' && expandedSoId != null && (
         <DetailModal
           title={soDetail?.ref ?? 'Sales Order'}
-          sub={soDetail ? `Sales order · ${soDetail.customer || '—'}` : 'Loading…'}
+          sub={soDetail ? `Sales order · ${soDetail.customer || '—'} · ${soDetail.type || '—'}` : 'Loading…'}
           onClose={() => setExpandedSoId(null)}
         >
           {detailErr ? (
             <div className="error">{detailErr}</div>
           ) : soDetail ? (
-            <div className="section" style={{ marginTop: 0 }}>
-              <div className="section-head"><h2 className="section-title">Sales Order</h2></div>
-              <div style={infoGrid}>
-                <KV label="Customer">{soDetail.customer || '—'}</KV>
-                <KV label="Status"><StatusPill status={soDetail.status} /></KV>
-                <KV label="Total">{formatCurrency(soDetail.total)}</KV>
-                <KV label="Line Items">{soDetail.lineItemCount.toLocaleString()}</KV>
-                <KV label="Created">{fmtDate(soDetail.date)}</KV>
+            <>
+              <div className="section" style={{ marginTop: 0 }}>
+                <div className="section-head"><h2 className="section-title">Sales Order</h2></div>
+                <div style={infoGrid}>
+                  <KV label="Customer">{soDetail.customer || '—'}</KV>
+                  <KV label="Payer">{soDetail.payer || '—'}</KV>
+                  <KV label="Program / Type">
+                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                      <StatusPill status={soDetail.program} />{soDetail.type || '—'}
+                    </span>
+                  </KV>
+                  <KV label="Status"><StatusPill status={soDetail.status} /></KV>
+                  <KV label="Invoice Status">{soDetail.invoiceStatus || '—'}</KV>
+                  <KV label="Sales Rep">{soDetail.rep || '—'}</KV>
+                  <KV label="Order Date">{fmtDate(soDetail.orderDate)}</KV>
+                  <KV label="Target Date">{fmtDate(soDetail.targetDate)}</KV>
+                  <KV label="Created">{fmtDateTime(soDetail.createdDate)}{soDetail.createdBy ? ` · by ${soDetail.createdBy}` : ''}</KV>
+                  <KV label="Last Updated">{fmtDateTime(soDetail.lastUpdatedDate)}{soDetail.lastUpdatedBy ? ` · by ${soDetail.lastUpdatedBy}` : ''}</KV>
+                  <KV label="Payment Term">{soDetail.paymentTerm || '—'}</KV>
+                  <KV label="Ship Via">{soDetail.shipVia || '—'}</KV>
+                  <KV label="Tracking #">{soDetail.trackingNumber || '—'}</KV>
+                  <KV label="Customer PO #">{soDetail.customerPONumber || '—'}</KV>
+                  <KV label="AR Account">{soDetail.arAccount || '—'}</KV>
+                  <KV label="Sales Tax">{soDetail.salesTax || '—'}</KV>
+                  <KV label="Invoice Format">{soDetail.invoiceFormat || '—'}</KV>
+                  <KV label="Notes / Attachments">{soDetail.notesLogCount} notes · {soDetail.attachmentCount} files</KV>
+                  {(soDetail.isChangeOrder || soDetail.isRecurring) && (
+                    <KV label="Flags">
+                      {soDetail.isChangeOrder ? <span className="pill-tag tag-warn" style={{ marginRight: 6 }}>Change order</span> : null}
+                      {soDetail.isRecurring ? <span className="pill-tag tag-info">Recurring</span> : null}
+                    </KV>
+                  )}
+                </div>
+                {soDetail.phiMasked && (
+                  <div className="muted-note">Patient name masked · addresses, notes &amp; line descriptions withheld (PHI).</div>
+                )}
               </div>
-              <div className="muted-note">
-                Line-item detail withheld (PHI). Patient name masked — PHI protected.
+
+              <div className="section">
+                <div className="section-head"><h2 className="section-title">Line Items — what was ordered</h2></div>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th className="num">Qty</th>
+                        <th className="num">Unit Price</th>
+                        <th className="num">Shipping</th>
+                        <th className="num">Amount</th>
+                        <th>Ordered from Vendor</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {soDetail.lineItems.map((li, i) => (
+                        <tr key={i}>
+                          <td><strong>{li.item || '—'}</strong>{li.description ? <div className="muted-note" style={{ margin: 0 }}>{li.description}</div> : null}</td>
+                          <td className="num">{li.qty.toLocaleString()}</td>
+                          <td className="num">{formatCurrency(li.unit)}</td>
+                          <td className="num">{li.shipping ? formatCurrency(li.shipping) : '—'}</td>
+                          <td className="num">{formatCurrency(li.amount)}</td>
+                          <td>{li.ordered == null ? '—' : li.ordered ? <span className="pill-tag tag-ok">Yes</span> : <span className="pill-tag tag-warn">Not yet</span>}</td>
+                        </tr>
+                      ))}
+                      {soDetail.lineItems.length === 0 && (
+                        <tr><td colSpan={6} className="muted-note">No line items on this sales order.</td></tr>
+                      )}
+                      {soDetail.lineItems.length > 0 && (
+                        <tr className="total-row">
+                          <td colSpan={4}>TOTAL</td>
+                          <td className="num">{formatCurrency(soDetail.total)}</td>
+                          <td />
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            </>
           ) : (
             <div className="page-sub" style={{ padding: 16 }}>Loading sales-order detail…</div>
           )}
@@ -590,7 +659,7 @@ export function OrdersTab() {
               <div className="section" style={{ marginTop: 0 }}>
                 <div className="section-head"><h2 className="section-title">Purchase Order</h2></div>
                 <div style={infoGrid}>
-                  <KV label="Raised by">{poDetail.createdBy || '—'}</KV>
+                  <KV label="Raised by">{poDetail.createdBy || '—'}{poDetail.createdDate ? ` · ${fmtDateTime(poDetail.createdDate)}` : ''}</KV>
                   <KV label="Requested by">{poDetail.requestedBy || '—'}</KV>
                   <KV label="Contact">{poDetail.contact || '—'}</KV>
                   <KV label="Vendor">

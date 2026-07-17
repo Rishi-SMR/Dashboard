@@ -698,14 +698,42 @@ async function getPODetail(id) {
     total: Number(r.poTotal ?? 0), lineItems: mapLineItems(r.lineItems),
   };
 }
+// FULL sales-order detail — every operational field Striven returns. Under
+// MASK_PHI: patient name → initials, addresses/notes/line descriptions dropped;
+// products, prices, dates, people-who-worked-it and logistics stay visible.
 async function getSODetail(id) {
   const r = await cached(`so-${id}`, () => striven('GET', `/v1/sales-orders/${id}`));
-  const lineItems = mapLineItems(r.lineItems);
+  const nm = (o) => o?.name ?? '';
+  const orderedFlag = (li) => {
+    const c = (li.customColumns ?? []).find((x) => /ordered/i.test(x?.name ?? ''));
+    return c ? /^true$/i.test(String(c.value ?? c.valueText ?? '')) : null;
+  };
+  const lineItems = (r.lineItems ?? []).map((li) => ({
+    item: li.item?.name ?? '',
+    description: MASK_PHI ? '' : (li.description ?? ''),
+    qty: Number(li.qty ?? 0),
+    unit: Number(li.price ?? 0),
+    amount: round2(Number(li.qty ?? 0) * Number(li.price ?? 0) + Number(li.shippingPrice ?? 0)),
+    shipping: Number(li.shippingPrice ?? 0),
+    taxable: !!li.taxable,
+    ordered: orderedFlag(li),
+  }));
   return {
     id: r.id, ref: safeRef('SO', r.id, r.orderNumber ?? r.number), customer: maskName(r.customer?.name),
     date: r.orderDate ?? r.dateCreated ?? null, total: Number(r.orderTotal ?? 0),
     status: r.status?.name ?? '', lineItemCount: lineItems.length,
-    lineItems: MASK_PHI ? [] : lineItems, phiMasked: MASK_PHI,
+    // full operational detail
+    type: nm(r.type), program: soClass(nm(r.type)), invoiceStatus: nm(r.invoiceStatus),
+    rep: cleanRep(nm(r.salesRep)), payer: payerOf(r),
+    orderDate: r.orderDate ?? null, targetDate: r.targetDate ?? null,
+    createdDate: r.dateCreated ?? null, createdBy: nm(r.createdBy) || String(r.createdBy ?? ''),
+    lastUpdatedDate: r.lastUpdatedDate ?? null, lastUpdatedBy: nm(r.lastUpdatedBy) || String(r.lastUpdatedBy ?? ''),
+    paymentTerm: nm(r.paymentTerm), shipVia: nm(r.shipVia), trackingNumber: r.trackingNumber ?? '',
+    customerPONumber: r.customerPONumber ?? '', arAccount: nm(r.arglAccount),
+    salesTax: nm(r.salesTax), invoiceFormat: nm(r.invoiceFormat),
+    isChangeOrder: !!r.isChangeOrder, isRecurring: !!r.isRecurring,
+    notesLogCount: Number(r.notesLogCount ?? 0), attachmentCount: Number(r.attachmentCount ?? 0),
+    lineItems, phiMasked: MASK_PHI,
   };
 }
 async function getTrends() {

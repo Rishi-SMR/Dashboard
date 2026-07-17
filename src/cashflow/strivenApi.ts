@@ -64,7 +64,17 @@ export type PoDetail = {
   paymentTerm: string; account: string; dropShipCustomer: string;
   total: number; lineItems: LineItem[];
 };
-export type SoDetail = { id: number; ref: string; customer: string; date: string | null; total: number; status: string; lineItemCount: number; lineItems: LineItem[]; phiMasked: boolean };
+export type SoLineItem = { item: string; description: string; qty: number; unit: number; amount: number; shipping: number; taxable: boolean; ordered: boolean | null };
+export type SoDetail = {
+  id: number; ref: string; customer: string; date: string | null; total: number; status: string; lineItemCount: number;
+  type: string; program: string; invoiceStatus: string; rep: string; payer: string;
+  orderDate: string | null; targetDate: string | null;
+  createdDate: string | null; createdBy: string; lastUpdatedDate: string | null; lastUpdatedBy: string;
+  paymentTerm: string; shipVia: string; trackingNumber: string; customerPONumber: string; arAccount: string;
+  salesTax: string; invoiceFormat: string; isChangeOrder: boolean; isRecurring: boolean;
+  notesLogCount: number; attachmentCount: number;
+  lineItems: SoLineItem[]; phiMasked: boolean;
+};
 
 export type Aging = { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
 
