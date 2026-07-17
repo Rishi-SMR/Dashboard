@@ -56,6 +56,7 @@ export function PayablesTab() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'due', dir: 1 });
   const [page, setPage] = useState(1);
   const [query, setQuery] = useState('');
+  const [dueF, setDueF] = useState<'All' | 'overdue' | 'today' | 'upcoming'>('All');
   const [asOfPick, setAsOfPick] = useState<string | null>(null); // YYYY-MM-DD
   const todayStr = new Date().toISOString().slice(0, 10);
   const asOfStr = asOfPick && asOfPick <= todayStr ? asOfPick : todayStr;
@@ -120,10 +121,13 @@ export function PayablesTab() {
   }
 
   // Open-bills table: search → sort → paginate.
+  const dueGroup = (b: typeof bills[number]) => { const d = daysPast(b.dueDate, refMs); return !b.dueDate ? 'upcoming' : d > 0 ? 'overdue' : d === 0 ? 'today' : 'upcoming'; };
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return bills.filter((b) => !q || String(b.number).toLowerCase().includes(q) || (b.vendor || '').toLowerCase().includes(q));
-  }, [bills, query]);
+    return bills.filter((b) =>
+      (dueF === 'All' || dueGroup(b) === dueF) &&
+      (!q || String(b.number).toLowerCase().includes(q) || (b.vendor || '').toLowerCase().includes(q)));
+  }, [bills, query, dueF, refMs]);
   const sorted = useMemo(() => {
     const v = (b: typeof bills[number]): number => sort.key === 'total' ? b.total : sort.key === 'open' ? b.open
       : sort.key === 'days' ? daysPast(b.dueDate, refMs) : (b.dueDate ? new Date(b.dueDate).getTime() : 0);
@@ -149,6 +153,21 @@ export function PayablesTab() {
     a.href = url; a.download = 'open-bills.csv'; a.click();
     URL.revokeObjectURL(url);
   }
+
+  // Click an aging bar → the bills inside that bucket.
+  const drillApBucket = (label: string) => {
+    const inBucket = (b: typeof bills[number]) => {
+      const d = daysPast(b.dueDate, refMs);
+      const bl = d <= 0 ? 'Current' : d <= 30 ? '1–30' : d <= 60 ? '31–60' : d <= 90 ? '61–90' : '90+';
+      return bl === label;
+    };
+    setDrill({
+      title: `AP Aging · ${label}`, sub: label === 'Current' ? 'Bills not yet due' : `Bills ${label} days past due`,
+      columns: [{ key: 'n', label: 'Bill #' }, { key: 'v', label: 'Vendor' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
+      rows: bills.filter((b) => b.open > 0 && inBucket(b)).sort((a, b) => b.open - a.open)
+        .map((b) => ({ n: `#${b.number}`, v: b.vendor || '—', d: fmtDate(b.dueDate), o: formatCurrency(b.open) })),
+    });
+  };
 
   // Tap-to-explain drills.
   const kv = (rows: { k: string; v: string }[]) => ({
@@ -223,7 +242,7 @@ export function PayablesTab() {
                   <button className={agingMode === 'count' ? 'active' : ''} onClick={() => setAgingMode('count')}>By Count</button>
                 </div>
               }>
-              <AgingBar aging={agingMode === 'amount' ? agingEff : agingCount} money={agingMode === 'amount'} />
+              <AgingBar aging={agingMode === 'amount' ? agingEff : agingCount} money={agingMode === 'amount'} onSelect={drillApBucket} />
             </ChartCard>
 
             <div className="section chart-card g12-12">
@@ -232,6 +251,12 @@ export function PayablesTab() {
                 <div className="tbl-controls">
                   <input className="tbl-search" placeholder="Search bills / vendor" value={query}
                     onChange={(e) => { setQuery(e.target.value); setPage(1); }} />
+                  <select className="tbl-select" value={dueF} onChange={(e) => { setDueF(e.target.value as typeof dueF); setPage(1); }}>
+                    <option value="All">All bills</option>
+                    <option value="overdue">Overdue</option>
+                    <option value="today">Due today</option>
+                    <option value="upcoming">Upcoming</option>
+                  </select>
                   <button className="btn ghost" style={{ padding: '7px 11px' }} title="Download CSV of the filtered bills" onClick={exportCsv}>⤓ CSV</button>
                 </div>
               </div>

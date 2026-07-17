@@ -190,9 +190,9 @@ export function BarsLine({ data, bars, line }: {
 
 // Donut + itemised legend rows (name · $ · share) + a total footer — the
 // "aging summary" card. Rows are the legend, so no floating legend below.
-export function DonutList({ data, totalLabel = 'Total', money = true }: {
+export function DonutList({ data, totalLabel = 'Total', money = true, onSelect }: {
   data: { name: string; value: number; color: string }[];
-  totalLabel?: string; money?: boolean;
+  totalLabel?: string; money?: boolean; onSelect?: (name: string) => void;
 }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   const fmt = (v: number) => (money ? formatCurrency(v) : v.toLocaleString());
@@ -201,7 +201,8 @@ export function DonutList({ data, totalLabel = 'Total', money = true }: {
       <div className="dl-chart">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Pie data={data} dataKey="value" nameKey="name" innerRadius="62%" outerRadius="92%" paddingAngle={2} stroke="none" {...NOANIM}>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius="62%" outerRadius="92%" paddingAngle={2} stroke="none"
+              cursor={onSelect ? 'pointer' : undefined} onClick={onSelect ? (p: any) => onSelect(p?.name) : undefined} {...NOANIM}>
               {data.map((d, i) => <Cell key={i} fill={d.color} />)}
             </Pie>
             <Tooltip {...tooltipStyle} formatter={(v: number | string, n: string) => [fmt(Number(v)), n]} />
@@ -210,7 +211,10 @@ export function DonutList({ data, totalLabel = 'Total', money = true }: {
       </div>
       <div className="dl-legend">
         {data.map((d) => (
-          <div key={d.name} className="dl-item">
+          <div key={d.name} className="dl-item" style={onSelect ? { cursor: 'pointer' } : undefined}
+            onClick={onSelect ? () => onSelect(d.name) : undefined}
+            role={onSelect ? 'button' : undefined} tabIndex={onSelect ? 0 : undefined}
+            onKeyDown={onSelect ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(d.name); } } : undefined}>
             <span className="donut-dot" style={{ background: d.color }} />
             <span className="dl-name">{d.name}</span>
             <span className="dl-val">{fmt(d.value)}</span>

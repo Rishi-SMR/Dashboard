@@ -232,7 +232,7 @@ export function VendorsTab() {
                   </thead>
                   <tbody>
                     {shown.map((v) => (
-                      <tr key={v.id}>
+                      <tr key={v.id} onClick={() => openDrillFor(v.name || '—')} style={{ cursor: 'pointer' }}>
                         <td><strong>{v.name || '—'}</strong></td>
                         <td>{v.number || '—'}</td>
                         <td><StatusPill status={v.status} /></td>

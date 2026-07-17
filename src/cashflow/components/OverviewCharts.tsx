@@ -10,7 +10,7 @@ import {
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone, programOfPayer, type Program } from '../chartTheme';
-import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, useSyncAgo, pctText } from '../chartKit';
+import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, DrillModal, useSyncAgo, pctText } from '../chartKit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
@@ -120,6 +120,8 @@ export function OverviewCharts() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const agoText = useSyncAgo(lastSync);
+  type Drill = { title: string; sub?: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] };
+  const [drill, setDrill] = useState<Drill | null>(null);
 
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
@@ -251,6 +253,33 @@ export function OverviewCharts() {
 
   const topVend = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5);
 
+  // ---- click-through drills: every list/donut leads to its underlying rows ----
+  const LABEL_KEY: Record<string, keyof Aging> = { Current: 'current', '1–30': 'd1_30', '31–60': 'd31_60', '61–90': 'd61_90', '90+': 'd90plus' };
+  const drillArBucket = (label: string) => setDrill({
+    title: `AR Aging · ${label}`, sub: `Open invoices ${label === 'Current' ? 'not yet due' : `${label} days past due`} · ${PROG_LABEL[prog]}`,
+    columns: [{ key: 'n', label: 'Invoice #' }, { key: 'p', label: 'Payer' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
+    rows: arInv.filter((i) => bucketKeyOf(i.dueDate, refMs) === LABEL_KEY[label]).sort((a, b) => b.open - a.open)
+      .map((i) => ({ n: `#${i.number}`, p: i.payer || '—', d: shortDate(i.dueDate), o: formatCurrency(i.open) })),
+  });
+  const drillApBucket = (label: string) => setDrill({
+    title: `AP Aging · ${label}`, sub: label === 'Current' ? 'Bills not yet due' : `Bills ${label} days past due`,
+    columns: [{ key: 'n', label: 'Bill #' }, { key: 'v', label: 'Vendor' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
+    rows: (ap?.bills ?? []).filter((b) => b.open > 0 && bucketKeyOf(b.dueDate, refMs) === LABEL_KEY[label]).sort((a, b) => b.open - a.open)
+      .map((b) => ({ n: `#${b.number}`, v: b.vendor || '—', d: shortDate(b.dueDate), o: formatCurrency(b.open) })),
+  });
+  const drillPayer = (name: string) => setDrill({
+    title: name, sub: 'Open invoices for this payer',
+    columns: [{ key: 'n', label: 'Invoice #' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
+    rows: arInv.filter((i) => (i.payer || i.customer || 'Unassigned') === name).sort((a, b) => b.open - a.open)
+      .map((i) => ({ n: `#${i.number}`, d: shortDate(i.dueDate), o: formatCurrency(i.open) })),
+  });
+  const drillVendor = (name: string) => setDrill({
+    title: name, sub: 'Recent purchase orders for this vendor',
+    columns: [{ key: 'r', label: 'PO ref' }, { key: 'd', label: 'Date' }, { key: 'a', label: 'Amount', num: true }],
+    rows: (po?.recent ?? []).filter((r) => (r.vendor || '—') === name).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+      .map((r) => ({ r: r.ref, d: shortDate(r.date), a: formatCurrency(r.total) })),
+  });
+
   // Financial insights — every line computed from the data above.
   const doneRev = (trends?.series ?? []).filter((s) => inFy(s.month) && s.month < nowYm && s.revenue > 0);
   const bestMonth = doneRev.length ? doneRev.reduce((m, s) => (s.revenue > m.revenue ? s : m)) : null;
@@ -264,21 +293,21 @@ export function OverviewCharts() {
 
   // Recent activity — a few of each stream (payments / orders / POs) so one
   // busy source can't crowd out the others; merged newest first.
-  type Act = { date: string | null; bg: string; fg: string; ico: string; text: ReactNode; amt: string; cls?: string };
+  type Act = { date: string | null; bg: string; fg: string; ico: string; text: ReactNode; amt: string; cls?: string; view: string };
   const money0 = (n: number) => (n > 0 ? formatCurrency(n) : '—');
   const acts: Act[] = [
     ...(payments?.recent ?? []).slice(0, 4).map((r): Act => ({
       date: r.date, bg: 'rgba(22,163,74,0.12)', fg: '#16A34A', ico: '$',
       text: <>Payment <b>{r.ref}</b> received{r.customer ? <> from <b>{trunc(r.customer, 24)}</b></> : null}</>,
-      amt: `+${formatCurrency(r.amount)}`, cls: 'pos',
+      amt: `+${formatCurrency(r.amount)}`, cls: 'pos', view: 'accounts',
     })),
     ...(so?.recent ?? []).slice(0, 3).map((r): Act => ({
       date: r.date, bg: 'rgba(37,99,235,0.10)', fg: '#2563EB', ico: '›',
-      text: <>Sales Order <b>{r.ref}</b> created · {r.type || 'order'}</>, amt: money0(r.value),
+      text: <>Sales Order <b>{r.ref}</b> created · {r.type || 'order'}</>, amt: money0(r.value), view: 'orders',
     })),
     ...(po?.recent ?? []).slice(0, 3).map((r): Act => ({
       date: r.date, bg: 'rgba(124,58,237,0.10)', fg: '#7C3AED', ico: '◧',
-      text: <>PO <b>{r.ref}</b> · {trunc(r.vendor, 22)}</>, amt: money0(r.total),
+      text: <>PO <b>{r.ref}</b> · {trunc(r.vendor, 22)}</>, amt: money0(r.total), view: 'tracking',
     })),
   ].filter((a) => a.date && String(a.date).slice(0, 10) <= asOfStr)
     .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
@@ -422,18 +451,18 @@ export function OverviewCharts() {
             </ChartCard>
 
             <ChartCard className="g12-3" title="AR Aging Summary" sub={`Open receivables · ${PROG_LABEL[prog]}${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}`}>
-              <DonutList data={agingData(arAging)} totalLabel="Total" />
+              <DonutList data={agingData(arAging)} totalLabel="Total" onSelect={drillArBucket} />
             </ChartCard>
 
             <ChartCard className="g12-3" title="AP Aging Summary" sub={`Open bills${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ' · days past due'}`}>
-              <DonutList data={agingData(apAging)} totalLabel="Total" />
+              <DonutList data={agingData(apAging)} totalLabel="Total" onSelect={drillApBucket} />
             </ChartCard>
 
             <div className="section chart-card g12-3">
               <div className="section-head"><div><h2 className="section-title">Top Payers (by AR)</h2><div className="section-sub">Largest open balances · {PROG_LABEL[prog]}</div></div></div>
               <div className="rank-list">
                 {topCust.map((c) => (
-                  <div key={c.name} className="rk-row">
+                  <div key={c.name} className="rk-row" style={{ cursor: 'pointer' }} onClick={() => drillPayer(c.name)}>
                     <span className="rk-ico">{initials(c.name)}</span>
                     <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
                     <span className="rk-val">{formatCurrency(c.open)}</span>
@@ -448,7 +477,7 @@ export function OverviewCharts() {
               <div className="section-head"><div><h2 className="section-title">Top Vendors (by Spend)</h2><div className="section-sub">Committed PO spend</div></div></div>
               <div className="rank-list">
                 {topVend.map((v) => (
-                  <div key={v.vendor} className="rk-row">
+                  <div key={v.vendor} className="rk-row" style={{ cursor: 'pointer' }} onClick={() => drillVendor(v.vendor)}>
                     <span className="rk-ico" style={{ background: 'rgba(124,58,237,0.10)', color: '#7C3AED' }}>{initials(v.vendor)}</span>
                     <span className="rk-name" title={v.vendor}>{trunc(v.vendor, 26)}</span>
                     <span className="rk-val">{formatCurrency(v.total)}</span>
@@ -501,7 +530,7 @@ export function OverviewCharts() {
               right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('accounts')}>View all →</button>}>
               <div className="act-list">
                 {acts.map((a, i) => (
-                  <div key={i} className="act-row">
+                  <div key={i} className="act-row" style={{ cursor: 'pointer' }} onClick={go(a.view)}>
                     <span className="act-time">{shortDate(a.date)}</span>
                     <span className="act-ico" style={{ background: a.bg, color: a.fg }}>{a.ico}</span>
                     <span className="act-text">{a.text}</span>
@@ -517,7 +546,7 @@ export function OverviewCharts() {
               {approvals.length ? (
                 <div className="appr-list">
                   {approvals.map((r) => (
-                    <div key={r.id} className="appr-row">
+                    <div key={r.id} className="appr-row" style={{ cursor: 'pointer' }} onClick={go('tracking')}>
                       <div className="appr-main">
                         <div className="t">{r.ref} · {trunc(r.vendor, 24)}</div>
                         <div className="s">{shortDate(r.date)}</div>
@@ -547,6 +576,8 @@ export function OverviewCharts() {
           </div>
         </>
       )}
+
+      {drill && <DrillModal title={drill.title} sub={drill.sub} columns={drill.columns} rows={drill.rows} onClose={() => setDrill(null)} />}
     </div>
   );
 }

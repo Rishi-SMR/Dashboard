@@ -372,7 +372,12 @@ export function OrdersTab() {
                 data={[...so.byType].sort((a, b) => (typeMode === 'value' ? b.value - a.value : b.count - a.count))
                   .map((t) => ({ name: t.type, value: typeMode === 'value' ? t.value : t.count }))}
                 money={typeMode === 'value'}
-                colorAt={(i) => TYPE_COLOR([...so.byType].sort((a, b) => (typeMode === 'value' ? b.value - a.value : b.count - a.count))[i]?.type ?? '')} />
+                colorAt={(i) => TYPE_COLOR([...so.byType].sort((a, b) => (typeMode === 'value' ? b.value - a.value : b.count - a.count))[i]?.type ?? '')}
+                onSelect={(name) => {
+                  const k = /tri.?care/i.test(name) ? 'TriCare' : /\bva\b|veteran/i.test(name) ? 'VA' : /pi/i.test(name) ? 'PI' : 'Other';
+                  setSoProgF(k); setSoPage(1);
+                  soTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }} />
             </ChartCard>
 
             <ChartCard className="g12-6" title="Sales Orders by Status" sub={`${so.count.toLocaleString()} orders · click a bar to drill in`}
@@ -381,7 +386,11 @@ export function OrdersTab() {
             </ChartCard>
 
             <ChartCard className="g12-12" title="Top Sales Reps by Order Value" sub="Sales rep on the sales order — referral group removed, no patient data">
-              <RankBar data={so.byRep.slice(0, repsShown).map((r) => ({ name: r.rep, value: r.value }))} money colorAt={() => C.brand} />
+              <RankBar data={so.byRep.slice(0, repsShown).map((r) => ({ name: r.rep, value: r.value }))} money colorAt={() => C.brand}
+                onSelect={(rep) => {
+                  setSoQuery(rep); setSoStatusF('All'); setSoProgF('All'); setSoPage(1);
+                  soTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }} />
               {so.byRep.length > repsShown && (
                 <button className="card-link" style={{ margin: '10px auto 0' }} onClick={() => setRepsShown(so.byRep.length)}>
                   View all sales reps →
@@ -417,7 +426,7 @@ export function OrdersTab() {
                 </thead>
                 <tbody>
                   {soShown.map((o) => (
-                    <tr key={o.id}>
+                    <tr key={o.id} onClick={() => openSo(o.id)} style={{ cursor: 'pointer' }}>
                       <td><strong>{o.ref}</strong></td>
                       <td><StatusPill status={o.type} /></td>
                       <td>{o.rep || '—'}</td>

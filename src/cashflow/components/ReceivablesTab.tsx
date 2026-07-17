@@ -293,7 +293,8 @@ export function ReceivablesTab() {
               <div className="section-head"><div><h2 className="section-title">Top Customers (by Balance)</h2><div className="section-sub">Payer · largest open balances</div></div></div>
               <div className="rank-list">
                 {topPayers.map((c) => (
-                  <div key={c.name} className="rk-row">
+                  <div key={c.name} className="rk-row" style={{ cursor: 'pointer' }}
+                    onClick={() => { setQuery(c.name); setBucketFilter('All'); setProgFilter('All'); setPage(1); tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
                     <span className="rk-ico">{initials(c.name)}</span>
                     <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
                     <span className="rk-val">{formatCurrency(c.open)}</span>
