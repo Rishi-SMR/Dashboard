@@ -45,6 +45,47 @@ export function AnimatedNumber({ value, format, duration = 1300 }: {
   return <>{fmt(shown)}</>;
 }
 
+// Icon KPI tile (reference-screenshot style): tinted icon square, label,
+// count-up value, honest delta line, pinned foot note. Shared by the
+// Receivables / Payables tabs. Click = tap-to-explain (open a drill).
+const kIcon = (children: ReactNode) => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    {children}
+  </svg>
+);
+export const KPI_ICONS = {
+  doc: kIcon(<><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="13" y2="17" /></>),
+  clip: kIcon(<><rect x="7" y="4" width="10" height="17" rx="2" /><path d="M9 4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" /><line x1="10" y1="11" x2="14" y2="11" /><line x1="10" y1="15" x2="14" y2="15" /></>),
+  cash: kIcon(<><circle cx="12" cy="12" r="9" /><path d="M14.5 9.2a2.6 2.6 0 0 0-2.5-1.4c-1.4 0-2.5.8-2.5 2s1 1.7 2.5 2 2.7.9 2.7 2.1-1.2 2-2.7 2a2.7 2.7 0 0 1-2.6-1.5" /><line x1="12" y1="6.2" x2="12" y2="7.8" /><line x1="12" y1="16.2" x2="12" y2="17.8" /></>),
+  users: kIcon(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
+  clock: kIcon(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.2 1.8" /></>),
+  box: kIcon(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="M12 12 20 7.5" /><path d="M12 12v9" /><path d="M12 12 4 7.5" /></>),
+  wallet: kIcon(<><path d="M20 7H5a2 2 0 0 1 0-4h13v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16V7" /><path d="M16 14h.01" /></>),
+};
+export function KpiR({ ico, tint, label, value, format, delta, deltaText, foot, onClick }: {
+  ico: keyof typeof KPI_ICONS; tint: string; label: string;
+  value: number; format?: (n: number) => string;
+  delta?: { pct: number; up: boolean } | null; deltaText?: string; foot: string; onClick?: () => void;
+}) {
+  return (
+    <div className={`kpi-r${onClick ? ' clickable' : ''}`} onClick={onClick}
+      role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}>
+      <div className="kr-head">
+        <span className="kr-ico" style={{ background: `color-mix(in srgb, ${tint} 11%, #fff)`, color: tint }}>{KPI_ICONS[ico]}</span>
+        <span className="kr-label">{label}{onClick && <span className="kpi-info-icon">i</span>}</span>
+      </div>
+      <div className="kr-value"><AnimatedNumber value={value} format={format} /></div>
+      <div className="kr-delta">
+        {delta
+          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}%</b><span> vs prior month</span></>
+          : <span>{deltaText ?? '—'}</span>}
+      </div>
+      <div className="kr-foot">{foot}</div>
+    </div>
+  );
+}
+
 // Live-sync heartbeat: re-renders every second and returns "Xs ago" for the
 // header pill, so the page visibly ticks between silent data refreshes.
 export function useSyncAgo(lastSync: number | null): string {

@@ -1394,7 +1394,7 @@ code {
    row's cards stretch to ONE shared height and every edge lines up. */
 .exec-grid12 { display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:18px; align-items:stretch; }
 .exec-grid12 > * { margin:0 !important; min-width:0; }
-.g12-3 { grid-column: span 3; } .g12-4 { grid-column: span 4; } .g12-5 { grid-column: span 5; } .g12-6 { grid-column: span 6; } .g12-7 { grid-column: span 7; }
+.g12-3 { grid-column: span 3; } .g12-4 { grid-column: span 4; } .g12-5 { grid-column: span 5; } .g12-6 { grid-column: span 6; } .g12-7 { grid-column: span 7; } .g12-12 { grid-column: 1 / -1; }
 /* Consistent internals: fixed head rhythm, chart flex-fills the card body, the
    stat footer pins to the base — so titles, charts and footers align per row. */
 .exec-grid12 .section-head { margin-bottom: 12px; }

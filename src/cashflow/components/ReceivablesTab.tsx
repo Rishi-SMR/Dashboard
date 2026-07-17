@@ -6,7 +6,7 @@ import {
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING, AGING_LABELS } from '../chartTheme';
-import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, AnimatedNumber, useSyncAgo } from '../chartKit';
+import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
@@ -39,44 +39,6 @@ const bucketOf = (dueDate: string | null): string => {
   if (d <= 90) return '61–90';
   return '90+';
 };
-
-// KPI icon tiles (stroke SVGs, soft-tinted square).
-const icon = (children: ReactNode) => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    {children}
-  </svg>
-);
-const KPI_ICONS = {
-  doc: icon(<><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="13" y2="17" /></>),
-  clip: icon(<><rect x="7" y="4" width="10" height="17" rx="2" /><path d="M9 4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" /><line x1="10" y1="11" x2="14" y2="11" /><line x1="10" y1="15" x2="14" y2="15" /></>),
-  cash: icon(<><circle cx="12" cy="12" r="9" /><path d="M14.5 9.2a2.6 2.6 0 0 0-2.5-1.4c-1.4 0-2.5.8-2.5 2s1 1.7 2.5 2 2.7.9 2.7 2.1-1.2 2-2.7 2a2.7 2.7 0 0 1-2.6-1.5" /><line x1="12" y1="6.2" x2="12" y2="7.8" /><line x1="12" y1="16.2" x2="12" y2="17.8" /></>),
-  users: icon(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
-  clock: icon(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.2 1.8" /></>),
-};
-
-function KpiR({ ico, tint, label, value, format, delta, deltaText, foot, onClick }: {
-  ico: keyof typeof KPI_ICONS; tint: string; label: string;
-  value: number; format?: (n: number) => string;
-  delta?: { pct: number; up: boolean } | null; deltaText?: string; foot: string; onClick?: () => void;
-}) {
-  return (
-    <div className={`kpi-r${onClick ? ' clickable' : ''}`} onClick={onClick}
-      role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}>
-      <div className="kr-head">
-        <span className="kr-ico" style={{ background: `color-mix(in srgb, ${tint} 11%, #fff)`, color: tint }}>{KPI_ICONS[ico]}</span>
-        <span className="kr-label">{label}{onClick && <span className="kpi-info-icon">i</span>}</span>
-      </div>
-      <div className="kr-value"><AnimatedNumber value={value} format={format} /></div>
-      <div className="kr-delta">
-        {delta
-          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}%</b><span> vs prior month</span></>
-          : <span>{deltaText ?? '—'}</span>}
-      </div>
-      <div className="kr-foot">{foot}</div>
-    </div>
-  );
-}
 
 const INS_TONES: Record<string, { bg: string; fg: string }> = {
   pos: { bg: 'rgba(22,163,74,0.12)', fg: '#16A34A' },
