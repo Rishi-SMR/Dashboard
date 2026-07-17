@@ -1,29 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   fetchStrivenAR, fetchStrivenAP, fetchStrivenPL, fetchStrivenSO, fetchStrivenPO,
-  fetchStrivenTrends, fetchStrivenPayments, fetchStrivenCustomers, fetchStrivenVendors,
-  fetchStrivenItems, fetchStrivenOrders, fetchStrivenExceptions,
+  fetchStrivenTrends, fetchStrivenPayments, fetchStrivenBillPayments,
+  fetchStrivenOrders, fetchStrivenExceptions,
   type ArResult, type ApResult, type PlResult, type SoResult, type PoResult,
-  type TrendsResult, type PaymentsResult, type CustomersResult,
-  type VendorsResult, type ItemsResult, type OrdersResult, type ExceptionsResult,
+  type TrendsResult, type PaymentsResult, type BillPaymentsResult,
+  type OrdersResult, type ExceptionsResult, type Aging,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
-import { C, SERIES, CAT6, compactMoney } from '../chartTheme';
-import { ChartCard, RankBar, AgingBar, TrendArea, GroupedBars, Donut, GaugeRing, DrillModal } from '../chartKit';
+import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone } from '../chartTheme';
+import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing } from '../chartKit';
 
-const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
-const trunc = (v: string, n = 16) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
-const bucketOf = (dueDate: string | null): string => {
-  const now = Date.now();
-  const due = dueDate ? new Date(dueDate).getTime() : now;
-  const d = Math.floor((now - due) / 86_400_000);
-  if (d <= 0) return 'Current';
-  if (d <= 30) return '1–30';
-  if (d <= 60) return '31–60';
-  if (d <= 90) return '61–90';
-  return '90+';
-};
+const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
+const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
+const initials = (name: string) =>
+  name.split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '•';
 
 // Honest MoM: compare the two most-recent COMPLETE months (never the partial current month).
 const nowYm = new Date().toISOString().slice(0, 7);
@@ -37,8 +29,7 @@ const momDelta = (series: { month: string; value: number }[]): { pct: number; up
 const completeVals = (series: { month: string; value: number }[]): number[] =>
   series.filter((p) => p.month < nowYm).map((p) => p.value ?? 0);
 
-// 7 KPI hues — the gradient top-rail per card; reused verbatim as the chart
-// palette so the strip + charts read as one system (premium light board-deck).
+// 7 KPI hues — reused verbatim as the chart palette so strip + charts read as one system.
 type Hue = { from: string; to: string; glow: string };
 const HUE = {
   revenue: { from: '#3B82F6', to: '#2563EB', glow: 'rgba(37,99,235,0.28)' } as Hue,
@@ -50,9 +41,9 @@ const HUE = {
   exc: { from: '#FB7185', to: '#E11D48', glow: 'rgba(225,29,72,0.28)' } as Hue,
 };
 
-function Sparkline({ values }: { values: number[] }) {
+function Spark({ values, color }: { values: number[]; color: string }) {
   if (values.length < 2) return null;
-  const w = 74, h = 26, pad = 2;
+  const w = 72, h = 30, pad = 2;
   const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
   const pts = values.map((v, i) => {
     const x = pad + (i / (values.length - 1)) * (w - pad * 2);
@@ -60,37 +51,46 @@ function Sparkline({ values }: { values: number[] }) {
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
   return (
-    <svg className="k-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
-      <polyline points={pts} fill="none" stroke="rgba(255,255,255,0.92)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    <svg className="ke-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
+      <polygon points={`${pad},${h - pad} ${pts} ${w - pad},${h - pad}`} fill={color} opacity={0.12} />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-function KpiGrad({ label, value, period, hue, delta, chip, spark, onClick }: {
-  label: string; value: string; period: string; hue: Hue;
-  delta?: { pct: number; up: boolean } | null; chip?: string; spark?: number[]; onClick?: () => void;
+function KpiExec({ label, value, hue, delta, sub, chip, spark, onClick }: {
+  label: string; value: string; hue: Hue;
+  delta?: { pct: number; up: boolean } | null; sub?: string; chip?: string; spark?: number[]; onClick?: () => void;
 }) {
   return (
     <div
-      className={`kpi--grad${onClick ? ' clickable' : ''}`}
+      className={`kpi--exec${onClick ? ' clickable' : ''}`}
       style={{ ['--k-from' as any]: hue.from, ['--k-to' as any]: hue.to, ['--k-glow' as any]: hue.glow }}
       onClick={onClick} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
     >
-      <div className="k-label">{label}</div>
-      <div className="k-value">{value}</div>
-      <div className="k-period">{period}</div>
-      {delta ? (
-        <span className={`k-delta${delta.up ? '' : ' down'}`}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}% MoM</span>
-      ) : chip ? (
-        <span className="k-delta">{chip}</span>
-      ) : null}
-      {spark && spark.length > 1 && <Sparkline values={spark} />}
+      <div className="ke-label">{label}</div>
+      <div className="ke-row">
+        <div className="ke-value">{value}</div>
+        {spark && spark.length > 1 && <Spark values={spark} color={hue.to} />}
+      </div>
+      <div className="ke-delta">
+        {delta
+          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}%</b><span>vs prior month</span></>
+          : <span>{sub}</span>}
+      </div>
+      {chip && <div className="ke-foot"><span className="ke-chip">{chip}</span></div>}
     </div>
   );
 }
 
-type Drill = { title: string; sub?: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, React.ReactNode>[] };
+const INS_TONES: Record<string, { bg: string; fg: string }> = {
+  pos: { bg: 'rgba(22,163,74,0.12)', fg: '#16A34A' },
+  neg: { bg: 'rgba(220,38,38,0.10)', fg: '#DC2626' },
+  brand: { bg: 'rgba(37,99,235,0.10)', fg: '#2563EB' },
+  purple: { bg: 'rgba(124,58,237,0.10)', fg: '#7C3AED' },
+  teal: { bg: 'rgba(13,148,136,0.10)', fg: '#0D9488' },
+};
 
 export function OverviewCharts() {
   const [ar, setAr] = useState<ArResult | null>(null);
@@ -100,25 +100,22 @@ export function OverviewCharts() {
   const [po, setPo] = useState<PoResult | null>(null);
   const [trends, setTrends] = useState<TrendsResult | null>(null);
   const [payments, setPayments] = useState<PaymentsResult | null>(null);
-  const [customers, setCustomers] = useState<CustomersResult | null>(null);
-  const [vendors, setVendors] = useState<VendorsResult | null>(null);
-  const [items, setItems] = useState<ItemsResult | null>(null);
+  const [billpay, setBillpay] = useState<BillPaymentsResult | null>(null);
   const [orders, setOrders] = useState<OrdersResult | null>(null);
   const [exc, setExc] = useState<ExceptionsResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [drill, setDrill] = useState<Drill | null>(null);
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [a, b, p, s, o, t, pay, cust, ven, it, ord, ex] = await Promise.all([
+      const [a, b, p, s, o, t, pay, bp, ord, ex] = await Promise.all([
         fetchStrivenAR(), fetchStrivenAP(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
-        fetchStrivenTrends(), fetchStrivenPayments(), fetchStrivenCustomers(), fetchStrivenVendors(),
-        fetchStrivenItems(), fetchStrivenOrders(), fetchStrivenExceptions(),
+        fetchStrivenTrends(), fetchStrivenPayments(), fetchStrivenBillPayments().catch(() => null),
+        fetchStrivenOrders().catch(() => null), fetchStrivenExceptions().catch(() => null),
       ]);
       setAr(a); setAp(b); setPl(p); setSo(s); setPo(o); setTrends(t); setPayments(pay);
-      setCustomers(cust); setVendors(ven); setItems(it); setOrders(ord); setExc(ex);
+      setBillpay(bp); setOrders(ord); setExc(ex);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load Striven data.');
     } finally { setLoading(false); }
@@ -130,64 +127,140 @@ export function OverviewCharts() {
   // ---- derived views (real data only) ----
   const revSeries = (trends?.series ?? []).map((s) => ({ month: s.month, value: s.revenue }));
   const cashSeries = (payments?.byMonth ?? []).map((m) => ({ month: m.month, value: m.amount }));
-  const finData = (trends?.series ?? []).map((s) => ({ month: s.month, revenue: s.revenue, expenses: s.expenses }));
+  const revD = momDelta(revSeries);
+  const cashD = momDelta(cashSeries);
 
-  const soData = [...(so?.byStatus ?? [])].sort((x, y) => y.count - x.count).map((s) => ({ name: s.status, value: s.count }));
+  // Cash flow: customer payments in vs vendor bill payments out, by month.
+  const cashOutBy: Record<string, number> = {};
+  for (const r of billpay?.recent ?? []) {
+    const m = String(r.date ?? '').slice(0, 7);
+    if (m) cashOutBy[m] = (cashOutBy[m] || 0) + r.amount;
+  }
+  const inBy: Record<string, number> = Object.fromEntries((payments?.byMonth ?? []).map((m) => [m.month, m.amount]));
+  const cfMonths = Array.from(new Set([...Object.keys(inBy), ...Object.keys(cashOutBy)])).sort().slice(-12);
+  const cashData = cfMonths.map((m) => ({
+    month: m, cashIn: inBy[m] || 0, cashOut: Math.round(cashOutBy[m] || 0), net: Math.round((inBy[m] || 0) - (cashOutBy[m] || 0)),
+  }));
+  const cfIn = cashData.reduce((s, d) => s + d.cashIn, 0);
+  const cfOut = cashData.reduce((s, d) => s + d.cashOut, 0);
+
+  // Revenue vs expense with profit line.
+  const finData = (trends?.series ?? []).map((s) => ({ month: s.month, revenue: s.revenue, expenses: s.expenses, profit: s.net }));
+  const fRev = finData.reduce((s, d) => s + d.revenue, 0);
+  const fExp = finData.reduce((s, d) => s + d.expenses, 0);
+  const margin = fRev > 0 ? Math.round(((fRev - fExp) / fRev) * 1000) / 10 : 0;
+
   const collectionPct = pl && pl.revenue > 0 ? Math.round((payments?.total ?? 0) / pl.revenue * 100) : 0;
   const dsoApprox = pl && pl.revenue > 0 ? Math.round((ar?.totalOpen ?? 0) / (pl.revenue / (revSeries.filter((r) => r.value > 0).length * 30 || 30))) : null;
 
-  // Sales orders by program (PI / VA / Tri-Care) — real classification off SO type.
-  const programDonut = so ? ([
-    { name: 'PI', value: so.piva.PI.value, color: SERIES[0] },
-    { name: 'VA', value: so.piva.VA.value, color: SERIES[1] },
-    { name: 'Tri-Care', value: so.piva.TriCare.value, color: SERIES[2] },
-    ...(so.piva.Other.value > 0 ? [{ name: 'Other', value: so.piva.Other.value, color: SERIES[3] }] : []),
-  ].filter((d) => d.value > 0)) : [];
+  // Action Center — items derived live from the same datasets.
+  const now = Date.now();
+  const soon = now + 7 * 86_400_000;
+  const overdue = (ar?.invoices ?? []).filter((i) => i.open > 0 && i.dueDate && new Date(i.dueDate).getTime() < now);
+  const overdueSum = overdue.reduce((s, i) => s + i.open, 0);
+  const billsDue = (ap?.bills ?? []).filter((b) => b.open > 0 && b.dueDate && new Date(b.dueDate).getTime() <= soon);
+  const billsDueSum = billsDue.reduce((s, b) => s + b.open, 0);
+  const waitingPo = (orders?.orders ?? []).filter((o) => o.pos.length === 0 && !/cancel|void|complete|closed/i.test(o.status));
+  type AcItem = { n: string; l1: string; l2: string; view: string; ico: ReactNode };
+  const acItems: AcItem[] = [];
+  if (overdue.length) acItems.push({ n: String(overdue.length), l1: 'Invoices Overdue', l2: formatCurrency(overdueSum), view: 'receivables', ico: '!' });
+  if (billsDue.length) acItems.push({ n: String(billsDue.length), l1: 'Vendor Bills Due', l2: formatCurrency(billsDueSum), view: 'payables', ico: '$' });
+  if (waitingPo.length) acItems.push({ n: String(waitingPo.length), l1: 'Sales Orders', l2: 'Waiting for PO', view: 'tracking', ico: '›' });
+  if (exc?.totalOpen) acItems.push({ n: String(exc.totalOpen), l1: 'Exceptions', l2: 'Needs Review', view: 'exceptions', ico: '▲' });
+  if (cashD && !cashD.up) acItems.push({ n: `${Math.abs(cashD.pct)}%`, l1: 'Collection Drop', l2: 'vs last month', view: 'accounts', ico: '↓' });
 
-  // PO spend by vendor (top 5 + Other) — honest: slices sum to committed spend.
-  const sortedV = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total);
-  const restV = sortedV.slice(5).reduce((s, v) => s + v.total, 0);
-  const vendorDonut = sortedV.slice(0, 5).map((v, i) => ({ name: trunc(v.vendor), value: v.total, color: CAT6[i] }))
-    .concat(restV > 0 ? [{ name: 'Other vendors', value: restV, color: C.muted }] : []);
+  // Aging donuts.
+  const agingData = (a: Aging) =>
+    AGING_LABELS.map((b, i) => ({ name: b.label, value: Math.round(a[b.key] || 0), color: AGING[i] })).filter((d) => d.value > 0);
 
-  // Order chain funnel (live from linked cache).
-  const chainTotal = orders?.count ?? 0;
-  const chainPo = (orders?.orders ?? []).filter((o) => o.pos.length > 0).length;
-  const chainInv = (orders?.orders ?? []).filter((o) => o.invoices.length > 0).length;
+  // Sales orders by program (real classification off SO type).
+  const programBars = so ? ([
+    { name: 'PI', ...so.piva.PI, color: SERIES[0] },
+    { name: 'VA', ...so.piva.VA, color: SERIES[1] },
+    { name: 'Tri-Care', ...so.piva.TriCare, color: SERIES[2] },
+    ...(so.piva.Other.count > 0 ? [{ name: 'Other', ...so.piva.Other, color: SERIES[3] }] : []),
+  ].filter((d) => d.count > 0).map((d) => ({ name: d.name, value: d.count, color: d.color, meta: `${d.count} orders` }))) : [];
 
-  // ---- drills ----
-  const drillAging = (label: string) => setDrill({
-    title: `AR Aging · ${label}`, sub: `Open invoices ${label} days past due`,
-    columns: [{ key: 'inv', label: 'Invoice' }, { key: 'due', label: 'Due' }, { key: 'open', label: 'Open', num: true }],
-    rows: (ar?.invoices ?? []).filter((i) => i.open > 0 && bucketOf(i.dueDate) === label).map((i) => ({ inv: `#${i.number}`, due: fmtDate(i.dueDate), open: formatCurrency(i.open) })),
-  });
-  const drillSo = (status: string) => setDrill({
-    title: `Sales Orders · ${status}`, sub: 'Recent orders in this status',
-    columns: [{ key: 'ref', label: 'Order' }, { key: 'type', label: 'Program' }, { key: 'status', label: 'Status' }, { key: 'date', label: 'Created' }],
-    rows: (so?.recent ?? []).filter((r) => r.status === status).map((r) => ({ ref: r.ref, type: r.type, status: <StatusPill status={r.status} />, date: fmtDate(r.date) })),
-  });
-  const openVendors = () => setDrill({ title: 'Vendors', sub: `${vendors?.count ?? 0} suppliers`, columns: [{ key: 'name', label: 'Vendor' }, { key: 'status', label: 'Status' }, { key: 'terms', label: 'Terms' }, { key: 'phone', label: 'Phone' }], rows: (vendors?.vendors ?? []).slice(0, 200).map((v) => ({ name: v.name, status: <StatusPill status={v.status} />, terms: v.terms || '—', phone: v.phone || '—' })) });
-  const openCatalog = () => setDrill({ title: 'Catalog', sub: `${items?.count ?? 0} items & services`, columns: [{ key: 'num', label: 'Item No' }, { key: 'name', label: 'Item Name' }, { key: 'type', label: 'Type' }, { key: 'price', label: 'Price', num: true }, { key: 'cost', label: 'Cost', num: true }], rows: (items?.items ?? []).slice(0, 200).map((i) => ({ num: i.number || '—', name: i.name, type: i.type || '—', price: formatCurrency(i.price), cost: formatCurrency(i.cost) })) });
+  // PO spend by vendor (top 5) — slices sum to committed spend.
+  const vendorBars = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5)
+    .map((v, i) => ({ name: trunc(v.vendor), value: v.total, color: CAT6[i % CAT6.length] }));
 
-  const ready = ar && ap && pl && payments && so && po;
+  // Top payers by open AR — payer (law firm / VA / insurer) is the non-PHI
+  // counterparty; patient customer names arrive masked.
+  const custAgg = new Map<string, number>();
+  for (const i of ar?.invoices ?? []) {
+    if (i.open <= 0) continue;
+    const who = i.payer || i.customer || 'Unassigned';
+    custAgg.set(who, (custAgg.get(who) || 0) + i.open);
+  }
+  const topCust = [...custAgg].map(([name, open]) => ({ name, open })).sort((a, b) => b.open - a.open).slice(0, 5);
 
+  const topVend = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5);
+
+  // Financial insights — every line computed from the data above.
+  const doneRev = (trends?.series ?? []).filter((s) => s.month < nowYm && s.revenue > 0);
+  const bestMonth = doneRev.length ? doneRev.reduce((m, s) => (s.revenue > m.revenue ? s : m)) : null;
+  type Ins = { tone: keyof typeof INS_TONES; ico: string; text: ReactNode };
+  const insights: Ins[] = [];
+  if (revD) insights.push({ tone: revD.up ? 'pos' : 'neg', ico: revD.up ? '▲' : '▼', text: <>Revenue {revD.up ? 'increased' : 'decreased'} <b>{Math.abs(revD.pct)}%</b> vs last month</> });
+  if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'up' : 'dropped'} <b>{Math.abs(cashD.pct)}%</b> vs last month</> });
+  if (bestMonth) insights.push({ tone: 'brand', ico: '★', text: <>Highest revenue month: <b>{monthLabel(bestMonth.month)}</b> ({compactMoney(bestMonth.revenue)})</> });
+  if (pl?.avgInvoice) insights.push({ tone: 'purple', ico: '$', text: <>Avg invoice value <b>{formatCurrency(pl.avgInvoice)}</b></> });
+  if (topCust[0]) insights.push({ tone: 'teal', ico: '◆', text: <>Top AR payer: <b>{trunc(topCust[0].name, 18)}</b> ({formatCurrency(topCust[0].open)} open)</> });
+
+  // Recent activity — a few of each stream (payments / orders / POs) so one
+  // busy source can't crowd out the others; merged newest first.
+  type Act = { date: string | null; bg: string; fg: string; ico: string; text: ReactNode; amt: string; cls?: string };
+  const money0 = (n: number) => (n > 0 ? formatCurrency(n) : '—');
+  const acts: Act[] = [
+    ...(payments?.recent ?? []).slice(0, 4).map((r): Act => ({
+      date: r.date, bg: 'rgba(22,163,74,0.12)', fg: '#16A34A', ico: '$',
+      text: <>Payment <b>{r.ref}</b> received{r.customer ? <> from <b>{trunc(r.customer, 24)}</b></> : null}</>,
+      amt: `+${formatCurrency(r.amount)}`, cls: 'pos',
+    })),
+    ...(so?.recent ?? []).slice(0, 3).map((r): Act => ({
+      date: r.date, bg: 'rgba(37,99,235,0.10)', fg: '#2563EB', ico: '›',
+      text: <>Sales Order <b>{r.ref}</b> created · {r.type || 'order'}</>, amt: money0(r.value),
+    })),
+    ...(po?.recent ?? []).slice(0, 3).map((r): Act => ({
+      date: r.date, bg: 'rgba(124,58,237,0.10)', fg: '#7C3AED', ico: '◧',
+      text: <>PO <b>{r.ref}</b> · {trunc(r.vendor, 22)}</>, amt: money0(r.total),
+    })),
+  ].filter((a) => a.date).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
+
+  // Pending approvals — POs whose status reads as pending/awaiting.
+  const approvals = (po?.recent ?? []).filter((r) => statusTone(r.status || '') === 'warn').slice(0, 6);
+
+  const excGroups = exc ? [...exc.groups].sort((a, b) => b.count - a.count).slice(0, 6) : [];
+
+  const ready = ar && ap && pl && payments && so && po && trends;
   const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const fy = new Date().getFullYear();
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
-      <div className="page-head deck-head">
+      <div className="page-head deck-head" style={{ marginBottom: 14 }}>
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Financial Overview</h1>
-          <div className="page-sub">Sports Med Recovery · executive summary</div>
+          <div className="page-sub">Executive Summary Dashboard · Sports Med Recovery</div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+        <div className="ov-headright">
+          <span className="deck-pill"><span className="live-dot" /> Live sync</span>
           <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
-          <div className="deck-pills">
-            <span className="deck-pill"><span className="live-dot" /> Live sync</span>
-            <span className="deck-pill muted">🔒 PHI masked</span>
-            <span className="deck-pill muted">As of {asOf}</span>
-          </div>
+          <button className="ov-bell" onClick={go('exceptions')} aria-label="Notifications" title="Items needing attention">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 8-3 8h18s-3-1-3-8" /><path d="M13.7 20a2 2 0 0 1-3.4 0" />
+            </svg>
+            {acItems.length > 0 && <span className="bell-badge">{acItems.length}</span>}
+          </button>
         </div>
+      </div>
+
+      <div className="ov-filters">
+        <span className="ov-filter"><span className="fl">Fiscal Year</span><b>FY{fy}</b></span>
+        <span className="ov-filter"><span className="fl">As of</span><b>{asOf}</b></span>
+        <span className="ov-filter"><span className="fl">Programs</span><b>PI · VA · Tri-Care</b></span>
+        <span className="ov-filter"><span className="fl">🔒</span><b>PHI masked</b></span>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -195,101 +268,207 @@ export function OverviewCharts() {
 
       {ready && (
         <>
-          <div className="kpi-eyebrow">
-            <span className="ey-label">Key Metrics</span>
-            <span className="ey-pill">FY2026 · YTD</span>
-          </div>
+          {acItems.length > 0 && (
+            <div className="action-center">
+              <div className="ac-head">
+                <span className="ac-flag">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" />
+                  </svg>
+                </span>
+                <div>
+                  <div className="t">Action Center</div>
+                  <div className="s">Items that need your attention</div>
+                </div>
+              </div>
+              <div className="ac-items">
+                {acItems.map((it) => (
+                  <button key={it.l1 + it.l2} className="ac-item" onClick={go(it.view)}>
+                    <span className="ico">{it.ico}</span>
+                    <span>
+                      <span className="n">{it.n}</span>
+                      <span className="l" style={{ display: 'block' }}>{it.l1}<br />{it.l2}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <button className="ac-review" onClick={go('exceptions')}>Review All</button>
+            </div>
+          )}
+
           <div className="kpi-strip">
-            <KpiGrad label="Revenue YTD" value={formatCurrency(pl.revenue)} period="invoiced this year" hue={HUE.revenue}
-              delta={momDelta(revSeries)} spark={completeVals(revSeries)} onClick={go('pl')} />
-            <KpiGrad label="Cash Received" value={formatCurrency(payments.total)} period={`${payments.count} payments`} hue={HUE.cash}
-              delta={momDelta(cashSeries)} spark={completeVals(cashSeries)} onClick={go('accounts')} />
-            <KpiGrad label="AR Open" value={formatCurrency(ar.totalOpen)} period="unpaid invoices" hue={HUE.ar}
-              chip={`${ar.count} invoices`} onClick={go('receivables')} />
-            <KpiGrad label="AP Open" value={formatCurrency(ap.totalOpen)} period="unpaid bills" hue={HUE.ap}
-              chip={`${ap.count} bills`} onClick={go('payables')} />
-            <KpiGrad label="Sales Orders" value={formatCurrency(so.totalValue)} period="order book (not revenue)" hue={HUE.sales}
-              chip={`${so.count} orders`} onClick={go('orders')} />
-            <KpiGrad label="PO Spend" value={formatCurrency(po.totalValue)} period="committed · active only" hue={HUE.po}
-              chip={`${po.count} POs`} onClick={go('tracking')} />
-            <KpiGrad label="Open Exceptions" value={String(exc?.totalOpen ?? 0)} period="data-quality items" hue={HUE.exc}
-              chip="needs review" onClick={go('exceptions')} />
+            <KpiExec label="Revenue YTD" value={formatCurrency(pl.revenue)} hue={HUE.revenue}
+              delta={revD} sub="invoiced this year" spark={completeVals(revSeries)} chip={`${pl.invoiceCount} invoices`} onClick={go('pl')} />
+            <KpiExec label="Cash Received" value={formatCurrency(payments.total)} hue={HUE.cash}
+              delta={cashD} sub="customer payments" spark={completeVals(cashSeries)} chip={`${payments.count} payments`} onClick={go('accounts')} />
+            <KpiExec label="AR Open" value={formatCurrency(ar.totalOpen)} hue={HUE.ar}
+              sub={`${ar.count} unpaid invoices`} chip={dsoApprox != null ? `Avg DSO: ${dsoApprox} days` : undefined} onClick={go('receivables')} />
+            <KpiExec label="AP Open" value={formatCurrency(ap.totalOpen)} hue={HUE.ap}
+              sub="unpaid bills" chip={`${ap.count} bills`} onClick={go('payables')} />
+            <KpiExec label="Sales Orders" value={formatCurrency(so.totalValue)} hue={HUE.sales}
+              sub="order book (not revenue)" chip={`${so.count} orders`} onClick={go('orders')} />
+            <KpiExec label="PO Spend" value={formatCurrency(po.totalValue)} hue={HUE.po}
+              sub="committed · active only" chip={`${po.count} POs`} onClick={go('tracking')} />
+            <KpiExec label="Open Exceptions" value={String(exc?.totalOpen ?? 0)} hue={HUE.exc}
+              sub="data-quality items" chip="Needs review" onClick={go('exceptions')} />
           </div>
 
-          {/* ── dense analytics grid ── */}
-          <div className="exec-grid">
-            <ChartCard span={1} title="Cash Collection Rate" sub="Cash received ÷ revenue YTD">
-              <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.brand} height={168} />
-              <div className="gauge-foot">
-                <div className="gf">Collected<b>{formatCurrency(payments.total)}</b></div>
-                <div className="gf right">DSO ≈ <b>{dsoApprox != null ? `${dsoApprox} days` : '—'}</b></div>
+          <div className="exec-grid12">
+            <ChartCard className="g12-5" title="Cash Flow Overview" sub="Customer payments in vs vendor bill payments out · monthly">
+              <LegendDots items={[{ name: 'Cash In', color: C.positive }, { name: 'Cash Out', color: C.negative }, { name: 'Net Cash', color: C.brand }]} />
+              <BarsLine data={cashData}
+                bars={[{ key: 'cashIn', name: 'Cash In', color: C.positive }, { key: 'cashOut', name: 'Cash Out', color: C.negative }]}
+                line={{ key: 'net', name: 'Net Cash', color: C.brand }} />
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Cash In</div><div className="v pos">{formatCurrency(cfIn)}</div></div>
+                <div className="cf-i"><div className="l">Cash Out</div><div className="v neg">{formatCurrency(cfOut)}</div></div>
+                <div className="cf-i"><div className="l">Net Cash</div><div className="v accent">{formatCurrency(cfIn - cfOut)}</div></div>
               </div>
             </ChartCard>
 
-            <ChartCard span={3} title="Financial Performance Over Time" sub="Invoiced revenue vs. billed expenses by month">
-              <GroupedBars data={finData} series={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expenses', color: C.negative }]} />
-            </ChartCard>
-
-            <ChartCard span={2} title="Sales Orders by Program" sub={`${so.count} orders · PI / VA / Tri-Care split`}>
-              <Donut data={programDonut} centerValue={compactMoney(so.totalValue)} centerLabel="order book" onSelect={go('orders')} />
-            </ChartCard>
-
-            <ChartCard span={2} title="PO Spend by Vendor" sub="Committed spend · active POs only">
-              <Donut data={vendorDonut} centerValue={compactMoney(po.totalValue)} centerLabel="committed" onSelect={go('tracking')} />
-            </ChartCard>
-
-            <ChartCard span={2} title="AR Aging" sub="Open receivables by days past due · click a bar">
-              <AgingBar aging={ar.aging} onSelect={drillAging} />
-            </ChartCard>
-
-            <ChartCard span={2} title="Sales Orders by Status" sub={`${so.count} orders · click a bar`}>
-              <RankBar data={soData} colorAt={(i) => SERIES[i % SERIES.length]} onSelect={drillSo} />
-            </ChartCard>
-
-            <ChartCard span={2} title="Cash Received by Month" sub="Customer payments collected">
-              <TrendArea data={(payments.byMonth ?? []).map((m) => ({ month: m.month, amount: m.amount }))} idPrefix="ov-pay" series={[{ key: 'amount', name: 'Received', color: C.brand }]} />
-            </ChartCard>
-
-            <ChartCard span={2} title="Order → PO → Invoice" sub={`${chainTotal} orders traced through fulfilment`}>
-              <div className="exec-funnel">
-                <div className="exec-funnel-step"><div className="n">{chainTotal}</div><div className="l">Orders</div></div>
-                <div className="exec-funnel-arrow">›</div>
-                <div className="exec-funnel-step"><div className="n">{chainPo}</div><div className="l">With PO</div></div>
-                <div className="exec-funnel-arrow">›</div>
-                <div className="exec-funnel-step"><div className="n">{chainInv}</div><div className="l">Invoiced</div></div>
-              </div>
-              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 12 }}>
-                {chainTotal ? Math.round((chainInv / chainTotal) * 100) : 0}% of orders have reached invoicing · <span className="link-like" onClick={go('tracking')} style={{ color: 'var(--accent)', cursor: 'pointer', fontWeight: 600 }}>trace orders →</span>
+            <ChartCard className="g12-4" title="Revenue vs Expense" sub="Invoiced revenue vs billed expenses · monthly">
+              <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />
+              <BarsLine data={finData}
+                bars={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expense', color: C.negative }]}
+                line={{ key: 'profit', name: 'Profit', color: C.brand }} />
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Revenue</div><div className="v pos">{formatCurrency(fRev)}</div></div>
+                <div className="cf-i"><div className="l">Expense</div><div className="v neg">{formatCurrency(fExp)}</div></div>
+                <div className="cf-i"><div className="l">Profit</div><div className="v accent">{formatCurrency(fRev - fExp)}</div></div>
+                <div className="cf-i"><div className="l">Margin</div><div className="v">{margin}%</div></div>
               </div>
             </ChartCard>
 
-            <ChartCard span={2} title="Master Data" sub="Records under management" right={<button className="btn ghost" style={{ padding: '5px 10px', fontSize: 12 }} onClick={go('vendors')}>Vendors →</button>}>
-              <div className="exec-mini">
-                <div><div className="n">{(customers?.count ?? 0).toLocaleString()}</div><div className="l">Customers</div></div>
-                <div style={{ cursor: 'pointer' }} onClick={openVendors}><div className="n">{(vendors?.count ?? 0).toLocaleString()}</div><div className="l">Vendors</div></div>
-                <div style={{ cursor: 'pointer' }} onClick={openCatalog}><div className="n">{(items?.count ?? 0).toLocaleString()}</div><div className="l">Catalog Items</div></div>
+            <div className="exec-rail">
+              <div className="section chart-card">
+                <div className="section-head"><div><h2 className="section-title">Top Payers (by AR)</h2><div className="section-sub">Largest open balances</div></div></div>
+                <div className="rank-list">
+                  {topCust.map((c) => (
+                    <div key={c.name} className="rk-row">
+                      <span className="rk-ico">{initials(c.name)}</span>
+                      <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
+                      <span className="rk-val">{formatCurrency(c.open)}</span>
+                    </div>
+                  ))}
+                  {topCust.length === 0 && <div className="muted-note">No open receivables.</div>}
+                </div>
+                <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('receivables')}>View all receivables →</button>
+              </div>
+
+              <div className="section chart-card">
+                <div className="section-head"><div><h2 className="section-title">Top Vendors (by Spend)</h2><div className="section-sub">Committed PO spend</div></div></div>
+                <div className="rank-list">
+                  {topVend.map((v) => (
+                    <div key={v.vendor} className="rk-row">
+                      <span className="rk-ico" style={{ background: 'rgba(124,58,237,0.10)', color: '#7C3AED' }}>{initials(v.vendor)}</span>
+                      <span className="rk-name" title={v.vendor}>{trunc(v.vendor, 26)}</span>
+                      <span className="rk-val">{formatCurrency(v.total)}</span>
+                    </div>
+                  ))}
+                  {topVend.length === 0 && <div className="muted-note">No active POs.</div>}
+                </div>
+                <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('vendors')}>View all vendors →</button>
+              </div>
+
+              <div className="section chart-card">
+                <div className="section-head"><div><h2 className="section-title">Financial Insights</h2><div className="section-sub">Computed from live data</div></div></div>
+                <div className="ins-list">
+                  {insights.map((ins, i) => (
+                    <div key={i} className="ins-item">
+                      <span className="ins-dot" style={{ background: INS_TONES[ins.tone].bg, color: INS_TONES[ins.tone].fg }}>{ins.ico}</span>
+                      <span>{ins.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <ChartCard className="g12-3" title="Collection Rate" sub="Cash received ÷ revenue YTD">
+              <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.positive} height={150} />
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Collected</div><div className="v pos">{formatCurrency(payments.total)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding</div><div className="v">{formatCurrency(ar.totalOpen)}</div></div>
+              </div>
+              <div className="cfoot" style={{ marginTop: 0 }}>
+                <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${Math.abs(cashD.pct)}%` : '—'}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">DSO</div><div className="v">{dsoApprox != null ? `${dsoApprox} days` : '—'}</div></div>
               </div>
             </ChartCard>
 
-            <ChartCard span={2} title="Open Exceptions" sub={`${exc?.totalOpen ?? 0} data-quality items to review`} right={<button className="btn ghost" style={{ padding: '5px 10px', fontSize: 12 }} onClick={go('exceptions')}>View all →</button>}>
-              {exc && exc.groups.length ? (
-                <RankBar data={[...exc.groups].sort((a, b) => b.count - a.count).slice(0, 6).map((g) => ({ name: g.title, value: g.count }))} colorAt={(i) => [C.negative, C.warning, C.info, C.brand, C.purple, C.muted][i % 6]} onSelect={go('exceptions')} />
+            <ChartCard className="g12-3" title="AR Aging Summary" sub="Open receivables · days past due">
+              <DonutList data={agingData(ar.aging)} totalLabel="Total" />
+            </ChartCard>
+
+            <ChartCard className="g12-3" title="AP Aging Summary" sub="Open bills · days past due">
+              <DonutList data={agingData(ap.aging)} totalLabel="Total" />
+            </ChartCard>
+
+            <ChartCard className="g12-6" title="Sales Orders by Program" sub={`${so.count} orders · PI / VA / Tri-Care split`}>
+              <BarList data={programBars} money={false} onSelect={go('orders')} />
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Total Orders</div><div className="v">{so.count.toLocaleString()}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Order Book</div><div className="v accent">{formatCurrency(so.totalValue)}</div></div>
+              </div>
+            </ChartCard>
+
+            <ChartCard className="g12-6" title="PO Spend by Vendor (Top 5)" sub="Committed spend · active POs only">
+              <BarList data={vendorBars} showPct={false} onSelect={go('tracking')} />
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Total Spend</div><div className="v">{formatCurrency(po.totalValue)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Active POs</div><div className="v accent">{po.count.toLocaleString()}</div></div>
+              </div>
+            </ChartCard>
+
+            <ChartCard className="g12-5" title="Recent Activity" sub="Payments · orders · POs"
+              right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('accounts')}>View all →</button>}>
+              <div className="act-list">
+                {acts.map((a, i) => (
+                  <div key={i} className="act-row">
+                    <span className="act-time">{shortDate(a.date)}</span>
+                    <span className="act-ico" style={{ background: a.bg, color: a.fg }}>{a.ico}</span>
+                    <span className="act-text">{a.text}</span>
+                    <span className={`act-amt${a.cls ? ` ${a.cls}` : ''}`}>{a.amt}</span>
+                  </div>
+                ))}
+                {acts.length === 0 && <div className="muted-note">No recent activity.</div>}
+              </div>
+            </ChartCard>
+
+            <ChartCard className="g12-4" title="Pending Approvals" sub="POs awaiting action"
+              right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('orders')}>View all →</button>}>
+              {approvals.length ? (
+                <div className="appr-list">
+                  {approvals.map((r) => (
+                    <div key={r.id} className="appr-row">
+                      <div className="appr-main">
+                        <div className="t">{r.ref} · {trunc(r.vendor, 24)}</div>
+                        <div className="s">{shortDate(r.date)}</div>
+                      </div>
+                      <span className="appr-amt">{formatCurrency(r.total)}</span>
+                      <StatusPill status={r.status || 'Pending'} />
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="qb-placeholder"><span className="qb-icon">✓</span>Nothing awaiting approval</div>}
+            </ChartCard>
+
+            <ChartCard className="g12-3" title="Exceptions" sub={`${exc?.totalOpen ?? 0} data-quality items`}
+              right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('exceptions')}>View all →</button>}>
+              {excGroups.length ? (
+                <div className="exc-list">
+                  {excGroups.map((g) => (
+                    <div key={g.key} className="exc-row" onClick={go('exceptions')}>
+                      <span className={`exc-badge ${g.severity}`}>{g.count}</span>
+                      <span className="exc-title" title={g.title}>{g.title}</span>
+                      <span className="exc-val">{g.value ? formatCurrency(g.value) : ''}</span>
+                    </div>
+                  ))}
+                </div>
               ) : <div className="qb-placeholder"><span className="qb-icon">✓</span>No open exceptions</div>}
-            </ChartCard>
-
-            {/* Honest placeholder — these need the accounting source (QuickBooks) that Striven's API doesn't expose. */}
-            <ChartCard span={4} title="Margins &amp; Working Capital" sub="Balance sheet · EBITDA · cash-on-hand">
-              <div className="qb-placeholder">
-                <span className="qb-icon">🔗</span>
-                <span>Bank balance, real P&amp;L and working-capital metrics aren't in Striven's API.</span>
-                <span className="qb-cta">Connect QuickBooks to unlock →</span>
-              </div>
             </ChartCard>
           </div>
         </>
       )}
-
-      {drill && <DrillModal title={drill.title} sub={drill.sub} columns={drill.columns} rows={drill.rows} onClose={() => setDrill(null)} />}
     </div>
   );
 }

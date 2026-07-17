@@ -2,6 +2,25 @@ import { useState } from 'react';
 import { invalidateAllCaches } from '../api';
 import type { ViewKey } from '../CashflowApp';
 
+// 16px stroke icons per nav item (lucide-style, currentColor).
+const svg = (children: React.ReactNode) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    {children}
+  </svg>
+);
+const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
+  overview: svg(<><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></>),
+  receivables: svg(<><path d="M12 3v11" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></>),
+  payables: svg(<><rect x="2.5" y="5" width="19" height="14" rx="2" /><line x1="2.5" y1="10" x2="21.5" y2="10" /></>),
+  pl: svg(<><line x1="6" y1="20" x2="6" y2="12" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="18" y1="20" x2="18" y2="9" /></>),
+  orders: svg(<><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M3 4h2l2.4 11.4a1 1 0 0 0 1 .6h8.8a1 1 0 0 0 1-.8L20 8H6" /></>),
+  tracking: svg(<><circle cx="6" cy="6" r="2.2" /><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="6" r="2.2" /><path d="M6 8.2v7.6" /><path d="M18 8.2A9 9 0 0 1 9 17" /></>),
+  vendors: svg(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
+  catalog: svg(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="M12 12 20 7.5" /><path d="M12 12v9" /><path d="M12 12 4 7.5" /></>),
+  accounts: svg(<><path d="m3 9 9-6 9 6" /><path d="M5 9v9" /><path d="M9.7 9v9" /><path d="M14.3 9v9" /><path d="M19 9v9" /><path d="M3 21h18" /></>),
+  exceptions: svg(<><path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" /></>),
+};
+
 const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'receivables', label: 'Receivables' },
@@ -69,6 +88,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
           className={`nav-item ${view === item.key ? 'active' : ''}`}
           onClick={() => onChange(item.key)}
         >
+          <span className="nav-icon">{NAV_ICONS[item.key]}</span>
           <span>{item.label}</span>
         </button>
       ))}

@@ -5,6 +5,7 @@ import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, LabelList,
   PieChart, Pie, RadialBarChart, RadialBar, PolarAngleAxis,
+  ComposedChart, Line,
 } from 'recharts';
 import type { ReactNode } from 'react';
 import { formatCurrency } from './format';
@@ -47,11 +48,116 @@ export function StatCards({ data, total, onSelect }: {
   );
 }
 
-export function ChartCard({ title, sub, span, right, children }: { title: string; sub?: string; span?: number; right?: ReactNode; children: ReactNode }) {
+export function ChartCard({ title, sub, span, right, className, children }: { title: string; sub?: string; span?: number; right?: ReactNode; className?: string; children: ReactNode }) {
   return (
-    <div className={`section chart-card${span ? ` span-${span}` : ''}`}>
+    <div className={`section chart-card${span ? ` span-${span}` : ''}${className ? ` ${className}` : ''}`}>
       <div className="section-head"><div><h2 className="section-title">{title}</h2>{sub && <div className="section-sub">{sub}</div>}</div>{right}</div>
       {children}
+    </div>
+  );
+}
+
+// Tiny inline legend row (colored dot + label) for combo charts.
+export function LegendDots({ items }: { items: { name: string; color: string }[] }) {
+  return (
+    <div className="mini-legend">
+      {items.map((i) => (
+        <span key={i.name} className="ml-i"><span className="ml-dot" style={{ background: i.color }} />{i.name}</span>
+      ))}
+    </div>
+  );
+}
+
+// Monthly bars (up to 2 series) + an overlay line (e.g. net cash / profit) —
+// the executive "flows + running result" combo chart.
+export function BarsLine({ data, bars, line }: {
+  data: Record<string, number | string>[];
+  bars: { key: string; name: string; color: string }[];
+  line: { key: string; name: string; color: string };
+}) {
+  return (
+    <div className="chart-box">
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={data} margin={{ top: 12, right: 16, left: 4, bottom: 2 }} barGap={3} barCategoryGap="28%">
+          <CartesianGrid {...gridProps} />
+          <XAxis dataKey="month" {...axisProps} tickFormatter={(m: string) => monthLabel(String(m))} />
+          <YAxis {...axisProps} width={54} tickFormatter={compactMoney} />
+          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.08)' }} formatter={(v: number | string, n: string) => [formatCurrency(Number(v)), n]} />
+          {bars.map((b) => (
+            <Bar key={b.key} {...NOANIM} dataKey={b.key} name={b.name} fill={b.color} radius={[4, 4, 0, 0]} maxBarSize={22} />
+          ))}
+          <Line {...NOANIM} type="monotone" dataKey={line.key} name={line.name} stroke={line.color} strokeWidth={2.5} dot={{ r: 3, fill: line.color, strokeWidth: 0 }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// Donut + itemised legend rows (name · $ · share) + a total footer — the
+// "aging summary" card. Rows are the legend, so no floating legend below.
+export function DonutList({ data, totalLabel = 'Total', money = true }: {
+  data: { name: string; value: number; color: string }[];
+  totalLabel?: string; money?: boolean;
+}) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const fmt = (v: number) => (money ? formatCurrency(v) : v.toLocaleString());
+  return (
+    <div className="donut-list">
+      <div className="dl-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius="62%" outerRadius="92%" paddingAngle={2} stroke="none" {...NOANIM}>
+              {data.map((d, i) => <Cell key={i} fill={d.color} />)}
+            </Pie>
+            <Tooltip {...tooltipStyle} formatter={(v: number | string, n: string) => [fmt(Number(v)), n]} />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="dl-legend">
+        {data.map((d) => (
+          <div key={d.name} className="dl-item">
+            <span className="donut-dot" style={{ background: d.color }} />
+            <span className="dl-name">{d.name}</span>
+            <span className="dl-val">{fmt(d.value)}</span>
+            <span className="dl-pct">{total > 0 ? Math.round((d.value / total) * 100) : 0}%</span>
+          </div>
+        ))}
+        <div className="dl-total"><span>{totalLabel}</span><b>{fmt(total)}</b></div>
+      </div>
+    </div>
+  );
+}
+
+// CSS progress-bar ranking (label · share bar · value) — for program splits and
+// top-N vendor spend, matching the exec board-deck look without an SVG chart.
+export function BarList({ data, money = true, showPct = true, onSelect }: {
+  data: { name: string; value: number; color: string; meta?: string }[];
+  money?: boolean; showPct?: boolean; onSelect?: (name: string) => void;
+}) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const max = Math.max(1, ...data.map((d) => d.value));
+  return (
+    <div className="hbar-list">
+      {data.map((d) => {
+        const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
+        return (
+          <div key={d.name} className={`hbar-row${onSelect ? ' clickable' : ''}`}
+            onClick={onSelect ? () => onSelect(d.name) : undefined}
+            role={onSelect ? 'button' : undefined} tabIndex={onSelect ? 0 : undefined}
+            onKeyDown={onSelect ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(d.name); } } : undefined}>
+            <div className="hb-top">
+              <span className="hb-name">{d.name}</span>
+              <span className="hb-meta">
+                {showPct && <b>{pct}%</b>}
+                {d.meta
+                  ? <span className="hb-sub">{d.meta}</span>
+                  : <span className={showPct ? 'hb-sub' : 'hb-val'}>{money ? formatCurrency(d.value) : d.value.toLocaleString()}</span>}
+              </span>
+            </div>
+            <div className="hb-track"><div className="hb-fill" style={{ width: `${Math.max(3, (d.value / max) * 100)}%`, background: d.color }} /></div>
+          </div>
+        );
+      })}
     </div>
   );
 }
