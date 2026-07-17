@@ -66,12 +66,12 @@ export default async function handler(req, res) {
     }
   }
 
-  // ---- QuickBooks Online (OAuth connect/callback/status) — behind the session gate ----
+  // ---- QuickBooks Online (OAuth + posting) — behind the session gate ----
   if (pathname.startsWith('/api/qb/')) {
     try {
-      const out = await qbHandle(pathname, Object.fromEntries(url.searchParams));
+      const out = await qbHandle(pathname, Object.fromEntries(url.searchParams), req.method);
       if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
-      if (out) return res.status(200).json(out.json);
+      if (out) return res.status(out.status ?? 200).json(out.json);
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 

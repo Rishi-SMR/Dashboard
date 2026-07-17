@@ -118,6 +118,29 @@ export type ExceptionGroup = { key: string; severity: 'high' | 'warn' | 'info'; 
 export type ExceptionsResult = { totalOpen: number; groups: ExceptionGroup[]; note: string };
 export const fetchStrivenExceptions = () => get<ExceptionsResult>('/api/exceptions');
 
+// ── QuickBooks Online ──────────────────────────────────────────────────────
+export type QbStatus = { connected: boolean; env: 'sandbox' | 'production'; configured?: boolean; realmId?: string; company?: string; country?: string; connectedAt?: string | null; error?: string };
+export type QbCustomer = { id: string; name: string; email: string; balance: number };
+export type QbCustomersResult = { count: number; customers: QbCustomer[] };
+export type QbPosted = { invoiceId: string; docNumber: string; total?: number; customer?: string; at: string };
+export type QbPlanLine = { name: string; qty: number; unit: number; amount: number; item: { status: 'matched' | 'create'; id?: string; qbName?: string } };
+export type QbPlan = {
+  so: { id: number; number: string; status: string; type: string; date: string | null; total: number };
+  customer: { status: 'matched' | 'create'; name: string; id?: string; qbName?: string; email?: string; phone?: string };
+  lines: QbPlanLine[];
+  computedTotal: number;
+  alreadyPosted: QbPosted | null;
+  warnings: string[];
+};
+export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: string; action: string; name: string; id: string }[]; soNumber?: string; alreadyPosted?: QbPosted; message?: string };
+
+export const fetchQbStatus = () => get<QbStatus>('/api/qb/status');
+export const fetchQbCustomers = (q: string) => get<QbCustomersResult>(`/api/qb/customers?q=${encodeURIComponent(q)}`);
+export const qbPrepareInvoice = (soId: number) => get<QbPlan>(`/api/qb/prepare-invoice?so=${soId}`);
+export const qbPostInvoice = (soId: number, force = false) =>
+  fetch(`/api/qb/post-invoice?so=${soId}${force ? '&force=1' : ''}`, { method: 'POST', headers: { Accept: 'application/json' } })
+    .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error((j as { error?: string })?.error || `Post failed: ${r.status}`); return j as QbPostResult; });
+
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
 export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };

@@ -19,6 +19,7 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   catalog: svg(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="M12 12 20 7.5" /><path d="M12 12v9" /><path d="M12 12 4 7.5" /></>),
   accounts: svg(<><path d="m3 9 9-6 9 6" /><path d="M5 9v9" /><path d="M9.7 9v9" /><path d="M14.3 9v9" /><path d="M19 9v9" /><path d="M3 21h18" /></>),
   exceptions: svg(<><path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" /></>),
+  quickbooks: svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 8.5c-1.7 0-2.8.9-2.8 2.2 0 2.6 4.4 1.6 4.4 3.6 0 .9-.8 1.4-1.9 1.4" /><path d="M12 7v10" /></>),
 };
 
 // Views that live inside another tab — highlight the parent nav item.
@@ -32,6 +33,7 @@ const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'vendors', label: 'Vendors & Items' },
   { key: 'accounts', label: 'Accounts' },
   { key: 'exceptions', label: 'Exceptions' },
+  { key: 'quickbooks', label: 'QuickBooks' },
 ];
 
 // Optional profile-photo + title fallbacks keyed by username. Left empty in the
