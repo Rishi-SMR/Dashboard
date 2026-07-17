@@ -1433,13 +1433,16 @@ code {
 .kpi-r.clickable { cursor:pointer; transition:transform .12s ease, box-shadow .18s ease, border-color .18s ease; }
 .kpi-r.clickable:hover { transform:translateY(-2px); border-color:var(--border-strong); box-shadow:0 14px 28px -14px rgba(37,99,235,.25), 0 2px 6px rgba(14,27,46,.06); }
 
-/* Underline sub-tabs (Sales Orders | Purchase Orders — reference style). */
-.ov-tabs { display:flex; gap:22px; border-bottom:1px solid var(--border); margin:4px 0 18px; }
-.ov-tab { background:none; border:0; padding:9px 2px 11px; font-size:13.5px; font-weight:600; color:var(--muted);
-  cursor:pointer; position:relative; transition:color .15s ease; }
-.ov-tab:hover { color:var(--text); }
-.ov-tab.active { color:var(--accent); }
-.ov-tab.active::after { content:''; position:absolute; left:0; right:0; bottom:-1px; height:2.5px; border-radius:2px; background:var(--accent); }
+/* Big segmented sub-tabs (Sales Orders | Purchase Orders | Tracking) — full
+   width, solid-accent active pill, unmissable. */
+.ov-tabs { display:flex; gap:6px; background:var(--panel); border:1px solid var(--border); border-radius:12px;
+  padding:6px; margin:4px 0 18px; box-shadow:0 1px 2px rgba(14,27,46,.04); }
+.ov-tab { flex:1; text-align:center; background:transparent; border:0; padding:12px 16px; border-radius:9px;
+  font-size:14px; font-weight:700; color:var(--muted-strong); cursor:pointer; white-space:nowrap;
+  transition:background .15s ease, color .15s ease; }
+.ov-tab:hover { background:var(--panel-2); color:var(--text); }
+.ov-tab.active { background:var(--accent); color:#fff; box-shadow:0 4px 12px -4px rgba(37,99,235,.45); }
+@media (max-width:640px){ .ov-tab { padding:10px 8px; font-size:12.5px; } }
 
 /* Table controls (search + bucket filter) + sortable headers + pagination. */
 .tbl-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
