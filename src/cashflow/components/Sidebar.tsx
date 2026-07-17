@@ -82,8 +82,9 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
         <div className="brand-logo" style={{ background: '#fff', padding: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <img src="/SMR%20Logo.png" alt="SMR" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </div>
-        <div>
-          <div className="brand-name">SMR</div>
+        <div style={{ minWidth: 0 }}>
+          <div className="brand-name">SMR Dashboard</div>
+          <div className="brand-sub">Sports Med Recovery</div>
         </div>
       </div>
 
