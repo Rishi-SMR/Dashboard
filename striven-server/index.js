@@ -51,6 +51,17 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // QuickBooks OAuth callback (registered redirect /auth/callback) — before the gate.
+  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+    try {
+      const out = await qbHandle('/api/qb/callback', Object.fromEntries(reqUrl.searchParams), req.method);
+      if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
+      if (out) { res.writeHead(out.status ?? 200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out.json)); }
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
   if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {
       const body = await readBody(req);

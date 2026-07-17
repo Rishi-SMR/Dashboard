@@ -25,6 +25,17 @@ export default async function handler(req, res) {
 
   const { gateEnabled, sessionToken } = await getAuth();
 
+  // ---- QuickBooks OAuth callback — Intuit redirects here after authorize.
+  // The registered redirect is /auth/callback (also accept /api/qb/callback).
+  // Handled BEFORE the gate: the OAuth `state` param is the CSRF guard. ----
+  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+    try {
+      const out = await qbHandle('/api/qb/callback', Object.fromEntries(url.searchParams), req.method);
+      if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
+      if (out) return res.status(out.status ?? 200).json(out.json);
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
   // ---- auto-PO (SO placed → PO raised) — cron token OR a logged-in session ----
   if (pathname === '/api/auto-po') {
     const keyOk = autoPoTokenOk(url.searchParams.get('key') || req.headers['x-auto-po-key']);
