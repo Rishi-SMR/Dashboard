@@ -40,12 +40,15 @@ const PHOTOS: Record<string, string> = {};
 const TITLES: Record<string, string> = {};
 
 function readIdentity() {
-  // The login screen stores the signed-in username in localStorage (cleared on
-  // sign-out); sessionStorage keys are a legacy fallback.
+  // The server sets a JS-readable smr_user cookie on login (cleared on
+  // sign-out); localStorage/sessionStorage are fallbacks for older sessions.
+  const cookieUser = () => {
+    try { const m = document.cookie.match(/(?:^|; )smr_user=([^;]+)/); return m ? decodeURIComponent(m[1]) : ''; } catch { return ''; }
+  };
   const get = (k: string) => {
     try { return localStorage.getItem(k) || sessionStorage.getItem(k) || ''; } catch { return ''; }
   };
-  const email = get('smr_user');
+  const email = cookieUser() || get('smr_user');
   const raw = get('smr_name') || (email ? email.split('@')[0].split(/[._]/)[0] : 'User');
   const name = raw.charAt(0).toUpperCase() + raw.slice(1);
   const emailUser = email ? email.split('@')[0].toLowerCase() : '';

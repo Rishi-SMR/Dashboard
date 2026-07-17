@@ -45,13 +45,19 @@ export default async function handler(req, res) {
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
       const r = await login(body?.username, body?.password, { ip: String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() });
       if (r.ok) {
-        res.setHeader('Set-Cookie', `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
+        res.setHeader('Set-Cookie', [
+          `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`,
+          `smr_user=${encodeURIComponent(String(body?.username ?? '').trim())}; Path=/; SameSite=Lax; Max-Age=86400`,
+        ]);
         return res.status(200).json({ ok: true });
       }
       return res.status(401).json({ error: 'Invalid username or password' });
     }
     if (pathname === '/api/logout') {
-      res.setHeader('Set-Cookie', 'smr_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
+      res.setHeader('Set-Cookie', [
+        'smr_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0',
+        'smr_user=; Path=/; SameSite=Lax; Max-Age=0',
+      ]);
       return res.status(200).json({ ok: true });
     }
     if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== sessionToken) {
