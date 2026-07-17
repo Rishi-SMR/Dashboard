@@ -537,6 +537,7 @@ export function OrdersTab() {
                   <tr>
                     <th>PO ref</th>
                     <th>Vendor</th>
+                    <th>Sales Order</th>
                     <th className="num">Total</th>
                     <th>Status</th>
                     <th>Created</th>
@@ -547,13 +548,14 @@ export function OrdersTab() {
                     <tr key={o.id} onClick={() => openPo(o.id)} style={{ cursor: 'pointer' }}>
                       <td><strong>{o.ref}</strong></td>
                       <td>{o.vendor || '—'}</td>
+                      <td>{o.so ? <span className="pill-tag tag-info">{o.so}</span> : <span className="pill-tag tag-muted">not linked</span>}</td>
                       <td className="num">{formatCurrency(o.total)}</td>
                       <td>{o.status ? <StatusPill status={o.status} /> : <span className="pill-tag tag-ok">Active</span>}</td>
                       <td>{fmtDate(o.date)}</td>
                     </tr>
                   ))}
                   {poShown.length === 0 && (
-                    <tr><td colSpan={5} className="muted-note">No purchase orders match.</td></tr>
+                    <tr><td colSpan={6} className="muted-note">No purchase orders match.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -702,6 +704,7 @@ export function OrdersTab() {
                       <StatusPill status={poDetail.status} />
                     </span>
                   </KV>
+                  <KV label="Linked Sales Order">{poDetail.linkedSo ? <span className="pill-tag tag-info">{poDetail.linkedSo}</span> : 'not linked to an order'}</KV>
                   <KV label="Type">{poDetail.type || '—'}</KV>
                   <KV label="PO Date">{fmtDate(poDetail.poDate)}</KV>
                   <KV label="Promise Date">{fmtDate(poDetail.promiseDate)}</KV>

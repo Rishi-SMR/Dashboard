@@ -26,7 +26,7 @@ export type SoResult = {
   liveCount: number; demoCount: number; enriched: boolean; phiMasked: boolean;
 };
 
-export type PoRecent = { id: number; ref: string; vendor: string; total: number; date: string | null; status?: string };
+export type PoRecent = { id: number; ref: string; vendor: string; total: number; date: string | null; status?: string; so?: string };
 export type PoResult = { count: number; totalValue: number; byVendor: { vendor: string; total: number }[]; recent: PoRecent[]; cancelledCount?: number; cancelledValue?: number; pendingCount?: number; pendingValue?: number; totalCount?: number; phiMasked: boolean };
 
 export type Customer = { id: number; ref: string; name: string; status: string; since: string | null };
@@ -62,7 +62,7 @@ export type PoDetail = {
   requestedBy: string; contact: string; createdBy: string; createdDate: string | null;
   approvedDate: string | null; reviewedDate: string | null; acceptedBy: string; lastUpdatedBy: string;
   paymentTerm: string; account: string; dropShipCustomer: string;
-  shipVia: string; lastUpdatedDate: string | null; notesLogCount: number; attachmentCount: number;
+  linkedSo: string; shipVia: string; lastUpdatedDate: string | null; notesLogCount: number; attachmentCount: number;
   isDropShip: boolean; isBlanket: boolean; isFixedCost: boolean; allowPartial: boolean; isRecurring: boolean; needsReview: boolean;
   total: number; lineItems: LineItem[];
 };

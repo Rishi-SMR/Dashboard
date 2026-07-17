@@ -634,6 +634,17 @@ async function getOrders() {
   return { count: orders.length, orders, enriched: Object.keys(chain).length > 0, phiMasked: MASK_PHI };
 }
 const poIsVoid = (r) => /cancel|void|denied|rejected|fail/i.test(r.statusName || '');
+// Reverse map PO ref → the sales order it was raised for (from the order_chain
+// cache — Striven's own line-item order link, no guessing).
+async function poToSoMap() {
+  const sb = await sbCacheRead('order_chain');
+  const chain = (sb && sb.data) || {};
+  const rev = {};
+  for (const [soId, o] of Object.entries(chain)) {
+    for (const p of (o.pos ?? [])) rev[p.ref] = `SO-${soId}`;
+  }
+  return rev;
+}
 async function getPO() {
   const all = await poStatusMap();                       // each PO enriched with statusName / classified
   const rows = all.filter((r) => r.classified && !poIsVoid(r));   // active, known-good
@@ -643,8 +654,9 @@ async function getPO() {
   const byVendorMap = {};
   for (const r of rows) { const v = r.vendor?.name ?? 'Unknown'; byVendorMap[v] = (byVendorMap[v] || 0) + Number(r.poTotal ?? 0); }
   const byVendor = Object.entries(byVendorMap).map(([vendor, total]) => ({ vendor, total: round2(total) })).sort((a, b) => b.total - a.total).slice(0, 12);
+  const rev = await poToSoMap();
   const recent = rows.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
-    .map((r) => ({ id: r.id, ref: safeRef('PO', r.id, r.poNumber), vendor: r.vendor?.name ?? '', total: Number(r.poTotal ?? 0), date: r.dateCreated ?? null, status: r.statusName ?? '' }));
+    .map((r) => { const ref = safeRef('PO', r.id, r.poNumber); return { id: r.id, ref, vendor: r.vendor?.name ?? '', total: Number(r.poTotal ?? 0), date: r.dateCreated ?? null, status: r.statusName ?? '', so: rev[ref] ?? '' }; });
   return {
     count: rows.length, totalValue: sum(rows), byVendor, recent,
     cancelledCount: cancelled.length, cancelledValue: sum(cancelled),
@@ -696,6 +708,7 @@ async function getPODetail(id) {
     paymentTerm: nm(r.paymentTerm), account: nm(r.apglAccount),
     dropShipCustomer: r.dropShipCustomer ? maskName(r.dropShipCustomer.name) : '',
     // full operational detail (addresses/notes withheld under PHI)
+    linkedSo: (await poToSoMap())[safeRef('PO', r.id, r.poNumber)] ?? '',
     shipVia: nm(r.shipVia), lastUpdatedDate: r.lastUpdatedDate ?? null,
     notesLogCount: Number(r.notesLogCount ?? 0), attachmentCount: Number(r.attachmentCount ?? 0),
     isDropShip: !!r.dropShipPO, isBlanket: !!r.isBlanketPO, isFixedCost: !!r.isFixedCostPO,
@@ -790,6 +803,13 @@ async function getExceptions() {
   const po = await poStatusMap();
   const cancelledPO = po.filter((r) => r.classified && poIsVoid(r));
   push({ key: 'cancelled_pos', severity: 'info', title: 'Cancelled POs excluded from PO spend', count: cancelledPO.length, value: round2(cancelledPO.reduce((s, r) => s + Number(r.poTotal || 0), 0)), note: 'Correctly excluded from PO Spend — listed for transparency.', columns: ['ref', 'vendor', 'value'], rows: cancelledPO.slice(0, 25).map((r) => ({ ref: `PO-${r.id}`, vendor: r.vendor?.name || '—', value: round2(Number(r.poTotal || 0)) })) });
+
+  // Active POs whose line items carry no sales-order link — cannot be traced
+  // to an order (may be stock/bulk purchases; worth reviewing in Striven).
+  const revMap = await poToSoMap();
+  const activePos = po.filter((r) => r.classified && !poIsVoid(r));
+  const unlinked = activePos.filter((r) => !revMap[`PO-${r.id}`] && !revMap[String(r.poNumber ?? '')]);
+  push({ key: 'unlinked_pos', severity: 'warn', title: 'Active POs not linked to a sales order', count: unlinked.length, value: round2(unlinked.reduce((s, r) => s + Number(r.poTotal || 0), 0)), note: 'No sales order on the PO line items — untraceable in Order Tracking. Some may be legitimate stock purchases.', columns: ['ref', 'vendor', 'value', 'status'], rows: unlinked.slice(0, 25).map((r) => ({ ref: `PO-${r.id}`, vendor: r.vendor?.name || '—', value: round2(Number(r.poTotal || 0)), status: r.statusName || '' })) });
 
   const sos = await allSO(); const det = await soDetailMap();
   const demo = sos.filter((r) => isDemoType(det[r.id]?.type));
