@@ -58,7 +58,7 @@ export function ReceivablesTab() {
       .sort((a, b) => (b.open || 0) - (a.open || 0))
       .map((inv) => ({
         number: `#${inv.number}`,
-        customer: inv.customer || '—',
+        customer: inv.payer || '—',
         due: fmtDate(inv.dueDate),
         total: formatCurrency(inv.total),
         received: (inv.total || 0) - (inv.open || 0) > 0.005 ? formatCurrency((inv.total || 0) - (inv.open || 0)) : '—',
@@ -168,7 +168,7 @@ export function ReceivablesTab() {
                           <strong>#{inv.number}</strong>
                           {recv > 0.005 && <span className="pill-tag tag-ok" style={{ marginLeft: 8, fontSize: 10.5 }}>part-paid</span>}
                         </td>
-                        <td>{inv.customer || '—'}</td>
+                        <td>{inv.payer || '—'}</td>
                         <td>{fmtDate(inv.dueDate)}</td>
                         <td className="num">{formatCurrency(inv.total)}</td>
                         <td className="num cell-pos">{recv > 0.005 ? formatCurrency(recv) : '—'}</td>
@@ -190,7 +190,7 @@ export function ReceivablesTab() {
                 </tbody>
               </table>
             </div>
-            <div className="muted-note">Referenced by invoice number · patient data removed (HIPAA) · Payer mapping pending Payer Master.</div>
+            <div className="muted-note">Referenced by invoice number · patient removed (HIPAA) · Payer = law firm (PI) / Veterans Affairs (VA) / TriCare, taken from the linked sales order in Striven.</div>
           </div>
 
           {/* Recent Payments */}
@@ -201,7 +201,6 @@ export function ReceivablesTab() {
                 <thead>
                   <tr>
                     <th>Payment Ref</th>
-                    <th>Payer</th>
                     <th>Date</th>
                     <th className="num">Amount</th>
                     <th>Status</th>
@@ -211,18 +210,17 @@ export function ReceivablesTab() {
                   {payRows.map((p) => (
                     <tr key={p.id}>
                       <td><strong>{p.ref || '—'}</strong></td>
-                      <td>{p.customer || '—'}</td>
                       <td>{fmtDate(p.date)}</td>
                       <td className="num cell-pos">{formatCurrency(p.amount)}</td>
                       <td><StatusPill status={p.status} /></td>
                     </tr>
                   ))}
                   {payRows.length === 0 && (
-                    <tr><td colSpan={5} style={{ color: C.muted }}>No recent payments.</td></tr>
+                    <tr><td colSpan={4} style={{ color: C.muted }}>No recent payments.</td></tr>
                   )}
                   {payRows.length > 0 && (
                     <tr className="total-row">
-                      <td colSpan={3}>TOTAL</td>
+                      <td colSpan={2}>TOTAL</td>
                       <td className="num">{formatCurrency(payShownTotal)}</td>
                       <td />
                     </tr>
@@ -230,7 +228,7 @@ export function ReceivablesTab() {
                 </tbody>
               </table>
             </div>
-            <div className="muted-note">Referenced by invoice number · patient data removed (HIPAA) · Payer mapping pending Payer Master.</div>
+            <div className="muted-note">Referenced by payment ref · patient data removed (HIPAA).</div>
           </div>
         </>
       )}

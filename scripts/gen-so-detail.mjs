@@ -17,12 +17,25 @@ let rows = [], pi = 0;
 for (;;) { const b = await (await fetch(`${BASE}/v1/sales-orders/search`, { method: 'POST', headers: { Authorization: `Bearer ${T}`, 'User-Agent': UA, 'Content-Type': 'application/json' }, body: JSON.stringify({ PageIndex: pi, PageSize: 100 }) })).json(); const d = b.data || b.Data || []; rows.push(...d); if (d.length < 100) break; pi++; }
 console.log('sales orders:', rows.length);
 
+// Who pays the invoice: PI orders → the "Payer"/"Law Firm" custom field (the
+// attorney's office); VA orders → Veterans Affairs; Tri-Care → TriCare. All from
+// Striven (order type + custom field), nothing invented.
+const cf = (d, name) => (d.customFields || []).find((f) => f.name === name)?.valueText;
+const payerOf = (d) => {
+  const type = d.type?.name || '';
+  const explicit = String(cf(d, 'Payer') || '').trim();
+  if (explicit) return explicit;
+  if (/tri.?care/i.test(type)) return 'TriCare';
+  if (/\bva\b|veteran/i.test(type)) return 'Veterans Affairs';
+  if (/\bpi\b|personal injury/i.test(type)) return String(cf(d, 'Law Firm') || '').trim();
+  return '';
+};
 const map = {};
 const get = async (id) => {
   for (let a = 0; a < 8; a++) {
     const r = await fetch(`${BASE}/v1/sales-orders/${id}`, { headers: { Authorization: `Bearer ${T}`, 'User-Agent': UA } });
     if (r.status === 429) { await wait(1000); continue; }
-    if (r.ok) { const d = await r.json(); map[id] = { type: d.type?.name ?? '', rep: d.salesRep?.name ?? '', total: Number(d.orderTotal ?? 0), invStatus: d.invoiceStatus?.name ?? '', status: d.status?.name ?? '' }; return; }
+    if (r.ok) { const d = await r.json(); map[id] = { type: d.type?.name ?? '', rep: d.salesRep?.name ?? '', payer: payerOf(d), total: Number(d.orderTotal ?? 0), invStatus: d.invoiceStatus?.name ?? '', status: d.status?.name ?? '' }; return; }
     return;
   }
 };

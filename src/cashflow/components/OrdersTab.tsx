@@ -197,6 +197,7 @@ export function OrdersTab() {
         { key: 'ref', label: 'Order #' },
         { key: 'type', label: 'PI/VA' },
         { key: 'rep', label: 'Sales Rep' },
+        { key: 'payer', label: 'Payer' },
         { key: 'value', label: 'Value', num: true },
         { key: 'inv', label: 'Invoiced' },
       ],
@@ -204,6 +205,7 @@ export function OrdersTab() {
         ref: <strong>{o.ref}</strong>,
         type: <StatusPill status={o.type} />,
         rep: o.rep || '—',
+        payer: o.payer || '—',
         value: formatCurrency(o.value),
         inv: o.invStatus || '—',
       })),
@@ -314,16 +316,16 @@ export function OrdersTab() {
             </ChartCard>
           </div>
 
-          <ChartCard title="Top Sales Reps by Order Value" sub="Referring group / rep on the sales order (not patient)">
+          <ChartCard title="Top Sales Reps by Order Value" sub="Sales rep on the sales order — referral group removed, no patient data">
             <RankBar data={so.byRep.map((r) => ({ name: r.rep, value: r.value }))} money colorAt={() => C.brand} />
           </ChartCard>
 
           <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head"><div><h2 className="section-title">Recent Sales Orders</h2><div className="section-sub">Referenced by order number · PI/VA + sales rep · no patient data</div></div></div>
+            <div className="section-head"><div><h2 className="section-title">Recent Sales Orders</h2><div className="section-sub">Order # · sales rep · payer (law firm / VA / TriCare) · no patient data</div></div></div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th className="num">Value</th><th>Status</th><th>Invoiced</th></tr>
+                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th>Payer</th><th className="num">Value</th><th>Status</th><th>Invoiced</th></tr>
                 </thead>
                 <tbody>
                   {so.recent.map((o) => (
@@ -331,13 +333,14 @@ export function OrdersTab() {
                       <td><strong>{o.ref}</strong></td>
                       <td><StatusPill status={o.type} /></td>
                       <td>{o.rep || '—'}</td>
+                      <td>{o.payer || '—'}</td>
                       <td className="num">{formatCurrency(o.value)}</td>
                       <td><StatusPill status={o.status} /></td>
                       <td>{o.invStatus || '—'}</td>
                     </tr>
                   ))}
                   {so.recent.length === 0 && (
-                    <tr><td colSpan={6} className="muted-note">No sales orders.</td></tr>
+                    <tr><td colSpan={7} className="muted-note">No sales orders.</td></tr>
                   )}
                 </tbody>
               </table>

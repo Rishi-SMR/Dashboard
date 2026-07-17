@@ -384,6 +384,36 @@ function maskName(name, mask = MASK_PHI) {
 }
 const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(rawNumber ?? '')) ? `${prefix}-${id}` : String(rawNumber));
 
+// Striven's salesRep field holds "Referral group- Person" (e.g.
+// "Maverick Medical- Jillian Colin", "CVT Medical - Christy Tan"). The actual
+// sales rep is the PERSON — strip the leading referral-group/vendor and any
+// trailing "(Striven)" tag so the rep name shows on its own.
+function cleanRep(raw) {
+  let s = String(raw ?? '').trim();
+  if (!s) return '';
+  s = s.replace(/\s*\([^)]*\)\s*$/, '').trim();            // drop trailing "(Striven)" etc.
+  const i = s.indexOf('-');                                 // "Group- Person" → keep Person
+  if (i > 0 && i < s.length - 1) { const person = s.slice(i + 1).trim(); if (person) return person; }
+  return s;
+}
+// A rep is effectively unassigned when it's blank or the placeholder "House Account".
+const repIsUnassigned = (raw) => { const r = cleanRep(raw); return !r || /^house account$/i.test(r); };
+// Who pays the invoice for an order. PI (personal-injury) orders are paid by the
+// attorney's office → the "Payer"/"Law Firm" custom field on the SO. VA orders are
+// paid by Veterans Affairs; Tri-Care by the TriCare program — both read straight
+// off the order type. All grounded in Striven, nothing fabricated. `d` is either a
+// live SO detail (with customFields) or a cached so_detail row (with .payer set).
+const cfVal = (d, name) => (Array.isArray(d?.customFields) ? d.customFields.find((f) => f.name === name)?.valueText : undefined);
+function payerOf(d) {
+  const type = d?.type?.name ?? d?.type ?? '';
+  const explicit = String(d?.payer ?? cfVal(d, 'Payer') ?? '').trim();
+  if (explicit) return explicit;
+  if (/tri.?care/i.test(type)) return 'TriCare';
+  if (/\bva\b|veteran/i.test(type)) return 'Veterans Affairs';
+  if (/\bpi\b|personal injury/i.test(type)) return String(cfVal(d, 'Law Firm') ?? '').trim();
+  return '';
+}
+
 // ---- endpoints ----------------------------------------------------------
 async function getStatus() {
   const { clientId, clientSecret } = await getConfig();
@@ -427,9 +457,15 @@ async function getAR() {
       netRows.push({ ...r, netOpen: round2(open - applied) });
     }
   }
+  // Payer per invoice: each invoice links to a sales order, and the order carries
+  // the payer (law firm for PI, VA / TriCare by type). Map invoice # → payer via
+  // the order_chain cache so we can show WHO pays each invoice (patient stays masked).
+  const payerByInv = await invoicePayerMap();
+
   const invoices = netRows.filter((r) => r.netOpen > 0.005).map((r) => ({
     id: r.id, number: r.txnNumber ?? String(r.id),
     customer: maskName(r.customer?.name), customerId: r.customer?.id ?? null,
+    payer: payerByInv[String(r.txnNumber ?? r.id)] || '',
     dueDate: r.dueDate ?? null, total: Number(r.invoiceTotal ?? 0), open: r.netOpen,
     currency: r.currency?.currencyISOCode ?? 'USD',
   }));
@@ -516,6 +552,18 @@ async function getPL() {
 }
 // SO type/rep/value come from the offline 'so_detail' enrichment (search omits them).
 async function soDetailMap() { const sb = await sbCacheRead('so_detail'); return (sb && sb.data) || {}; }
+// invoice # → payer, built from the SO→invoice order_chain (each order carries its payer).
+async function invoicePayerMap() {
+  const sb = await sbCacheRead('order_chain');
+  const chain = (sb && sb.data) || {};
+  const out = {};
+  for (const o of Object.values(chain)) {
+    const payer = payerOf(o);
+    if (!payer) continue;
+    for (const inv of (o.invoices || [])) { const num = String(inv.ref || '').replace(/^#/, ''); if (num) out[num] = payer; }
+  }
+  return out;
+}
 const soClass = (t) => { const s = (t || '').toLowerCase(); if (/pi/.test(s)) return 'PI'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/tri.?care/.test(s)) return 'TriCare'; return 'Other'; };
 const isDemoType = (t) => /demo|test|sample/i.test(t || '');
 async function getSO() {
@@ -537,11 +585,11 @@ async function getSO() {
   const byStatus = Object.entries(byStatusMap).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
 
   const byRepMap = {};
-  for (const r of live) { const rep = r.d.rep || 'Unassigned'; byRepMap[rep] = (byRepMap[rep] || 0) + Number(r.d.total || 0); }
+  for (const r of live) { const rep = cleanRep(r.d.rep) || 'Unassigned'; byRepMap[rep] = (byRepMap[rep] || 0) + Number(r.d.total || 0); }
   const byRep = Object.entries(byRepMap).map(([rep, value]) => ({ rep, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 15);
 
   const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || '')).slice(0, 60)
-    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: r.d.rep || '', value: Number(r.d.total || 0), status: r.status?.name ?? r.d.status ?? '', invStatus: r.d.invStatus || '', date: r.dateCreated ?? null }));
+    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: r.status?.name ?? r.d.status ?? '', invStatus: r.d.invStatus || '', date: r.dateCreated ?? null }));
 
   return { count: live.length, totalValue, piva, byType, byStatus, byRep, recent, demoCount: enriched.length - live.length, enriched: Object.keys(det).length > 0, phiMasked: MASK_PHI };
 }
@@ -552,7 +600,7 @@ async function getOrders() {
   const orders = Object.values(chain)
     .filter((o) => !isDemoType(o.type))
     .map((o) => ({
-      ref: o.ref, pi: soClass(o.type), type: o.type, rep: o.rep || '', value: round2(Number(o.value || 0)),
+      ref: o.ref, pi: soClass(o.type), type: o.type, rep: cleanRep(o.rep), payer: payerOf(o), value: round2(Number(o.value || 0)),
       status: o.status || '', invStatus: o.invStatus || '',
       pos: (o.pos || []).map((p) => ({ ...p, value: round2(Number(p.value || 0)) })),
       invoices: (o.invoices || []).map((i) => ({ ...i, total: round2(Number(i.total || 0)), open: round2(Number(i.open || 0)) })),
@@ -690,8 +738,8 @@ async function getExceptions() {
   const sos = await allSO(); const det = await soDetailMap();
   const demo = sos.filter((r) => isDemoType(det[r.id]?.type));
   push({ key: 'demo_orders', severity: 'warn', title: 'DEMO / test sales orders', count: demo.length, value: round2(demo.reduce((s, r) => s + Number(det[r.id]?.total || 0), 0)), note: 'Test orders — excluded from sales totals. Should be archived in Striven.', columns: ['ref', 'type', 'value'], rows: demo.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '', value: round2(Number(det[r.id]?.total || 0)) })) });
-  const noRep = sos.filter((r) => { const t = det[r.id]?.type; const rep = det[r.id]?.rep; return t && !isDemoType(t) && (!rep || /house account/i.test(rep)); });
-  push({ key: 'missing_rep', severity: 'warn', title: 'Sales orders with no sales rep', count: noRep.length, note: 'Rep is blank or "House Account" — needed for rep reporting.', columns: ['ref', 'rep', 'type'], rows: noRep.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, rep: det[r.id]?.rep || '(none)', type: det[r.id]?.type || '' })) });
+  const noRep = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && repIsUnassigned(det[r.id]?.rep); });
+  push({ key: 'missing_rep', severity: 'warn', title: 'Sales orders with no sales rep', count: noRep.length, note: 'Rep is blank or "House Account" — needed for rep reporting.', columns: ['ref', 'rep', 'type'], rows: noRep.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, rep: cleanRep(det[r.id]?.rep) || '(none)', type: det[r.id]?.type || '' })) });
   const unclassified = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && soClass(t) === 'Other'; });
   push({ key: 'missing_pi_va', severity: 'warn', title: 'Sales orders not classified PI / VA / Tri-Care', count: unclassified.length, note: 'Order type does not map to PI, VA or Tri-Care.', columns: ['ref', 'type'], rows: unclassified.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '(none)' })) });
 

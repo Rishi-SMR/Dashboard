@@ -30,7 +30,7 @@ console.log('invoices linked');
 
 const chain = {};
 for (const [soId, s] of Object.entries(soDet)) {
-  chain[soId] = { ref: `SO-${soId}`, type: s.type || '', rep: s.rep || '', value: Number(s.total || 0), status: s.status || '', invStatus: s.invStatus || '', pos: poBySo[soId] || [], invoices: invBySo[soId] || [] };
+  chain[soId] = { ref: `SO-${soId}`, type: s.type || '', rep: s.rep || '', payer: s.payer || '', value: Number(s.total || 0), status: s.status || '', invStatus: s.invStatus || '', pos: poBySo[soId] || [], invoices: invBySo[soId] || [] };
 }
 await fetch(`${SB}/rest/v1/striven_cache`, { method: 'POST', headers: { apikey: SK, Authorization: `Bearer ${SK}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ key: 'order_chain', data: chain, updated_at: new Date().toISOString() }) });
 const withPo = Object.values(chain).filter((c) => c.pos.length).length;

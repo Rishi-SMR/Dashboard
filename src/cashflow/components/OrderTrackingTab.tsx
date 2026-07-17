@@ -26,7 +26,7 @@ export function OrderTrackingTab() {
     const q = query.trim().toLowerCase();
     if (!q) return orders;
     return orders.filter((o) =>
-      o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.pi || '').toLowerCase().includes(q) ||
+      o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q) || (o.pi || '').toLowerCase().includes(q) ||
       o.pos.some((p) => p.ref.toLowerCase().includes(q) || (p.vendor || '').toLowerCase().includes(q)) ||
       o.invoices.some((i) => i.ref.toLowerCase().includes(q)));
   }, [orders, query]);
@@ -77,13 +77,13 @@ export function OrderTrackingTab() {
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th className="num">Value</th><th>Status</th><th>POs</th><th>Invoices</th></tr>
+                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th>Payer</th><th className="num">Value</th><th>Status</th><th>POs</th><th>Invoices</th></tr>
                 </thead>
                 <tbody>
                   {shown.map((o) => (
                     <OrderRowView key={o.ref} o={o} open={openRef === o.ref} onToggle={() => setOpenRef((r) => (r === o.ref ? null : o.ref))} />
                   ))}
-                  {shown.length === 0 && <tr><td colSpan={7} className="muted-note">{query ? 'No orders match your search.' : 'No orders.'}</td></tr>}
+                  {shown.length === 0 && <tr><td colSpan={8} className="muted-note">{query ? 'No orders match your search.' : 'No orders.'}</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -102,6 +102,7 @@ function OrderRowView({ o, open, onToggle }: { o: OrderRow; open: boolean; onTog
         <td><strong>{open ? '▾ ' : '▸ '}{o.ref}</strong></td>
         <td><StatusPill status={o.pi} /></td>
         <td>{o.rep || '—'}</td>
+        <td>{o.payer || '—'}</td>
         <td className="num">{formatCurrency(o.value)}</td>
         <td><StatusPill status={o.status} /></td>
         <td>{o.pos.length ? `${o.pos.length} · ${formatCurrency(o.poValue)}` : '—'}</td>
@@ -109,7 +110,7 @@ function OrderRowView({ o, open, onToggle }: { o: OrderRow; open: boolean; onTog
       </tr>
       {open && (
         <tr>
-          <td colSpan={7} style={{ background: 'var(--accent-soft)', padding: '10px 16px' }}>
+          <td colSpan={8} style={{ background: 'var(--accent-soft)', padding: '10px 16px' }}>
             <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: C.muted, marginBottom: 6 }}>Purchase Orders</div>

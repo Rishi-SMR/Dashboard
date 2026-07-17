@@ -11,7 +11,7 @@ async function get<T>(path: string): Promise<T> {
 
 export type StrivenStatus = { connected: boolean; company: string | null; subdomain?: string | null; reason?: string; phiMasked?: boolean };
 
-export type SoRecent = { id: number; ref: string; type: string; rep: string; value: number; status: string; invStatus: string; date: string | null };
+export type SoRecent = { id: number; ref: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; date: string | null };
 export type SoPivaKey = 'PI' | 'VA' | 'TriCare' | 'Other';
 export type SoResult = {
   count: number; totalValue: number;
@@ -64,7 +64,7 @@ export type SoDetail = { id: number; ref: string; customer: string; date: string
 
 export type Aging = { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
 
-export type ArInvoice = { id: number; number: string; customer: string; customerId: number | null; dueDate: string | null; total: number; open: number; currency: string; memo: string };
+export type ArInvoice = { id: number; number: string; customer: string; customerId: number | null; payer: string; dueDate: string | null; total: number; open: number; currency: string; memo: string };
 export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number };
 
 export type ApBill = { id: number; number: string; vendor: string; vendorId: number | null; dueDate: string | null; total: number; open: number; currency: string };
@@ -104,6 +104,6 @@ export const fetchStrivenExceptions = () => get<ExceptionsResult>('/api/exceptio
 
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
-export type OrderRow = { ref: string; pi: string; type: string; rep: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };
+export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };
 export type OrdersResult = { count: number; orders: OrderRow[]; enriched: boolean; phiMasked: boolean };
 export const fetchStrivenOrders = () => get<OrdersResult>('/api/orders');
