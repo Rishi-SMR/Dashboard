@@ -5,7 +5,7 @@
 // Tokens persist in Supabase striven_cache (key 'qb_tokens'). Intuit ROTATES the
 // refresh token on every refresh, so the newest pair must always be persisted.
 import crypto from 'node:crypto';
-import { sbCacheRead, sbCacheWrite, readConfigTable, striven } from './_striven.js';
+import { sbCacheRead, sbCacheWrite, readConfigTable, striven, allCustomers } from './_striven.js';
 
 const QB_OAUTH = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const QB_REVOKE = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke';
@@ -333,6 +333,44 @@ export async function qbPostInvoice(soId, { force = false } = {}) {
   return { ok: true, invoice: rec, steps, soNumber: so.soNumber };
 }
 
+// The Striven→QuickBooks posted-invoice map (for the Sync view's status column).
+export async function qbPostedList() {
+  const m = await postedMap();
+  return { count: Object.keys(m).length, posted: m };
+}
+
+// Fetch EVERY QuickBooks customer (paged) → normalized-name set + display list.
+const normName = (s) => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+async function qbAllCustomers() {
+  const out = [];
+  for (let start = 1; start < 10000; start += 1000) {
+    const rows = (await qbQuery(`select Id, DisplayName, Balance from Customer startposition ${start} maxresults 1000`)).Customer ?? [];
+    out.push(...rows);
+    if (rows.length < 1000) break;
+  }
+  return out;
+}
+
+// Reconcile Striven customers against QuickBooks: matched / missing-in-QB.
+// Real names are used (needed to decide who to create) — staff-only, behind login.
+export async function qbReconcileCustomers() {
+  const [striRows, qbRows] = await Promise.all([allCustomers(), qbAllCustomers()]);
+  const qbSet = new Set(qbRows.map((c) => normName(c.DisplayName)));
+  const stri = striRows
+    .filter((r) => (r.name ?? '').trim())
+    .map((r) => ({ id: r.id, name: r.name, inQb: qbSet.has(normName(r.name)) }));
+  const missingInQb = stri.filter((c) => !c.inQb);
+  const matched = stri.filter((c) => c.inQb);
+  return {
+    strivenCount: stri.length,
+    qbCount: qbRows.length,
+    matchedCount: matched.length,
+    missingCount: missingInQb.length,
+    missingInQb: missingInQb.slice(0, 500).map((c) => ({ name: c.name })),
+    matched: matched.slice(0, 200).map((c) => ({ name: c.name })),
+  };
+}
+
 // Lightweight customer search / create used by the QB tab's Customers panel.
 export async function qbCustomerSearch(q) {
   const term = String(q ?? '').trim();
@@ -353,6 +391,8 @@ export async function qbHandle(pathname, q, method = 'GET') {
     catch (e) { return { redirect: `/?qb=error&reason=${encodeURIComponent(e.message)}` }; }
   }
   if (pathname === '/api/qb/customers') return { json: await qbCustomerSearch(q.q) };
+  if (pathname === '/api/qb/posted') return { json: await qbPostedList() };
+  if (pathname === '/api/qb/reconcile-customers') return { json: await qbReconcileCustomers() };
   if (pathname === '/api/qb/prepare-invoice') return { json: await qbPrepareInvoice(q.so) };
   if (pathname === '/api/qb/post-invoice') {
     if (method !== 'POST') return { json: { error: 'POST required' }, status: 405 };

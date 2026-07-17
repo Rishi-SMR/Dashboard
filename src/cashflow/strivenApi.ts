@@ -134,8 +134,13 @@ export type QbPlan = {
 };
 export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: string; action: string; name: string; id: string }[]; soNumber?: string; alreadyPosted?: QbPosted; message?: string };
 
+export type QbPostedList = { count: number; posted: Record<string, QbPosted> };
+export type QbReconcileCustomers = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string }[]; matched: { name: string }[] };
+
 export const fetchQbStatus = () => get<QbStatus>('/api/qb/status');
 export const fetchQbCustomers = (q: string) => get<QbCustomersResult>(`/api/qb/customers?q=${encodeURIComponent(q)}`);
+export const fetchQbPosted = () => get<QbPostedList>('/api/qb/posted');
+export const fetchQbReconcileCustomers = () => get<QbReconcileCustomers>('/api/qb/reconcile-customers');
 export const qbPrepareInvoice = (soId: number) => get<QbPlan>(`/api/qb/prepare-invoice?so=${soId}`);
 export const qbPostInvoice = (soId: number, force = false) =>
   fetch(`/api/qb/post-invoice?so=${soId}${force ? '&force=1' : ''}`, { method: 'POST', headers: { Accept: 'application/json' } })

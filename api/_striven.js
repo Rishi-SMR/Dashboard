@@ -322,6 +322,7 @@ const allBills = () => persistentCached('bills', () => searchAll('/v1/bills/sear
 const allSO = () => persistentCached('so', () => searchAll('/v1/sales-orders/search', {}));
 const allPO = () => persistentCached('po', () => searchAll('/v1/purchase-orders/search', {}));
 const allCustomers = () => persistentCached('customers', () => searchAll('/v1/customers/search', {}));
+export { allCustomers };
 const allVendors = () => persistentCached('vendors', () => searchAll('/v1/vendors/search', {}));
 const allItems = () => persistentCached('items', () => searchAll('/v1/items/search', {}));
 const allPayments = () => persistentCached('payments', () => searchAll('/v1/payments/search', {}));
