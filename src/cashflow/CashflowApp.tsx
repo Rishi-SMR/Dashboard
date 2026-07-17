@@ -5,11 +5,9 @@ import { fetchStrivenStatus, type StrivenStatus } from './strivenApi';
 // Lazy-loaded so recharts (heavy) only downloads when a chart tab is opened.
 const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m) => ({ default: m.OverviewCharts })));
 const OrdersTab = lazy(() => import('./components/OrdersTab').then((m) => ({ default: m.OrdersTab })));
-const ReceivablesTab = lazy(() => import('./components/ReceivablesTab').then((m) => ({ default: m.ReceivablesTab })));
-const PayablesTab = lazy(() => import('./components/PayablesTab').then((m) => ({ default: m.PayablesTab })));
+const ArApTab = lazy(() => import('./components/ArApTab').then((m) => ({ default: m.ArApTab })));
 const PLTab = lazy(() => import('./components/PLTab').then((m) => ({ default: m.PLTab })));
-const CatalogTab = lazy(() => import('./components/CatalogTab').then((m) => ({ default: m.CatalogTab })));
-const VendorsTab = lazy(() => import('./components/VendorsTab').then((m) => ({ default: m.VendorsTab })));
+const VendorsItemsTab = lazy(() => import('./components/VendorsItemsTab').then((m) => ({ default: m.VendorsItemsTab })));
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
 const ExceptionsTab = lazy(() => import('./components/ExceptionsTab').then((m) => ({ default: m.ExceptionsTab })));
 
@@ -96,13 +94,13 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
 
   const TABS: Record<ViewKey, ReactNode> = {
     overview: <OverviewCharts />,
-    receivables: <ReceivablesTab />,
-    payables: <PayablesTab />,
+    receivables: <ArApTab initialMode="ar" />,
+    payables: <ArApTab initialMode="ap" />,
     pl: <PLTab />,
     orders: <OrdersTab />,
     tracking: <OrdersTab initialMode="tracking" />,
-    vendors: <VendorsTab />,
-    catalog: <CatalogTab />,
+    vendors: <VendorsItemsTab initialMode="vendors" />,
+    catalog: <VendorsItemsTab initialMode="items" />,
     accounts: <AccountsTab />,
     exceptions: <ExceptionsTab />,
   };

@@ -21,14 +21,15 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   exceptions: svg(<><path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" /></>),
 };
 
+// Views that live inside another tab — highlight the parent nav item.
+const VIEW_ALIAS: Partial<Record<ViewKey, ViewKey>> = { payables: 'receivables', tracking: 'orders', catalog: 'vendors' };
+
 const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
-  { key: 'receivables', label: 'Receivables' },
-  { key: 'payables', label: 'Payables' },
+  { key: 'receivables', label: 'AR / AP' },
   { key: 'pl', label: 'P&L' },
   { key: 'orders', label: 'Orders' },
-  { key: 'vendors', label: 'Vendors' },
-  { key: 'catalog', label: 'Catalog' },
+  { key: 'vendors', label: 'Vendors & Items' },
   { key: 'accounts', label: 'Accounts' },
   { key: 'exceptions', label: 'Exceptions' },
 ];
@@ -89,7 +90,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
       {ITEMS.map((item) => (
         <button
           key={item.key}
-          className={`nav-item ${view === item.key ? 'active' : ''}`}
+          className={`nav-item ${view === item.key || VIEW_ALIAS[view] === item.key ? 'active' : ''}`}
           onClick={() => onChange(item.key)}
         >
           <span className="nav-icon">{NAV_ICONS[item.key]}</span>
