@@ -26,8 +26,26 @@ async function qbCreds() {
   return _creds;
 }
 async function qbEnvName() { return (await qbCreds()).env; }
-async function qbApiBase() { return (await qbEnvName()) === 'production' ? 'https://quickbooks.api.intuit.com' : 'https://sandbox-quickbooks.api.intuit.com'; }
+const baseFor = (env) => (env === 'production' ? 'https://quickbooks.api.intuit.com' : 'https://sandbox-quickbooks.api.intuit.com');
 async function basic() { const { id, secret } = await qbCreds(); return 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64'); }
+
+// Which Intuit environment does this token/realm actually belong to? Intuit's
+// authorize endpoint is shared, so a token minted with production keys (or a
+// production company) returns 403 ApplicationAuthorizationFailed against the
+// sandbox API base and vice-versa. Probe both and report the one that answers.
+async function tryCompanyInfo(t, env) {
+  try {
+    const res = await fetch(`${baseFor(env)}/v3/company/${t.realmId}/companyinfo/${t.realmId}?minorversion=75`, {
+      headers: { Authorization: `Bearer ${t.accessToken}`, Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+async function probeEnv(t) {
+  for (const env of ['production', 'sandbox']) { if (await tryCompanyInfo(t, env)) return env; }
+  return null;
+}
 
 let _tok = null; // in-memory copy of the persisted token record
 
@@ -76,7 +94,12 @@ export async function qbCallback(q) {
     connectedAt: new Date().toISOString(),
   });
   await sbCacheWrite('qb_oauth_state', {});
-  return { ok: true, realmId: String(realmId) };
+  // Detect the real environment for this token/realm and persist it, so all
+  // later API calls hit the correct base URL regardless of the configured env.
+  const fresh = await readTokens();
+  const detected = await probeEnv(fresh);
+  if (detected && detected !== fresh.env) await writeTokens({ ...fresh, env: detected });
+  return { ok: true, realmId: String(realmId), env: detected ?? fresh.env };
 }
 
 async function accessToken() {
@@ -98,8 +121,9 @@ async function accessToken() {
 // ── API client ──────────────────────────────────────────────────────────────
 export async function qbApi(pathname, { method = 'GET', body } = {}) {
   const t = await accessToken();
+  const env = t.env || (await qbCreds()).env;
   const sep = pathname.includes('?') ? '&' : '?';
-  const res = await fetch(`${await qbApiBase()}/v3/company/${t.realmId}/${pathname}${sep}minorversion=75`, {
+  const res = await fetch(`${baseFor(env)}/v3/company/${t.realmId}/${pathname}${sep}minorversion=75`, {
     method,
     headers: { Authorization: `Bearer ${t.accessToken}`, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
@@ -113,17 +137,27 @@ export async function qbApi(pathname, { method = 'GET', body } = {}) {
 }
 
 export async function qbStatus() {
-  const t = await readTokens();
-  const env = await qbEnvName();
+  const t0 = await readTokens();
+  const cfgEnv = await qbEnvName();
   const configured = Boolean((await qbCreds()).id);
-  if (!t?.refreshToken) return { connected: false, env, configured };
-  try {
-    const info = await qbApi(`companyinfo/${t.realmId}`);
-    const c = info?.CompanyInfo ?? {};
-    return { connected: true, env: t.env ?? env, configured, realmId: t.realmId, company: c.CompanyName || c.LegalName || '', country: c.Country || '', connectedAt: t.connectedAt ?? null };
-  } catch (e) {
-    return { connected: false, env, configured, realmId: t.realmId, error: e.message };
+  if (!t0?.refreshToken) return { connected: false, env: cfgEnv, configured };
+  let t;
+  try { t = await accessToken(); } catch (e) { return { connected: false, env: t0.env ?? cfgEnv, configured, realmId: t0.realmId, error: e.message }; }
+
+  // Try the token's stored env; on failure, probe the other env and persist the
+  // one that works — so an env mismatch self-heals without a reconnect.
+  let env = t.env || cfgEnv;
+  let info = await tryCompanyInfo(t, env);
+  if (!info) {
+    const detected = await probeEnv(t);
+    if (detected) { env = detected; await writeTokens({ ...t, env }); info = await tryCompanyInfo(t, env); }
   }
+  if (!info) {
+    return { connected: false, env, configured, realmId: t.realmId,
+      error: 'ApplicationAuthorizationFailed — this token works with neither the sandbox nor the production API. Confirm the app keys (Development vs Production) match the company you authorized.' };
+  }
+  const c = info.CompanyInfo ?? {};
+  return { connected: true, env, configured, realmId: t.realmId, company: c.CompanyName || c.LegalName || '', country: c.Country || '', connectedAt: t.connectedAt ?? null };
 }
 
 export async function qbDisconnect() {
