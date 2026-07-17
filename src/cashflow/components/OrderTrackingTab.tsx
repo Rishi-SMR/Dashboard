@@ -1,9 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchStrivenOrders, type OrdersResult, type OrderRow } from '../strivenApi';
 import { formatCurrency } from '../format';
-import { KpiCard } from './KpiCard';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
+import { KpiR, useSyncAgo } from '../chartKit';
+
+const PAGE_SIZE = 15;
+type SortKey = 'value' | 'ref' | 'po' | 'inv';
+
+// Windowed page list: 1 2 3 … 21 (with the current page's neighbours kept visible).
+function pageList(cur: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const keep = new Set([1, 2, 3, cur - 1, cur, cur + 1, total]);
+  const nums = [...keep].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out: (number | '…')[] = [];
+  for (let i = 0; i < nums.length; i++) {
+    if (i > 0 && nums[i] - nums[i - 1] > 1) out.push('…');
+    out.push(nums[i]);
+  }
+  return out;
+}
 
 export function OrderTrackingTab() {
   const [data, setData] = useState<OrdersResult | null>(null);
@@ -11,15 +27,26 @@ export function OrderTrackingTab() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [openRef, setOpenRef] = useState<string | null>(null);
-  const [openKpi, setOpenKpi] = useState<number | null>(null);
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'value', dir: -1 });
+  const [page, setPage] = useState(1);
+  const [lastSync, setLastSync] = useState<number | null>(null);
+  const agoText = useSyncAgo(lastSync);
 
-  async function load() {
-    setLoading(true); setError(null);
-    try { setData(await fetchStrivenOrders()); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Failed to load orders.'); }
-    finally { setLoading(false); }
+  async function load(silent = false) {
+    if (!silent) { setLoading(true); setError(null); }
+    try {
+      setData(await fetchStrivenOrders());
+      setLastSync(Date.now());
+    } catch (e) {
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load orders.');
+    } finally { if (!silent) setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  // Initial load + silent live refresh every 90s.
+  useEffect(() => {
+    load();
+    const r = setInterval(() => load(true), 90_000);
+    return () => clearInterval(r);
+  }, []);
 
   const orders = data?.orders ?? [];
   const filtered = useMemo(() => {
@@ -30,24 +57,57 @@ export function OrderTrackingTab() {
       o.pos.some((p) => p.ref.toLowerCase().includes(q) || (p.vendor || '').toLowerCase().includes(q)) ||
       o.invoices.some((i) => i.ref.toLowerCase().includes(q)));
   }, [orders, query]);
-  const shown = filtered.slice(0, 200);
+
+  const sorted = useMemo(() => {
+    const v = (o: OrderRow): number | string => sort.key === 'value' ? o.value
+      : sort.key === 'po' ? o.poValue : sort.key === 'inv' ? o.invoices.length : o.ref;
+    return [...filtered].sort((a, b) => {
+      const x = v(a), y = v(b);
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
+      return c * sort.dir;
+    });
+  }, [filtered, sort]);
+
+  const pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, pages);
+  const shown = sorted.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+  const setSortKey = (key: SortKey) => { setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === 'ref' ? 1 : -1 })); setPage(1); };
+  const sortInd = (key: SortKey) => <span className="sort-ind">{sort.key === key ? (sort.dir === 1 ? '↑' : '↓') : '⇅'}</span>;
 
   const totalValue = orders.reduce((s, o) => s + o.value, 0);
   const withPo = orders.filter((o) => o.pos.length > 0).length;
   const invoiced = orders.filter((o) => o.invoices.length > 0).length;
-  const kpi = (i: number) => ({ open: openKpi === i, onClick: () => setOpenKpi((o) => (o === i ? null : i)), onClose: () => setOpenKpi(null) });
+  const pctOf = (n: number) => (orders.length ? Math.round((n / orders.length) * 100) : 0);
+
+  // Export the filtered chain as CSV (client-side only).
+  function exportCsv() {
+    const esc = (s: string | number) => `"${String(s).replace(/"/g, '""')}"`;
+    const lines = [
+      ['Order #', 'Program', 'Sales rep', 'Payer', 'Value', 'Status', 'POs', 'PO value', 'Invoices', 'Invoice open'].map(esc).join(','),
+      ...sorted.map((o) => [o.ref, o.pi, o.rep || '', o.payer || '', o.value, o.status || '', o.pos.length, o.poValue, o.invoices.length, o.invOpen].map(esc).join(',')),
+    ];
+    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'order-tracking.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <div className="page-head">
+    <div className="exec-deck" style={{ padding: '4px 2px' }}>
+      <div className="page-head deck-head" style={{ marginBottom: 16 }}>
         <div>
-          <h1 className="page-title">Order Tracking</h1>
+          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Order Tracking</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · sales order → purchase order → invoice, by number
-            <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark, border: '1px solid #bfd3f2' }}>🔒 no patient data</span>
+            <span className="live-dot" /> Sports Med Recovery · Sales Order → Purchase Order → Invoice, by number{agoText ? ` · updated ${agoText}` : ''}
+            <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>🔒 no patient data</span>
           </div>
         </div>
-        <button className="btn ghost" onClick={load} disabled={loading}>↻ Refresh</button>
+        <div className="ov-headright">
+          <span className="ov-filter"><span className="fl">📅</span><b>{asOf}</b></span>
+          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
+        </div>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -55,29 +115,42 @@ export function OrderTrackingTab() {
 
       {data && (
         <>
-          <div className="kpis" style={{ marginTop: 8 }}>
-            <KpiCard label="Orders Tracked" value={orders.length.toLocaleString()} period="DEMO excluded"
-              info={{ formula: 'Sales orders with their full chain — linked purchase orders and invoices, referenced by number only.' }} active={openKpi === 0} {...kpi(0)} />
-            <KpiCard label="Order Value" value={formatCurrency(totalValue)} period="across tracked orders"
-              info={{ formula: 'Total order value across all tracked sales orders.' }} active={openKpi === 1} {...kpi(1)} />
-            <KpiCard label="With Purchase Order" value={withPo.toLocaleString()} period={`${orders.length ? Math.round((withPo / orders.length) * 100) : 0}% of orders`}
-              info={{ formula: 'Orders that have at least one linked purchase order (raised to a vendor).' }} active={openKpi === 2} {...kpi(2)} />
-            <KpiCard label="Invoiced" value={invoiced.toLocaleString()} period={`${orders.length ? Math.round((invoiced / orders.length) * 100) : 0}% of orders`}
-              info={{ formula: 'Orders that have at least one invoice raised.' }} active={openKpi === 3} {...kpi(3)} />
+          <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <KpiR ico="box" tint="#2563EB" label="Orders Tracked" value={orders.length}
+              deltaText="DEMO excluded" foot="full SO → PO → invoice chain" />
+            <KpiR ico="cash" tint="#16A34A" label="Order Value" value={totalValue} format={formatCurrency}
+              deltaText="across tracked orders" foot="order book, not revenue" />
+            <KpiR ico="bag" tint="#7C3AED" label="With Purchase Order" value={withPo}
+              deltaText={`${pctOf(withPo)}% of orders`} foot="at least one linked PO" />
+            <KpiR ico="doc" tint="#D97706" label="Invoiced" value={invoiced}
+              deltaText={`${pctOf(invoiced)}% of orders`} foot="at least one invoice raised" />
           </div>
 
           {!data.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order chain is still populating — links will fill in shortly.</span></div>}
 
-          <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div className="section chart-card">
+            <div className="section-head">
               <div><h2 className="section-title">Orders</h2><div className="section-sub">{filtered.length.toLocaleString()} orders · click a row to see its POs &amp; invoices</div></div>
-              <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search order #, PO #, invoice #, rep…"
-                style={{ fontSize: 13, padding: '6px 10px', border: `1px solid ${C.grid}`, borderRadius: 8, color: C.ink, minWidth: 260 }} />
+              <div className="tbl-controls">
+                <input className="tbl-search" style={{ width: 250 }} type="text" value={query}
+                  onChange={(e) => { setQuery(e.target.value); setPage(1); }}
+                  placeholder="Search order #, PO #, invoice #, rep…" />
+                <button className="btn ghost" style={{ padding: '7px 11px' }} title="Download CSV of the filtered orders" onClick={exportCsv}>⤓ CSV</button>
+              </div>
             </div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th>Payer</th><th className="num">Value</th><th>Status</th><th>POs</th><th>Invoices</th></tr>
+                  <tr>
+                    <th className="sortable" onClick={() => setSortKey('ref')}>Order # {sortInd('ref')}</th>
+                    <th>P/I/VA</th>
+                    <th>Sales Rep</th>
+                    <th>Payer</th>
+                    <th className="num sortable" onClick={() => setSortKey('value')}>Value {sortInd('value')}</th>
+                    <th>Status</th>
+                    <th className="sortable" onClick={() => setSortKey('po')}>POs {sortInd('po')}</th>
+                    <th className="sortable" onClick={() => setSortKey('inv')}>Invoices {sortInd('inv')}</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {shown.map((o) => (
@@ -87,7 +160,18 @@ export function OrderTrackingTab() {
                 </tbody>
               </table>
             </div>
-            {filtered.length > shown.length && <div className="muted-note">Showing first {shown.length} of {filtered.length}. Refine your search.</div>}
+            <div className="pgn">
+              <span className="pgn-info">Showing {sorted.length === 0 ? 0 : (pageSafe - 1) * PAGE_SIZE + 1} to {Math.min(pageSafe * PAGE_SIZE, sorted.length)} of {sorted.length.toLocaleString()} entries</span>
+              <div className="pgn-pages">
+                <button disabled={pageSafe <= 1} onClick={() => setPage(pageSafe - 1)}>‹</button>
+                {pageList(pageSafe, pages).map((p, i) => (
+                  p === '…'
+                    ? <button key={`e${i}`} disabled>…</button>
+                    : <button key={p} className={p === pageSafe ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
+                ))}
+                <button disabled={pageSafe >= pages} onClick={() => setPage(pageSafe + 1)}>›</button>
+              </div>
+            </div>
           </div>
         </>
       )}
