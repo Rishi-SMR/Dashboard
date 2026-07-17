@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { C } from '../chartTheme';
@@ -26,6 +26,29 @@ const TYPE_COLOR = (name: string): string => {
   if (/tri.?care/.test(s)) return '#7C3AED';
   return C.muted;
 };
+// Client mirror of the server's status grouping (active / completed / cancelled).
+type SoGroup = 'active' | 'completed' | 'cancelled';
+const GROUP_OF = (status: string): SoGroup => {
+  const s = (status || '').toLowerCase();
+  if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
+  if (/complete|closed|done/.test(s)) return 'completed';
+  return 'active';
+};
+const GROUP_LABEL: Record<SoGroup | 'All', string> = { All: 'All statuses', active: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
+const SO_PAGE = 10;
+// Windowed page list: 1 2 3 … N.
+function pageList(cur: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const keep = new Set([1, 2, 3, cur - 1, cur, cur + 1, total]);
+  const nums = [...keep].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out: (number | '…')[] = [];
+  for (let i = 0; i < nums.length; i++) {
+    if (i > 0 && nums[i] - nums[i - 1] > 1) out.push('…');
+    out.push(nums[i]);
+  }
+  return out;
+}
+
 // Status hue: in-progress blue, completed green, cancelled red.
 const STATUS_COLOR = (name: string): string => {
   const s = (name || '').toLowerCase();
@@ -129,6 +152,17 @@ export function OrdersTab() {
   const [typeMode, setTypeMode] = useState<'value' | 'count'>('value');
   const [repsShown, setRepsShown] = useState(8);
 
+  // Recent-orders table filters (KPI cards click into these).
+  const [soStatusF, setSoStatusF] = useState<'All' | SoGroup>('All');
+  const [soProgF, setSoProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'Other'>('All');
+  const [soQuery, setSoQuery] = useState('');
+  const [soPage, setSoPage] = useState(1);
+  const soTableRef = useRef<HTMLDivElement | null>(null);
+  const filterTo = (g: 'All' | SoGroup) => {
+    setSoStatusF(g); setSoPage(1);
+    soTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   // Chart-click drill (shared kit DrillModal).
   const [drill, setDrill] = useState<Drill | null>(null);
 
@@ -195,6 +229,18 @@ export function OrdersTab() {
     columns: [{ key: 'k', label: 'Item' }, { key: 'v', label: 'Value', num: true }],
     rows: rows.map((r) => ({ k: r.k, v: r.v })),
   });
+
+  // Recent-orders list after search + status-group + program filters.
+  const soRecentFiltered = useMemo(() => {
+    const q = soQuery.trim().toLowerCase();
+    return (so?.recent ?? []).filter((o) =>
+      (soStatusF === 'All' || GROUP_OF(o.status) === soStatusF) &&
+      (soProgF === 'All' || o.type === soProgF) &&
+      (!q || o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q)));
+  }, [so, soStatusF, soProgF, soQuery]);
+  const soPages = Math.max(1, Math.ceil(soRecentFiltered.length / SO_PAGE));
+  const soPageSafe = Math.min(soPage, soPages);
+  const soShown = soRecentFiltered.slice((soPageSafe - 1) * SO_PAGE, soPageSafe * SO_PAGE);
 
   // SO by status — ranked bar (status-hued), sorted desc, empties dropped.
   const statusData = [...(so?.byStatus ?? [])]
@@ -298,17 +344,18 @@ export function OrdersTab() {
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
             <KpiR ico="bag" tint="#2563EB" label="Total Order Value" value={so.totalValue} format={formatCurrency}
-              deltaText={`${so.count.toLocaleString()} orders`} foot={`${so.demoCount} DEMO/test orders excluded`}
-              onClick={() => setDrill({
-                title: 'Total Order Value', sub: 'Live sales orders by type — DEMO/test excluded',
-                ...kv([...so.byType.map((t) => ({ k: t.type, v: formatCurrency(t.value) })), { k: 'Total', v: formatCurrency(so.totalValue) }]),
-              })} />
-            <KpiR ico="doc" tint="#16A34A" label="PI Orders" value={so.piva.PI.count}
-              deltaText={formatCurrency(so.piva.PI.value)} foot="personal-injury orders" />
-            <KpiR ico="users" tint="#7C3AED" label="VA Orders" value={so.piva.VA.count}
-              deltaText={formatCurrency(so.piva.VA.value)} foot="Veterans Affairs orders" />
-            <KpiR ico="shield" tint="#D97706" label="Tri-Care Orders" value={so.piva.TriCare.count}
-              deltaText={formatCurrency(so.piva.TriCare.value)} foot="military health orders" />
+              deltaText={`${so.count.toLocaleString()} open + completed orders`}
+              foot={`${so.statusGroups.cancelled.count} cancelled + ${so.demoCount} demo excluded`}
+              onClick={() => filterTo('All')} />
+            <KpiR ico="clock" tint="#D97706" label="Pending / In Progress" value={so.statusGroups.active.count}
+              deltaText={formatCurrency(so.statusGroups.active.value)} foot="awaiting fulfilment · click to filter"
+              onClick={() => filterTo('active')} />
+            <KpiR ico="shield" tint="#16A34A" label="Completed" value={so.statusGroups.completed.count}
+              deltaText={formatCurrency(so.statusGroups.completed.value)} foot="fulfilled orders · click to filter"
+              onClick={() => filterTo('completed')} />
+            <KpiR ico="trend" tint="#DC2626" label="Cancelled" value={so.statusGroups.cancelled.count}
+              deltaText={formatCurrency(so.statusGroups.cancelled.value)} foot="excluded from every total · click to filter"
+              onClick={() => filterTo('cancelled')} />
           </div>
 
           {!so.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order type / rep / value enrichment is still populating — numbers will fill in shortly.</span></div>}
@@ -343,15 +390,33 @@ export function OrdersTab() {
             </ChartCard>
           </div>
 
-          <div className="section" style={{ marginTop: 16 }}>
-            <div className="section-head"><div><h2 className="section-title">Recent Sales Orders</h2><div className="section-sub">Order # · sales rep · payer (law firm / VA / TriCare) · no patient data</div></div></div>
+          <div className="section chart-card" style={{ marginTop: 16 }} ref={soTableRef}>
+            <div className="section-head">
+              <div><h2 className="section-title">All Sales Orders</h2><div className="section-sub">{soRecentFiltered.length} of {so.recent.length} orders · {GROUP_LABEL[soStatusF]}{soProgF !== 'All' ? ` · ${soProgF === 'TriCare' ? 'Tri-Care' : soProgF}` : ''}</div></div>
+              <div className="tbl-controls">
+                <input className="tbl-search" style={{ width: 190 }} value={soQuery} onChange={(e) => { setSoQuery(e.target.value); setSoPage(1); }} placeholder="Search order / rep / payer" />
+                <select className="tbl-select" value={soStatusF} onChange={(e) => { setSoStatusF(e.target.value as 'All' | SoGroup); setSoPage(1); }}>
+                  <option value="All">All statuses</option>
+                  <option value="active">In Progress</option>
+                  <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+                <select className="tbl-select" value={soProgF} onChange={(e) => { setSoProgF(e.target.value as typeof soProgF); setSoPage(1); }}>
+                  <option value="All">All programs</option>
+                  <option value="PI">PI</option>
+                  <option value="VA">VA</option>
+                  <option value="TriCare">Tri-Care</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+            </div>
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
                   <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th>Payer</th><th className="num">Value</th><th>Status</th><th>Invoiced</th></tr>
                 </thead>
                 <tbody>
-                  {so.recent.map((o) => (
+                  {soShown.map((o) => (
                     <tr key={o.id}>
                       <td><strong>{o.ref}</strong></td>
                       <td><StatusPill status={o.type} /></td>
@@ -362,11 +427,23 @@ export function OrdersTab() {
                       <td>{o.invStatus || '—'}</td>
                     </tr>
                   ))}
-                  {so.recent.length === 0 && (
-                    <tr><td colSpan={7} className="muted-note">No sales orders.</td></tr>
+                  {soRecentFiltered.length === 0 && (
+                    <tr><td colSpan={7} className="muted-note">No orders match the filters.</td></tr>
                   )}
                 </tbody>
               </table>
+            </div>
+            <div className="pgn">
+              <span className="pgn-info">Showing {soRecentFiltered.length === 0 ? 0 : (soPageSafe - 1) * SO_PAGE + 1} to {Math.min(soPageSafe * SO_PAGE, soRecentFiltered.length)} of {soRecentFiltered.length.toLocaleString()} orders</span>
+              <div className="pgn-pages">
+                <button disabled={soPageSafe <= 1} onClick={() => setSoPage(soPageSafe - 1)}>‹</button>
+                {pageList(soPageSafe, soPages).map((pg, i) => (
+                  pg === '…'
+                    ? <button key={`e${i}`} disabled>…</button>
+                    : <button key={pg} className={pg === soPageSafe ? 'active' : ''} onClick={() => setSoPage(pg)}>{pg}</button>
+                ))}
+                <button disabled={soPageSafe >= soPages} onClick={() => setSoPage(soPageSafe + 1)}>›</button>
+              </div>
             </div>
           </div>
         </>
@@ -425,6 +502,7 @@ export function OrdersTab() {
                     <th>PO ref</th>
                     <th>Vendor</th>
                     <th className="num">Total</th>
+                    <th>Status</th>
                     <th>Created</th>
                   </tr>
                 </thead>
@@ -434,11 +512,12 @@ export function OrdersTab() {
                       <td><strong>{o.ref}</strong></td>
                       <td>{o.vendor || '—'}</td>
                       <td className="num">{formatCurrency(o.total)}</td>
+                      <td>{o.status ? <StatusPill status={o.status} /> : <span className="pill-tag tag-ok">Active</span>}</td>
                       <td>{fmtDate(o.date)}</td>
                     </tr>
                   ))}
                   {po.recent.length === 0 && (
-                    <tr><td colSpan={4} className="muted-note">No recent purchase orders.</td></tr>
+                    <tr><td colSpan={5} className="muted-note">No recent purchase orders.</td></tr>
                   )}
                 </tbody>
               </table>

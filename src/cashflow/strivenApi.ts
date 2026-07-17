@@ -13,13 +13,17 @@ export type StrivenStatus = { connected: boolean; company: string | null; subdom
 
 export type SoRecent = { id: number; ref: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; date: string | null };
 export type SoPivaKey = 'PI' | 'VA' | 'TriCare' | 'Other';
+export type SoStatusGroup = 'active' | 'completed' | 'cancelled';
 export type SoResult = {
+  // count/totalValue/piva/byType/byRep = the ORDER BOOK (cancelled + demo excluded).
   count: number; totalValue: number;
   piva: Record<SoPivaKey, { count: number; value: number }>;
   byType: { type: string; count: number; value: number }[];
   byStatus: { status: string; count: number }[];
   byRep: { rep: string; value: number }[];
-  recent: SoRecent[]; demoCount: number; enriched: boolean; phiMasked: boolean;
+  recent: SoRecent[];
+  statusGroups: Record<SoStatusGroup, { count: number; value: number }>;
+  liveCount: number; demoCount: number; enriched: boolean; phiMasked: boolean;
 };
 
 export type PoRecent = { id: number; ref: string; vendor: string; total: number; date: string | null; status?: string };

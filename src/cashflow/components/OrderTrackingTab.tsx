@@ -7,6 +7,13 @@ import { KpiR, useSyncAgo } from '../chartKit';
 
 const PAGE_SIZE = 15;
 type SortKey = 'value' | 'ref' | 'po' | 'inv';
+type SoGroup = 'active' | 'completed' | 'cancelled';
+const GROUP_OF = (status: string): SoGroup => {
+  const s = (status || '').toLowerCase();
+  if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
+  if (/complete|closed|done/.test(s)) return 'completed';
+  return 'active';
+};
 
 // Windowed page list: 1 2 3 … 21 (with the current page's neighbours kept visible).
 function pageList(cur: number, total: number): (number | '…')[] {
@@ -26,6 +33,8 @@ export function OrderTrackingTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [statusF, setStatusF] = useState<'All' | SoGroup>('All');
+  const [progF, setProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'Other'>('All');
   const [openRef, setOpenRef] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'value', dir: -1 });
   const [page, setPage] = useState(1);
@@ -51,12 +60,14 @@ export function OrderTrackingTab() {
   const orders = data?.orders ?? [];
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return orders;
     return orders.filter((o) =>
-      o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q) || (o.pi || '').toLowerCase().includes(q) ||
-      o.pos.some((p) => p.ref.toLowerCase().includes(q) || (p.vendor || '').toLowerCase().includes(q)) ||
-      o.invoices.some((i) => i.ref.toLowerCase().includes(q)));
-  }, [orders, query]);
+      (statusF === 'All' || GROUP_OF(o.status) === statusF) &&
+      (progF === 'All' || o.pi === progF) &&
+      (!q ||
+        o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q) || (o.pi || '').toLowerCase().includes(q) ||
+        o.pos.some((p) => p.ref.toLowerCase().includes(q) || (p.vendor || '').toLowerCase().includes(q)) ||
+        o.invoices.some((i) => i.ref.toLowerCase().includes(q))));
+  }, [orders, query, statusF, progF]);
 
   const sorted = useMemo(() => {
     const v = (o: OrderRow): number | string => sort.key === 'value' ? o.value
@@ -74,10 +85,13 @@ export function OrderTrackingTab() {
   const setSortKey = (key: SortKey) => { setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === 'ref' ? 1 : -1 })); setPage(1); };
   const sortInd = (key: SortKey) => <span className="sort-ind">{sort.key === key ? (sort.dir === 1 ? '↑' : '↓') : '⇅'}</span>;
 
-  const totalValue = orders.reduce((s, o) => s + o.value, 0);
-  const withPo = orders.filter((o) => o.pos.length > 0).length;
-  const invoiced = orders.filter((o) => o.invoices.length > 0).length;
-  const pctOf = (n: number) => (orders.length ? Math.round((n / orders.length) * 100) : 0);
+  // KPIs count the real book — cancelled orders are excluded (and shown separately).
+  const book = useMemo(() => orders.filter((o) => GROUP_OF(o.status) !== 'cancelled'), [orders]);
+  const cancelledCount = orders.length - book.length;
+  const totalValue = book.reduce((s, o) => s + o.value, 0);
+  const withPo = book.filter((o) => o.pos.length > 0).length;
+  const invoiced = book.filter((o) => o.invoices.length > 0).length;
+  const pctOf = (n: number) => (book.length ? Math.round((n / book.length) * 100) : 0);
 
   // Export the filtered chain as CSV (client-side only).
   function exportCsv() {
@@ -116,14 +130,14 @@ export function OrderTrackingTab() {
       {data && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="box" tint="#2563EB" label="Orders Tracked" value={orders.length}
-              deltaText="DEMO excluded" foot="full SO → PO → invoice chain" />
+            <KpiR ico="box" tint="#2563EB" label="Orders Tracked" value={book.length}
+              deltaText={`${cancelledCount} cancelled excluded`} foot="DEMO excluded · full SO → PO → invoice chain" />
             <KpiR ico="cash" tint="#16A34A" label="Order Value" value={totalValue} format={formatCurrency}
-              deltaText="across tracked orders" foot="order book, not revenue" />
+              deltaText="cancelled excluded" foot="order book, not revenue" />
             <KpiR ico="bag" tint="#7C3AED" label="With Purchase Order" value={withPo}
-              deltaText={`${pctOf(withPo)}% of orders`} foot="at least one linked PO" />
+              deltaText={`${pctOf(withPo)}% of tracked orders`} foot="at least one linked PO" />
             <KpiR ico="doc" tint="#D97706" label="Invoiced" value={invoiced}
-              deltaText={`${pctOf(invoiced)}% of orders`} foot="at least one invoice raised" />
+              deltaText={`${pctOf(invoiced)}% of tracked orders`} foot="at least one invoice raised" />
           </div>
 
           {!data.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order chain is still populating — links will fill in shortly.</span></div>}
@@ -132,9 +146,22 @@ export function OrderTrackingTab() {
             <div className="section-head">
               <div><h2 className="section-title">Orders</h2><div className="section-sub">{filtered.length.toLocaleString()} orders · click a row to see its POs &amp; invoices</div></div>
               <div className="tbl-controls">
-                <input className="tbl-search" style={{ width: 250 }} type="text" value={query}
+                <input className="tbl-search" style={{ width: 220 }} type="text" value={query}
                   onChange={(e) => { setQuery(e.target.value); setPage(1); }}
                   placeholder="Search order #, PO #, invoice #, rep…" />
+                <select className="tbl-select" value={statusF} onChange={(e) => { setStatusF(e.target.value as 'All' | SoGroup); setPage(1); }}>
+                  <option value="All">All statuses</option>
+                  <option value="active">In Progress</option>
+                  <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+                <select className="tbl-select" value={progF} onChange={(e) => { setProgF(e.target.value as typeof progF); setPage(1); }}>
+                  <option value="All">All programs</option>
+                  <option value="PI">PI</option>
+                  <option value="VA">VA</option>
+                  <option value="TriCare">Tri-Care</option>
+                  <option value="Other">Other</option>
+                </select>
                 <button className="btn ghost" style={{ padding: '7px 11px' }} title="Download CSV of the filtered orders" onClick={exportCsv}>⤓ CSV</button>
               </div>
             </div>

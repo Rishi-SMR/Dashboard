@@ -566,32 +566,55 @@ async function invoicePayerMap() {
 }
 const soClass = (t) => { const s = (t || '').toLowerCase(); if (/pi/.test(s)) return 'PI'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/tri.?care/.test(s)) return 'TriCare'; return 'Other'; };
 const isDemoType = (t) => /demo|test|sample/i.test(t || '');
+// Cancelled / completed / active(open) status grouping — cancelled orders must
+// never inflate the order book (same rule the PO side already follows).
+const soStatusOf = (r) => r.status?.name ?? r.d?.status ?? 'Unknown';
+const soGroupOf = (status) => {
+  const s = String(status || '').toLowerCase();
+  if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
+  if (/complete|closed|done/.test(s)) return 'completed';
+  return 'active';
+};
 async function getSO() {
   const rows = await allSO();
   const det = await soDetailMap();
   const enriched = rows.map((r) => ({ ...r, d: det[r.id] || {} }));
   const live = enriched.filter((r) => !isDemoType(r.d.type));        // exclude DEMO / test orders
-  const totalValue = round2(live.reduce((s, r) => s + Number(r.d.total || 0), 0));
+
+  // Explicit status groups (counts + value) — the source of truth for KPIs.
+  const statusGroups = { active: { count: 0, value: 0 }, completed: { count: 0, value: 0 }, cancelled: { count: 0, value: 0 } };
+  for (const r of live) { const g = statusGroups[soGroupOf(soStatusOf(r))]; g.count++; g.value = round2(g.value + Number(r.d.total || 0)); }
+
+  // Order book = live minus cancelled. Every aggregate below uses `book` so no
+  // figure silently contains cancelled orders.
+  const book = live.filter((r) => soGroupOf(soStatusOf(r)) !== 'cancelled');
+  const totalValue = round2(book.reduce((s, r) => s + Number(r.d.total || 0), 0));
 
   const piva = { PI: { count: 0, value: 0 }, VA: { count: 0, value: 0 }, TriCare: { count: 0, value: 0 }, Other: { count: 0, value: 0 } };
-  for (const r of live) { const c = soClass(r.d.type); piva[c].count++; piva[c].value = round2(piva[c].value + Number(r.d.total || 0)); }
-  // raw type breakdown (PI Order / VA Order / Tri-Care …) minus demo
+  for (const r of book) { const c = soClass(r.d.type); piva[c].count++; piva[c].value = round2(piva[c].value + Number(r.d.total || 0)); }
+  // raw type breakdown (PI Order / VA Order / Tri-Care …) minus demo + cancelled
   const byTypeMap = {};
-  for (const r of live) { const t = r.d.type || 'Unclassified'; byTypeMap[t] = byTypeMap[t] || { count: 0, value: 0 }; byTypeMap[t].count++; byTypeMap[t].value += Number(r.d.total || 0); }
+  for (const r of book) { const t = r.d.type || 'Unclassified'; byTypeMap[t] = byTypeMap[t] || { count: 0, value: 0 }; byTypeMap[t].count++; byTypeMap[t].value += Number(r.d.total || 0); }
   const byType = Object.entries(byTypeMap).map(([type, v]) => ({ type, count: v.count, value: round2(v.value) })).sort((a, b) => b.value - a.value);
 
+  // Status mix keeps ALL live orders (that chart is exactly about status).
   const byStatusMap = {};
-  for (const r of live) { const s = r.status?.name ?? r.d.status ?? 'Unknown'; byStatusMap[s] = (byStatusMap[s] || 0) + 1; }
+  for (const r of live) { const s = soStatusOf(r); byStatusMap[s] = (byStatusMap[s] || 0) + 1; }
   const byStatus = Object.entries(byStatusMap).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
 
   const byRepMap = {};
-  for (const r of live) { const rep = cleanRep(r.d.rep) || 'Unassigned'; byRepMap[rep] = (byRepMap[rep] || 0) + Number(r.d.total || 0); }
+  for (const r of book) { const rep = cleanRep(r.d.rep) || 'Unassigned'; byRepMap[rep] = (byRepMap[rep] || 0) + Number(r.d.total || 0); }
   const byRep = Object.entries(byRepMap).map(([rep, value]) => ({ rep, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 15);
 
-  const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || '')).slice(0, 60)
-    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: r.status?.name ?? r.d.status ?? '', invStatus: r.d.invStatus || '', date: r.dateCreated ?? null }));
+  // The COMPLETE live order list (each row carries its status for filtering).
+  const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
+    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: soStatusOf(r), invStatus: r.d.invStatus || '', date: r.dateCreated ?? null }));
 
-  return { count: live.length, totalValue, piva, byType, byStatus, byRep, recent, demoCount: enriched.length - live.length, enriched: Object.keys(det).length > 0, phiMasked: MASK_PHI };
+  return {
+    count: book.length, totalValue, piva, byType, byStatus, byRep, recent, statusGroups,
+    liveCount: live.length, demoCount: enriched.length - live.length,
+    enriched: Object.keys(det).length > 0, phiMasked: MASK_PHI,
+  };
 }
 // Order-to-cash chain (SO -> linked POs + invoices), keyed by order number, no PHI.
 async function getOrders() {
