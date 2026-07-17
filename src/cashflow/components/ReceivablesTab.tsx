@@ -6,7 +6,7 @@ import {
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTheme';
-import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo } from '../chartKit';
+import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo, pctText } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
@@ -24,15 +24,15 @@ const momDelta = (series: { month: string; value: number }[]): { pct: number; up
   return { pct: Math.round(((cur - prev) / prev) * 100), up: cur >= prev };
 };
 
-const daysPast = (dueDate: string | null): number => {
+const daysPast = (dueDate: string | null, refMs = Date.now()): number => {
   if (!dueDate) return 0;
   const due = new Date(dueDate).getTime();
   if (Number.isNaN(due)) return 0;
-  return Math.floor((Date.now() - due) / 86_400_000);
+  return Math.floor((refMs - due) / 86_400_000);
 };
 // Bucket labels match AGING_LABELS so bars/filters line up with Striven's aging.
-const bucketOf = (dueDate: string | null): string => {
-  const d = daysPast(dueDate);
+const bucketOf = (dueDate: string | null, refMs = Date.now()): string => {
+  const d = daysPast(dueDate, refMs);
   if (d <= 0) return 'Current';
   if (d <= 30) return '1–30';
   if (d <= 60) return '31–60';
@@ -67,7 +67,11 @@ export function ReceivablesTab() {
   const [bucketFilter, setBucketFilter] = useState<string>('All');
   const [progFilter, setProgFilter] = useState<'All' | Program>('All');
   const [query, setQuery] = useState('');
+  const [asOfPick, setAsOfPick] = useState<string | null>(null); // YYYY-MM-DD
   const tableRef = useRef<HTMLDivElement | null>(null);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const asOfStr = asOfPick && asOfPick <= todayStr ? asOfPick : todayStr;
+  const refMs = new Date(`${asOfStr}T23:59:59`).getTime();
 
   const [lastSync, setLastSync] = useState<number | null>(null);
   const agoText = useSyncAgo(lastSync);
@@ -106,15 +110,21 @@ export function ReceivablesTab() {
   const healthColor = healthPct >= 75 ? C.positive : healthPct >= 60 ? '#D97706' : C.negative;
 
   // Aging by count (invoices per bucket) for the toggle.
+  const BUCKET_KEY: Record<string, string> = { Current: 'current', '1–30': 'd1_30', '31–60': 'd31_60', '61–90': 'd61_90', '90+': 'd90plus' };
   const agingCount = useMemo(() => {
     const m: Record<string, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
-    const keyOf: Record<string, string> = { Current: 'current', '1–30': 'd1_30', '31–60': 'd31_60', '61–90': 'd61_90', '90+': 'd90plus' };
-    for (const i of invoices) m[keyOf[bucketOf(i.dueDate)]] += 1;
+    for (const i of invoices) m[BUCKET_KEY[bucketOf(i.dueDate, refMs)]] += 1;
     return m;
-  }, [invoices]);
+  }, [invoices, refMs]);
+  // Amount aging bucketed client-side so the as-of date applies.
+  const agingEff = useMemo(() => {
+    const m: Record<string, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
+    for (const i of invoices) m[BUCKET_KEY[bucketOf(i.dueDate, refMs)]] += i.open;
+    return m;
+  }, [invoices, refMs]);
 
   const overdueRows = AGING_LABELS.filter((b) => b.key !== 'current')
-    .map((b, i) => ({ label: `${b.label} days`, value: ar?.aging[b.key] || 0, color: AGING[i + 1] }));
+    .map((b, i) => ({ label: `${b.label} days`, value: agingEff[b.key] || 0, color: AGING[i + 1] }));
   const totalOverdue = overdueRows.reduce((s, r) => s + r.value, 0);
 
   // Top payers by open balance.
@@ -131,7 +141,7 @@ export function ReceivablesTab() {
   // Insights — all computed from live data above.
   const biggestBucket = overdueRows.slice().sort((a, b) => b.value - a.value)[0];
   const insights: { tone: keyof typeof INS_TONES; ico: string; text: ReactNode }[] = [];
-  if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'increased' : 'dropped'} <b>{Math.abs(cashD.pct)}%</b> vs last month</> });
+  if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'increased' : 'dropped'} <b>{pctText(cashD.pct)}</b> vs last month</> });
   if (biggestBucket && biggestBucket.value > 0) insights.push({ tone: 'warn', ico: '!', text: <><b>{biggestBucket.label}</b> overdue is the largest bucket ({formatCurrency(biggestBucket.value)})</> });
   if (dso != null) insights.push({ tone: 'brand', ico: '◷', text: <>DSO is <b>{dso} days</b> (open AR ÷ avg daily revenue)</> });
   if ((ar?.unappliedCredits ?? 0) > 0.005) insights.push({ tone: 'warn', ico: '$', text: <><b>{formatCurrency(ar!.unappliedCredits!)}</b> paid but unapplied — netted out of AR</> });
@@ -141,15 +151,15 @@ export function ReceivablesTab() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return invoices.filter((i) =>
-      (bucketFilter === 'All' || bucketOf(i.dueDate) === bucketFilter) &&
+      (bucketFilter === 'All' || bucketOf(i.dueDate, refMs) === bucketFilter) &&
       (progFilter === 'All' || programOfPayer(i.payer || i.customer) === progFilter) &&
       (!q || String(i.number).toLowerCase().includes(q) || (i.payer || '').toLowerCase().includes(q)));
-  }, [invoices, bucketFilter, progFilter, query]);
+  }, [invoices, bucketFilter, progFilter, query, refMs]);
   const sorted = useMemo(() => {
     const v = (i: typeof invoices[number]): number => sort.key === 'total' ? i.total : sort.key === 'open' ? i.open
-      : sort.key === 'days' ? daysPast(i.dueDate) : (i.dueDate ? new Date(i.dueDate).getTime() : 0);
+      : sort.key === 'days' ? daysPast(i.dueDate, refMs) : (i.dueDate ? new Date(i.dueDate).getTime() : 0);
     return [...filtered].sort((a, b) => (v(a) - v(b)) * sort.dir);
-  }, [filtered, sort]);
+  }, [filtered, sort, refMs]);
   const pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const pageSafe = Math.min(page, pages);
   const shown = sorted.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
@@ -180,9 +190,9 @@ export function ReceivablesTab() {
     ...kv([{ k: 'Open AR', v: formatCurrency(ar?.totalOpen || 0) }, { k: 'Revenue (period)', v: formatCurrency(pl?.revenue || 0) }, { k: 'DSO', v: dso != null ? `${dso} days` : '—' }]),
   });
   const drillBucket = (label: string) => setDrill({
-    title: `Open Invoices · ${label}`, sub: `${invoices.filter((i) => bucketOf(i.dueDate) === label).length} invoices in this bucket`,
+    title: `Open Invoices · ${label}`, sub: `${invoices.filter((i) => bucketOf(i.dueDate, refMs) === label).length} invoices in this bucket`,
     columns: [{ key: 'n', label: 'Invoice #' }, { key: 'p', label: 'Payer' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
-    rows: invoices.filter((i) => bucketOf(i.dueDate) === label).sort((a, b) => b.open - a.open)
+    rows: invoices.filter((i) => bucketOf(i.dueDate, refMs) === label).sort((a, b) => b.open - a.open)
       .map((i) => ({ n: `#${i.number}`, p: i.payer || '—', d: fmtDate(i.dueDate), o: formatCurrency(i.open) })),
   });
   const viewAllPayments = () => setDrill({
@@ -191,8 +201,6 @@ export function ReceivablesTab() {
     rows: payRows.map((p) => ({ r: p.ref, d: fmtDate(p.date), a: formatCurrency(p.amount), s: <StatusPill status={p.status} /> })),
   });
 
-  const today = new Date();
-  const rangeChip = `${new Date(today.getFullYear(), today.getMonth(), 1).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -205,7 +213,10 @@ export function ReceivablesTab() {
           </div>
         </div>
         <div className="ov-headright">
-          <span className="ov-filter"><span className="fl">📅</span><b>{rangeChip}</b></span>
+          <label className="ov-filter"><span className="fl">As of</span>
+            <input type="date" value={asOfStr} max={todayStr} onChange={(e) => setAsOfPick(e.target.value || null)} />
+          </label>
+          {asOfPick && <button className="card-link" style={{ marginTop: 0 }} onClick={() => setAsOfPick(null)}>Today</button>}
           <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
         </div>
       </div>
@@ -236,7 +247,7 @@ export function ReceivablesTab() {
                   <button className={agingMode === 'count' ? 'active' : ''} onClick={() => setAgingMode('count')}>By Count</button>
                 </div>
               }>
-              <AgingBar aging={agingMode === 'amount' ? ar.aging : agingCount} money={agingMode === 'amount'} onSelect={drillBucket} />
+              <AgingBar aging={agingMode === 'amount' ? agingEff : agingCount} money={agingMode === 'amount'} onSelect={drillBucket} />
             </ChartCard>
 
             <ChartCard className="g12-4" title="Cash Received by Month" sub="Customer payments collected"
@@ -274,7 +285,7 @@ export function ReceivablesTab() {
               </div>
               <div className="cfoot">
                 <div className="cf-i"><div className="l">Total Overdue</div><div className="v neg">{formatCurrency(totalOverdue)}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Current (not due)</div><div className="v pos">{formatCurrency(ar.aging.current || 0)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Current (not due)</div><div className="v pos">{formatCurrency(agingEff.current || 0)}</div></div>
               </div>
             </div>
 
@@ -348,7 +359,7 @@ export function ReceivablesTab() {
                   <tbody>
                     {shown.map((inv) => {
                       const recv = (inv.total || 0) - (inv.open || 0);
-                      const d = daysPast(inv.dueDate);
+                      const d = daysPast(inv.dueDate, refMs);
                       return (
                         <tr key={inv.id}>
                           <td>

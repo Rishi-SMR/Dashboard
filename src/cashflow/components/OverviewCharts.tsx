@@ -10,7 +10,7 @@ import {
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone, programOfPayer, type Program } from '../chartTheme';
-import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, useSyncAgo } from '../chartKit';
+import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, useSyncAgo, pctText } from '../chartKit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
@@ -18,10 +18,10 @@ const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '•';
 const PROG_LABEL: Record<string, string> = { All: 'All programs', PI: 'PI', VA: 'VA', TriCare: 'Tri-Care' };
 
-// Aging bucket for one invoice (mirrors the server buckets).
-const bucketKeyOf = (dueDate: string | null): keyof Aging => {
+// Aging bucket for one invoice, relative to the as-of reference date.
+const bucketKeyOf = (dueDate: string | null, refMs = Date.now()): keyof Aging => {
   if (!dueDate) return 'current';
-  const d = Math.floor((Date.now() - new Date(dueDate).getTime()) / 86_400_000);
+  const d = Math.floor((refMs - new Date(dueDate).getTime()) / 86_400_000);
   if (Number.isNaN(d) || d <= 0) return 'current';
   if (d <= 30) return 'd1_30';
   if (d <= 60) return 'd31_60';
@@ -29,17 +29,18 @@ const bucketKeyOf = (dueDate: string | null): keyof Aging => {
   return 'd90plus';
 };
 
-// Honest MoM: compare the two most-recent COMPLETE months (never the partial current month).
+// Honest MoM: compare the two most-recent COMPLETE months before the cutoff
+// (never the partial as-of month).
 const nowYm = new Date().toISOString().slice(0, 7);
-const momDelta = (series: { month: string; value: number }[]): { pct: number; up: boolean } | null => {
-  const done = series.filter((p) => p.month < nowYm && (p.value ?? 0) > 0);
+const momDelta = (series: { month: string; value: number }[], cutoffYm = nowYm): { pct: number; up: boolean } | null => {
+  const done = series.filter((p) => p.month < cutoffYm && (p.value ?? 0) > 0);
   if (done.length < 2) return null;
   const cur = done[done.length - 1].value, prev = done[done.length - 2].value;
   if (!prev) return null;
   return { pct: Math.round(((cur - prev) / prev) * 100), up: cur >= prev };
 };
-const completeVals = (series: { month: string; value: number }[]): number[] =>
-  series.filter((p) => p.month < nowYm).map((p) => p.value ?? 0);
+const completeVals = (series: { month: string; value: number }[], cutoffYm = nowYm): number[] =>
+  series.filter((p) => p.month < cutoffYm).map((p) => p.value ?? 0);
 
 // 7 KPI hues — reused verbatim as the chart palette so strip + charts read as one system.
 type Hue = { from: string; to: string; glow: string };
@@ -88,7 +89,7 @@ function KpiExec({ label, value, format, hue, delta, sub, chip, spark, onClick }
       </div>
       <div className="ke-delta">
         {delta
-          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}%</b><span>vs prior month</span></>
+          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {pctText(delta.pct)}</b><span>vs prior month</span></>
           : <span>{sub}</span>}
       </div>
       {chip && <div className="ke-foot"><span className="ke-chip">{chip}</span></div>}
@@ -144,22 +145,27 @@ export function OverviewCharts() {
 
   const go = (v: string) => () => { location.hash = v; };
 
-  // ---- FY + Program scope (the header filters actually re-slice the data) ----
+  // ---- FY + Program + As-of scope (the header filters actually re-slice the data) ----
   const [fyPick, setFyPick] = useState<string | null>(null);
   const [prog, setProg] = useState<'All' | Program>('All');
+  const [asOfPick, setAsOfPick] = useState<string | null>(null); // YYYY-MM-DD
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const asOfStr = asOfPick && asOfPick <= todayStr ? asOfPick : todayStr;
+  const refMs = new Date(`${asOfStr}T23:59:59`).getTime();
+  const asOfYm = asOfStr.slice(0, 7);
   const years = Array.from(new Set([
     ...(trends?.series ?? []).map((s) => s.month.slice(0, 4)),
     ...(payments?.byMonth ?? []).map((m) => m.month.slice(0, 4)),
   ])).sort();
   const fy = fyPick && years.includes(fyPick) ? fyPick : years[years.length - 1] ?? String(new Date().getFullYear());
   const fyLatest = fy === (years[years.length - 1] ?? fy);
-  const inFy = (m: string) => m.startsWith(fy);
+  const inFy = (m: string) => m.startsWith(fy) && m <= asOfYm;
 
   // ---- derived views (real data only, FY-scoped where the data is monthly) ----
   const revSeries = (trends?.series ?? []).filter((s) => inFy(s.month)).map((s) => ({ month: s.month, value: s.revenue }));
   const cashSeries = (payments?.byMonth ?? []).filter((m) => inFy(m.month)).map((m) => ({ month: m.month, value: m.amount }));
-  const revD = momDelta(revSeries);
-  const cashD = momDelta(cashSeries);
+  const revD = momDelta(revSeries, asOfYm);
+  const cashD = momDelta(cashSeries, asOfYm);
   const cashFY = cashSeries.reduce((s, p) => s + p.value, 0);
 
   // Cash flow: customer payments in vs vendor bill payments out, by month (FY-scoped).
@@ -185,10 +191,11 @@ export function OverviewCharts() {
   // Program-scoped AR: payer (law firm / VA / TriCare) classifies each invoice.
   const arInv = (ar?.invoices ?? []).filter((i) => i.open > 0 && (prog === 'All' || programOfPayer(i.payer) === prog));
   const arOpenF = arInv.reduce((s, i) => s + i.open, 0);
-  const arAging: Aging = prog === 'All' && ar
-    ? ar.aging
-    : arInv.reduce((acc, i) => { acc[bucketKeyOf(i.dueDate)] += i.open; return acc; },
-      { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 } as Aging);
+  // Aging always client-bucketed so Program + As-of both apply.
+  const emptyAging = (): Aging => ({ current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 });
+  const arAging: Aging = arInv.reduce((acc, i) => { acc[bucketKeyOf(i.dueDate, refMs)] += i.open; return acc; }, emptyAging());
+  const apAging: Aging = (ap?.bills ?? []).filter((b) => b.open > 0)
+    .reduce((acc, b) => { acc[bucketKeyOf(b.dueDate, refMs)] += b.open; return acc; }, emptyAging());
 
   // Program-scoped sales orders.
   const soCount = so ? (prog === 'All' ? so.count : so.piva[prog === 'Unassigned' ? 'Other' : prog].count) : 0;
@@ -198,9 +205,8 @@ export function OverviewCharts() {
   const dsoApprox = fRev > 0 ? Math.round(arOpenF / (fRev / (revSeries.filter((r) => r.value > 0).length * 30 || 30))) : null;
 
   // Action Center — items derived live from the same datasets.
-  const now = Date.now();
-  const soon = now + 7 * 86_400_000;
-  const overdue = arInv.filter((i) => i.dueDate && new Date(i.dueDate).getTime() < now);
+  const soon = refMs + 7 * 86_400_000;
+  const overdue = arInv.filter((i) => i.dueDate && new Date(i.dueDate).getTime() < refMs);
   const overdueSum = overdue.reduce((s, i) => s + i.open, 0);
   const billsDue = (ap?.bills ?? []).filter((b) => b.open > 0 && b.dueDate && new Date(b.dueDate).getTime() <= soon);
   const billsDueSum = billsDue.reduce((s, b) => s + b.open, 0);
@@ -250,8 +256,8 @@ export function OverviewCharts() {
   const bestMonth = doneRev.length ? doneRev.reduce((m, s) => (s.revenue > m.revenue ? s : m)) : null;
   type Ins = { tone: keyof typeof INS_TONES; ico: string; text: ReactNode };
   const insights: Ins[] = [];
-  if (revD) insights.push({ tone: revD.up ? 'pos' : 'neg', ico: revD.up ? '▲' : '▼', text: <>Revenue {revD.up ? 'increased' : 'decreased'} <b>{Math.abs(revD.pct)}%</b> vs last month</> });
-  if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'up' : 'dropped'} <b>{Math.abs(cashD.pct)}%</b> vs last month</> });
+  if (revD) insights.push({ tone: revD.up ? 'pos' : 'neg', ico: revD.up ? '▲' : '▼', text: <>Revenue {revD.up ? 'increased' : 'decreased'} <b>{pctText(revD.pct)}</b> vs last month</> });
+  if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'up' : 'dropped'} <b>{pctText(cashD.pct)}</b> vs last month</> });
   if (bestMonth) insights.push({ tone: 'brand', ico: '★', text: <>Highest revenue month: <b>{monthLabel(bestMonth.month)}</b> ({compactMoney(bestMonth.revenue)})</> });
   if (pl?.avgInvoice) insights.push({ tone: 'purple', ico: '$', text: <>Avg invoice value <b>{formatCurrency(pl.avgInvoice)}</b></> });
   if (topCust[0]) insights.push({ tone: 'teal', ico: '◆', text: <>Top AR payer: <b>{trunc(topCust[0].name, 18)}</b> ({formatCurrency(topCust[0].open)} open)</> });
@@ -274,7 +280,8 @@ export function OverviewCharts() {
       date: r.date, bg: 'rgba(124,58,237,0.10)', fg: '#7C3AED', ico: '◧',
       text: <>PO <b>{r.ref}</b> · {trunc(r.vendor, 22)}</>, amt: money0(r.total),
     })),
-  ].filter((a) => a.date).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
+  ].filter((a) => a.date && String(a.date).slice(0, 10) <= asOfStr)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
 
   // Pending approvals — POs whose status reads as pending/awaiting.
   const approvals = (po?.recent ?? []).filter((r) => statusTone(r.status || '') === 'warn').slice(0, 6);
@@ -282,8 +289,6 @@ export function OverviewCharts() {
   const excGroups = exc ? [...exc.groups].sort((a, b) => b.count - a.count).slice(0, 6) : [];
 
   const ready = ar && ap && pl && payments && so && po && trends;
-  const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
       <div className="page-head deck-head" style={{ marginBottom: 14 }}>
@@ -317,7 +322,10 @@ export function OverviewCharts() {
             <option value="TriCare">Tri-Care</option>
           </select>
         </label>
-        <span className="ov-filter"><span className="fl">As of</span><b>{asOf}</b></span>
+        <label className="ov-filter"><span className="fl">As of</span>
+          <input type="date" value={asOfStr} max={todayStr} onChange={(e) => setAsOfPick(e.target.value || null)} />
+        </label>
+        {asOfPick && <button className="card-link" style={{ marginTop: 0 }} onClick={() => setAsOfPick(null)}>Reset to today</button>}
         <span className="ov-filter"><span className="fl">🔒</span><b>PHI masked</b></span>
       </div>
 
@@ -356,10 +364,10 @@ export function OverviewCharts() {
 
           <div className="kpi-strip">
             <KpiExec label={fyLatest ? 'Revenue YTD' : `Revenue FY${fy}`} value={fRev} format={formatCurrency} hue={HUE.revenue}
-              delta={revD} sub={`invoiced · FY${fy}`} spark={completeVals(revSeries)}
+              delta={revD} sub={`invoiced · FY${fy}`} spark={completeVals(revSeries, asOfYm)}
               chip={fyLatest ? `${pl.invoiceCount} invoices` : `FY${fy}`} onClick={go('pl')} />
             <KpiExec label="Cash Received" value={cashFY} format={formatCurrency} hue={HUE.cash}
-              delta={cashD} sub={`customer payments · FY${fy}`} spark={completeVals(cashSeries)}
+              delta={cashD} sub={`customer payments · FY${fy}`} spark={completeVals(cashSeries, asOfYm)}
               chip={fyLatest ? `${payments.count} payments` : `FY${fy}`} onClick={go('accounts')} />
             <KpiExec label="AR Open" value={arOpenF} format={formatCurrency} hue={HUE.ar}
               sub={`${arInv.length} unpaid · ${PROG_LABEL[prog]}`} chip={dsoApprox != null ? `Avg DSO: ${dsoApprox} days` : undefined} onClick={go('receivables')} />
@@ -408,17 +416,17 @@ export function OverviewCharts() {
                 <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding</div><div className="v">{formatCurrency(arOpenF)}</div></div>
               </div>
               <div className="cfoot" style={{ marginTop: 0 }}>
-                <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${Math.abs(cashD.pct)}%` : '—'}</div></div>
+                <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${pctText(cashD.pct)}` : '—'}</div></div>
                 <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">DSO</div><div className="v">{dsoApprox != null ? `${dsoApprox} days` : '—'}</div></div>
               </div>
             </ChartCard>
 
-            <ChartCard className="g12-3" title="AR Aging Summary" sub={`Open receivables · ${PROG_LABEL[prog]}`}>
+            <ChartCard className="g12-3" title="AR Aging Summary" sub={`Open receivables · ${PROG_LABEL[prog]}${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}`}>
               <DonutList data={agingData(arAging)} totalLabel="Total" />
             </ChartCard>
 
-            <ChartCard className="g12-3" title="AP Aging Summary" sub="Open bills · days past due">
-              <DonutList data={agingData(ap.aging)} totalLabel="Total" />
+            <ChartCard className="g12-3" title="AP Aging Summary" sub={`Open bills${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ' · days past due'}`}>
+              <DonutList data={agingData(apAging)} totalLabel="Total" />
             </ChartCard>
 
             <div className="section chart-card g12-3">

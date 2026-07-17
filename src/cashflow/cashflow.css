@@ -1349,10 +1349,10 @@ code {
   border:1px solid var(--border-strong); font-size:12.5px; font-weight:600; color:var(--muted-strong); }
 .ov-filter b { color:var(--text); font-weight:700; }
 .ov-filter .fl { color:var(--muted); font-weight:600; }
-/* Functional filter chips: a bare select inside the chip (FY / Program). */
-.ov-filter select { border:0; background:transparent; font:inherit; font-weight:700; color:var(--text); cursor:pointer; padding-right:2px; }
-.ov-filter select:focus { outline:none; }
-.ov-filter:has(select):hover { border-color:var(--accent); }
+/* Functional filter chips: a bare select / date input inside the chip. */
+.ov-filter select, .ov-filter input[type="date"] { border:0; background:transparent; font:inherit; font-weight:700; color:var(--text); cursor:pointer; padding:0; }
+.ov-filter select:focus, .ov-filter input[type="date"]:focus { outline:none; }
+.ov-filter:has(select):hover, .ov-filter:has(input[type="date"]):hover { border-color:var(--accent); }
 
 /* Action Center — soft red attention banner. */
 .action-center { display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-bottom:20px; padding:14px 18px;

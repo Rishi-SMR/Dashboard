@@ -14,16 +14,16 @@ const PAGE_SIZE = 8;
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
-const daysPast = (dueDate: string | null): number => {
+const daysPast = (dueDate: string | null, refMs = Date.now()): number => {
   if (!dueDate) return 0;
   const due = new Date(dueDate).getTime();
   if (Number.isNaN(due)) return 0;
-  return Math.floor((Date.now() - due) / 86_400_000);
+  return Math.floor((refMs - due) / 86_400_000);
 };
 
 // Bill status straight from the due date: overdue / due today / due in Xd.
-function DuePill({ dueDate }: { dueDate: string | null }) {
-  const d = daysPast(dueDate);
+function DuePill({ dueDate, refMs }: { dueDate: string | null; refMs?: number }) {
+  const d = daysPast(dueDate, refMs);
   if (!dueDate) return <span className="pill-tag tag-muted">No due date</span>;
   if (d > 0) return <span className="pill-tag tag-danger">Overdue</span>;
   if (d === 0) return <span className="pill-tag tag-warn">Due Today</span>;
@@ -56,6 +56,10 @@ export function PayablesTab() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'due', dir: 1 });
   const [page, setPage] = useState(1);
   const [query, setQuery] = useState('');
+  const [asOfPick, setAsOfPick] = useState<string | null>(null); // YYYY-MM-DD
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const asOfStr = asOfPick && asOfPick <= todayStr ? asOfPick : todayStr;
+  const refMs = new Date(`${asOfStr}T23:59:59`).getTime();
 
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
@@ -81,15 +85,18 @@ export function PayablesTab() {
   const paidCount = useMemo(() => payments.filter((p) => isPaid(p.status)).length, [payments]);
 
   // Aging by bill count for the toggle.
+  const bucketK = (d: number) => (d <= 0 ? 'current' : d <= 30 ? 'd1_30' : d <= 60 ? 'd31_60' : d <= 90 ? 'd61_90' : 'd90plus');
   const agingCount = useMemo(() => {
     const m: Record<string, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
-    for (const b of bills) {
-      const d = daysPast(b.dueDate);
-      const k = d <= 0 ? 'current' : d <= 30 ? 'd1_30' : d <= 60 ? 'd31_60' : d <= 90 ? 'd61_90' : 'd90plus';
-      m[k] += 1;
-    }
+    for (const b of bills) m[bucketK(daysPast(b.dueDate, refMs))] += 1;
     return m;
-  }, [bills]);
+  }, [bills, refMs]);
+  // Amount aging bucketed client-side so the as-of date applies.
+  const agingEff = useMemo(() => {
+    const m: Record<string, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
+    for (const b of bills) m[bucketK(daysPast(b.dueDate, refMs))] += b.open;
+    return m;
+  }, [bills, refMs]);
 
   // Top vendors by PO spend — brand-blue ranked bars, click to drill into POs.
   const vendorData = useMemo(
@@ -119,9 +126,9 @@ export function PayablesTab() {
   }, [bills, query]);
   const sorted = useMemo(() => {
     const v = (b: typeof bills[number]): number => sort.key === 'total' ? b.total : sort.key === 'open' ? b.open
-      : sort.key === 'days' ? daysPast(b.dueDate) : (b.dueDate ? new Date(b.dueDate).getTime() : 0);
+      : sort.key === 'days' ? daysPast(b.dueDate, refMs) : (b.dueDate ? new Date(b.dueDate).getTime() : 0);
     return [...filtered].sort((a, b) => (v(a) - v(b)) * sort.dir);
-  }, [filtered, sort]);
+  }, [filtered, sort, refMs]);
   const pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const pageSafe = Math.min(page, pages);
   const shown = sorted.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
@@ -135,7 +142,7 @@ export function PayablesTab() {
     const esc = (s: string | number) => `"${String(s).replace(/"/g, '""')}"`;
     const lines = [
       ['Bill #', 'Vendor', 'Due date', 'Total', 'Open', 'Days past due'].map(esc).join(','),
-      ...sorted.map((b) => [b.number, b.vendor || '', b.dueDate?.slice(0, 10) || '', b.total, b.open, Math.max(0, daysPast(b.dueDate))].map(esc).join(',')),
+      ...sorted.map((b) => [b.number, b.vendor || '', b.dueDate?.slice(0, 10) || '', b.total, b.open, Math.max(0, daysPast(b.dueDate, refMs))].map(esc).join(',')),
     ];
     const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     const a = document.createElement('a');
@@ -168,7 +175,6 @@ export function PayablesTab() {
 
   const vendorRows = (vendors?.vendors ?? []).slice(0, VENDOR_CAP);
   const moreVendors = Math.max(0, (vendors?.vendors.length ?? 0) - vendorRows.length);
-  const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const ready = !!ap;
 
   return (
@@ -181,7 +187,10 @@ export function PayablesTab() {
           </div>
         </div>
         <div className="ov-headright">
-          <span className="ov-filter"><span className="fl">📅</span><b>{asOf}</b></span>
+          <label className="ov-filter"><span className="fl">As of</span>
+            <input type="date" value={asOfStr} max={todayStr} onChange={(e) => setAsOfPick(e.target.value || null)} />
+          </label>
+          {asOfPick && <button className="card-link" style={{ marginTop: 0 }} onClick={() => setAsOfPick(null)}>Today</button>}
           <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
         </div>
       </div>
@@ -214,7 +223,7 @@ export function PayablesTab() {
                   <button className={agingMode === 'count' ? 'active' : ''} onClick={() => setAgingMode('count')}>By Count</button>
                 </div>
               }>
-              <AgingBar aging={agingMode === 'amount' ? ap!.aging : agingCount} money={agingMode === 'amount'} />
+              <AgingBar aging={agingMode === 'amount' ? agingEff : agingCount} money={agingMode === 'amount'} />
             </ChartCard>
 
             <div className="section chart-card g12-12">
@@ -241,7 +250,7 @@ export function PayablesTab() {
                   </thead>
                   <tbody>
                     {shown.map((b) => {
-                      const d = daysPast(b.dueDate);
+                      const d = daysPast(b.dueDate, refMs);
                       return (
                         <tr key={b.id}>
                           <td><strong>#{b.number}</strong></td>
@@ -250,7 +259,7 @@ export function PayablesTab() {
                           <td className="num">{formatCurrency(b.total)}</td>
                           <td className="num cell-neg">{formatCurrency(b.open)}</td>
                           <td className="num cell-neg">{d > 0 ? d : '—'}</td>
-                          <td><DuePill dueDate={b.dueDate} /></td>
+                          <td><DuePill dueDate={b.dueDate} refMs={refMs} /></td>
                         </tr>
                       );
                     })}

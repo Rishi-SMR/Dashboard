@@ -84,13 +84,16 @@ export function KpiR({ ico, tint, label, value, format, delta, deltaInvert = fal
       <div className="kr-value"><AnimatedNumber value={value} format={format} /></div>
       <div className="kr-delta">
         {delta
-          ? <><b className={(delta.up !== deltaInvert) ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {Math.abs(delta.pct)}%</b><span> vs prior month</span></>
+          ? <><b className={(delta.up !== deltaInvert) ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {pctText(delta.pct)}</b><span> vs prior month</span></>
           : <span>{deltaText ?? '—'}</span>}
       </div>
       <div className="kr-foot">{foot}</div>
     </div>
   );
 }
+
+// Delta % for display — caps silly-looking spikes from tiny base months.
+export const pctText = (p: number): string => (Math.abs(p) > 999 ? '999%+' : `${Math.abs(p)}%`);
 
 // Live-sync heartbeat: re-renders every second and returns "Xs ago" for the
 // header pill, so the page visibly ticks between silent data refreshes.
