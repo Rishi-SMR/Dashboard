@@ -419,7 +419,7 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <div className="section chart-card g12-4">
+            <div className="section chart-card g12-4 g12-w">
               <div className="section-head"><div><h2 className="section-title">Financial Insights</h2><div className="section-sub">Computed from live data</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 <div className="ins-list">

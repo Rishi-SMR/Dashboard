@@ -292,7 +292,7 @@ export function ReceivablesTab() {
                 onClick={() => tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>View all customers →</button>
             </div>
 
-            <div className="section chart-card g12-4">
+            <div className="section chart-card g12-4 g12-w">
               <div className="section-head"><div><h2 className="section-title">Insights</h2><div className="section-sub">Computed from live data</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 <div className="ins-list">

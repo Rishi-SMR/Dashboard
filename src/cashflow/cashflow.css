@@ -1404,6 +1404,8 @@ code {
   .exec-grid12 { grid-template-columns: repeat(6, minmax(0,1fr)); }
   .g12-3, .g12-4 { grid-column: span 3; }
   .g12-5, .g12-6, .g12-7 { grid-column: span 6; }
+  /* Cards that would orphan into a half-empty row at 6 cols go full-width. */
+  .g12-w { grid-column: 1 / -1 !important; }
 }
 @media (max-width:940px){
   .exec-grid12 { grid-template-columns: 1fr; }
