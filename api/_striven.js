@@ -197,7 +197,7 @@ async function getToken(force = false) {
   return tokenCache.token;
 }
 
-async function striven(method, endpoint, jsonBody) {
+export async function striven(method, endpoint, jsonBody) {
   const doCall = async () => {
     const token = await getToken();
     return fetch(`${BASE}${endpoint}`, {
