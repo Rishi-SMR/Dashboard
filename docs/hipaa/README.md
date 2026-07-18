@@ -18,6 +18,7 @@ Working code satisfies roughly half of it; these documents are the other half.
 | [05](05-workforce-training.md) | Workforce training | §164.308(a)(5) |
 | [06](06-baa-tracker.md) | Business Associate Agreements | §164.308(b)(1), §164.502(e) |
 | [07](07-baa-action-pack.md) | BAA action pack — click paths + ready-to-send email | — |
+| [08](08-verification-sop.md) | **SOP: how to verify compliance** (`node scripts/hipaa-check.mjs`) | §164.308(a)(8) |
 
 ---
 

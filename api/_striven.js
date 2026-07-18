@@ -354,14 +354,102 @@ function cached(key, fn, ttl = CACHE_TTL) {
 // HIPAA §164.502(b) minimum necessary: patient names are NEVER persisted in our
 // cache. At write time each name is replaced by its PT-<id> reference; the name
 // itself lives only in Striven and is re-read from there when truly required.
-export function scrubPhi(key, data) {
-  if (!Array.isArray(data)) return data;
-  const ref = (id) => (id ? `PT-${id}` : '(unassigned)');
-  if (key === 'customers') return data.map((r) => (r && r.name ? { ...r, name: ref(r.id) } : r));
-  if (key === 'invoices' || key === 'so' || key === 'payments') {
-    return data.map((r) => (r && r.customer && r.customer.name
-      ? { ...r, customer: { ...r.customer, name: ref(r.customer.id) } } : r));
+
+// Names live in Striven only. Build a name → PT-<id> lookup by reading customers
+// straight from the API — NOT via allCustomers(), which returns the already
+// scrubbed cache and would map names to themselves. Held in memory, never written.
+let _refMap = { at: 0, map: null };
+export async function customerRefMap() {
+  if (_refMap.map && Date.now() - _refMap.at < CACHE_TTL) return _refMap.map;
+  const map = new Map();
+  try {
+    for (let page = 0; page < 20; page++) {
+      const body = await striven('POST', '/v1/customers/search', { PageIndex: page, PageSize: 100 });
+      const rows = body.data ?? body.Data ?? [];
+      for (const r of rows) {
+        const n = String(r.name ?? r.Name ?? '').trim();
+        if (n && r.id && !/^PT-\d+$/.test(n)) map.set(n.toLowerCase(), `PT-${r.id}`);
+      }
+      if (rows.length < 100) break;
+    }
+    _refMap = { at: Date.now(), map };
+  } catch { /* keep whatever we had; callers fall back to structural scrubbing */ }
+  return _refMap.map ?? map;
+}
+
+// Fields outside the four primary datasets that can carry a patient's identity.
+// Targeted by field NAME so nesting is handled without brittle paths — and so
+// siblings like `rep` (a sales rep) and `createdBy` (staff) are left untouched,
+// because workforce names are business data, not PHI.
+const PHI_NAME_FIELDS = {
+  qb_posted: ['customer'],
+  qb_posted_inv: ['customer'],
+  so_detail: ['payer'],
+  order_chain: ['payer'],
+  auto_po_state: ['dropShipTo'],
+};
+// Free-text fields where a patient's name is EMBEDDED rather than being the whole
+// value — "Temple - Fidel Castillo", "Jan Vaiz AFO- L1971" (that L-code is an
+// orthotic device, so name + code is health information). Exact matching misses
+// these, so the known names are substituted wherever they occur.
+const PHI_FREETEXT_FIELDS = { tasks: ['title'], projects: ['name'] };
+const _rxCache = new Map();
+function redactFreeText(str, refMap) {
+  if (!refMap?.size) return str;
+  let out = String(str);
+  const low = out.toLowerCase();
+  for (const [name, ref] of refMap) {
+    if (name.length < 6 || !low.includes(name)) continue;   // length guard: avoid matching inside unrelated words
+    let rx = _rxCache.get(name);
+    if (!rx) { rx = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'); _rxCache.set(name, rx); }
+    out = out.replace(rx, ref);
   }
+  return out;
+}
+// Internal automation log fields that embed a patient's name or an abbreviation
+// of it (Striven order numbers look like "ADubberly DEMO Hidow"). Nothing in the
+// UI reads them, so they are dropped rather than mapped.
+const PHI_DROP_FIELDS = { auto_po_state: ['title', 'soNumber'] };
+
+function redactNode(node, nameFields, dropFields, refMap, freeFields = []) {
+  if (Array.isArray(node)) return node.map((v) => redactNode(v, nameFields, dropFields, refMap, freeFields));
+  if (!node || typeof node !== 'object') return node;
+  const out = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (dropFields.includes(k)) continue;
+    if (freeFields.includes(k) && typeof v === 'string') { out[k] = redactFreeText(v, refMap); continue; }
+    // { id, name } under a `customer` key → resolve by id, no lookup needed
+    if (k === 'customer' && v && typeof v === 'object' && !Array.isArray(v) && 'name' in v) {
+      out[k] = { ...v, name: v.id ? `PT-${v.id}` : '(unassigned)' };
+      continue;
+    }
+    if (nameFields.includes(k) && typeof v === 'string' && v.trim()) {
+      const hit = refMap?.get(v.trim().toLowerCase());
+      out[k] = hit ?? v;
+      continue;
+    }
+    out[k] = redactNode(v, nameFields, dropFields, refMap, freeFields);
+  }
+  return out;
+}
+
+// HIPAA §164.502(b) minimum necessary: patient names are NEVER persisted in our
+// cache. At write time each name is replaced by its PT-<id> reference; the name
+// itself lives only in Striven and is re-read from there when truly required.
+export function scrubPhi(key, data, refMap = null) {
+  const ref = (id) => (id ? `PT-${id}` : '(unassigned)');
+  if (Array.isArray(data)) {
+    if (key === 'customers') return data.map((r) => (r && r.name ? { ...r, name: ref(r.id) } : r));
+    if (key === 'invoices' || key === 'so' || key === 'payments') {
+      return data.map((r) => (r && r.customer && r.customer.name
+        ? { ...r, customer: { ...r.customer, name: ref(r.customer.id) } } : r));
+    }
+  }
+  const nameFields = PHI_NAME_FIELDS[key] ?? [];
+  const dropFields = PHI_DROP_FIELDS[key] ?? [];
+  const freeFields = PHI_FREETEXT_FIELDS[key] ?? [];
+  // Every dataset still gets the `{ customer: { id, name } }` rule.
+  if (data && typeof data === 'object') return redactNode(data, nameFields, dropFields, refMap, freeFields);
   return data;
 }
 
@@ -402,7 +490,7 @@ function persistentCached(key, fn) {
       return sb.data;
     }
     try {                                                      // cache empty → one-time bootstrap
-      const value = scrubPhi(key, await fn());
+      const value = scrubPhi(key, await fn(), await customerRefMap());
       _cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL });
       sbCacheWrite(key, value);
       return value;
@@ -422,8 +510,9 @@ async function refreshAll() {
     ['tasks', '/v2/tasks/search'], ['projects', '/v1/projects/search'],
   ];
   const out = {};
+  const refMap = await customerRefMap();
   for (const [key, ep] of jobs) {
-    try { const data = scrubPhi(key, await searchAll(ep)); await sbCacheWrite(key, data); _cache.set(key, { value: data, expiresAt: Date.now() + CACHE_TTL }); out[key] = data.length; }
+    try { const data = scrubPhi(key, await searchAll(ep), refMap); await sbCacheWrite(key, data); _cache.set(key, { value: data, expiresAt: Date.now() + CACHE_TTL }); out[key] = data.length; }
     catch (e) { out[key] = `FAIL ${e.message}`; }
   }
   try { const b = await striven('POST', '/v1/gl-accounts/search', { Active: true }); const gl = b.data ?? b.Data ?? []; await sbCacheWrite('gl', gl); _cache.set('gl', { value: gl, expiresAt: Date.now() + CACHE_TTL }); out.gl = gl.length; } catch (e) { out.gl = `FAIL ${e.message}`; }
@@ -1066,7 +1155,9 @@ async function autoPoProcessSo(soId, mode) {
   const so = await striven('GET', `/v1/sales-orders/${soId}`);
   const soNumber = String(so.orderNumber ?? so.number ?? soId);
   const typeName = so.type?.name ?? '';
-  const entry = { at: new Date().toISOString(), soId: Number(soId), soNumber, type: typeName, mode, lines: [] };
+  // soNumber is NOT logged: Striven order numbers embed the patient's surname
+  // ("ADubberly DEMO Hidow"). soId identifies the order without carrying a name.
+  const entry = { at: new Date().toISOString(), soId: Number(soId), type: typeName, mode, lines: [] };
   const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
   if (autoPoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test order (pilot gate)'; return entry; }
   const chainSb = await sbCacheRead('order_chain');
@@ -1092,10 +1183,12 @@ async function autoPoProcessSo(soId, mode) {
       li.poId = created?.id ?? created?.data?.id ?? null;
     } else {
       li.result = 'DRY-RUN: PO would be created';
+      // The payload sent to Striven keeps the real name — Striven is the system
+      // of record. What we persist in our own log never does.
       li.plan = {
         vendor: li.vendor, qty,
         unitPrice: payload.lineItems?.[0]?.unitPrice ?? payload.lineItems?.[0]?.price ?? null,
-        title: payload.title, dropShipTo: payload.dropShipCustomer?.name ?? null,
+        dropShipTo: payload.dropShipCustomer?.id ? `PT-${payload.dropShipCustomer.id}` : null,
       };
     }
   }
