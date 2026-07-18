@@ -351,34 +351,37 @@ async function qbAllCustomers() {
   return out;
 }
 
+// HIPAA: patient names are PHI. They NEVER leave the server — the browser only
+// ever receives a reference (PT-<Striven customer id>). When QuickBooks needs the
+// real name (to create/match a customer) the server resolves the reference here.
+const patientRef = (id) => `PT-${id}`;
+async function customerMaps() {
+  const byRef = new Map();
+  for (const r of await allCustomers()) {
+    if (!r.id || !(r.name ?? '').trim()) continue;
+    byRef.set(patientRef(r.id), r.name);
+  }
+  return { byRef };
+}
+
 // Reconcile Striven customers against QuickBooks: matched / missing-in-QB.
-// Real names are used (needed to decide who to create) — staff-only, behind login.
+// Identified by reference only — no names cross the wire.
 export async function qbReconcileCustomers() {
   const [striRows, qbRows] = await Promise.all([allCustomers(), qbAllCustomers()]);
   const qbSet = new Set(qbRows.map((c) => normName(c.DisplayName)));
   const stri = striRows
-    .filter((r) => (r.name ?? '').trim())
-    .map((r) => ({ id: r.id, name: r.name, inQb: qbSet.has(normName(r.name)) }));
+    .filter((r) => r.id && (r.name ?? '').trim())
+    .map((r) => ({ ref: patientRef(r.id), inQb: qbSet.has(normName(r.name)) }));
   const missingInQb = stri.filter((c) => !c.inQb);
-  const matched = stri.filter((c) => c.inQb);
   return {
     strivenCount: stri.length,
     qbCount: qbRows.length,
-    matchedCount: matched.length,
+    matchedCount: stri.length - missingInQb.length,
     missingCount: missingInQb.length,
-    missingInQb: missingInQb.slice(0, 500).map((c) => ({ name: c.name })),
-    matched: matched.slice(0, 200).map((c) => ({ name: c.name })),
+    // `name` carries the REFERENCE for customers (the UI table is generic).
+    missingInQb: missingInQb.slice(0, 500).map((c) => ({ name: c.ref })),
+    phi: true,
   };
-}
-
-// Lightweight customer search / create used by the QB tab's Customers panel.
-export async function qbCustomerSearch(q) {
-  const term = String(q ?? '').trim();
-  const sql = term
-    ? `select Id, DisplayName, PrimaryEmailAddr, Balance from Customer where DisplayName like '${qE(term)}%' orderby DisplayName`
-    : 'select Id, DisplayName, PrimaryEmailAddr, Balance from Customer orderby DisplayName';
-  const rows = (await qbQuery(`${sql} maxresults 25`)).Customer ?? [];
-  return { count: rows.length, customers: rows.map((c) => ({ id: c.Id, name: c.DisplayName, email: c.PrimaryEmailAddr?.Address ?? '', balance: money(c.Balance ?? 0) })) };
 }
 
 // ── Generic reconcile (vendors, items) + chunked bulk create ────────────────
@@ -429,7 +432,9 @@ export async function qbCreateMissing(kind, limit = 30) {
   const CHUNK = Math.min(Math.max(1, Number(limit) || 30), 30);
   let strivenRows, qbEntity, qbNameField, buildPayload;
   if (kind === 'customers') {
-    strivenRows = (await allCustomers()).map((r) => ({ name: r.name })); qbEntity = 'Customer'; qbNameField = 'DisplayName';
+    // label = PT-reference (what the browser sees); payload carries the real name.
+    strivenRows = (await allCustomers()).filter((r) => r.id).map((r) => ({ name: r.name, label: patientRef(r.id) }));
+    qbEntity = 'Customer'; qbNameField = 'DisplayName';
     buildPayload = (r) => ({ DisplayName: cap(r.name, 100) });
   } else if (kind === 'vendors') {
     strivenRows = (await allVendors()).map((r) => ({ name: r.name })); qbEntity = 'Vendor'; qbNameField = 'DisplayName';
@@ -449,29 +454,40 @@ export async function qbCreateMissing(kind, limit = 30) {
     seen.add(key); missing.push(r);
   }
   const totalMissing = missing.length;
-  const batch = missing.slice(0, CHUNK).map((r) => ({ name: r.name, payload: buildPayload(r) }));
+  const batch = missing.slice(0, CHUNK).map((r) => ({ name: r.label ?? r.name, payload: buildPayload(r) }));
   if (!batch.length) return { kind, created: [], createdCount: 0, failed: [], remaining: 0, totalMissing: 0 };
   const { created, failed } = await qbBatchCreate(qbEntity, batch);
   return { kind, created, createdCount: created.length, failed, remaining: Math.max(0, totalMissing - created.length), totalMissing };
 }
 
-// Create only the SPECIFIC names the user selected (each ≤30-item QB batch).
+// Create only the records the user selected (each ≤30-item QB batch).
+// For customers the browser sends PT-<id> REFERENCES — resolved to real names here.
 export async function qbCreateSelected(kind, names) {
   const list = (Array.isArray(names) ? names : []).map((n) => String(n)).filter((n) => n.trim());
   if (!list.length) return { kind, created: [], createdCount: 0, failed: [] };
-  let qbEntity, buildPayload;
-  if (kind === 'customers') { qbEntity = 'Customer'; buildPayload = (n) => ({ DisplayName: cap(n, 100) }); }
-  else if (kind === 'vendors') { qbEntity = 'Vendor'; buildPayload = (n) => ({ DisplayName: cap(n, 100) }); }
-  else if (kind === 'items') {
+  let qbEntity, entries;
+  if (kind === 'customers') {
+    const { byRef } = await customerMaps();
+    qbEntity = 'Customer';
+    entries = list
+      .map((ref) => ({ ref, real: byRef.get(ref) }))
+      .filter((e) => e.real)
+      .map((e) => ({ name: e.ref, payload: { DisplayName: cap(e.real, 100) } }));
+  } else if (kind === 'vendors') {
+    qbEntity = 'Vendor';
+    entries = list.map((n) => ({ name: n, payload: { DisplayName: cap(n, 100) } }));
+  } else if (kind === 'items') {
     const inc = await defaultIncomeAccountRef();
     const priceByName = new Map((await allItems()).map((r) => [normName(r.name), Number(r.price || 0)]));
     qbEntity = 'Item';
-    buildPayload = (n) => { const p = priceByName.get(normName(n)) || 0; return { Name: cap(itemName(n), 100), Type: 'Service', IncomeAccountRef: { value: inc.value }, ...(p ? { UnitPrice: money(p) } : {}) }; };
+    entries = list.map((n) => {
+      const p = priceByName.get(normName(n)) || 0;
+      return { name: n, payload: { Name: cap(itemName(n), 100), Type: 'Service', IncomeAccountRef: { value: inc.value }, ...(p ? { UnitPrice: money(p) } : {}) } };
+    });
   } else throw new Error('unknown kind: ' + kind);
   const created = [], failed = [];
-  for (let i = 0; i < list.length; i += 30) {
-    const chunk = list.slice(i, i + 30).map((n) => ({ name: n, payload: buildPayload(n) }));
-    const r = await qbBatchCreate(qbEntity, chunk);
+  for (let i = 0; i < entries.length; i += 30) {
+    const r = await qbBatchCreate(qbEntity, entries.slice(i, i + 30));
     created.push(...r.created); failed.push(...r.failed);
   }
   return { kind, created, createdCount: created.length, failed };
@@ -493,7 +509,8 @@ async function strivenInvoiceRaw(invId) {
     invId: Number(invId), number: String(r.txnNumber ?? invId),
     txnDate: (String(r.txnDate ?? r.dateCreated ?? '').slice(0, 10)) || null,   // ← the real invoice date
     dueDate: (String(r.dueDate ?? '').slice(0, 10)) || null,
-    customer: { name: r.customer?.name ?? '' },
+    // name stays server-side (needed for QuickBooks); ref is what the browser sees.
+    customer: { name: r.customer?.name ?? '', ref: r.customer?.id ? patientRef(r.customer.id) : '(unassigned)' },
     order: r.order?.name ?? (r.order?.id ? `SO-${r.order.id}` : ''),
     lines,
   };
@@ -514,7 +531,8 @@ async function createQbInvoice(body) {
 export async function qbInvoiceList() {
   const [invs, posted] = await Promise.all([allInvoicesList(), postedInvMap()]);
   const rows = invs.map((r) => ({
-    id: r.id, number: String(r.txnNumber ?? r.id), customer: r.customer?.name ?? '',
+    id: r.id, number: String(r.txnNumber ?? r.id),
+    customer: r.customer?.id ? patientRef(r.customer.id) : '(unassigned)',   // reference, never the name
     date: (String(r.txnDate ?? r.dateCreated ?? '').slice(0, 10)) || null,
     total: Number(r.invoiceTotal ?? 0), open: Number(r.openBalance ?? 0),
     posted: posted[String(r.id)] ?? null,
@@ -533,11 +551,12 @@ export async function qbPrepareInvoiceDoc(invId) {
     lines.push({ name: l.name, qty: l.qty, unit: l.unit, amount: money(l.qty * l.unit), item: found ? { status: 'matched', id: found.Id, qbName: found.Name } : { status: 'create' } });
   }
   return {
-    invoice: { id: inv.invId, number: inv.number, date: inv.txnDate, dueDate: inv.dueDate, customerName: inv.customer.name, order: inv.order },
-    customer: cust ? { status: 'matched', name: inv.customer.name, id: cust.Id, qbName: cust.DisplayName } : { status: 'create', name: inv.customer.name },
+    invoice: { id: inv.invId, number: inv.number, date: inv.txnDate, dueDate: inv.dueDate, customerRef: inv.customer.ref, order: inv.order },
+    // Reference only — the real name is resolved server-side when posting.
+    customer: cust ? { status: 'matched', ref: inv.customer.ref, id: cust.Id } : { status: 'create', ref: inv.customer.ref },
     lines, computedTotal: money(lines.reduce((s, l) => s + l.amount, 0)),
     alreadyPosted: already,
-    warnings: [...(inv.lines.length === 0 ? ['This invoice has no line items.'] : []), ...(!inv.customer.name ? ['This invoice has no customer name.'] : [])],
+    warnings: [...(inv.lines.length === 0 ? ['This invoice has no line items.'] : []), ...(!inv.customer.name ? ['This invoice has no customer on it.'] : [])],
   };
 }
 
@@ -550,8 +569,9 @@ export async function qbPostInvoiceDoc(invId, { force = false } = {}) {
   if (!inv.lines.length) throw new Error('Invoice has no line items — cannot post.');
   const steps = [];
   let cust = await qbFindCustomer(inv.customer.name);
-  if (cust) steps.push({ step: 'customer', action: 'matched', name: cust.DisplayName, id: cust.Id });
-  else { cust = await qbCreateCustomer({ name: inv.customer.name }); steps.push({ step: 'customer', action: 'created', name: cust.DisplayName, id: cust.Id }); }
+  // Steps are shown in the UI → report the REFERENCE, never the patient name.
+  if (cust) steps.push({ step: 'customer', action: 'matched', name: inv.customer.ref, id: cust.Id });
+  else { cust = await qbCreateCustomer({ name: inv.customer.name }); steps.push({ step: 'customer', action: 'created', name: inv.customer.ref, id: cust.Id }); }
   const Line = [];
   for (const l of inv.lines) {
     let it = await qbFindItem(l.name);
@@ -567,7 +587,7 @@ export async function qbPostInvoiceDoc(invId, { force = false } = {}) {
     PrivateNote: `Created from Striven Invoice ${inv.number}${inv.order ? ` (${inv.order})` : ''}.`,
   };
   const created = await createQbInvoice(body);
-  const rec = { invoiceId: created.Id, docNumber: created.DocNumber ?? inv.number, total: money(created.TotalAmt ?? 0), customer: cust.DisplayName, txnDate: inv.txnDate, at: new Date().toISOString() };
+  const rec = { invoiceId: created.Id, docNumber: created.DocNumber ?? inv.number, total: money(created.TotalAmt ?? 0), customer: inv.customer.ref, txnDate: inv.txnDate, at: new Date().toISOString() };
   await recordPostedInv(inv.invId, rec);
   return { ok: true, invoice: rec, steps, number: inv.number };
 }
@@ -581,7 +601,6 @@ export async function qbHandle(pathname, q, method = 'GET', body = null) {
     try { await qbCallback(q); return { redirect: '/?qb=connected' }; }
     catch (e) { return { redirect: `/?qb=error&reason=${encodeURIComponent(e.message)}` }; }
   }
-  if (pathname === '/api/qb/customers') return { json: await qbCustomerSearch(q.q) };
   if (pathname === '/api/qb/posted') return { json: await qbPostedList() };
   if (pathname === '/api/qb/reconcile-customers') return { json: await qbReconcileCustomers() };
   if (pathname === '/api/qb/reconcile-vendors') return { json: await qbReconcileVendors() };

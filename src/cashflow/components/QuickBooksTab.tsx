@@ -229,6 +229,12 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
             <KpiR ico="clock" tint="#F59E0B" label="Not in QuickBooks" value={rec.missingCount} foot="ready to create" deltaText="Striven only" />
           </div>
 
+          {rec.phi && (
+            <div className="qb-flash warn" style={{ marginBottom: 12 }}>
+              🔒 Patient names are protected health information — they never reach this screen. Patients show as
+              <b> PT-&lt;Striven customer id&gt;</b>; the real name is read straight from Striven on the server only when QuickBooks needs it.
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button className="btn" onClick={createAll} disabled={running || rec.missingCount === 0}
               style={{ background: rec.missingCount === 0 ? 'var(--muted)' : 'var(--accent)', color: '#fff' }}>
@@ -373,7 +379,7 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
           {running && <button className="btn ghost" onClick={() => { cancel.current = true; }} style={{ padding: '6px 12px', fontSize: 13 }}>Stop</button>}
           {progress && <span className="page-sub" style={{ margin: 0, fontSize: 13 }}>{progress.done} / {progress.total} posted{progress.failed ? ` · ${progress.failed} failed` : ''}</span>}
         </div>
-        <input className="login-input" style={{ maxWidth: 240, height: 38 }} placeholder="Search invoice / customer…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="login-input" style={{ maxWidth: 240, height: 38 }} placeholder="Search invoice / patient ref…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
 
       {loading && <div className="page-sub" style={{ padding: 12 }}>Loading invoices…</div>}
@@ -382,7 +388,7 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
           <table className="data-table">
             <thead><tr>
               <th style={{ width: 34 }}><input type="checkbox" checked={allSelected} onChange={toggleAll} title="Select all pending shown" /></th>
-              <th>Invoice</th><th>Customer</th><th>Date</th><th className="num">Total</th><th className="num">Open</th><th>QuickBooks</th><th></th>
+              <th>Invoice</th><th>Patient ref</th><th>Date</th><th className="num">Total</th><th className="num">Open</th><th>QuickBooks</th><th></th>
             </tr></thead>
             <tbody>
               {rows.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No invoices in this view.</td></tr>}
@@ -429,7 +435,7 @@ function InvoiceDocModal({ inv, onClose, onPosted }: { inv: QbInvoiceRow; onClos
     finally { setPosting(false); }
   }
 
-  const blocked = !!plan && (plan.lines.length === 0 || plan.customer.name.trim() === '');
+  const blocked = !!plan && (plan.lines.length === 0 || plan.customer.ref.trim() === '');
 
   return (
     <div className="drill-backdrop" onClick={onClose}>
@@ -467,8 +473,8 @@ function InvoiceDocModal({ inv, onClose, onPosted }: { inv: QbInvoiceRow; onClos
               <div className="qb-plan-row"><span className="qb-plan-k">Date</span><span className="qb-plan-v"><b>{fmtDate(plan.invoice.date)}</b> <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>(original Striven date · due {fmtDate(plan.invoice.dueDate)})</span></span></div>
               <div className="qb-plan-row"><span className="qb-plan-k">Invoice #</span><span className="qb-plan-v"><b>{plan.invoice.number}</b>{plan.invoice.order ? <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>· {plan.invoice.order}</span> : null}</span></div>
               <div className="qb-plan-row">
-                <span className="qb-plan-k">Customer</span>
-                <span className="qb-plan-v"><b>{plan.customer.name || '(none)'}</b>{' '}
+                <span className="qb-plan-k">Patient ref</span>
+                <span className="qb-plan-v"><b>{plan.customer.ref || '(unassigned)'}</b>{' '}
                   {plan.customer.status === 'matched'
                     ? <span className="pill-tag tag-ok">✓ Existing</span>
                     : <span className="pill-tag" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>➕ Will be created</span>}</span>
