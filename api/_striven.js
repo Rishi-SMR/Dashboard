@@ -56,20 +56,15 @@ async function readVault(names) {
     return out;
   } finally { await client.end().catch(() => {}); }
 }
-// APP_USERS: JSON [{u,p},…] or compact "user:pass,user:pass". Username match is
-// case-insensitive and tolerant of a trailing ".com".
-function parseUsers(raw) {
-  if (!raw) return [];
-  const s = String(raw).trim();
-  try { const j = JSON.parse(s); if (Array.isArray(j)) return j.map((x) => ({ u: String(x.u ?? x.username ?? ''), p: String(x.p ?? x.password ?? '') })).filter((x) => x.u && x.p); } catch { /* not JSON */ }
-  return s.split(',').map((pair) => { const i = pair.indexOf(':'); return i < 0 ? null : { u: pair.slice(0, i).trim(), p: pair.slice(i + 1).trim() }; }).filter((x) => x && x.u && x.p);
-}
+// Username match is case-insensitive and tolerant of a trailing ".com".
 const normUser = (s) => String(s ?? '').trim().toLowerCase().replace(/\.com$/, '');
 
-// Login users live in the Supabase `dashboard_users` table (username, password) —
-// the human-editable source of truth. Read over PostgREST with the service-role
-// key (RLS keeps the table private to the server). Falls back to the APP_USERS
-// env var if the table is empty/unreachable, so login never breaks.
+// Login users live in the Supabase `dashboard_users` table (username, password)
+// — the ONLY source of truth. Read over PostgREST with the service-role key (RLS
+// keeps the table private to the server). HIPAA §164.312(a)(2)(i): there is no
+// env-var/shared-password fallback, so no credential can exist outside the
+// hashed table. If the table is unreachable the gate FAILS CLOSED — logins are
+// refused rather than silently dropping to a weaker credential.
 let _usersCache = { at: 0, users: null };
 async function readUsersTable() {
   const url = process.env.SUPABASE_URL || process.env.SUPABASE_REST_URL;
@@ -85,11 +80,11 @@ async function readUsersTable() {
     return rows.map((r) => ({ u: String(r.username ?? ''), p: String(r.password ?? '') })).filter((x) => x.u && x.p);
   } catch { return null; }
 }
-async function resolveUsers(envAppUsers) {
+async function resolveUsers() {
   const now = Date.now();
   if (_usersCache.users && now - _usersCache.at < 60_000) return _usersCache.users;
-  const fromTable = await readUsersTable();
-  const users = fromTable && fromTable.length ? fromTable : parseUsers(envAppUsers);
+  const users = (await readUsersTable()) ?? [];
+  if (!users.length) console.error('[auth] dashboard_users empty or unreachable — refusing all logins (fail closed)');
   _usersCache = { at: now, users };
   return users;
 }
@@ -208,49 +203,39 @@ async function getStatic() {
     const t = await readConfigTable();   // Supabase app_config = source of truth
     let clientId = t.STRIVEN_CLIENT_ID || process.env.STRIVEN_CLIENT_ID || '';
     let clientSecret = t.STRIVEN_CLIENT_SECRET || process.env.STRIVEN_CLIENT_SECRET || '';
-    let accessPw = t.ACCESS_PASSWORD || process.env.ACCESS_PASSWORD || '';
-    let appUsers = process.env.APP_USERS || '';
     if (!clientId || !clientSecret) {
       try {
-        const v = await readVault(['STRIVEN_CLIENT_ID', 'STRIVEN_CLIENT_SECRET', 'ACCESS_PASSWORD', 'APP_USERS']);
+        const v = await readVault(['STRIVEN_CLIENT_ID', 'STRIVEN_CLIENT_SECRET']);
         clientId = clientId || v.STRIVEN_CLIENT_ID || '';
         clientSecret = clientSecret || v.STRIVEN_CLIENT_SECRET || '';
-        accessPw = accessPw || v.ACCESS_PASSWORD || '';
-        appUsers = appUsers || v.APP_USERS || '';
       } catch (e) { console.error('[config] Supabase Vault read failed:', e.message); }
     }
-    return { clientId, clientSecret, accessPw, appUsers };
+    return { clientId, clientSecret };
   })();
   return _cfg;
 }
 async function getConfig() {
   const s = await getStatic();
-  const users = await resolveUsers(s.appUsers);          // live from the table (60s cache)
-  const gateEnabled = users.length > 0 || Boolean(s.accessPw);
-  return { clientId: s.clientId, clientSecret: s.clientSecret, accessPw: s.accessPw, users, gateEnabled };
+  const users = await resolveUsers();                    // live from the table (60s cache)
+  return { clientId: s.clientId, clientSecret: s.clientSecret, users };
 }
-// Gate info for the request handlers.
+// Gate info for the request handlers. The dashboard serves PHI, so the login
+// gate is mandatory and never switches itself off.
 export async function getAuth() {
-  const { gateEnabled } = await getConfig();
-  return { gateEnabled };
+  return { gateEnabled: true };
 }
 // Validate a login → { ok, session, user }. `session` is a per-user signed token.
 // Every attempt is recorded in the Supabase `login_events` audit table.
 export async function login(username, password, meta = {}) {
-  const { users, accessPw } = await getConfig();
+  const { users } = await getConfig();
   const pw = String(password ?? '');
   let ok = false, who = String(username ?? '').trim();
-  if (users.length) {
-    const row = users.find((x) => normUser(x.u) === normUser(username));
-    if (row) {
-      const v = verifyPassword(pw, row.p);
-      ok = v.ok;
-      who = row.u;
-      if (ok && v.legacy) await upgradeStoredPassword(row.u, pw);   // migrate plaintext → scrypt
-    }
-  } else if (accessPw) {
-    ok = pw === accessPw;
-    who = who || 'shared-access';
+  const row = users.find((x) => normUser(x.u) === normUser(username));
+  if (row) {
+    const v = verifyPassword(pw, row.p);
+    ok = v.ok;
+    who = row.u;
+    if (ok && v.legacy) await upgradeStoredPassword(row.u, pw);   // migrate plaintext → scrypt
   }
   await logLoginEvent(username, ok, meta.ip);
   return { ok, session: ok ? makeSession(who) : '', user: ok ? who : '' };

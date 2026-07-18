@@ -41,7 +41,7 @@ export default async function handler(req, res) {
   // ---- auto-PO (SO placed → PO raised) — cron token OR a logged-in session ----
   if (pathname === '/api/auto-po') {
     const keyOk = autoPoTokenOk(url.searchParams.get('key') || req.headers['x-auto-po-key']);
-    const sessionOk = !gateEnabled || Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
+    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
     if (!keyOk && !sessionOk) return res.status(401).json({ error: 'auth required' });
     try {
       return res.status(200).json(await autoPoRun({
@@ -52,7 +52,7 @@ export default async function handler(req, res) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  // ---- access gate (only when a password / users are configured) ----
+  // ---- access gate — always on: every route below serves patient-derived data ----
   if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {
       let body = req.body;

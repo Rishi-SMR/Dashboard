@@ -36,7 +36,7 @@ const server = http.createServer(async (req, res) => {
   // Auto-PO (SO placed → PO raised) — cron token OR a logged-in session (UI).
   if (pathname === '/api/auto-po') {
     const keyOk = autoPoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-po-key']);
-    const sessionOk = !gateEnabled || Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
+    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
     if (!keyOk && !sessionOk) {
       res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
     }
