@@ -126,6 +126,81 @@ async function logLoginEvent(username, success, ip) {
   } catch { /* audit is best-effort — never block or break login */ }
 }
 
+// ---- HIPAA §164.312(a)(2)(i)/(d): password storage + per-user identity -----
+// Passwords are stored scrypt-hashed. Legacy plaintext rows still authenticate
+// once and are then transparently upgraded to a hash, so nobody is locked out.
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(pw), salt, 64);
+  return `scrypt$${salt.toString('base64')}$${hash.toString('base64')}`;
+}
+function verifyPassword(pw, stored) {
+  const s = String(stored ?? '');
+  if (!s.startsWith('scrypt$')) return { ok: Boolean(s) && s === String(pw), legacy: true };
+  try {
+    const [, saltB64, hashB64] = s.split('$');
+    const expected = Buffer.from(hashB64, 'base64');
+    const actual = crypto.scryptSync(String(pw), Buffer.from(saltB64, 'base64'), expected.length);
+    return { ok: expected.length === actual.length && crypto.timingSafeEqual(expected, actual), legacy: false };
+  } catch { return { ok: false, legacy: false }; }
+}
+async function upgradeStoredPassword(username, pw) {
+  const url = SB_URL(), key = SB_KEY();
+  if (!url || !key) return;
+  try {
+    await fetch(`${url}/rest/v1/dashboard_users?username=eq.${encodeURIComponent(username)}`, {
+      method: 'PATCH',
+      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ password: hashPassword(pw) }),
+    });
+    _usersCache = { at: 0, users: null };   // force a re-read next time
+  } catch { /* best effort — never block login */ }
+}
+
+// Per-user signed session (replaces the old single token shared by everyone, so
+// the server can attribute every PHI read to a named user).
+function sessionSecret() {
+  const s = process.env.SESSION_SECRET || SB_KEY() || process.env.STRIVEN_CLIENT_SECRET || '';
+  return crypto.createHash('sha256').update(`${s}::smr-session-v2`).digest();
+}
+const b64u = (b) => Buffer.from(b).toString('base64url');
+export function makeSession(username, hours = 12) {
+  const payload = b64u(JSON.stringify({ u: String(username), exp: Date.now() + hours * 3600_000 }));
+  const sig = crypto.createHmac('sha256', sessionSecret()).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+/** → { user } for a valid, unexpired token, else null. */
+export function verifySession(token) {
+  const t = String(token ?? '');
+  const dot = t.lastIndexOf('.');
+  if (dot < 1) return null;
+  const payload = t.slice(0, dot), sig = t.slice(dot + 1);
+  const want = crypto.createHmac('sha256', sessionSecret()).update(payload).digest('base64url');
+  const a = Buffer.from(sig), b = Buffer.from(want);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const p = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!p.u || !p.exp || Date.now() > Number(p.exp)) return null;
+    return { user: String(p.u) };
+  } catch { return null; }
+}
+
+// HIPAA §164.312(b): record every read of patient data — who, what, when.
+export async function logPhiAccess(user, pathname, ip) {
+  const url = SB_URL(), key = SB_KEY();
+  if (!url || !key) return;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2000);
+    await fetch(`${url}/rest/v1/phi_access_events`, {
+      method: 'POST', signal: ctrl.signal,
+      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ username: String(user ?? '').slice(0, 200), path: String(pathname ?? '').slice(0, 300), ip: ip ? String(ip).slice(0, 100) : null }),
+    });
+    clearTimeout(t);
+  } catch { /* audit is best-effort — never block a request */ }
+}
+
 // Static config (Striven creds + access password) — resolved once and cached.
 async function getStatic() {
   if (_cfg) return _cfg;
@@ -152,25 +227,33 @@ async function getConfig() {
   const s = await getStatic();
   const users = await resolveUsers(s.appUsers);          // live from the table (60s cache)
   const gateEnabled = users.length > 0 || Boolean(s.accessPw);
-  const basis = users.length ? JSON.stringify(users.map((u) => u.u).sort()) + s.accessPw : s.accessPw;
-  const sessionToken = gateEnabled ? crypto.createHash('sha256').update(`${basis}::smr-session`).digest('hex') : '';
-  return { clientId: s.clientId, clientSecret: s.clientSecret, accessPw: s.accessPw, users, gateEnabled, sessionToken };
+  return { clientId: s.clientId, clientSecret: s.clientSecret, accessPw: s.accessPw, users, gateEnabled };
 }
 // Gate info for the request handlers.
 export async function getAuth() {
-  const { gateEnabled, sessionToken } = await getConfig();
-  return { gateEnabled, sessionToken };
+  const { gateEnabled } = await getConfig();
+  return { gateEnabled };
 }
-// Validate a login (username + password, or password-only fallback). → { ok, sessionToken }.
+// Validate a login → { ok, session, user }. `session` is a per-user signed token.
 // Every attempt is recorded in the Supabase `login_events` audit table.
 export async function login(username, password, meta = {}) {
-  const { users, accessPw, sessionToken } = await getConfig();
+  const { users, accessPw } = await getConfig();
   const pw = String(password ?? '');
-  let ok = false;
-  if (users.length) ok = users.some((x) => normUser(x.u) === normUser(username) && x.p === pw);
-  else if (accessPw) ok = pw === accessPw;
+  let ok = false, who = String(username ?? '').trim();
+  if (users.length) {
+    const row = users.find((x) => normUser(x.u) === normUser(username));
+    if (row) {
+      const v = verifyPassword(pw, row.p);
+      ok = v.ok;
+      who = row.u;
+      if (ok && v.legacy) await upgradeStoredPassword(row.u, pw);   // migrate plaintext → scrypt
+    }
+  } else if (accessPw) {
+    ok = pw === accessPw;
+    who = who || 'shared-access';
+  }
   await logLoginEvent(username, ok, meta.ip);
-  return { ok, sessionToken };
+  return { ok, session: ok ? makeSession(who) : '', user: ok ? who : '' };
 }
 
 const BASE = 'https://api.striven.com';

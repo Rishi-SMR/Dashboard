@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from './_striven.js';
 import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
@@ -23,7 +23,9 @@ export default async function handler(req, res) {
     catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  const { gateEnabled, sessionToken } = await getAuth();
+  const { gateEnabled } = await getAuth();
+  const clientIp = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  let currentUser = null;
 
   // ---- QuickBooks OAuth callback — Intuit redirects here after authorize.
   // The registered redirect is /auth/callback (also accept /api/qb/callback).
@@ -39,7 +41,7 @@ export default async function handler(req, res) {
   // ---- auto-PO (SO placed → PO raised) — cron token OR a logged-in session ----
   if (pathname === '/api/auto-po') {
     const keyOk = autoPoTokenOk(url.searchParams.get('key') || req.headers['x-auto-po-key']);
-    const sessionOk = !gateEnabled || cookieVal(req.headers.cookie, 'smr_session') === sessionToken;
+    const sessionOk = !gateEnabled || Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
     if (!keyOk && !sessionOk) return res.status(401).json({ error: 'auth required' });
     try {
       return res.status(200).json(await autoPoRun({
@@ -55,11 +57,11 @@ export default async function handler(req, res) {
     if (pathname === '/api/login' && req.method === 'POST') {
       let body = req.body;
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
-      const r = await login(body?.username, body?.password, { ip: String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() });
+      const r = await login(body?.username, body?.password, { ip: clientIp });
       if (r.ok) {
         res.setHeader('Set-Cookie', [
-          `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`,
-          `smr_user=${encodeURIComponent(String(body?.username ?? '').trim())}; Path=/; SameSite=Lax; Max-Age=86400`,
+          `smr_session=${r.session}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_user=${encodeURIComponent(r.user)}; Path=/; SameSite=Lax; Max-Age=43200`,
         ]);
         return res.status(200).json({ ok: true });
       }
@@ -72,8 +74,12 @@ export default async function handler(req, res) {
       ]);
       return res.status(200).json({ ok: true });
     }
-    if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== sessionToken) {
-      return res.status(401).json({ error: 'auth required' });
+    if (pathname !== '/api/health') {
+      const sess = verifySession(cookieVal(req.headers.cookie, 'smr_session'));
+      if (!sess) return res.status(401).json({ error: 'auth required' });
+      currentUser = sess.user;
+      // HIPAA audit: record every authenticated read of patient-derived data.
+      logPhiAccess(currentUser, pathname, clientIp);
     }
   }
 

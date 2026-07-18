@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from '../api/_striven.js';
 import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -30,12 +30,13 @@ const server = http.createServer(async (req, res) => {
     catch (e) { res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message })); }
   }
 
-  const { gateEnabled, sessionToken } = await getAuth();
+  const { gateEnabled } = await getAuth();
+  const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
 
   // Auto-PO (SO placed → PO raised) — cron token OR a logged-in session (UI).
   if (pathname === '/api/auto-po') {
     const keyOk = autoPoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-po-key']);
-    const sessionOk = !gateEnabled || cookieVal(req.headers.cookie, 'smr_session') === sessionToken;
+    const sessionOk = !gateEnabled || Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
     if (!keyOk && !sessionOk) {
       res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
     }
@@ -65,11 +66,11 @@ const server = http.createServer(async (req, res) => {
   if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {
       const body = await readBody(req);
-      const r = await login(body.username, body.password, { ip: (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim() });
+      const r = await login(body.username, body.password, { ip: clientIp });
       if (r.ok) {
         res.setHeader('Set-Cookie', [
-          `smr_session=${sessionToken}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`,
-          `smr_user=${encodeURIComponent(String(body.username ?? '').trim())}; Path=/; SameSite=Lax; Max-Age=86400`,
+          `smr_session=${r.session}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_user=${encodeURIComponent(r.user)}; Path=/; SameSite=Lax; Max-Age=43200`,
         ]);
         res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
       }
@@ -82,8 +83,10 @@ const server = http.createServer(async (req, res) => {
       ]);
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
     }
-    if (pathname !== '/api/health' && cookieVal(req.headers.cookie, 'smr_session') !== sessionToken) {
-      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
+    if (pathname !== '/api/health') {
+      const sess = verifySession(cookieVal(req.headers.cookie, 'smr_session'));
+      if (!sess) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' })); }
+      logPhiAccess(sess.user, pathname, clientIp);   // HIPAA audit trail
     }
   }
 
