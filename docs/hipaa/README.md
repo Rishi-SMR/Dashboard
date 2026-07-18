@@ -17,6 +17,7 @@ Working code satisfies roughly half of it; these documents are the other half.
 | [04](04-data-retention-and-disposal.md) | Retention & disposal | §164.310(d)(2), §164.316(b)(2) |
 | [05](05-workforce-training.md) | Workforce training | §164.308(a)(5) |
 | [06](06-baa-tracker.md) | Business Associate Agreements | §164.308(b)(1), §164.502(e) |
+| [07](07-baa-action-pack.md) | BAA action pack — click paths + ready-to-send email | — |
 
 ---
 
@@ -70,10 +71,12 @@ Known gaps, with owners, are tracked in [02-risk-analysis.md](02-risk-analysis.m
 The two that need a human, not a commit:
 
 1. **Signed BAAs** — Supabase, Vercel, Striven. Nothing in code substitutes.
+   Click paths and a ready-to-send email are in [07](07-baa-action-pack.md).
 2. **Delete `APP_USERS` and `ACCESS_PASSWORD` from the Vercel project's
-   environment variables.** The code has ignored them since 2026-07-18, but they
-   are plaintext passwords sitting at rest. Vercel → project `dashboard` →
-   Settings → Environment Variables → ⋯ → Remove.
+   environment variables.** Vercel → project `dashboard` → Settings →
+   Environment Variables → ⋯ → Remove. *Severity reduced 2026-07-18:* the code
+   has ignored them since that date and all three passwords were rotated, so the
+   values there are dead — but credentials should not sit in a console.
 
 ---
 

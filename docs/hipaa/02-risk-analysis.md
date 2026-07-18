@@ -64,12 +64,12 @@ These are the real gaps. Each has an owner and a target date, per
 | ID | Threat | L | I | Risk | Required action | Owner | Target |
 |---|---|---|---|---|---|---|---|
 | **R-12** | **No BAA with Supabase, Vercel or Striven.** PHI is disclosed to three vendors with no contractual safeguard. This is a per-vendor violation regardless of how good the technical controls are. | **H** | **H** | **HIGH** | Execute BAAs — see [06](06-baa-tracker.md). Supabase needs Team plan + HIPAA add-on; Vercel offers one to Pro teams via a HIPAA add-on. If a vendor will not sign, the data must move. | Security Officer | **Immediate** |
-| **R-13** | **Plaintext passwords remain in Vercel environment variables** (`APP_USERS`, `ACCESS_PASSWORD`). The code ignores them since 2026-07-18, but anyone with Vercel project access can read three working passwords. | M | H | **HIGH** | Delete both env vars in the Vercel dashboard. 2 minutes. | Maintainer | **Immediate** |
+| **R-13** | **Stale credentials remain in Vercel environment variables** (`APP_USERS`, `ACCESS_PASSWORD`). *Downgraded from HIGH on 2026-07-18:* the code ignores them, and all three passwords were rotated that day, so the values are dead. Residual issue is hygiene — credentials should not sit in a console. | L | L | **LOW** | Delete both env vars in the Vercel dashboard. 2 minutes. Could not be done from code — the stored Vercel CLI token is revoked. | Maintainer | 30 days |
 | **R-03** | **No multi-factor authentication.** A phished or reused password is sufficient to reach PHI. Lockout slows guessing but does nothing against a *correct* stolen password. | M | H | **MED-HIGH** | Add MFA (TOTP is implementable on the current stack), or front the app with an identity provider that offers it. | Maintainer | 90 days |
 | R-14 | **No documented, exercised backup restore.** Supabase backs up automatically but no restore has ever been tested, and Striven's backup posture is unverified. §164.308(a)(7) wants a tested contingency plan. | L | M | MED | Perform one restore test; document the result and the RTO. Confirm Striven's backup/DR terms in writing. | Maintainer | 90 days |
 | R-15 | **Audit logs grow without review or retention limits.** Controls exist; the *habit* does not. An unreviewed log satisfies nobody at audit. | M | M | MED | Start the monthly review in [01 §5](01-policies-and-procedures.md); apply the retention rule in [04](04-data-retention-and-disposal.md). | Security Officer | Monthly from Aug 2026 |
 | R-16 | **12-hour session with no idle timeout.** An unattended, unlocked workstation stays authenticated for up to 12 hours. | M | M | MED | Either shorten the session, or add an idle timeout that clears the cookie after ~30 minutes of inactivity. Device screen-lock (policy §7) is the current partial control. | Maintainer | 90 days |
-| R-17 | **Supabase service-role key is a single high-value secret** stored in Vercel env. It bypasses RLS and reads every table. | L | H | MED | Rotate on any suspected exposure and on staff departure; consider a narrower key. Note it was previously pasted into a chat session — **rotate it once as a precaution.** | Maintainer | 30 days |
+| R-17 | **Supabase service-role key is a single high-value secret** stored in Vercel env. It bypasses RLS and reads every table. | L | H | MED | Rotate on any suspected exposure and on staff departure; consider a narrower key. It was previously pasted into a chat session, so **rotate it once as a precaution** — but note the rotation must be done *together with* updating the Vercel env var, or production breaks instantly. Do it in the same sitting as R-13. | Maintainer | 30 days |
 | R-18 | **Personal access tokens in `.credentials.local`** (Supabase PAT, and account passwords) sit in plaintext on a developer workstation. | M | H | MED | Confirm the disk is encrypted; rotate the Supabase PAT, which was previously pasted into a chat session; consider moving to a password manager. | Maintainer | 30 days |
 | R-19 | **No workforce training has been delivered or recorded.** §164.308(a)(5) requires it, and the record of it. | H | M | MED | Deliver [05](05-workforce-training.md) to all three users and sign the register. | Security Officer | 30 days |
 | R-20 | **Sales-rep names remain in cached order data** (`so_detail`, `order_chain`). Assessed as workforce/business data, not PHI, and deliberately retained. | L | L | LOW | Documented decision — no action. Revisit if a rep name could ever imply a patient's condition. | — | — |
@@ -80,11 +80,10 @@ The technical safeguards for this system are, as of 2026-07-18, in reasonable
 shape: identity, authentication, audit, transmission security and minimisation
 of identifiers are all implemented and verified in production.
 
-**The system is nonetheless not compliant**, for two reasons that no amount of
-code will fix: PHI is disclosed to vendors under no Business Associate
-Agreement (R-12), and plaintext credentials remain in a third-party console
-(R-13). Both are correctable in days, not months. R-03 (no MFA) is the most
-significant remaining *technical* weakness.
+**The system is nonetheless not compliant**, principally because PHI is
+disclosed to three vendors under no Business Associate Agreement (R-12). No
+amount of code fixes that — it needs a purchase and a signature. R-03 (no MFA)
+is the most significant remaining *technical* weakness.
 
 ## 6. Review
 
