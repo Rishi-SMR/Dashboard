@@ -67,19 +67,26 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/login' && req.method === 'POST') {
       const body = await readBody(req);
       const r = await login(body.username, body.password, { ip: clientIp });
+      // Mark the cookies Secure whenever the request arrived over HTTPS (a
+      // tunnel/proxy in front of this dev server); plain http://localhost would
+      // silently drop a Secure cookie, so it is conditional here — the Vercel
+      // handler, which is always HTTPS, sets it unconditionally.
+      const sec = String(req.headers['x-forwarded-proto'] || '').includes('https') ? ' Secure;' : '';
       if (r.ok) {
         res.setHeader('Set-Cookie', [
-          `smr_session=${r.session}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200`,
-          `smr_user=${encodeURIComponent(r.user)}; Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_session=${r.session}; HttpOnly;${sec} Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_user=${encodeURIComponent(r.user)};${sec} Path=/; SameSite=Lax; Max-Age=43200`,
         ]);
         res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
       }
+      if (r.locked) { res.writeHead(429, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'Too many failed attempts. Try again in 15 minutes.' })); }
       res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'Invalid username or password' }));
     }
     if (pathname === '/api/logout') {
+      const sec = String(req.headers['x-forwarded-proto'] || '').includes('https') ? ' Secure;' : '';
       res.setHeader('Set-Cookie', [
-        'smr_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0',
-        'smr_user=; Path=/; SameSite=Lax; Max-Age=0',
+        `smr_session=; HttpOnly;${sec} Path=/; SameSite=Lax; Max-Age=0`,
+        `smr_user=;${sec} Path=/; SameSite=Lax; Max-Age=0`,
       ]);
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
     }

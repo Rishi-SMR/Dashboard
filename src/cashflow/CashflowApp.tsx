@@ -45,6 +45,8 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
       if (r.ok) {
         try { localStorage.setItem('smr_user', username.trim()); } catch { /* storage may be blocked */ }
         onOk();
+      } else if (r.status === 429) {
+        setErr('Too many failed attempts. Try again in 15 minutes.');
       } else setErr('Invalid username or password');
     } catch { setErr('Could not reach the server'); }
     finally { setBusy(false); }

@@ -59,18 +59,20 @@ export default async function handler(req, res) {
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
       const r = await login(body?.username, body?.password, { ip: clientIp });
       if (r.ok) {
+        // Secure: production is HTTPS-only, so the session must never travel in clear.
         res.setHeader('Set-Cookie', [
-          `smr_session=${r.session}; HttpOnly; Path=/; SameSite=Lax; Max-Age=43200`,
-          `smr_user=${encodeURIComponent(r.user)}; Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_session=${r.session}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_user=${encodeURIComponent(r.user)}; Secure; Path=/; SameSite=Lax; Max-Age=43200`,
         ]);
         return res.status(200).json({ ok: true });
       }
+      if (r.locked) return res.status(429).json({ error: 'Too many failed attempts. Try again in 15 minutes.' });
       return res.status(401).json({ error: 'Invalid username or password' });
     }
     if (pathname === '/api/logout') {
       res.setHeader('Set-Cookie', [
-        'smr_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0',
-        'smr_user=; Path=/; SameSite=Lax; Max-Age=0',
+        'smr_session=; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0',
+        'smr_user=; Secure; Path=/; SameSite=Lax; Max-Age=0',
       ]);
       return res.status(200).json({ ok: true });
     }

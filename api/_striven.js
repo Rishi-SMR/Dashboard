@@ -121,6 +121,31 @@ async function logLoginEvent(username, success, ip) {
   } catch { /* audit is best-effort — never block or break login */ }
 }
 
+// HIPAA §164.308(a)(5)(ii)(C) — log-in monitoring. Brute force is throttled off
+// the same `login_events` audit trail (serverless has no shared memory, so the
+// table is the only counter every instance agrees on): LOCK_MAX consecutive
+// failures for a username inside LOCK_WINDOW_MIN minutes refuses further
+// attempts until the window passes. A successful login clears the count because
+// only rows newer than the last success are examined.
+const LOCK_MAX = 5, LOCK_WINDOW_MIN = 15;
+async function isLockedOut(username) {
+  const url = SB_URL(), key = SB_KEY();
+  if (!url || !key || !username) return false;
+  try {
+    const since = new Date(Date.now() - LOCK_WINDOW_MIN * 60_000).toISOString();
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    const res = await fetch(
+      `${url}/rest/v1/login_events?select=success&username=eq.${encodeURIComponent(username)}&at=gte.${since}&order=at.desc&limit=${LOCK_MAX}`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` }, signal: ctrl.signal },
+    );
+    clearTimeout(t);
+    if (!res.ok) return false;
+    const rows = await res.json();
+    return Array.isArray(rows) && rows.length >= LOCK_MAX && rows.every((r) => r.success === false);
+  } catch { return false; }   // never lock people out because the audit table hiccuped
+}
+
 // ---- HIPAA §164.312(a)(2)(i)/(d): password storage + per-user identity -----
 // Passwords are stored scrypt-hashed. Legacy plaintext rows still authenticate
 // once and are then transparently upgraded to a hash, so nobody is locked out.
@@ -229,15 +254,21 @@ export async function getAuth() {
 export async function login(username, password, meta = {}) {
   const { users } = await getConfig();
   const pw = String(password ?? '');
-  let ok = false, who = String(username ?? '').trim();
   const row = users.find((x) => normUser(x.u) === normUser(username));
+  // Attribute the attempt to the canonical username so attempts cannot be
+  // spread across spellings ("Rishi@…", "rishi") to dodge the lockout counter.
+  const who = row ? row.u : String(username ?? '').trim();
+  if (await isLockedOut(who)) {
+    await logLoginEvent(who, false, meta.ip);
+    return { ok: false, locked: true, session: '', user: '' };
+  }
+  let ok = false;
   if (row) {
     const v = verifyPassword(pw, row.p);
     ok = v.ok;
-    who = row.u;
     if (ok && v.legacy) await upgradeStoredPassword(row.u, pw);   // migrate plaintext → scrypt
   }
-  await logLoginEvent(username, ok, meta.ip);
+  await logLoginEvent(who, ok, meta.ip);
   return { ok, session: ok ? makeSession(who) : '', user: ok ? who : '' };
 }
 
