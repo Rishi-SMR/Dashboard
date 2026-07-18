@@ -121,18 +121,8 @@ export const fetchStrivenExceptions = () => get<ExceptionsResult>('/api/exceptio
 // ── QuickBooks Online ──────────────────────────────────────────────────────
 export type QbStatus = { connected: boolean; env: 'sandbox' | 'production'; configured?: boolean; realmId?: string; company?: string; country?: string; connectedAt?: string | null; error?: string };
 export type QbPosted = { invoiceId: string; docNumber: string; total?: number; customer?: string; at: string };
-export type QbPlanLine = { name: string; qty: number; unit: number; amount: number; item: { status: 'matched' | 'create'; id?: string; qbName?: string } };
-export type QbPlan = {
-  so: { id: number; number: string; status: string; type: string; date: string | null; total: number };
-  customer: { status: 'matched' | 'create'; name: string; id?: string; qbName?: string; email?: string; phone?: string };
-  lines: QbPlanLine[];
-  computedTotal: number;
-  alreadyPosted: QbPosted | null;
-  warnings: string[];
-};
 export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: string; action: string; name: string; id: string }[]; soNumber?: string; alreadyPosted?: QbPosted; message?: string };
 
-export type QbPostedList = { count: number; posted: Record<string, QbPosted> };
 /** For customers, `missingInQb[].name` carries a PT-<id> REFERENCE (phi=true), not a patient name. */
 export type QbReconcile = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string }[]; phi?: boolean };
 export type QbReconcileCustomers = QbReconcile & { matched: { name: string }[] };
@@ -142,6 +132,7 @@ export type QbEntityKind = 'customers' | 'vendors' | 'items';
 /** `customer` is a PT-<id> REFERENCE, never a patient name (PHI stays server-side). */
 export type QbInvoiceRow = { id: number; number: string; customer: string; date: string | null; total: number; open: number; posted: QbPosted | null };
 export type QbInvoicesResult = { count: number; postedCount: number; invoices: QbInvoiceRow[] };
+export type QbPlanLine = { name: string; qty: number; unit: number; amount: number; item: { status: 'matched' | 'create'; id?: string; qbName?: string } };
 export type QbInvoiceDocPlan = {
   invoice: { id: number; number: string; date: string | null; dueDate: string | null; customerRef: string; order: string };
   customer: { status: 'matched' | 'create'; ref: string; id?: string };
@@ -152,7 +143,6 @@ export type QbInvoiceDocPlan = {
 };
 
 export const fetchQbStatus = () => get<QbStatus>('/api/qb/status');
-export const fetchQbPosted = () => get<QbPostedList>('/api/qb/posted');
 export const fetchQbReconcileCustomers = () => get<QbReconcileCustomers>('/api/qb/reconcile-customers');
 export const fetchQbReconcile = (kind: QbEntityKind) =>
   get<QbReconcile>(kind === 'customers' ? '/api/qb/reconcile-customers' : `/api/qb/reconcile-${kind}`);
@@ -173,10 +163,6 @@ export const qbCreateSelected = (kind: QbEntityKind, names: string[]) => postJso
 export const fetchQbInvoices = () => get<QbInvoicesResult>('/api/qb/invoices');
 export const qbPrepareInvoiceDoc = (invId: number) => get<QbInvoiceDocPlan>(`/api/qb/prepare-invoice-doc?inv=${invId}`);
 export const qbPostInvoiceDoc = (invId: number, force = false) => post<QbPostResult>(`/api/qb/post-invoice-doc?inv=${invId}${force ? '&force=1' : ''}`);
-export const qbPrepareInvoice = (soId: number) => get<QbPlan>(`/api/qb/prepare-invoice?so=${soId}`);
-export const qbPostInvoice = (soId: number, force = false) =>
-  fetch(`/api/qb/post-invoice?so=${soId}${force ? '&force=1' : ''}`, { method: 'POST', headers: { Accept: 'application/json' } })
-    .then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error((j as { error?: string })?.error || `Post failed: ${r.status}`); return j as QbPostResult; });
 
 // ── Reports (vendor purchases, patient orders) — cancelled excluded ─────────
 export type ReportVendorItem = { item: string; qty: number; cost: number; poCount: number };
