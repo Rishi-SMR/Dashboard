@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SMR Cashflow Dashboard — Standard Operating Procedure</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 18mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+    color: #0F172A; font-size: 10pt; line-height: 1.5; margin: 0;
+  }
+  h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  p { margin: 0 0 8px; }
+  a { color: #2563EB; text-decoration: none; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9pt;
+         background: #F1F5F9; padding: 1px 4px; border-radius: 3px; }
+
+  /* ---------- cover ---------- */
+  .cover { height: 247mm; display: flex; flex-direction: column; justify-content: center;
+           page-break-after: always; }
+  .rule { height: 5px; width: 68px; background: #2563EB; border-radius: 3px; margin-bottom: 22px; }
+  .cover .eyebrow { font-size: 9.5pt; font-weight: 700; letter-spacing: .16em;
+                    text-transform: uppercase; color: #2563EB; margin-bottom: 12px; }
+  .cover h1 { font-size: 30pt; line-height: 1.12; margin-bottom: 14px; }
+  .cover .lede { font-size: 12pt; color: #475569; max-width: 135mm; line-height: 1.55; }
+  .cover-meta { margin-top: 34px; border-top: 1px solid #E2E8F0; padding-top: 16px;
+                display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .cover-meta div span { display: block; font-size: 7.6pt; text-transform: uppercase;
+                         letter-spacing: .1em; color: #94A3B8; margin-bottom: 3px; }
+  .cover-meta div b { font-size: 10pt; font-weight: 600; }
+  .verdict { margin-top: 30px; border: 1px solid #FDE68A; background: #FFFBEB;
+             border-left: 4px solid #F59E0B; border-radius: 6px; padding: 14px 16px; }
+  .verdict b { display: block; font-size: 11pt; margin-bottom: 5px; color: #92400E; }
+  .verdict p { margin: 0; font-size: 9.5pt; color: #78350F; }
+
+  /* ---------- sections ---------- */
+  section { page-break-inside: avoid; }
+  .sec-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px;
+              padding-bottom: 7px; border-bottom: 2px solid #0F172A; }
+  .sec-head .num { font-size: 9pt; font-weight: 700; color: #2563EB; }
+  .sec-head h2 { font-size: 14pt; }
+  h3 { font-size: 10.5pt; margin: 14px 0 5px; }
+  .page-break { page-break-before: always; }
+
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 9pt; }
+  th { text-align: left; font-size: 7.8pt; text-transform: uppercase; letter-spacing: .07em;
+       color: #64748B; border-bottom: 1.5px solid #CBD5E1; padding: 6px 8px 5px; font-weight: 700; }
+  td { padding: 7px 8px; border-bottom: 1px solid #F1F5F9; vertical-align: top; }
+  tr { page-break-inside: avoid; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .badge { display: inline-block; font-size: 7.6pt; font-weight: 700; padding: 2px 7px;
+           border-radius: 20px; white-space: nowrap; letter-spacing: .02em; }
+  .ok   { background: #DCFCE7; color: #166534; }
+  .warn { background: #FEF3C7; color: #92400E; }
+  .bad  { background: #FEE2E2; color: #991B1B; }
+  .info { background: #DBEAFE; color: #1E40AF; }
+  .none { background: #F1F5F9; color: #475569; }
+
+  .card { border: 1px solid #E2E8F0; border-radius: 7px; padding: 12px 14px; margin: 10px 0;
+          page-break-inside: avoid; }
+  .card.blue { background: #EFF6FF; border-color: #BFDBFE; }
+  .card.amber { background: #FFFBEB; border-color: #FDE68A; }
+  .card.red { background: #FEF2F2; border-color: #FECACA; }
+  .card h3 { margin-top: 0; }
+
+  .tab { border: 1px solid #E2E8F0; border-radius: 7px; margin: 0 0 10px;
+         page-break-inside: avoid; overflow: hidden; }
+  .tab-h { background: #F8FAFC; border-bottom: 1px solid #E2E8F0; padding: 8px 12px;
+           display: flex; align-items: center; gap: 9px; }
+  .tab-h .n { width: 19px; height: 19px; border-radius: 50%; background: #2563EB; color: #fff;
+              font-size: 8.5pt; font-weight: 700; display: flex; align-items: center;
+              justify-content: center; flex: none; }
+  .tab-h h3 { margin: 0; font-size: 10.5pt; flex: 1; }
+  .tab-b { padding: 10px 12px; }
+  .tab-b dl { display: grid; grid-template-columns: 74px 1fr; gap: 4px 10px; margin: 0; font-size: 9pt; }
+  .tab-b dt { font-size: 7.8pt; text-transform: uppercase; letter-spacing: .06em;
+              color: #94A3B8; font-weight: 700; padding-top: 1.5px; }
+  .tab-b dd { margin: 0; }
+
+  ul, ol { margin: 5px 0 10px; padding-left: 17px; }
+  li { margin-bottom: 3.5px; }
+  .foot { margin-top: 20px; padding-top: 10px; border-top: 1px solid #E2E8F0;
+          font-size: 8.5pt; color: #64748B; font-style: italic; }
+  pre { background: #0F172A; color: #E2E8F0; padding: 10px 12px; border-radius: 6px;
+        font-size: 8.5pt; overflow-x: auto; margin: 8px 0; line-height: 1.45;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre .c { color: #94A3B8; }
+  pre .g { color: #4ADE80; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════ COVER ══════════════════ -->
+<div class="cover">
+  <div class="rule"></div>
+  <div class="eyebrow">Standard Operating Procedure</div>
+  <h1>SMR Cashflow Dashboard</h1>
+  <p class="lede">What every screen is, who uses it and why, where its data comes from,
+     and exactly where the system stands against HIPAA — with the parts that are
+     still open stated plainly.</p>
+
+  <div class="cover-meta">
+    <div><span>Client</span><b>Sports Med Recovery</b></div>
+    <div><span>System</span><b>cfovaani.in</b></div>
+    <div><span>Version</span><b>1.0</b></div>
+    <div><span>Date</span><b>18 July 2026</b></div>
+  </div>
+
+  <div class="verdict">
+    <b>Compliance status: technically sound, not yet compliant</b>
+    <p>All 13 automated technical controls pass in production. HIPAA is not met
+       overall because no Business Associate Agreement has been signed with
+       Supabase, Vercel or Striven, no Security Officer is named in writing, and
+       no workforce training has been delivered. Details in sections 5 and 6.</p>
+  </div>
+</div>
+
+<!-- ══════════════════ 1. PURPOSE ══════════════════ -->
+<section>
+  <div class="sec-head"><span class="num">01</span><h2>Purpose &amp; scope</h2></div>
+  <p>The SMR Cashflow Dashboard is a read-and-post financial console over Sports Med
+     Recovery's Striven ERP. It answers four questions the ERP makes slow to answer:
+     <b>what are we owed, what do we owe, what is moving, and what is stuck</b> — and it
+     posts approved invoices into QuickBooks Online without re-keying.</p>
+
+  <table>
+    <tr><th style="width:26%">Item</th><th>Detail</th></tr>
+    <tr><td><b>Who uses it</b></td><td>Practice owner, finance/admin staff, and the external accountant. Three named accounts today.</td></tr>
+    <tr><td><b>System of record</b></td><td>Striven ERP. The dashboard never becomes the source of truth — it reads, shapes and posts.</td></tr>
+    <tr><td><b>Refresh</b></td><td>Cached in Supabase, refreshed automatically every 6 hours; each screen also has a manual refresh.</td></tr>
+    <tr><td><b>Out of scope</b></td><td>Clinical notes, diagnoses, imaging, insurance IDs, dates of birth, addresses. The dashboard must not be extended to carry these without a fresh risk analysis.</td></tr>
+  </table>
+
+  <div class="card blue">
+    <h3>The one design rule behind everything</h3>
+    <p style="margin:0">No patient name ever leaves Striven. Every screen, every export and
+       every record posted to QuickBooks refers to a patient as <code>PT-418</code> — a
+       reference built from their Striven customer id. Staff who need the actual name
+       look it up in Striven, where access is already controlled.</p>
+  </div>
+</section>
+
+<!-- ══════════════════ 2. ACCESS ══════════════════ -->
+<section class="page-break">
+  <div class="sec-head"><span class="num">02</span><h2>Getting in — access procedure</h2></div>
+
+  <table>
+    <tr><th style="width:26%">Step</th><th>What happens</th></tr>
+    <tr><td><b>1. Open</b></td><td>Go to <code>https://cfovaani.in</code> from a bookmark — never from a link in an email.</td></tr>
+    <tr><td><b>2. Log in</b></td><td>Your own username and password. Accounts are personal; sharing one is prohibited.</td></tr>
+    <tr><td><b>3. Session</b></td><td>Lasts 12 hours. Lock your screen whenever you step away.</td></tr>
+    <tr><td><b>4. Log out</b></td><td>Use Log out on a shared or unfamiliar device.</td></tr>
+  </table>
+
+  <h3>Rules that are enforced by the system, not just written down</h3>
+  <table>
+    <tr><th style="width:38%">Control</th><th>Behaviour</th></tr>
+    <tr><td>Password storage</td><td>scrypt-hashed. Even with database access, passwords cannot be read.</td></tr>
+    <tr><td>Failed attempts</td><td>5 wrong passwords in 15 minutes locks that account for 15 minutes.</td></tr>
+    <tr><td>Identity</td><td>Each session token is signed and names one user. There is no shared login.</td></tr>
+    <tr><td>Audit</td><td>Every login and every read of patient-derived data is recorded with user, page, IP and time.</td></tr>
+    <tr><td>Failure mode</td><td>If the user directory is unreachable the gate <b>refuses everyone</b> rather than falling back to a weaker credential.</td></tr>
+  </table>
+
+  <h3>Adding or removing a user</h3>
+  <ol>
+    <li>The Security Officer approves in writing, naming the person and the business reason.</li>
+    <li>The maintainer adds a row to <code>dashboard_users</code> with a hashed password — never plaintext.</li>
+    <li>The password is delivered out-of-band; the user completes training before first login.</li>
+    <li><b>On departure:</b> delete the row the same day. To kill a live session immediately, rotate <code>SESSION_SECRET</code> — this logs everyone out and is the correct move for any non-amicable exit.</li>
+  </ol>
+</section>
+
+<!-- ══════════════════ 3. THE SCREENS ══════════════════ -->
+<section class="page-break">
+  <div class="sec-head"><span class="num">03</span><h2>The nine screens — what each is for</h2></div>
+  <p>Left sidebar, top to bottom. "Patient data" below means data derived from a
+     patient's orders shown against a <code>PT-</code> reference — never a name.</p>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">1</span><h3>Overview</h3><span class="badge info">Patient data (referenced)</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Executive summary — cash position, revenue and expense trend, AR and AP headlines, the invoices and bills that need attention now.</dd>
+      <dt>Use case</dt><dd>The Monday-morning screen. Owner opens it to see whether cash is moving and what is overdue, without opening anything else.</dd>
+      <dt>Source</dt><dd><code>/api/status</code>, <code>/api/trends</code>, <code>/api/ar</code>, <code>/api/ap</code></dd>
+      <dt>HIPAA</dt><dd>Invoice rows show a <code>PT-</code> reference and the payer (a law firm, VA or TriCare). No names.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">2</span><h3>AR / AP</h3><span class="badge info">Patient data (referenced)</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Two sub-views. <b>Receivables</b> — every open invoice, aged current / 1–30 / 31–60 / 61–90 / 90+, with unapplied credits and voided amounts separated out. <b>Payables</b> — the same for supplier bills.</dd>
+      <dt>Use case</dt><dd>Collections and payment runs. "Who do we chase this week, and what must we pay before it goes overdue."</dd>
+      <dt>Source</dt><dd><code>/api/ar</code>, <code>/api/ap</code></dd>
+      <dt>HIPAA</dt><dd>Highest-density patient screen. Invoice amounts and dates against <code>PT-</code> references — pseudonymised PHI, correctly handled.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">3</span><h3>P&amp;L</h3><span class="badge ok">No patient identifiers</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Revenue, expenses and net profit by period, broken down by account.</dd>
+      <dt>Use case</dt><dd>Month-end review and the accountant's starting point. Answers "did we make money, and where did it go."</dd>
+      <dt>Source</dt><dd><code>/api/pl</code></dd>
+      <dt>HIPAA</dt><dd>Aggregate financial totals only — nothing traceable to an individual.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">4</span><h3>Orders</h3><span class="badge info">Patient data (referenced)</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Two sub-views. <b>Orders</b> — every sales order with type (PI / VA / TriCare), sales rep, payer, value and whether it has been invoiced. <b>Tracking</b> — the order chain, following each sales order through to its purchase orders and invoices.</dd>
+      <dt>Use case</dt><dd>Revenue leakage. An order that was delivered but never invoiced is money already spent and never billed — this is where it surfaces.</dd>
+      <dt>Source</dt><dd><code>/api/orders</code>, <code>/api/so</code>, <code>/api/po</code></dd>
+      <dt>HIPAA</dt><dd>Order rows carry a <code>PT-</code> reference. The <b>Sales Rep</b> and <b>Payer</b> columns hold business names — a rep or a law firm — which are not PHI. This was checked: 16 distinct rep values and 64 distinct payers, none matching a patient.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">5</span><h3>Vendors &amp; Items</h3><span class="badge ok">No patient data</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Two sub-views. <b>Vendors</b> — supplier list with spend and payment terms. <b>Catalog</b> — the item/product master.</dd>
+      <dt>Use case</dt><dd>Purchasing and negotiation. "How much do we spend with this supplier, and on what."</dd>
+      <dt>Source</dt><dd><code>/api/vendors</code>, <code>/api/items</code></dd>
+      <dt>HIPAA</dt><dd>Purely commercial data. Out of scope.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">6</span><h3>Accounts</h3><span class="badge ok">No patient identifiers</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Chart of accounts with balances, plus customer payments received and bill payments made.</dd>
+      <dt>Use case</dt><dd>Reconciliation — matching what the ledger says against what actually moved.</dd>
+      <dt>Source</dt><dd><code>/api/accounts</code>, <code>/api/payments</code>, <code>/api/billpayments</code></dd>
+      <dt>HIPAA</dt><dd>Ledger-level. Payments carry references, not names.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">7</span><h3>Exceptions</h3><span class="badge info">Patient data (referenced)</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Everything that does not add up, grouped: orders with no invoice, purchase orders with no matching sales order, unapplied credits, amount mismatches. Each group opens into the underlying rows.</dd>
+      <dt>Use case</dt><dd>The clean-up worklist. This is the screen that finds money — e.g. 25 unlinked purchase orders worth roughly $50,494 currently sit here awaiting review.</dd>
+      <dt>Source</dt><dd><code>/api/exceptions</code></dd>
+      <dt>HIPAA</dt><dd>Drill-down rows show <code>PT-</code> references.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">8</span><h3>Reports</h3><span class="badge warn">PHI — handle exports carefully</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Two sub-views. <b>Vendor purchases</b> — what we buy from each supplier, built from purchase orders. <b>Patient orders</b> — what each patient reference orders, built from sales orders, ranked by order count. Cancelled orders are excluded from both. CSV export available.</dd>
+      <dt>Use case</dt><dd>Buying patterns and supplier negotiation on one side; product demand by patient cohort on the other.</dd>
+      <dt>Source</dt><dd><code>/api/reports/vendor-items</code>, <code>/api/reports/patient-items</code></dd>
+      <dt>HIPAA</dt><dd><b>The most sensitive screen.</b> A patient reference tied to specific medical items is health information. On-screen it is safe; an exported CSV must be treated as PHI — encrypted device only, never emailed out, deleted when the task is done.</dd>
+    </dl></div>
+  </div>
+
+  <div class="tab">
+    <div class="tab-h"><span class="n">9</span><h3>QuickBooks</h3><span class="badge info">Posts references only</span></div>
+    <div class="tab-b"><dl>
+      <dt>What</dt><dd>Four numbered steps — Customers, Vendors, Items, Invoices — each showing exactly what exists in Striven but not yet in QuickBooks, with the option to create missing records individually, in a selection, or all at once. Invoices preview before posting.</dd>
+      <dt>Use case</dt><dd>Removes double data entry between Striven and the accounts, and keeps the two reconciled.</dd>
+      <dt>Source</dt><dd><code>/api/qb/*</code> (OAuth 2.0 to QuickBooks Online)</dd>
+      <dt>HIPAA</dt><dd>Intuit will not sign a BAA, so the design keeps PHI out entirely: customers are created as <code>PT-</code> references, and each invoice carries the reference, the original date and the amount — no name, no clinical detail. Verified: all 8 QuickBooks customers are references.</dd>
+    </dl></div>
+  </div>
+</section>
+
+<!-- ══════════════════ 4. QB WORKFLOW ══════════════════ -->
+<section class="page-break">
+  <div class="sec-head"><span class="num">04</span><h2>Procedure: posting to QuickBooks</h2></div>
+  <p>Run in order. Each step only shows what is genuinely missing, so a step with
+     nothing listed is already reconciled and can be skipped.</p>
+
+  <table>
+    <tr><th style="width:16%">Step</th><th style="width:42%">Action</th><th>Why the order matters</th></tr>
+    <tr><td><b>1 · Customers</b></td><td>Review the list of Striven customers missing from QuickBooks. Create all, or tick a selection.</td><td>An invoice cannot post without its customer. Created as <code>PT-</code> references.</td></tr>
+    <tr><td><b>2 · Vendors</b></td><td>Same, for suppliers.</td><td>Needed before any bill or purchase-side record.</td></tr>
+    <tr><td><b>3 · Items</b></td><td>Same, for products and services.</td><td>Invoice lines reference items; missing items fail the post.</td></tr>
+    <tr><td><b>4 · Invoices</b></td><td>Filter Pending / Posted / All. Preview an invoice, confirm, then post — singly, as a selection, or all pending.</td><td>Final step, once the three above are clean.</td></tr>
+  </table>
+
+  <div class="card">
+    <h3>Two behaviours worth knowing</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Dates are preserved.</b> A posted invoice carries its <i>original</i> Striven date, not the date you clicked post — so the accounts stay in the correct period.</li>
+      <li><b>Nothing posts twice.</b> Posted invoices are tracked, so re-running a batch skips what is already in QuickBooks.</li>
+    </ul>
+  </div>
+
+  <div class="card red">
+    <h3>Never do this</h3>
+    <p style="margin:0">Do not send a patient name, date of birth, address, phone, email, diagnosis or
+       any clinical description to QuickBooks — no matter how convenient a future feature
+       makes it. Intuit is not covered by a BAA, so anything sent there is an unprotected
+       disclosure.</p>
+  </div>
+</section>
+
+<!-- ══════════════════ 5. HIPAA ══════════════════ -->
+<section class="page-break">
+  <div class="sec-head"><span class="num">05</span><h2>HIPAA compliance — where this actually stands</h2></div>
+
+  <h3>What HIPAA asks for, and what is in place</h3>
+  <table>
+    <tr><th style="width:34%">Requirement</th><th style="width:13%">Status</th><th>Evidence</th></tr>
+    <tr><td>Unique user identification<br><span style="color:#94A3B8;font-size:8pt">§164.312(a)(2)(i)</span></td><td><span class="badge ok">Met</span></td><td>Per-user signed session tokens; the former shared token was removed</td></tr>
+    <tr><td>Password protection<br><span style="color:#94A3B8;font-size:8pt">§164.312(a)(2)(iv)</span></td><td><span class="badge ok">Met</span></td><td>scrypt hashes; no plaintext copy in code, env, Vault or config</td></tr>
+    <tr><td>Audit controls<br><span style="color:#94A3B8;font-size:8pt">§164.312(b)</span></td><td><span class="badge ok">Met</span></td><td><code>login_events</code> and <code>phi_access_events</code> record who read what, when</td></tr>
+    <tr><td>Minimum necessary<br><span style="color:#94A3B8;font-size:8pt">§164.502(b)</span></td><td><span class="badge ok">Met</span></td><td>Names stripped at every write; only references reach the browser</td></tr>
+    <tr><td>Transmission security<br><span style="color:#94A3B8;font-size:8pt">§164.312(e)(1)</span></td><td><span class="badge ok">Met</span></td><td>TLS enforced; session cookies HttpOnly + Secure</td></tr>
+    <tr><td>Log-in monitoring<br><span style="color:#94A3B8;font-size:8pt">§164.308(a)(5)(ii)(C)</span></td><td><span class="badge ok">Met</span></td><td>Lockout after 5 failures in 15 minutes</td></tr>
+    <tr><td>Policies &amp; procedures<br><span style="color:#94A3B8;font-size:8pt">§164.316(a)</span></td><td><span class="badge ok">Written</span></td><td>Eight documents in <code>docs/hipaa/</code></td></tr>
+    <tr><td>Risk analysis<br><span style="color:#94A3B8;font-size:8pt">§164.308(a)(1)(ii)(A)</span></td><td><span class="badge ok">Written</span></td><td>21 risks rated, with owners and target dates</td></tr>
+    <tr><td><b>Business Associate Agreements</b><br><span style="color:#94A3B8;font-size:8pt">§164.308(b)(1)</span></td><td><span class="badge bad">NOT MET</span></td><td>None signed with Supabase, Vercel or Striven</td></tr>
+    <tr><td><b>Workforce training</b><br><span style="color:#94A3B8;font-size:8pt">§164.308(a)(5)</span></td><td><span class="badge bad">NOT MET</span></td><td>Material written; not delivered, register unsigned</td></tr>
+    <tr><td><b>Security Officer assigned</b><br><span style="color:#94A3B8;font-size:8pt">§164.308(a)(2)</span></td><td><span class="badge bad">NOT MET</span></td><td>Not named in writing</td></tr>
+    <tr><td>Multi-factor authentication<br><span style="color:#94A3B8;font-size:8pt">(not mandated, expected)</span></td><td><span class="badge warn">Gap</span></td><td>Not implemented — a stolen password alone reaches the data</td></tr>
+  </table>
+
+  <div class="card amber">
+    <h3>An important distinction: PT-418 is not "anonymous"</h3>
+    <p style="margin:0">Replacing names with references is <b>pseudonymisation</b>, not de-identification.
+       Because SMR keeps the key in Striven, the order history and amounts stored against
+       <code>PT-418</code> remain protected health information under §164.514(b). This matters
+       practically: it means Supabase and Vercel are still Business Associates and still need
+       BAAs. What the references genuinely achieve is a much smaller blast radius if anything
+       leaks, and keeping Intuit out of the PHI chain entirely.</p>
+  </div>
+</section>
+
+<!-- ══════════════════ 6. VERIFY ══════════════════ -->
+<section class="page-break">
+  <div class="sec-head"><span class="num">06</span><h2>Procedure: verifying compliance monthly</h2></div>
+
+  <h3>Step 1 — run the automated check</h3>
+  <pre><span class="c">$</span> node scripts/hipaa-check.mjs
+
+<span class="g">PASS</span>  A1  Passwords are hashed, never plaintext
+<span class="g">PASS</span>  A3  Unauthenticated requests are refused
+<span class="g">PASS</span>  A4  A forged session token is rejected
+<span class="g">PASS</span>  A6  Brute force is locked out
+<span class="g">PASS</span>  A7  Session cookies are HttpOnly + Secure
+<span class="g">PASS</span>  B2  Every read of patient data is attributed to a user
+<span class="g">PASS</span>  C1  No patient name is stored in the Supabase cache
+<span class="g">PASS</span>  C3  QuickBooks holds no patient name
+<span class="g">PASS</span>  D1  Site is served over TLS only
+
+Technical controls: <span class="g">13/13 PASS</span></pre>
+  <p>Safe to run any time — read-only, and the lockout test uses a throwaway username
+     so it can never lock a colleague out. A failure prints the exact JSON path of the
+     problem. <b>Do not silence a failure by adding it to the allowlist</b> — justify it
+     in writing first.</p>
+
+  <h3>Step 2 — review the audit logs (a human must do this)</h3>
+  <pre><span class="c">-- failed logins in the last 30 days</span>
+select username, ip, at from login_events
+where success = false and at &gt; now() - interval '30 days' order by at desc;
+
+<span class="c">-- who read patient data, and how much</span>
+select username, count(*), min(at), max(at) from phi_access_events
+where at &gt; now() - interval '30 days' group by username order by 2 desc;</pre>
+  <p>Look for logins by departed staff, unfamiliar locations, bursts of failures, or a
+     volume far outside someone's normal pattern. <b>Record that the review happened</b>
+     even when nothing was found — the record is the deliverable, not the reassurance.</p>
+
+  <h3>Step 3 — tick the manual items</h3>
+  <p>BAAs signed · training register current · user list matches actual staff · risk
+     analysis reviewed within 12 months · Security Officer named. A script cannot check
+     any of these, and they are what an auditor asks for first.</p>
+
+  <h3>Also re-run the check before shipping any change that…</h3>
+  <ul>
+    <li>touches login, sessions or cookies</li>
+    <li>adds a new cached dataset, or a new field to an existing one</li>
+    <li>changes anything posted to QuickBooks</li>
+    <li>adds any new external service — which needs its BAA signed <i>first</i></li>
+  </ul>
+</section>
+
+<!-- ══════════════════ 7. RULES ══════════════════ -->
+<section class="page-break">
+  <div class="sec-head"><span class="num">07</span><h2>Daily rules for everyone with a login</h2></div>
+  <table>
+    <tr><th style="width:50%">Do</th><th>Do not</th></tr>
+    <tr>
+      <td>Log in only from an encrypted work device with a screen lock</td>
+      <td>Log in from a public, shared or hotel computer</td>
+    </tr>
+    <tr>
+      <td>Use a unique password of 12+ characters</td>
+      <td>Reuse a password from email or banking</td>
+    </tr>
+    <tr>
+      <td>Refer to patients by their <code>PT-</code> reference in email and chat</td>
+      <td>Share your login — every action is recorded against your name</td>
+    </tr>
+    <tr>
+      <td>Delete CSV exports as soon as the task is finished</td>
+      <td>Email or upload an export outside SMR</td>
+    </tr>
+    <tr>
+      <td>Report anything odd the same day</td>
+      <td>Paste dashboard data into ChatGPT, Claude or any unapproved online tool</td>
+    </tr>
+    <tr>
+      <td>Reach the site from your bookmark</td>
+      <td>Look up a patient, friend or colleague out of curiosity — every read is logged</td>
+    </tr>
+  </table>
+
+  <div class="card">
+    <h3>If something goes wrong</h3>
+    <p>Tell the Security Officer <b>the same day</b> — a lost device, a shared password, an
+       export sent somewhere it should not have gone, a name appearing where a reference
+       should be, or a login you do not recognise. Do not wait until you are sure it was
+       real; fast reporting is what turns a breach into a near-miss. There is no penalty
+       for reporting in good faith.</p>
+    <p style="margin:0">Full procedure: <code>docs/hipaa/03-incident-response-plan.md</code>.
+       <b>The contact details in that plan are still blank and must be filled in.</b></p>
+  </div>
+</section>
+
+<!-- ══════════════════ 8. OPEN ══════════════════ -->
+<section class="page-break">
+  <div class="sec-head"><span class="num">08</span><h2>Open items — what closes the gap</h2></div>
+  <table>
+    <tr><th style="width:6%">#</th><th style="width:36%">Action</th><th style="width:14%">Priority</th><th>Note</th></tr>
+    <tr><td><b>1</b></td><td>Sign BAAs with Supabase, Vercel and Striven</td><td><span class="badge bad">Critical</span></td><td>Supabase needs the Team plan + HIPAA add-on; Vercel offers one to Pro teams via a HIPAA add-on; Striven is a direct request — a ready-to-send email is in <code>07-baa-action-pack.md</code></td></tr>
+    <tr><td><b>2</b></td><td>Name the Security &amp; Privacy Officer in writing</td><td><span class="badge bad">Critical</span></td><td>Fill the blanks in <code>01-policies-and-procedures.md</code> and the incident plan</td></tr>
+    <tr><td><b>3</b></td><td>Deliver training; sign the register</td><td><span class="badge bad">Critical</span></td><td>~20 minutes per person; material is written</td></tr>
+    <tr><td><b>4</b></td><td>Delete <code>APP_USERS</code> and <code>ACCESS_PASSWORD</code> from Vercel</td><td><span class="badge warn">Housekeeping</span></td><td>Severity already reduced — the code ignores them and all three passwords were rotated on 18 Jul 2026, so the stored values are dead</td></tr>
+    <tr><td><b>5</b></td><td>Add multi-factor authentication</td><td><span class="badge warn">90 days</span></td><td>The largest remaining technical weakness — lockout does nothing against a correct stolen password</td></tr>
+    <tr><td><b>6</b></td><td>Start the monthly audit review</td><td><span class="badge warn">Monthly</span></td><td>First one due August 2026</td></tr>
+    <tr><td><b>7</b></td><td>Test a backup restore once; document the result</td><td><span class="badge none">90 days</span></td><td>§164.308(a)(7) expects a contingency plan that has actually been exercised</td></tr>
+    <tr><td><b>8</b></td><td>Rotate the Supabase service key and access token</td><td><span class="badge none">30 days</span></td><td>Both were exposed in a chat session. Must be done in the same sitting as item 4 — rotating without updating Vercel takes production down instantly</td></tr>
+  </table>
+
+  <div class="card blue">
+    <h3>Summary in one paragraph</h3>
+    <p style="margin:0">The software side is done and, unusually, it is <i>verifiable</i> — one command
+       re-proves all 13 technical controls, so drift gets caught instead of assumed away.
+       The remaining gap is organisational: three signatures, one appointment and one
+       training session. None of it is engineering work, and all of it is achievable in a
+       week. Until then the honest position is that the dashboard is built to HIPAA's
+       technical standard but SMR is not yet HIPAA compliant.</p>
+  </div>
+
+  <p class="foot">Prepared by the system maintainer with AI assistance. This document is a
+     factual record of the system as built and verified on 18 July 2026 — it is not legal
+     advice and it is not a certification. A qualified HIPAA compliance professional should
+     review it before it is relied upon in an audit, a payer contract or a breach response.</p>
+</section>
+
+</body>
+</html>
