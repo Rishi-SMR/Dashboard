@@ -184,7 +184,8 @@ export type ReportVendorItem = { item: string; qty: number; cost: number; poCoun
 export type ReportVendor = { vendor: string; poCount: number; totalCost: number; items: ReportVendorItem[] };
 export type VendorItemsReport = { vendors: ReportVendor[]; count: number; generatedAt: string | null; note: string };
 export type ReportPatientItem = { item: string; qty: number; value: number; soCount: number };
-export type ReportPatient = { patient: string; soCount: number; totalValue: number; items: ReportPatientItem[] };
+/** Patients are identified ONLY by a reference (PT-<Striven customer id>) — names are PHI and are never sent to the browser. */
+export type ReportPatient = { ref: string; soCount: number; totalValue: number; items: ReportPatientItem[] };
 export type PatientItemsReport = { patients: ReportPatient[]; count: number; generatedAt: string | null; note: string };
 export const fetchVendorItemsReport = () => get<VendorItemsReport>('/api/reports/vendor-items');
 export const fetchPatientItemsReport = () => get<PatientItemsReport>('/api/reports/patient-items');

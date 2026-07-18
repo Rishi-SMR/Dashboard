@@ -129,15 +129,15 @@ function PatientReport({ data }: { data: PatientItemsReport }) {
 
   const patients = useMemo(() => {
     const t = q.trim().toLowerCase();
-    return data.patients.filter((p) => !t || p.patient.toLowerCase().includes(t) || p.items.some((i) => i.item.toLowerCase().includes(t)));
+    return data.patients.filter((p) => !t || p.ref.toLowerCase().includes(t) || p.items.some((i) => i.item.toLowerCase().includes(t)));
   }, [data, q]);
 
   const totalValue = data.patients.reduce((s, p) => s + p.totalValue, 0);
   const totalSo = data.patients.reduce((s, p) => s + p.soCount, 0);
 
   function exportCsv() {
-    const rows = data.patients.flatMap((p) => p.items.map((i) => [p.patient, p.soCount, i.item, i.qty, i.value]));
-    downloadCsv('patient-orders.csv', ['Patient', 'SO count', 'Item', 'Qty', 'Value'], rows);
+    const rows = data.patients.flatMap((p) => p.items.map((i) => [p.ref, p.soCount, i.item, i.qty, i.value]));
+    downloadCsv('patient-orders.csv', ['Patient ref', 'SO count', 'Item', 'Qty', 'Value'], rows);
   }
 
   if (!data.patients.length) return <NotReady note={data.note} />;
@@ -145,28 +145,33 @@ function PatientReport({ data }: { data: PatientItemsReport }) {
   return (
     <div className="section">
       <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KpiR ico="users" tint={C.brand} label="Patients" value={data.patients.length} foot="patients with orders" deltaText="ranked by # orders" />
+        <KpiR ico="users" tint={C.brand} label="Patients" value={data.patients.length} foot="by reference — no names" deltaText="ranked by # orders" />
         <KpiR ico="clip" tint="#8B5CF6" label="Sales orders" value={totalSo} foot="non-cancelled orders" deltaText="across all patients" />
         <KpiR ico="cash" tint="#16A34A" label="Total order value" value={totalValue} format={formatCurrency} foot="from non-cancelled SOs" deltaText="all patients" />
       </div>
 
+      <div className="qb-flash warn" style={{ marginBottom: 12 }}>
+        🔒 Patient names are protected health information and are never shown or stored here. Each patient appears as a reference
+        (<b>PT-&lt;Striven customer id&gt;</b>) — look the reference up inside Striven when you need to identify someone.
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>Ranked by number of orders. Click a patient to see what they order.</div>
+        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>Ranked by number of orders. Click a reference to see what they order.</div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <input className="login-input" style={{ maxWidth: 240, height: 38 }} placeholder="Search patient / item…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="login-input" style={{ maxWidth: 240, height: 38 }} placeholder="Search ref / item…" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn ghost" onClick={exportCsv}>⭳ CSV</button>
         </div>
       </div>
 
       <div className="table-wrap">
         <table className="data-table">
-          <thead><tr><th style={{ width: 40 }}>#</th><th>Patient</th><th className="num">Orders</th><th className="num">Items</th><th className="num">Total value</th></tr></thead>
+          <thead><tr><th style={{ width: 40 }}>#</th><th>Patient ref</th><th className="num">Orders</th><th className="num">Items</th><th className="num">Total value</th></tr></thead>
           <tbody>
             {patients.length === 0 && <tr><td colSpan={5} style={{ color: C.muted }}>No patients.</td></tr>}
             {patients.map((p, i) => (
-              <FragmentRow key={p.patient}
-                rank={i + 1} name={p.patient} a={p.soCount} b={p.items.length} c={p.totalValue}
-                open={open === p.patient} onToggle={() => setOpen(open === p.patient ? null : p.patient)}
+              <FragmentRow key={p.ref}
+                rank={i + 1} name={p.ref} a={p.soCount} b={p.items.length} c={p.totalValue}
+                open={open === p.ref} onToggle={() => setOpen(open === p.ref ? null : p.ref)}
                 columns={['Item', 'Qty', 'Value', 'Orders']}
                 rows={p.items.map((it) => [it.item, it.qty, formatCurrency(it.value), it.soCount])} />
             ))}

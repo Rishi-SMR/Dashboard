@@ -19,15 +19,18 @@ const soDet = (await sbCacheRead('so_detail'))?.data || {};
 const poList = (await sbCacheRead('po'))?.data || [];
 
 // ── Patients ← Sales Orders ────────────────────────────────────────────────
+// HIPAA: patient NAMES are PHI and are never stored here. Each patient is keyed
+// by a reference derived from their Striven customer id (PT-<id>) — traceable
+// back inside Striven by authorised staff, but not identifying on its own.
 const patients = new Map();
 let soDone = 0, soSkip = 0;
 for (const so of soList) {
   const meta = soDet[so.id] || {};
   if (isCancelled(meta.status) || isDemo(meta.type) || isDemo(meta.status)) { soSkip++; continue; }
   let d; try { d = await striven('GET', `/v1/sales-orders/${so.id}`); } catch { continue; }
-  const name = d.customer?.name || '(no customer)';
-  if (isDemo(name)) { soSkip++; continue; }
-  const p = patients.get(name) || { patient: name, soCount: 0, totalValue: 0, items: new Map() };
+  if (isDemo(d.customer?.name)) { soSkip++; continue; }   // name used only to filter test rows, never stored
+  const ref = d.customer?.id ? `PT-${d.customer.id}` : '(unassigned)';
+  const p = patients.get(ref) || { ref, soCount: 0, totalValue: 0, items: new Map() };
   p.soCount += 1;
   for (const li of (d.lineItems || [])) {
     const item = li.item?.name; if (!item) continue;
@@ -37,11 +40,11 @@ for (const so of soList) {
     const it = p.items.get(item) || { item, qty: 0, value: 0, soCount: 0 };
     it.qty += qty; it.value = round2(it.value + val); it.soCount += 1; p.items.set(item, it);
   }
-  patients.set(name, p);
+  patients.set(ref, p);
   if (++soDone % 25 === 0) console.log(`  SOs ${soDone} done…`);
 }
 const patientReport = [...patients.values()]
-  .map((p) => ({ patient: p.patient, soCount: p.soCount, totalValue: p.totalValue, items: [...p.items.values()].sort((a, b) => b.qty - a.qty) }))
+  .map((p) => ({ ref: p.ref, soCount: p.soCount, totalValue: p.totalValue, items: [...p.items.values()].sort((a, b) => b.qty - a.qty) }))
   .sort((a, b) => b.soCount - a.soCount || b.totalValue - a.totalValue);
 
 // ── Vendors ← Purchase Orders ──────────────────────────────────────────────
@@ -69,7 +72,7 @@ const vendorReport = [...vendors.values()]
   .sort((a, b) => b.totalCost - a.totalCost || b.poCount - a.poCount);
 
 const stamp = new Date().toISOString();
-await sbCacheWrite('report_patient_items', { patients: patientReport, count: patientReport.length, generatedAt: stamp, note: 'Cancelled and demo/test orders excluded.' });
+await sbCacheWrite('report_patient_items', { patients: patientReport, count: patientReport.length, generatedAt: stamp, note: 'Cancelled and demo/test orders excluded. Patients shown by reference (PT-<Striven customer id>) — no names (PHI) are stored.' });
 await sbCacheWrite('report_vendor_items', { vendors: vendorReport, count: vendorReport.length, generatedAt: stamp, note: 'Cancelled POs excluded.' });
 
 console.log(`\nDONE — patients: ${patientReport.length} (${soDone} SOs, ${soSkip} skipped) · vendors: ${vendorReport.length} (${poDone} POs, ${poSkip} skipped)`);
