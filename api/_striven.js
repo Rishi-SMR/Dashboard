@@ -335,6 +335,20 @@ function cached(key, fn, ttl = CACHE_TTL) {
   return p;
 }
 
+// HIPAA §164.502(b) minimum necessary: patient names are NEVER persisted in our
+// cache. At write time each name is replaced by its PT-<id> reference; the name
+// itself lives only in Striven and is re-read from there when truly required.
+export function scrubPhi(key, data) {
+  if (!Array.isArray(data)) return data;
+  const ref = (id) => (id ? `PT-${id}` : '(unassigned)');
+  if (key === 'customers') return data.map((r) => (r && r.name ? { ...r, name: ref(r.id) } : r));
+  if (key === 'invoices' || key === 'so' || key === 'payments') {
+    return data.map((r) => (r && r.customer && r.customer.name
+      ? { ...r, customer: { ...r.customer, name: ref(r.customer.id) } } : r));
+  }
+  return data;
+}
+
 // Shared, durable cache in the Supabase `striven_cache` table. Cold serverless
 // instances and Striven rate-limit/outage never break loading — we always fall
 // back to the last-known-good copy instead of hanging or erroring.
@@ -372,7 +386,7 @@ function persistentCached(key, fn) {
       return sb.data;
     }
     try {                                                      // cache empty → one-time bootstrap
-      const value = await fn();
+      const value = scrubPhi(key, await fn());
       _cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL });
       sbCacheWrite(key, value);
       return value;
@@ -393,7 +407,7 @@ async function refreshAll() {
   ];
   const out = {};
   for (const [key, ep] of jobs) {
-    try { const data = await searchAll(ep); await sbCacheWrite(key, data); _cache.set(key, { value: data, expiresAt: Date.now() + CACHE_TTL }); out[key] = data.length; }
+    try { const data = scrubPhi(key, await searchAll(ep)); await sbCacheWrite(key, data); _cache.set(key, { value: data, expiresAt: Date.now() + CACHE_TTL }); out[key] = data.length; }
     catch (e) { out[key] = `FAIL ${e.message}`; }
   }
   try { const b = await striven('POST', '/v1/gl-accounts/search', { Active: true }); const gl = b.data ?? b.Data ?? []; await sbCacheWrite('gl', gl); _cache.set('gl', { value: gl, expiresAt: Date.now() + CACHE_TTL }); out.gl = gl.length; } catch (e) { out.gl = `FAIL ${e.message}`; }
@@ -465,7 +479,9 @@ const round2 = (n) => Math.round(n * 100) / 100;
 // emit nothing — the UI references transactions by invoice/order number, sales rep,
 // clinic/hospital and payer instead (per the data-privacy requirement).
 function maskName(name, mask = MASK_PHI) {
-  if (!mask) return String(name || '');
+  const v = String(name ?? '');
+  if (/^PT-\d+$/.test(v)) return v;   // already a de-identified reference — safe to show
+  if (!mask) return v;
   return '';
 }
 const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(rawNumber ?? '')) ? `${prefix}-${id}` : String(rawNumber));
