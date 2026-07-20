@@ -6,6 +6,7 @@ import { fetchStrivenStatus, type StrivenStatus } from './strivenApi';
 const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m) => ({ default: m.OverviewCharts })));
 const OrdersTab = lazy(() => import('./components/OrdersTab').then((m) => ({ default: m.OrdersTab })));
 const ArApTab = lazy(() => import('./components/ArApTab').then((m) => ({ default: m.ArApTab })));
+const ApSheetTab = lazy(() => import('./components/ApSheetTab').then((m) => ({ default: m.ApSheetTab })));
 const PLTab = lazy(() => import('./components/PLTab').then((m) => ({ default: m.PLTab })));
 const VendorsItemsTab = lazy(() => import('./components/VendorsItemsTab').then((m) => ({ default: m.VendorsItemsTab })));
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
@@ -15,7 +16,7 @@ const ReportsTab = lazy(() => import('./components/ReportsTab').then((m) => ({ d
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'pl' | 'orders' | 'tracking' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'reports' | 'quickbooks';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'reports' | 'quickbooks';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -74,7 +75,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'pl', 'orders', 'tracking', 'vendors', 'catalog', 'accounts', 'exceptions', 'reports', 'quickbooks'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'vendors', 'catalog', 'accounts', 'exceptions', 'reports', 'quickbooks'];
 const initialView = (): ViewKey => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
   return VIEW_KEYS.includes(h) ? h : 'overview';
@@ -100,6 +101,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     overview: <OverviewCharts />,
     receivables: <ArApTab initialMode="ar" />,
     payables: <ArApTab initialMode="ap" />,
+    apsheet: <ApSheetTab />,
     pl: <PLTab />,
     orders: <OrdersTab />,
     tracking: <OrdersTab initialMode="tracking" />,
