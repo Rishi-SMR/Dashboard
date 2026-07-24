@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   fetchAutoPoCandidates, fetchAutoPoPreview, autoPoRaise, fetchAutoPoPdf, autoPoSendEmail, fetchAutoPoEmailPreview, fetchAutoPoSoPos,
-  type AutoPoCandidatesResult, type AutoPoCandidate, type AutoPoEntry, type AutoPoLine,
+  type AutoPoCandidatesResult, type AutoPoCandidate, type AutoPoEntry, type AutoPoPoGroup,
   type AutoPoRunResult, type AutoPoPreview, type AutoPoPdf, type AutoPoEmailResult, type AutoPoEmailPreview,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
@@ -136,7 +136,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
   const [generating, setGenerating] = useState(false);
   const [genEntry, setGenEntry] = useState<AutoPoEntry | null>(null);
   const [genNote, setGenNote] = useState<string | null>(null);
-  const [existingPos, setExistingPos] = useState<AutoPoLine[] | null>(null);
+  const [existingPos, setExistingPos] = useState<AutoPoPoGroup[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -145,16 +145,15 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
   }, [cand.soId]);
 
   const blocked = !!preview && demoOnly && !preview.testy;
-  const createdPos = (genEntry?.lines ?? []).filter((l) => l.poId);
-  const deliveryPos: AutoPoLine[] = createdPos.length ? createdPos : (existingPos ?? []);
+  const createdPos = (genEntry?.pos ?? []).filter((p) => p.poId);
+  const deliveryPos: AutoPoPoGroup[] = createdPos.length ? createdPos : (existingPos ?? []);
+  const unmatched = genEntry?.unmatched ?? [];
   const showResult = !!genEntry || !!genNote || (!!existingPos && existingPos.length > 0);
   const step = showResult ? 3 : 1;
 
   async function loadExisting() {
-    try {
-      const sp = await fetchAutoPoSoPos(cand.soId);
-      setExistingPos(sp.pos.map((p) => ({ itemId: null, itemName: p.itemName, qty: p.qty ?? 0, vendor: p.vendor, vendorEmail: p.vendorEmail, result: 'PO CREATED', poId: p.poId })));
-    } catch { /* ignore — note still shows */ }
+    try { const sp = await fetchAutoPoSoPos(cand.soId); setExistingPos(sp.pos); }
+    catch { /* ignore — note still shows */ }
   }
 
   async function generate() {
@@ -202,14 +201,22 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
                 </div>
               )}
               {genEntry?.skipped && <div className="qb-flash warn" style={{ marginBottom: 12 }}>⚠ Skipped: {genEntry.skipped}</div>}
-              {genEntry && !genEntry.skipped && <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ {createdPos.length} purchase order(s) created in Striven for {cand.ref}.</div>}
+              {genEntry && !genEntry.skipped && <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ {createdPos.length} purchase order(s) created for {cand.ref} — one per vendor.</div>}
 
-              {deliveryPos.map((l, i) => <PoDeliveryCard key={i} line={l} />)}
-
-              {!deliveryPos.length && !genEntry?.skipped && (
-                <div className="page-sub" style={{ fontSize: 13 }}>
-                  No PO to deliver — none of the lines had a prior PO to copy a vendor from. Add an item→vendor mapping, or try a fresh test order.
+              {unmatched.length > 0 && (
+                <div className="qb-flash warn" style={{ marginBottom: 12 }}>
+                  ⚠ <b>{unmatched.length} item(s) had no vendor</b> — not added to any PO:
+                  <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                    {unmatched.map((u, i) => <li key={i}><b>{u.itemName}</b> ×{u.qty}{u.reason ? ` — ${u.reason}` : ''}</li>)}
+                  </ul>
+                  <div style={{ marginTop: 6 }}>Map each to a vendor (add one prior PO for it in Striven), then re-run.</div>
                 </div>
+              )}
+
+              {deliveryPos.map((p, i) => <PoDeliveryCard key={i} po={p} />)}
+
+              {!deliveryPos.length && !unmatched.length && !genEntry?.skipped && (
+                <div className="page-sub" style={{ fontSize: 13 }}>No PO to deliver. Try a fresh test order.</div>
               )}
               <button className="btn ghost" onClick={onClose} style={{ marginTop: 8 }}>Done</button>
             </div>
@@ -229,36 +236,43 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
                     </div>
                   )}
                   <div className="qb-plan-row"><span className="qb-plan-k">Order</span><span className="qb-plan-v"><b>{preview.ref}</b> <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>· placed {fmtDate(preview.orderDate)} · {preview.type}</span></span></div>
-                  <div className="qb-plan-row"><span className="qb-plan-k">Vendors</span><span className="qb-plan-v">{preview.vendors.length
-                    ? preview.vendors.map((v, i) => <span key={i} className="pill-tag tag-ok" style={{ marginRight: 6 }}>🏢 {v}</span>)
-                    : <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>none matched from reports — will resolve on generate</span>}</span></div>
+                  <div className="qb-plan-row"><span className="qb-plan-k">Will create</span><span className="qb-plan-v"><b>{preview.vendorGroups.length}</b> purchase order(s){preview.vendorGroups.length ? ' — one per vendor' : ''}{preview.pending.length ? ` · ${preview.pending.length} item(s) pending` : ''}</span></div>
 
-                  <div className="table-wrap" style={{ marginTop: 10 }}>
-                    <table className="data-table">
-                      <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Unit</th><th>Vendor</th></tr></thead>
-                      <tbody>
-                        {preview.lines.map((l, i) => (
-                          <tr key={i}>
-                            <td style={{ fontWeight: 600 }}>{l.itemName}</td>
-                            <td className="num">{l.qty}</td>
-                            <td className="num">{l.unit != null ? formatCurrency(l.unit) : '—'}</td>
-                            <td>{l.vendor
-                              ? <span className="pill-tag tag-ok" title={l.vendorSource === 'reports' ? 'From your vendor-items report' : ''}>✓ {l.vendor}</span>
-                              : <span className="pill-tag" style={{ background: 'rgba(245,158,11,.12)', color: '#92400E' }}>○ resolve on generate</span>}</td>
-                          </tr>
-                        ))}
-                        {preview.lines.length === 0 && <tr><td colSpan={4} style={{ color: C.muted }}>This order has no line items.</td></tr>}
-                      </tbody>
-                    </table>
-                  </div>
+                  {/* One card per vendor — its items go on ONE PO */}
+                  {preview.vendorGroups.map((g, gi) => (
+                    <div key={gi} style={{ border: '1px solid var(--border, #e5e7eb)', borderRadius: 10, padding: 12, marginTop: 10 }}>
+                      <div style={{ fontWeight: 800, marginBottom: 6 }}>🏢 {g.vendor} <span className="page-sub" style={{ fontWeight: 400, fontSize: 12 }}>· one PO · {g.items.length} item(s)</span></div>
+                      <table className="data-table">
+                        <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Unit</th></tr></thead>
+                        <tbody>
+                          {g.items.map((it, ii) => (
+                            <tr key={ii}><td style={{ fontWeight: 600 }}>{it.itemName}</td><td className="num">{it.qty}</td><td className="num">{it.unit != null ? formatCurrency(it.unit) : '—'}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+
+                  {preview.pending.length > 0 && (
+                    <div className="qb-flash warn" style={{ marginTop: 10 }}>
+                      ⚠ <b>{preview.pending.length} item(s)</b> not in your vendor-items report — will resolve from its most recent PO on generate, or flag as <b>no vendor</b> if none exists:
+                      <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                        {preview.pending.map((p, i) => <li key={i}><b>{p.itemName}</b> ×{p.qty}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {preview.vendorGroups.length === 0 && preview.pending.length === 0 && (
+                    <div className="page-sub" style={{ marginTop: 10, color: C.muted }}>This order has no line items.</div>
+                  )}
+
                   <div className="page-sub" style={{ marginTop: 8, fontSize: 12 }}>
-                    Vendor comes from your <b>Reports → Vendor items</b> mapping (which item you buy from whom). On generate, any unmatched line is resolved from its most recent PO.
+                    Same vendor's items go on <b>one</b> purchase order. Vendor comes from your <b>Reports → Vendor items</b> mapping.
                   </div>
 
                   <div style={{ display: 'flex', gap: 10, marginTop: 16, alignItems: 'center' }}>
-                    <button className="btn" onClick={generate} disabled={generating || blocked || preview.lines.length === 0}
-                      style={{ background: (blocked || preview.lines.length === 0) ? 'var(--muted)' : 'var(--accent)', color: '#fff' }}>
-                      {generating ? 'Generating…' : blocked ? 'Blocked (not a test order)' : 'Generate PO →'}
+                    <button className="btn" onClick={generate} disabled={generating || blocked || preview.lineCount === 0}
+                      style={{ background: (blocked || preview.lineCount === 0) ? 'var(--muted)' : 'var(--accent)', color: '#fff' }}>
+                      {generating ? 'Generating…' : blocked ? 'Blocked (not a test order)' : `Generate ${preview.vendorGroups.length || ''} PO${preview.vendorGroups.length === 1 ? '' : '(s)'} →`}
                     </button>
                     <button className="btn ghost" onClick={onClose} disabled={generating}>Cancel</button>
                   </div>
@@ -274,8 +288,8 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
 
 // A created PO: fetch its PDF, PREVIEW the exact email before sending, and email it
 // to an editable recipient. Nothing goes out until you click Send.
-function PoDeliveryCard({ line }: { line: AutoPoLine }) {
-  const poId = line.poId as number;
+function PoDeliveryCard({ po }: { po: AutoPoPoGroup }) {
+  const poId = po.poId as number;
   const [pdf, setPdf] = useState<AutoPoPdf | null>(null);
   const [loadingPdf, setLoadingPdf] = useState(true);
   const [pdfErr, setPdfErr] = useState<string | null>(null);
@@ -303,14 +317,19 @@ function PoDeliveryCard({ line }: { line: AutoPoLine }) {
 
   const dataUri = pdf ? `data:application/pdf;base64,${pdf.pdfBase64}` : '';
   const validTo = /.+@.+\..+/.test(to.trim());
-  const vendorEmail = mail?.vendorEmail || line.vendorEmail || '';
+  const vendorEmail = mail?.vendorEmail || po.vendorEmail || '';
 
   return (
     <div className="section" style={{ margin: '0 0 12px', border: '1px solid var(--border, #e5e7eb)', borderRadius: 12, padding: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-        <div style={{ fontWeight: 800 }}>PO #{poId} <span className="pill-tag tag-ok" style={{ marginLeft: 6 }}>🏢 {line.vendor || 'vendor'}</span></div>
-        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>{line.itemName} × {line.qty}</div>
+        <div style={{ fontWeight: 800 }}>PO #{poId} <span className="pill-tag tag-ok" style={{ marginLeft: 6 }}>🏢 {po.vendor || 'vendor'}</span></div>
+        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>{po.items.length} item(s)</div>
       </div>
+      {po.items.length > 0 && (
+        <div className="page-sub" style={{ margin: '0 0 10px', fontSize: 12.5 }}>
+          {po.items.map((it, i) => <span key={i}>{i > 0 ? ' · ' : ''}<b>{it.itemName}</b> ×{it.qty}</span>)}
+        </div>
+      )}
 
       {/* PDF */}
       {loadingPdf && <div className="page-sub" style={{ fontSize: 13 }}>Fetching PO PDF…</div>}

@@ -1128,7 +1128,11 @@ async function previousPoForItem(itemId) {
   return null;
 }
 
-function buildAutoPoPayload(prevPo, prevLine, { itemId, itemName, qty, soNumber, soCustomer, soShipTo }) {
+// Build ONE purchase order for a vendor from a template PO, carrying ALL the
+// order's items for that vendor as separate line items (each `items[i]` =
+// { itemId, itemName, qty, templateLine }). This is the streamlining: same vendor
+// → one PO, not one PO per item.
+function buildAutoPoPayloadMulti(prevPo, items, { soNumber, soCustomer, soShipTo }) {
   const clone = (v) => JSON.parse(JSON.stringify(v));
   const p = clone(prevPo);
   p.id = 0;
@@ -1154,13 +1158,15 @@ function buildAutoPoPayload(prevPo, prevLine, { itemId, itemName, qty, soNumber,
   }
   p.title = `Auto PO for SO ${soNumber}`;
   if ('memo' in p) p.memo = `Auto-created from Sales Order ${soNumber}`;
-  const nl = clone(prevLine);
-  nl.id = 0;
-  for (const k of ['purchaseOrderLineItemId', 'purchaseOrderId', 'quantityReceived', 'quantityBilled',
-    'amountReceived', 'amountBilled']) delete nl[k];
-  nl.item = { ...(nl.item ?? {}), id: Number(itemId), name: String(itemName ?? nl.item?.name ?? '') };
-  nl.quantity = Number(qty);
-  p.lineItems = [nl];
+  p.lineItems = items.map((it) => {
+    const nl = clone(it.templateLine);
+    nl.id = 0;
+    for (const k of ['purchaseOrderLineItemId', 'purchaseOrderId', 'quantityReceived', 'quantityBilled',
+      'amountReceived', 'amountBilled']) delete nl[k];
+    nl.item = { ...(nl.item ?? {}), id: Number(it.itemId), name: String(it.itemName ?? nl.item?.name ?? '') };
+    nl.quantity = Number(it.qty);
+    return nl;
+  });
   return p;
 }
 
@@ -1170,7 +1176,8 @@ async function autoPoProcessSo(soId, mode) {
   const typeName = so.type?.name ?? '';
   // soNumber is NOT logged: Striven order numbers embed the patient's surname
   // ("ADubberly DEMO Hidow"). soId identifies the order without carrying a name.
-  const entry = { at: new Date().toISOString(), soId: Number(soId), type: typeName, mode, lines: [] };
+  // pos = one entry PER VENDOR (grouped); unmatched = items with no vendor found.
+  const entry = { at: new Date().toISOString(), soId: Number(soId), type: typeName, mode, pos: [], unmatched: [] };
   const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
   if (autoPoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test order (pilot gate)'; return entry; }
   const chainSb = await sbCacheRead('order_chain');
@@ -1178,32 +1185,35 @@ async function autoPoProcessSo(soId, mode) {
   if ((chain[String(soId)]?.pos ?? []).length) { entry.skipped = 'SO already has a linked PO'; return entry; }
   const lines = so.lineItems ?? [];
   if (!lines.length) { entry.skipped = 'no line items on SO'; return entry; }
+
+  // 1. Resolve each SO line to a vendor + template line, then GROUP BY VENDOR.
+  const groups = new Map();   // vendorKey → { vendor, template, items: [{itemId,itemName,qty,unit,templateLine}] }
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     const itemId = l.item?.id ?? l.itemId ?? null;
     const itemName = l.item?.name ?? l.itemName ?? `Line ${i + 1}`;
     const qty = Number(l.quantity ?? l.qty ?? 0);
-    const li = { itemId, itemName, qty };
-    entry.lines.push(li);
-    if (!itemId || qty <= 0) { li.result = 'skipped: missing item id or quantity'; continue; }
+    if (!itemId || qty <= 0) { entry.unmatched.push({ itemName, qty, reason: 'missing item id or quantity' }); continue; }
     const prev = await previousPoForItem(itemId);
-    if (!prev) { li.result = 'no previous PO contains this item — vendor unknown (add mapping later)'; continue; }
-    li.vendor = prev.po.vendor?.name ?? '';
-    const payload = buildAutoPoPayload(prev.po, prev.line, { itemId, itemName, qty, soNumber, soCustomer: so.customer ?? null, soShipTo: so.shipToLocation ?? so.shipTo ?? null });
+    if (!prev) { entry.unmatched.push({ itemId, itemName, qty, reason: 'no vendor — this item has no prior purchase order to copy from' }); continue; }
+    const vName = prev.po.vendor?.name ?? '';
+    const vKey = String(prev.po.vendor?.id ?? vName);
+    if (!groups.has(vKey)) groups.set(vKey, { vendor: prev.po.vendor ?? { name: vName }, template: prev.po, items: [] });
+    groups.get(vKey).items.push({ itemId, itemName, qty, unit: prev.line?.unitPrice ?? prev.line?.price ?? null, templateLine: prev.line });
+  }
+
+  // 2. One PO per vendor group — all that vendor's items on a single PO.
+  for (const g of groups.values()) {
+    const vendorName = g.vendor?.name ?? '';
+    const items = g.items.map((it) => ({ itemName: it.itemName, qty: it.qty, unit: it.unit }));
     if (mode === 'live') {
+      const payload = buildAutoPoPayloadMulti(g.template, g.items, { soNumber, soCustomer: so.customer ?? null, soShipTo: so.shipToLocation ?? so.shipTo ?? null });
       const created = await striven('POST', '/v1/purchase-orders', payload);
-      li.result = 'PO CREATED';
-      li.poId = created?.id ?? created?.data?.id ?? null;
-      li.vendorEmail = await vendorContactEmail(li.vendor);   // for the UI to pre-fill the recipient
+      const poId = created?.id ?? created?.data?.id ?? null;
+      const vendorEmail = await vendorContactEmail(vendorName);
+      entry.pos.push({ poId, vendor: vendorName, vendorEmail, items });
     } else {
-      li.result = 'DRY-RUN: PO would be created';
-      // The payload sent to Striven keeps the real name — Striven is the system
-      // of record. What we persist in our own log never does.
-      li.plan = {
-        vendor: li.vendor, qty,
-        unitPrice: payload.lineItems?.[0]?.unitPrice ?? payload.lineItems?.[0]?.price ?? null,
-        dropShipTo: payload.dropShipCustomer?.id ? `PT-${payload.dropShipCustomer.id}` : null,
-      };
+      entry.pos.push({ poId: null, vendor: vendorName, vendorEmail: '', items, dryRun: true });
     }
   }
   return entry;
@@ -1264,22 +1274,30 @@ async function autoPoPreview(soId) {
   const typeName = so.type?.name ?? '';
   const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
   const vm = await itemVendorMap();
-  const lines = (so.lineItems ?? []).map((l, i) => {
-    const itemName = l.item?.name ?? l.itemName ?? `Line ${i + 1}`;
+  // Group items by their reports-vendor; items with no reports match go to
+  // `pending` (they usually still resolve from a prior PO at generate time).
+  const groups = new Map();   // vendor → items[]
+  const pending = [];
+  let lineCount = 0;
+  for (const l of (so.lineItems ?? [])) {
+    lineCount++;
+    const itemName = l.item?.name ?? l.itemName ?? `Line ${lineCount}`;
     const qty = Number(l.quantity ?? l.qty ?? 0);
     const hit = vm.get(String(itemName).toLowerCase().trim());
-    return {
-      itemId: l.item?.id ?? l.itemId ?? null, itemName, qty,
-      vendor: hit?.vendor ?? '', vendorSource: hit ? 'reports' : '',
-      unit: hit?.unit ?? (l.unitPrice ?? l.price ?? null),
-    };
-  });
-  const vendors = [...new Set(lines.map((l) => l.vendor).filter(Boolean))];
+    const unit = hit?.unit ?? (l.unitPrice ?? l.price ?? null);
+    if (hit?.vendor) {
+      if (!groups.has(hit.vendor)) groups.set(hit.vendor, []);
+      groups.get(hit.vendor).push({ itemName, qty, unit });
+    } else {
+      pending.push({ itemName, qty, unit });
+    }
+  }
+  const vendorGroups = [...groups.entries()].map(([vendor, items]) => ({ vendor, items }));
   return {
     ok: true, soId: Number(soId), ref: safeRef('SO', soId, soNumber),
     type: testy ? 'DEMO / test' : (typeName ? soClass(typeName) : '—'), testy,
     demoOnly: autoPoDemoOnly(), orderDate: so.orderDate ?? so.dateCreated ?? null,
-    lineCount: lines.length, lines, vendors,
+    lineCount, vendorGroups, pending,
   };
 }
 
@@ -1385,10 +1403,16 @@ async function autoPoSoPos(soId) {
   const seen = new Set(); const pos = [];
   for (const e of (state.log || [])) {
     if (Number(e.soId) !== Number(soId)) continue;
-    for (const l of (e.lines || [])) {
+    for (const p of (e.pos || [])) {           // new grouped structure
+      if (p.poId && !seen.has(p.poId)) {
+        seen.add(p.poId);
+        pos.push({ poId: p.poId, vendor: p.vendor || '', vendorEmail: p.vendorEmail || '', items: p.items || [] });
+      }
+    }
+    for (const l of (e.lines || [])) {          // backward-compat with old per-line logs
       if (l.poId && !seen.has(l.poId)) {
         seen.add(l.poId);
-        pos.push({ poId: l.poId, itemName: l.itemName || '', qty: l.qty ?? null, vendor: l.vendor || '', vendorEmail: l.vendorEmail || '' });
+        pos.push({ poId: l.poId, vendor: l.vendor || '', vendorEmail: l.vendorEmail || '', items: [{ itemName: l.itemName || '', qty: l.qty ?? null }] });
       }
     }
   }

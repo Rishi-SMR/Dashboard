@@ -180,20 +180,21 @@ export const fetchPatientItemsReport = () => get<PatientItemsReport>('/api/repor
  *  patient names never reach the browser. `testy` = passes the pilot demo/test gate. */
 export type AutoPoCandidate = { soId: number; ref: string; date: string | null; kind: string; testy: boolean; hasPo: boolean };
 export type AutoPoCandidatesResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly: boolean; candidates: AutoPoCandidate[] };
-/** Per-line result of the SO→PO run. In dry mode `plan` is filled; in live mode `poId` is set. */
-export type AutoPoLine = {
-  itemId: number | null; itemName: string; qty: number; vendor?: string; vendorEmail?: string; result: string;
-  plan?: { vendor: string; qty: number; unitPrice: number | null; dropShipTo: string | null };
-  poId?: number | null;
-};
-export type AutoPoEntry = { at: string; soId: number; type: string; mode: 'dry' | 'live'; lines: AutoPoLine[]; skipped?: string };
+/** SO→PO run result, GROUPED BY VENDOR: `pos` = one PO per vendor (all its items);
+ *  `unmatched` = items with no vendor. In dry mode `poId` is null. */
+export type AutoPoPoItem = { itemName: string; qty: number; unit?: number | null };
+export type AutoPoPoGroup = { poId: number | null; vendor: string; vendorEmail?: string; items: AutoPoPoItem[]; dryRun?: boolean };
+export type AutoPoUnmatched = { itemId?: number | null; itemName: string; qty: number; reason?: string };
+export type AutoPoEntry = { at: string; soId: number; type: string; mode: 'dry' | 'live'; pos: AutoPoPoGroup[]; unmatched: AutoPoUnmatched[]; skipped?: string };
 export type AutoPoRunResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly?: boolean; note?: string; processed?: AutoPoEntry[]; checkpoint?: number };
 
-/** Instant preview: order lines + the reports-based vendor for each (no PO scan). */
-export type AutoPoPreviewLine = { itemId: number | null; itemName: string; qty: number; vendor: string; vendorSource: string; unit: number | null };
+/** Instant preview: order items GROUPED BY reports-vendor; `pending` = items with
+ *  no reports match (usually still resolve from a prior PO at generate time). */
 export type AutoPoPreview = {
   ok: boolean; soId: number; ref: string; type: string; testy: boolean; demoOnly: boolean;
-  orderDate: string | null; lineCount: number; lines: AutoPoPreviewLine[]; vendors: string[];
+  orderDate: string | null; lineCount: number;
+  vendorGroups: { vendor: string; items: AutoPoPoItem[] }[];
+  pending: AutoPoPoItem[];
 };
 export type AutoPoPdf = { ok: boolean; poId: number; filename: string; size: number; pdfBase64: string };
 export type AutoPoEmailResult = { ok: boolean; poId?: number; to?: string; id?: string | null; error?: string };
@@ -205,7 +206,7 @@ export const fetchAutoPoPdf = (poId: number) => get<AutoPoPdf>(`/api/auto-po?act
 export type AutoPoEmailPreview = { ok: boolean; poId: number; subject: string; vendor: string; vendorEmail: string; html: string };
 export const fetchAutoPoEmailPreview = (poId: number) => get<AutoPoEmailPreview>(`/api/auto-po?action=email-preview&po=${poId}`);
 /** POs already created for a sales order — so an already-processed order still shows its delivery step. */
-export type AutoPoSoPos = { ok: boolean; soId: number; pos: { poId: number; itemName: string; qty: number | null; vendor: string; vendorEmail: string }[] };
+export type AutoPoSoPos = { ok: boolean; soId: number; pos: AutoPoPoGroup[] };
 export const fetchAutoPoSoPos = (soId: number) => get<AutoPoSoPos>(`/api/auto-po?action=so-pos&so=${soId}`);
 export const autoPoSendEmail = (poId: number, to: string, subject?: string, body?: string) =>
   get<AutoPoEmailResult>(`/api/auto-po?action=email&po=${poId}&to=${encodeURIComponent(to)}${subject ? `&subject=${encodeURIComponent(subject)}` : ''}${body ? `&body=${encodeURIComponent(body)}` : ''}`);
