@@ -189,7 +189,20 @@ export type AutoPoLine = {
 export type AutoPoEntry = { at: string; soId: number; type: string; mode: 'dry' | 'live'; lines: AutoPoLine[]; skipped?: string };
 export type AutoPoRunResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly?: boolean; note?: string; processed?: AutoPoEntry[]; checkpoint?: number };
 
+/** Instant preview: order lines + the reports-based vendor for each (no PO scan). */
+export type AutoPoPreviewLine = { itemId: number | null; itemName: string; qty: number; vendor: string; vendorSource: string; unit: number | null };
+export type AutoPoPreview = {
+  ok: boolean; soId: number; ref: string; type: string; testy: boolean; demoOnly: boolean;
+  orderDate: string | null; lineCount: number; lines: AutoPoPreviewLine[]; vendors: string[];
+};
+export type AutoPoPdf = { ok: boolean; poId: number; filename: string; size: number; pdfBase64: string };
+export type AutoPoEmailResult = { ok: boolean; poId?: number; to?: string; id?: string | null; error?: string };
+
 export const fetchAutoPoCandidates = () => get<AutoPoCandidatesResult>('/api/auto-po?action=candidates');
+export const fetchAutoPoPreview = (soId: number) => get<AutoPoPreview>(`/api/auto-po?action=preview&so=${soId}`);
+export const fetchAutoPoPdf = (poId: number) => get<AutoPoPdf>(`/api/auto-po?action=pdf&po=${poId}`);
+export const autoPoSendEmail = (poId: number, to: string, subject?: string, body?: string) =>
+  get<AutoPoEmailResult>(`/api/auto-po?action=email&po=${poId}&to=${encodeURIComponent(to)}${subject ? `&subject=${encodeURIComponent(subject)}` : ''}${body ? `&body=${encodeURIComponent(body)}` : ''}`);
 /** Build the PO plan for one SO WITHOUT creating anything (dry run). */
 export const fetchAutoPoPlan = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?so=${soId}&mode=dry`);
 /** Actually create the vendor PO(s) in Striven for one SO (live). Demo-gated server-side. */

@@ -8,3 +8,4 @@ dist/
 .DS_Store
 striven-server/.env
 striven-server/node_modules/
+.vercel/

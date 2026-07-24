@@ -1223,12 +1223,97 @@ async function autoPoCandidates() {
   });
 }
 
+// item(name) → primary vendor, from the cached vendor-items report — instant, no
+// live PO scan. This IS the "which item we buy from which vendor" mapping the
+// Reports tab already computes; preview reads it so the vendor pops up at once.
+async function itemVendorMap() {
+  const r = await sbCacheRead('report_vendor_items');
+  const vendors = r?.data?.vendors || [];
+  const m = new Map();
+  for (const v of vendors) for (const it of (v.items || [])) {
+    const k = String(it.item || '').toLowerCase().trim();
+    if (!k) continue;
+    const cur = m.get(k);
+    if (!cur || Number(it.poCount || 0) > cur.poCount) {
+      const qty = Number(it.qty || 0);
+      m.set(k, { vendor: v.vendor, poCount: Number(it.poCount || 0), unit: qty ? round2(Number(it.cost || 0) / qty) : null });
+    }
+  }
+  return m;
+}
+
+// Fast preview for the UI: the order's items + the reports-based vendor for each
+// (no slow previous-PO scan — that runs only when the PO is actually generated).
+async function autoPoPreview(soId) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const soNumber = String(so.orderNumber ?? so.number ?? soId);
+  const typeName = so.type?.name ?? '';
+  const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
+  const vm = await itemVendorMap();
+  const lines = (so.lineItems ?? []).map((l, i) => {
+    const itemName = l.item?.name ?? l.itemName ?? `Line ${i + 1}`;
+    const qty = Number(l.quantity ?? l.qty ?? 0);
+    const hit = vm.get(String(itemName).toLowerCase().trim());
+    return {
+      itemId: l.item?.id ?? l.itemId ?? null, itemName, qty,
+      vendor: hit?.vendor ?? '', vendorSource: hit ? 'reports' : '',
+      unit: hit?.unit ?? (l.unitPrice ?? l.price ?? null),
+    };
+  });
+  const vendors = [...new Set(lines.map((l) => l.vendor).filter(Boolean))];
+  return {
+    ok: true, soId: Number(soId), ref: safeRef('SO', soId, soNumber),
+    type: testy ? 'DEMO / test' : (typeName ? soClass(typeName) : '—'), testy,
+    demoOnly: autoPoDemoOnly(), orderDate: so.orderDate ?? so.dateCreated ?? null,
+    lineCount: lines.length, lines, vendors,
+  };
+}
+
+// Fetch a PO's own PDF (Striven document format 15) as base64 for the UI/email.
+// striven() returns JSON, so this does a dedicated binary fetch with the token.
+async function autoPoFetchPdf(poId) {
+  const token = await getToken();
+  const res = await fetch(`${BASE}/v1/purchase-orders/${poId}/format/15`, {
+    headers: { Authorization: `Bearer ${token}`, 'User-Agent': UA, Accept: 'application/pdf' },
+  });
+  if (!res.ok) throw new Error(`PO PDF ${poId} → HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { ok: true, poId: Number(poId), filename: `PO-${poId}.pdf`, size: buf.length, pdfBase64: buf.toString('base64') };
+}
+
+// Email the PO PDF via Resend (HTTPS → serverless-safe, native attachments, no
+// npm dependency). Configure RESEND_API_KEY (+ optional AUTO_PO_EMAIL_FROM).
+// Recipient is passed per-call and is editable in the UI (demo default on client).
+async function autoPoEmail({ poId, to, subject, body }) {
+  const key = process.env.RESEND_API_KEY || '';
+  if (!key) return { ok: false, error: 'Email not configured yet — set RESEND_API_KEY (see the Auto-PO email note).' };
+  if (!to || !/.+@.+\..+/.test(String(to))) return { ok: false, error: 'A valid recipient email is required.' };
+  const pdf = await autoPoFetchPdf(poId);
+  const from = process.env.AUTO_PO_EMAIL_FROM || 'SMR Auto-PO <onboarding@resend.dev>';
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from, to: [String(to)],
+      subject: subject || `Purchase Order PO-${poId}`,
+      html: body || `<p>Please find attached Purchase Order <b>PO-${poId}</b>.</p><p style="color:#64748b">Sent from the SMR dashboard (demo).</p>`,
+      attachments: [{ filename: pdf.filename, content: pdf.pdfBase64 }],
+    }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: `Email send failed (HTTP ${res.status}): ${j?.message || JSON.stringify(j)}` };
+  return { ok: true, poId: Number(poId), to: String(to), id: j.id ?? null };
+}
+
 export async function autoPoRun(params = {}) {
   const mode = params.mode === 'live' ? 'live' : (process.env.AUTO_PO_MODE === 'live' ? 'live' : 'dry');
   const state = await autoPoState();
   if (params.action === 'candidates') {
     return { ok: true, mode, demoOnly: autoPoDemoOnly(), candidates: await autoPoCandidates() };
   }
+  if (params.action === 'preview' && params.so) return autoPoPreview(Number(params.so));
+  if (params.action === 'pdf' && params.po) return autoPoFetchPdf(Number(params.po));
+  if (params.action === 'email' && params.po) return autoPoEmail({ poId: Number(params.po), to: params.to, subject: params.subject, body: params.body });
   if (params.action === 'status') {
     return {
       ok: true, mode, demoOnly: autoPoDemoOnly(), checkpoint: state.lastSoId,

@@ -48,6 +48,10 @@ export default async function handler(req, res) {
         so: url.searchParams.get('so') || undefined,
         mode: url.searchParams.get('mode') || undefined,
         action: url.searchParams.get('action') || undefined,
+        po: url.searchParams.get('po') || undefined,
+        to: url.searchParams.get('to') || undefined,
+        subject: url.searchParams.get('subject') || undefined,
+        body: url.searchParams.get('body') || undefined,
       }));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }

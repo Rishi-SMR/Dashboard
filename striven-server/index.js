@@ -45,6 +45,10 @@ const server = http.createServer(async (req, res) => {
         so: reqUrl.searchParams.get('so') || undefined,
         mode: reqUrl.searchParams.get('mode') || undefined,
         action: reqUrl.searchParams.get('action') || undefined,
+        po: reqUrl.searchParams.get('po') || undefined,
+        to: reqUrl.searchParams.get('to') || undefined,
+        subject: reqUrl.searchParams.get('subject') || undefined,
+        body: reqUrl.searchParams.get('body') || undefined,
       });
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
     } catch (e) {
