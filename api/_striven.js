@@ -1378,6 +1378,17 @@ async function autoPoEmail({ poId, to, subject, body }) {
   return { ok: true, poId: Number(poId), to: String(to), id: j.id ?? null };
 }
 
+// Render the email that WOULD be sent — subject, HTML body, and the resolved
+// vendor email — WITHOUT sending. Needs no RESEND_API_KEY, so the user can review
+// the mail in the UI before anything goes out ("jaane se pehle dikhe").
+async function autoPoEmailPreview(poId) {
+  let po = {};
+  try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal fallback */ }
+  const subject = `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` — ${po.vendor.name}` : ''}`;
+  const vendorEmail = await vendorContactEmail(po.vendor?.name ?? '');
+  return { ok: true, poId: Number(poId), subject, vendor: po.vendor?.name ?? '', vendorEmail, html: autoPoEmailHtml(po, poId) };
+}
+
 export async function autoPoRun(params = {}) {
   const mode = params.mode === 'live' ? 'live' : (process.env.AUTO_PO_MODE === 'live' ? 'live' : 'dry');
   const state = await autoPoState();
@@ -1386,6 +1397,7 @@ export async function autoPoRun(params = {}) {
   }
   if (params.action === 'preview' && params.so) return autoPoPreview(Number(params.so));
   if (params.action === 'pdf' && params.po) return autoPoFetchPdf(Number(params.po));
+  if (params.action === 'email-preview' && params.po) return autoPoEmailPreview(Number(params.po));
   if (params.action === 'email' && params.po) return autoPoEmail({ poId: Number(params.po), to: params.to, subject: params.subject, body: params.body });
   if (params.action === 'status') {
     return {

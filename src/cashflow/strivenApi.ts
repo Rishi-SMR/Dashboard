@@ -201,6 +201,9 @@ export type AutoPoEmailResult = { ok: boolean; poId?: number; to?: string; id?: 
 export const fetchAutoPoCandidates = () => get<AutoPoCandidatesResult>('/api/auto-po?action=candidates');
 export const fetchAutoPoPreview = (soId: number) => get<AutoPoPreview>(`/api/auto-po?action=preview&so=${soId}`);
 export const fetchAutoPoPdf = (poId: number) => get<AutoPoPdf>(`/api/auto-po?action=pdf&po=${poId}`);
+/** Render the email that WOULD be sent (subject + HTML body + resolved vendor email) without sending. */
+export type AutoPoEmailPreview = { ok: boolean; poId: number; subject: string; vendor: string; vendorEmail: string; html: string };
+export const fetchAutoPoEmailPreview = (poId: number) => get<AutoPoEmailPreview>(`/api/auto-po?action=email-preview&po=${poId}`);
 export const autoPoSendEmail = (poId: number, to: string, subject?: string, body?: string) =>
   get<AutoPoEmailResult>(`/api/auto-po?action=email&po=${poId}&to=${encodeURIComponent(to)}${subject ? `&subject=${encodeURIComponent(subject)}` : ''}${body ? `&body=${encodeURIComponent(body)}` : ''}`);
 /** Build the PO plan for one SO WITHOUT creating anything (dry run). */

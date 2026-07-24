@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  fetchAutoPoCandidates, fetchAutoPoPreview, autoPoRaise, fetchAutoPoPdf, autoPoSendEmail,
+  fetchAutoPoCandidates, fetchAutoPoPreview, autoPoRaise, fetchAutoPoPdf, autoPoSendEmail, fetchAutoPoEmailPreview,
   type AutoPoCandidatesResult, type AutoPoCandidate, type AutoPoEntry, type AutoPoLine,
-  type AutoPoRunResult, type AutoPoPreview, type AutoPoPdf, type AutoPoEmailResult,
+  type AutoPoRunResult, type AutoPoPreview, type AutoPoPdf, type AutoPoEmailResult, type AutoPoEmailPreview,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
@@ -255,23 +255,29 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
   );
 }
 
-// A created PO: fetch its PDF, preview + download it, and email it to an editable recipient.
+// A created PO: fetch its PDF, PREVIEW the exact email before sending, and email it
+// to an editable recipient. Nothing goes out until you click Send.
 function PoDeliveryCard({ line }: { line: AutoPoLine }) {
   const poId = line.poId as number;
   const [pdf, setPdf] = useState<AutoPoPdf | null>(null);
   const [loadingPdf, setLoadingPdf] = useState(true);
   const [pdfErr, setPdfErr] = useState<string | null>(null);
+  const [mail, setMail] = useState<AutoPoEmailPreview | null>(null);
   const [to, setTo] = useState(DEFAULT_TO);
-  const [subject, setSubject] = useState(`Purchase Order PO-${poId} — ${line.itemName}`);
+  const [subject, setSubject] = useState('');
+  const [showBody, setShowBody] = useState(true);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<AutoPoEmailResult | null>(null);
 
   useEffect(() => {
     setLoadingPdf(true); setPdfErr(null);
     fetchAutoPoPdf(poId).then(setPdf).catch((e) => setPdfErr(e instanceof Error ? e.message : 'Failed to fetch the PDF.')).finally(() => setLoadingPdf(false));
+    // Render the exact email (subject + body + vendor email) — no send.
+    fetchAutoPoEmailPreview(poId).then((m) => { setMail(m); setSubject((s) => (s ? s : m.subject)); }).catch(() => { /* preview optional */ });
   }, [poId]);
 
   async function send() {
+    if (!confirm(`Send this PO email to ${to.trim()}?`)) return;
     setSending(true); setSent(null);
     try { setSent(await autoPoSendEmail(poId, to.trim(), subject)); }
     catch (e) { setSent({ ok: false, error: e instanceof Error ? e.message : 'Send failed.' }); }
@@ -280,6 +286,7 @@ function PoDeliveryCard({ line }: { line: AutoPoLine }) {
 
   const dataUri = pdf ? `data:application/pdf;base64,${pdf.pdfBase64}` : '';
   const validTo = /.+@.+\..+/.test(to.trim());
+  const vendorEmail = mail?.vendorEmail || line.vendorEmail || '';
 
   return (
     <div className="section" style={{ margin: '0 0 12px', border: '1px solid var(--border, #e5e7eb)', borderRadius: 12, padding: 14 }}>
@@ -292,25 +299,22 @@ function PoDeliveryCard({ line }: { line: AutoPoLine }) {
       {loadingPdf && <div className="page-sub" style={{ fontSize: 13 }}>Fetching PO PDF…</div>}
       {pdfErr && <div className="error" style={{ marginBottom: 8 }}>{pdfErr}</div>}
       {pdf && (
-        <>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-            <a className="btn" href={dataUri} download={pdf.filename} style={{ background: 'var(--accent)', color: '#fff', textDecoration: 'none', padding: '6px 14px', fontSize: 13 }}>⬇ {pdf.filename}</a>
-            <a className="btn ghost" href={dataUri} target="_blank" rel="noreferrer" style={{ padding: '6px 14px', fontSize: 13 }}>Open in tab ↗</a>
-            <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>{(pdf.size / 1024).toFixed(0)} KB</span>
-          </div>
-          <object data={dataUri} type="application/pdf" width="100%" height="220" style={{ border: '1px solid var(--border, #e5e7eb)', borderRadius: 8, marginBottom: 12 }}>
-            <span className="page-sub" style={{ fontSize: 12 }}>Preview unavailable — use Download / Open in tab.</span>
-          </object>
-        </>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          <a className="btn" href={dataUri} download={pdf.filename} style={{ background: 'var(--accent)', color: '#fff', textDecoration: 'none', padding: '6px 14px', fontSize: 13 }}>⬇ {pdf.filename}</a>
+          <a className="btn ghost" href={dataUri} target="_blank" rel="noreferrer" style={{ padding: '6px 14px', fontSize: 13 }}>Open PDF ↗</a>
+          <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>{(pdf.size / 1024).toFixed(0)} KB · attached to the email</span>
+        </div>
       )}
 
-      {/* Email */}
+      {/* Email — preview BEFORE sending */}
       <div style={{ borderTop: '1px dashed var(--border, #e5e7eb)', paddingTop: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>📧 Email this PO <span className="page-sub" style={{ fontWeight: 400, fontSize: 12 }}>· professional PO email + PDF attached</span></div>
-        {line.vendorEmail && (
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>📧 Review the email before sending <span className="page-sub" style={{ fontWeight: 400, fontSize: 12 }}>· nothing goes out until you click Send</span></div>
+
+        {vendorEmail && (
           <div className="page-sub" style={{ margin: '0 0 8px', fontSize: 12.5 }}>
-            Vendor contact found: <b>{line.vendorEmail}</b>{' '}
-            <button className="btn ghost" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setTo(line.vendorEmail as string)}>Use this →</button>
+            Vendor contact on file: <b>{vendorEmail}</b>{' '}
+            <button className="btn ghost" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setTo(vendorEmail)}>Use vendor →</button>
+            {to !== DEFAULT_TO && <button className="btn ghost" style={{ padding: '2px 10px', fontSize: 12, marginLeft: 6 }} onClick={() => setTo(DEFAULT_TO)}>Back to my inbox</button>}
           </div>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
@@ -319,12 +323,25 @@ function PoDeliveryCard({ line }: { line: AutoPoLine }) {
           <label className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>Subject</label>
           <input className="login-input" style={{ height: 36 }} value={subject} onChange={(e) => setSubject(e.target.value)} />
         </div>
+
+        {/* Rendered email preview */}
+        {mail && (
+          <div style={{ marginBottom: 10 }}>
+            <button className="btn ghost" style={{ padding: '4px 12px', fontSize: 12.5, marginBottom: 6 }} onClick={() => setShowBody((v) => !v)}>
+              {showBody ? '▾ Hide email preview' : '▸ Show email preview'}
+            </button>
+            {showBody && (
+              <iframe title={`email-${poId}`} srcDoc={mail.html} style={{ width: '100%', height: 380, border: '1px solid var(--border, #e5e7eb)', borderRadius: 8, background: '#fff' }} />
+            )}
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <button className="btn" onClick={send} disabled={sending || !pdf || !validTo}
             style={{ background: (!pdf || !validTo) ? 'var(--muted)' : '#16A34A', color: '#fff' }}>
-            {sending ? 'Sending…' : 'Send email with PDF →'}
+            {sending ? 'Sending…' : `Send to ${validTo ? to.trim() : '…'} →`}
           </button>
-          <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>Demo: editable recipient — defaults to the internal inbox, not the real vendor.</span>
+          <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>Demo: goes to your editable inbox, not the real vendor.</span>
         </div>
         {sent && (sent.ok
           ? <div className="qb-flash ok" style={{ marginTop: 10 }}>✓ Sent to <b>{sent.to}</b>{sent.id ? ` · id ${sent.id}` : ''}</div>
