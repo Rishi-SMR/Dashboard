@@ -1194,6 +1194,7 @@ async function autoPoProcessSo(soId, mode) {
       const created = await striven('POST', '/v1/purchase-orders', payload);
       li.result = 'PO CREATED';
       li.poId = created?.id ?? created?.data?.id ?? null;
+      li.vendorEmail = await vendorContactEmail(li.vendor);   // for the UI to pre-fill the recipient
     } else {
       li.result = 'DRY-RUN: PO would be created';
       // The payload sent to Striven keeps the real name — Striven is the system
@@ -1294,24 +1295,83 @@ async function autoPoFetchPdf(poId) {
   return { ok: true, poId: Number(poId), filename: `PO-${poId}.pdf`, size: buf.length, pdfBase64: buf.toString('base64') };
 }
 
-// Email the PO PDF via Resend (HTTPS → serverless-safe, native attachments, no
-// npm dependency). Configure RESEND_API_KEY (+ optional AUTO_PO_EMAIL_FROM).
-// Recipient is passed per-call and is editable in the UI (demo default on client).
+// Vendor's primary contact email — search contacts by the vendor's account name,
+// then read the contact detail for its primary active email (mirrors the SMR n8n
+// flow). '' if none found; failures are swallowed so the field stays editable.
+async function vendorContactEmail(vendorName) {
+  if (!vendorName) return '';
+  try {
+    const s = await striven('POST', '/v1/contacts/search', { accountName: String(vendorName), pageIndex: 0, pageSize: 20 });
+    const cid = (s.data ?? s.Data ?? [])[0]?.id;
+    if (!cid) return '';
+    const c = await striven('GET', `/v1/contacts/${cid}`);
+    const emails = Array.isArray(c.emails) ? c.emails.filter((e) => e.active !== false) : [];
+    const pick = emails.find((e) => e.isPrimary) ?? emails[0] ?? {};
+    return String(pick.email ?? pick.emailAddress ?? c.email ?? c.emailAddress ?? c.primaryEmail ?? '').trim();
+  } catch { return ''; }
+}
+
+// A professional PO email body (adapted from the SMR n8n template) — vendor-facing,
+// no patient data. Built from the PO detail so it's correct and self-contained.
+function autoPoEmailHtml(po, poId) {
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const poNo = po.poNumber ?? po.purchaseOrderNumber ?? `PO-${poId}`;
+  const vendor = po.vendor?.name ?? 'Vendor';
+  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const lines = po.lineItems ?? po.purchaseOrderLineItems ?? [];
+  const rows = (lines.length ? lines : [{ item: { name: 'Requested item' } }]).map((l, i) => {
+    const name = esc(l.item?.name ?? l.itemName ?? 'Item');
+    const qty = esc(l.quantity ?? l.qty ?? '');
+    const unit = l.unitPrice ?? l.price ?? null;
+    const unitStr = unit != null ? `$${Number(unit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+    return `<tr><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${i + 1}</td><td style="padding:10px;border:1px solid #d6d6d6"><b>${name}</b></td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center;font-weight:bold">${qty}</td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${unitStr}</td></tr>`;
+  }).join('');
+  return `<div style="margin:0;padding:24px;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#222">
+  <div style="max-width:720px;margin:0 auto;background:#fff;border:1px solid #ddd">
+    <div style="padding:22px 28px;border-bottom:4px solid #1f4e78">
+      <div style="font-size:24px;font-weight:bold;color:#1f4e78;letter-spacing:.5px">PURCHASE ORDER</div>
+      <div style="margin-top:6px;font-size:13px;color:#666">Confirmation required &middot; <b>${esc(poNo)}</b> &middot; ${esc(dateStr)}</div>
+    </div>
+    <div style="padding:24px 28px">
+      <p style="margin:0 0 16px;font-size:14px">Dear ${esc(vendor)},</p>
+      <p style="margin:0 0 20px;font-size:14px;line-height:1.7">Please process the following Purchase Order and confirm acceptance, expected dispatch date, and delivery date.</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:22px;font-size:13px">
+        <thead><tr style="background:#1f4e78;color:#fff">
+          <th style="width:8%;padding:11px;border:1px solid #1f4e78">Sr.</th>
+          <th style="padding:11px;border:1px solid #1f4e78;text-align:left">Item</th>
+          <th style="width:16%;padding:11px;border:1px solid #1f4e78">Qty</th>
+          <th style="width:18%;padding:11px;border:1px solid #1f4e78">Unit</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="padding:14px;margin-bottom:20px;border:1px solid #d6d6d6;background:#fafafa;font-size:13px;line-height:1.7">
+        <b>Please confirm:</b>
+        <ol style="margin:8px 0 0 20px;padding:0"><li>Acceptance of this PO</li><li>Unit price &amp; total</li><li>Taxes &amp; freight</li><li>Expected dispatch &amp; delivery dates</li><li>Payment terms</li></ol>
+      </div>
+      <p style="margin:0 0 6px;font-size:14px">Please reply confirming acceptance of <b>${esc(poNo)}</b>, and mention the PO number on all invoices &amp; documents.</p>
+      <p style="margin:16px 0 0;font-size:14px">Regards,<br><b>Purchasing Team &middot; Sports Med Recovery</b></p>
+    </div>
+    <div style="padding:12px 28px;background:#f2f5f8;border-top:1px solid #ddd;text-align:center;font-size:11px;color:#666">Auto-generated Purchase Order &middot; PDF attached.</div>
+  </div></div>`;
+}
+
+// Email the PO (rich HTML body + PDF attachment) via Resend (HTTPS → serverless-safe,
+// native attachments, no npm dependency). RESEND_API_KEY (+ optional AUTO_PO_EMAIL_FROM).
+// Recipient is passed per-call and is editable in the UI.
 async function autoPoEmail({ poId, to, subject, body }) {
   const key = process.env.RESEND_API_KEY || '';
   if (!key) return { ok: false, error: 'Email not configured yet — set RESEND_API_KEY (see the Auto-PO email note).' };
   if (!to || !/.+@.+\..+/.test(String(to))) return { ok: false, error: 'A valid recipient email is required.' };
+  let po = {};
+  try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal template fallback */ }
   const pdf = await autoPoFetchPdf(poId);
   const from = process.env.AUTO_PO_EMAIL_FROM || 'SMR Auto-PO <onboarding@resend.dev>';
+  const html = body || autoPoEmailHtml(po, poId);
+  const subj = subject || `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` — ${po.vendor.name}` : ''}`;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from, to: [String(to)],
-      subject: subject || `Purchase Order PO-${poId}`,
-      html: body || `<p>Please find attached Purchase Order <b>PO-${poId}</b>.</p><p style="color:#64748b">Sent from the SMR dashboard (demo).</p>`,
-      attachments: [{ filename: pdf.filename, content: pdf.pdfBase64 }],
-    }),
+    body: JSON.stringify({ from, to: [String(to)], subject: subj, html, attachments: [{ filename: pdf.filename, content: pdf.pdfBase64 }] }),
   });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) return { ok: false, error: `Email send failed (HTTP ${res.status}): ${j?.message || JSON.stringify(j)}` };

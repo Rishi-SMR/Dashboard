@@ -182,7 +182,7 @@ export type AutoPoCandidate = { soId: number; ref: string; date: string | null; 
 export type AutoPoCandidatesResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly: boolean; candidates: AutoPoCandidate[] };
 /** Per-line result of the SO→PO run. In dry mode `plan` is filled; in live mode `poId` is set. */
 export type AutoPoLine = {
-  itemId: number | null; itemName: string; qty: number; vendor?: string; result: string;
+  itemId: number | null; itemName: string; qty: number; vendor?: string; vendorEmail?: string; result: string;
   plan?: { vendor: string; qty: number; unitPrice: number | null; dropShipTo: string | null };
   poId?: number | null;
 };

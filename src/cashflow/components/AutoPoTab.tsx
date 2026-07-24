@@ -306,7 +306,13 @@ function PoDeliveryCard({ line }: { line: AutoPoLine }) {
 
       {/* Email */}
       <div style={{ borderTop: '1px dashed var(--border, #e5e7eb)', paddingTop: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>📧 Email this PO</div>
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>📧 Email this PO <span className="page-sub" style={{ fontWeight: 400, fontSize: 12 }}>· professional PO email + PDF attached</span></div>
+        {line.vendorEmail && (
+          <div className="page-sub" style={{ margin: '0 0 8px', fontSize: 12.5 }}>
+            Vendor contact found: <b>{line.vendorEmail}</b>{' '}
+            <button className="btn ghost" style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setTo(line.vendorEmail as string)}>Use this →</button>
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <label className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>To</label>
           <input className="login-input" style={{ height: 36 }} value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@email.com" />
