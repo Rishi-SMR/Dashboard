@@ -1128,7 +1128,7 @@ async function previousPoForItem(itemId) {
   return null;
 }
 
-function buildAutoPoPayload(prevPo, prevLine, { itemId, itemName, qty, soNumber, soCustomer }) {
+function buildAutoPoPayload(prevPo, prevLine, { itemId, itemName, qty, soNumber, soCustomer, soShipTo }) {
   const clone = (v) => JSON.parse(JSON.stringify(v));
   const p = clone(prevPo);
   p.id = 0;
@@ -1137,8 +1137,21 @@ function buildAutoPoPayload(prevPo, prevLine, { itemId, itemName, qty, soNumber,
   const now = new Date();
   p.purchaseOrderDate = now.toISOString();
   p.promiseDate = new Date(now.getTime() + 7 * 86_400_000).toISOString();
-  // Drop-ship to the CURRENT order's customer — never the previous order's.
-  if (soCustomer && 'dropShipCustomer' in p) p.dropShipCustomer = clone(soCustomer);
+  // Drop-ship to the CURRENT order's customer AND its OWN ship-to location. The
+  // cloned template still carries the PREVIOUS customer's dropShipLocation, which
+  // Striven rejects ("Drop Ship Location does not match Drop Ship Customer") — so
+  // both must be overwritten together. No ship-to on the order → don't drop-ship.
+  if (p.dropShipPO === true || 'dropShipLocation' in p || 'dropShipCustomer' in p) {
+    if (soShipTo && soShipTo.id) {
+      if (soCustomer) p.dropShipCustomer = clone(soCustomer);
+      p.dropShipLocation = clone(soShipTo);
+      p.dropShipPO = true;
+    } else {
+      p.dropShipPO = false;
+      delete p.dropShipLocation;
+      delete p.dropShipCustomer;
+    }
+  }
   p.title = `Auto PO for SO ${soNumber}`;
   if ('memo' in p) p.memo = `Auto-created from Sales Order ${soNumber}`;
   const nl = clone(prevLine);
@@ -1176,7 +1189,7 @@ async function autoPoProcessSo(soId, mode) {
     const prev = await previousPoForItem(itemId);
     if (!prev) { li.result = 'no previous PO contains this item — vendor unknown (add mapping later)'; continue; }
     li.vendor = prev.po.vendor?.name ?? '';
-    const payload = buildAutoPoPayload(prev.po, prev.line, { itemId, itemName, qty, soNumber, soCustomer: so.customer ?? null });
+    const payload = buildAutoPoPayload(prev.po, prev.line, { itemId, itemName, qty, soNumber, soCustomer: so.customer ?? null, soShipTo: so.shipToLocation ?? so.shipTo ?? null });
     if (mode === 'live') {
       const created = await striven('POST', '/v1/purchase-orders', payload);
       li.result = 'PO CREATED';
