@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  fetchAutoPoCandidates, fetchAutoPoPreview, autoPoRaise, fetchAutoPoPdf, autoPoSendEmail, fetchAutoPoEmailPreview,
+  fetchAutoPoCandidates, fetchAutoPoPreview, autoPoRaise, fetchAutoPoPdf, autoPoSendEmail, fetchAutoPoEmailPreview, fetchAutoPoSoPos,
   type AutoPoCandidatesResult, type AutoPoCandidate, type AutoPoEntry, type AutoPoLine,
   type AutoPoRunResult, type AutoPoPreview, type AutoPoPdf, type AutoPoEmailResult, type AutoPoEmailPreview,
 } from '../strivenApi';
@@ -136,6 +136,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
   const [generating, setGenerating] = useState(false);
   const [genEntry, setGenEntry] = useState<AutoPoEntry | null>(null);
   const [genNote, setGenNote] = useState<string | null>(null);
+  const [existingPos, setExistingPos] = useState<AutoPoLine[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -145,15 +146,28 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
 
   const blocked = !!preview && demoOnly && !preview.testy;
   const createdPos = (genEntry?.lines ?? []).filter((l) => l.poId);
-  const step = genEntry ? 3 : 1;
+  const deliveryPos: AutoPoLine[] = createdPos.length ? createdPos : (existingPos ?? []);
+  const showResult = !!genEntry || !!genNote || (!!existingPos && existingPos.length > 0);
+  const step = showResult ? 3 : 1;
+
+  async function loadExisting() {
+    try {
+      const sp = await fetchAutoPoSoPos(cand.soId);
+      setExistingPos(sp.pos.map((p) => ({ itemId: null, itemName: p.itemName, qty: p.qty ?? 0, vendor: p.vendor, vendorEmail: p.vendorEmail, result: 'PO CREATED', poId: p.poId })));
+    } catch { /* ignore — note still shows */ }
+  }
 
   async function generate() {
     if (!confirm(`Generate the vendor PO(s) in Striven for ${cand.ref}?\n\nThis creates REAL purchase order(s) (status In Progress).`)) return;
     setGenerating(true); setErr(null);
     try {
       const r = await autoPoRaise(cand.soId);
+      const e = entryOf(r);
       setGenNote(r.note ?? null);
-      setGenEntry(entryOf(r));
+      setGenEntry(e);
+      // Already processed (no new entry) → pull the PO(s) it created earlier so the
+      // PDF/email step still shows instead of silently stalling.
+      if (!e && r.note) await loadExisting();
       onDone();
     } catch (e) { setErr(e instanceof Error ? e.message : 'Generate failed.'); }
     finally { setGenerating(false); }
@@ -179,19 +193,22 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
         <div className="drill-body">
           {err && <div className="error" style={{ margin: 8 }}>{err}</div>}
 
-          {/* STEP 3 — created POs: PDF + email */}
-          {genEntry && (
+          {/* STEP 3 — created / existing POs: PDF + email */}
+          {showResult && (
             <div className="section" style={{ margin: 0 }}>
-              {genNote && <div className="qb-flash warn" style={{ marginBottom: 12 }}>{genNote}</div>}
-              {genEntry.skipped
-                ? <div className="qb-flash warn" style={{ marginBottom: 12 }}>⚠ Skipped: {genEntry.skipped}</div>
-                : <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ {createdPos.length} purchase order(s) created in Striven for {cand.ref}.</div>}
+              {genNote && (
+                <div className="qb-flash warn" style={{ marginBottom: 12 }}>
+                  ℹ {genNote}{deliveryPos.length ? ' — showing the PO(s) already created for this order:' : ' Use a fresh test order to run the full flow.'}
+                </div>
+              )}
+              {genEntry?.skipped && <div className="qb-flash warn" style={{ marginBottom: 12 }}>⚠ Skipped: {genEntry.skipped}</div>}
+              {genEntry && !genEntry.skipped && <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ {createdPos.length} purchase order(s) created in Striven for {cand.ref}.</div>}
 
-              {createdPos.map((l, i) => <PoDeliveryCard key={i} line={l} />)}
+              {deliveryPos.map((l, i) => <PoDeliveryCard key={i} line={l} />)}
 
-              {!genEntry.skipped && createdPos.length === 0 && (
+              {!deliveryPos.length && !genEntry?.skipped && (
                 <div className="page-sub" style={{ fontSize: 13 }}>
-                  No PO was created — none of the lines had a prior PO to copy a vendor from. Add an item→vendor mapping and retry.
+                  No PO to deliver — none of the lines had a prior PO to copy a vendor from. Add an item→vendor mapping, or try a fresh test order.
                 </div>
               )}
               <button className="btn ghost" onClick={onClose} style={{ marginTop: 8 }}>Done</button>
@@ -199,7 +216,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
           )}
 
           {/* STEP 1 — review */}
-          {!genEntry && (
+          {!showResult && (
             <div className="section" style={{ margin: 0 }}>
               {!preview && !prevErr && <div className="page-sub" style={{ padding: 12 }}>Loading order & matching vendors…</div>}
               {prevErr && <div className="error">{prevErr}</div>}

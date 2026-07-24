@@ -1378,6 +1378,23 @@ async function autoPoEmail({ poId, to, subject, body }) {
   return { ok: true, poId: Number(poId), to: String(to), id: j.id ?? null };
 }
 
+// POs already created for a sales order (from the auto-po run log) — so an
+// already-processed SO can still show its PDF/email delivery step in the UI.
+async function autoPoSoPos(soId) {
+  const state = await autoPoState();
+  const seen = new Set(); const pos = [];
+  for (const e of (state.log || [])) {
+    if (Number(e.soId) !== Number(soId)) continue;
+    for (const l of (e.lines || [])) {
+      if (l.poId && !seen.has(l.poId)) {
+        seen.add(l.poId);
+        pos.push({ poId: l.poId, itemName: l.itemName || '', qty: l.qty ?? null, vendor: l.vendor || '', vendorEmail: l.vendorEmail || '' });
+      }
+    }
+  }
+  return { ok: true, soId: Number(soId), pos };
+}
+
 // Render the email that WOULD be sent — subject, HTML body, and the resolved
 // vendor email — WITHOUT sending. Needs no RESEND_API_KEY, so the user can review
 // the mail in the UI before anything goes out ("jaane se pehle dikhe").
@@ -1397,6 +1414,7 @@ export async function autoPoRun(params = {}) {
   }
   if (params.action === 'preview' && params.so) return autoPoPreview(Number(params.so));
   if (params.action === 'pdf' && params.po) return autoPoFetchPdf(Number(params.po));
+  if (params.action === 'so-pos' && params.so) return autoPoSoPos(Number(params.so));
   if (params.action === 'email-preview' && params.po) return autoPoEmailPreview(Number(params.po));
   if (params.action === 'email' && params.po) return autoPoEmail({ poId: Number(params.po), to: params.to, subject: params.subject, body: params.body });
   if (params.action === 'status') {
