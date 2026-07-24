@@ -175,6 +175,26 @@ export type PatientItemsReport = { patients: ReportPatient[]; count: number; gen
 export const fetchVendorItemsReport = () => get<VendorItemsReport>('/api/reports/vendor-items');
 export const fetchPatientItemsReport = () => get<PatientItemsReport>('/api/reports/patient-items');
 
+// ── Auto-PO (Sales Order → vendor Purchase Order) ────────────────────────────
+/** One recent sales order the user can raise a PO for. `ref` is id-based (SO-<id>);
+ *  patient names never reach the browser. `testy` = passes the pilot demo/test gate. */
+export type AutoPoCandidate = { soId: number; ref: string; date: string | null; kind: string; testy: boolean; hasPo: boolean };
+export type AutoPoCandidatesResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly: boolean; candidates: AutoPoCandidate[] };
+/** Per-line result of the SO→PO run. In dry mode `plan` is filled; in live mode `poId` is set. */
+export type AutoPoLine = {
+  itemId: number | null; itemName: string; qty: number; vendor?: string; result: string;
+  plan?: { vendor: string; qty: number; unitPrice: number | null; dropShipTo: string | null };
+  poId?: number | null;
+};
+export type AutoPoEntry = { at: string; soId: number; type: string; mode: 'dry' | 'live'; lines: AutoPoLine[]; skipped?: string };
+export type AutoPoRunResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly?: boolean; note?: string; processed?: AutoPoEntry[]; checkpoint?: number };
+
+export const fetchAutoPoCandidates = () => get<AutoPoCandidatesResult>('/api/auto-po?action=candidates');
+/** Build the PO plan for one SO WITHOUT creating anything (dry run). */
+export const fetchAutoPoPlan = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?so=${soId}&mode=dry`);
+/** Actually create the vendor PO(s) in Striven for one SO (live). Demo-gated server-side. */
+export const autoPoRaise = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?so=${soId}&mode=live`);
+
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
 export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };

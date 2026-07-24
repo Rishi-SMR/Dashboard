@@ -1195,9 +1195,40 @@ async function autoPoProcessSo(soId, mode) {
   return entry;
 }
 
+// Recent sales orders for the UI to pick from — ONE live search call (no per-SO
+// detail fetch, so it stays fast and can't time out). PHI stays server-side:
+// only the id-based ref, date, a non-PHI class and two booleans leave the server.
+async function autoPoCandidates() {
+  const b = await striven('POST', '/v1/sales-orders/search', { PageIndex: 0, PageSize: 25, SortExpression: 'DateCreated', SortOrder: '2' });
+  const rows = b.data ?? b.Data ?? [];
+  const chainSb = await sbCacheRead('order_chain');
+  const chain = (chainSb && chainSb.data) || {};
+  return rows.map((r) => {
+    const soId = Number(r.id);
+    const c = chain[String(soId)] || {};
+    const type = c.type || '';
+    // 'testy' is derived from PHI-bearing fields (order number embeds the patient
+    // surname, customer name) here on the server — only the boolean is emitted.
+    const testy = isDemoType(type)
+      || /demo|test|sample/i.test(r.number ?? r.orderNumber ?? '')
+      || /demo|test/i.test(r.customerName ?? r.customer?.name ?? '');
+    return {
+      soId,
+      ref: safeRef('SO', soId, r.number ?? r.orderNumber),
+      date: r.dateCreated ?? r.orderDate ?? null,
+      kind: testy ? 'DEMO / test' : (type ? soClass(type) : '—'),
+      testy,
+      hasPo: (c.pos ?? []).length > 0,
+    };
+  });
+}
+
 export async function autoPoRun(params = {}) {
   const mode = params.mode === 'live' ? 'live' : (process.env.AUTO_PO_MODE === 'live' ? 'live' : 'dry');
   const state = await autoPoState();
+  if (params.action === 'candidates') {
+    return { ok: true, mode, demoOnly: autoPoDemoOnly(), candidates: await autoPoCandidates() };
+  }
   if (params.action === 'status') {
     return {
       ok: true, mode, demoOnly: autoPoDemoOnly(), checkpoint: state.lastSoId,
