@@ -99,9 +99,19 @@ export function ReceivablesTab() {
   const cashSeries = (payments?.byMonth ?? []).map((m) => ({ month: m.month, value: m.amount }));
   const cashD = momDelta(cashSeries);
 
-  // DSO ≈ open AR ÷ average daily invoiced revenue.
+  // DSO restricted to PI (client SOW) — VA/TriCare pay on fixed cycles so DSO is
+  // meaningless there. Aging method: amount-weighted average age of open PI
+  // receivables (revenue isn't program-split, so a sales-based PI DSO can't be
+  // scoped honestly).
   const revMonths = (pl?.series ?? []).filter((s) => s.revenue > 0).length;
-  const dso = pl && pl.revenue > 0 ? Math.round((ar?.totalOpen ?? 0) / (pl.revenue / ((revMonths || 1) * 30))) : null;
+  const piOpenInv = invoices.filter((i) => (i.open || 0) > 0 && programOfPayer(i.payer || i.customer) === 'PI');
+  const piOpenSum = piOpenInv.reduce((s, i) => s + (i.open || 0), 0);
+  const dso = piOpenSum > 0
+    ? Math.round(piOpenInv.reduce((s, i) => {
+        const age = i.dueDate ? Math.max(0, Math.floor((refMs - new Date(i.dueDate).getTime()) / 86_400_000)) : 0;
+        return s + (i.open || 0) * age;
+      }, 0) / piOpenSum)
+    : null;
 
   // Collection effectiveness = collected ÷ (collected + still open). Real, explainable.
   const collected = payments?.total ?? 0;
@@ -143,7 +153,7 @@ export function ReceivablesTab() {
   const insights: { tone: keyof typeof INS_TONES; ico: string; text: ReactNode }[] = [];
   if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'increased' : 'dropped'} <b>{pctText(cashD.pct)}</b> vs last month</> });
   if (biggestBucket && biggestBucket.value > 0) insights.push({ tone: 'warn', ico: '!', text: <><b>{biggestBucket.label}</b> overdue is the largest bucket ({formatCurrency(biggestBucket.value)})</> });
-  if (dso != null) insights.push({ tone: 'brand', ico: '◷', text: <>DSO is <b>{dso} days</b> (open AR ÷ avg daily revenue)</> });
+  if (dso != null) insights.push({ tone: 'brand', ico: '◷', text: <>PI DSO is <b>{dso} days</b> (avg age of open PI receivables)</> });
   if ((ar?.unappliedCredits ?? 0) > 0.005) insights.push({ tone: 'warn', ico: '$', text: <><b>{formatCurrency(ar!.unappliedCredits!)}</b> paid but unapplied — netted out of AR</> });
   if (topPayers[0]) insights.push({ tone: 'pos', ico: '◆', text: <>Top balance: <b>{trunc(topPayers[0].name, 20)}</b> ({formatCurrency(topPayers[0].open)})</> });
 
@@ -186,8 +196,8 @@ export function ReceivablesTab() {
     ...kv([{ k: 'Payments recorded', v: String(payments?.count ?? 0) }, { k: 'Total received', v: formatCurrency(collected) }]),
   });
   const explainDso = () => setDrill({
-    title: 'Days Sales Outstanding', sub: 'Open AR ÷ average daily invoiced revenue',
-    ...kv([{ k: 'Open AR', v: formatCurrency(ar?.totalOpen || 0) }, { k: 'Revenue (period)', v: formatCurrency(pl?.revenue || 0) }, { k: 'DSO', v: dso != null ? `${dso} days` : '—' }]),
+    title: 'PI Days Sales Outstanding', sub: 'PI only (client rule) · avg age of open PI receivables, amount-weighted',
+    ...kv([{ k: 'Open PI AR', v: formatCurrency(piOpenSum) }, { k: 'PI invoices open', v: String(piOpenInv.length) }, { k: 'PI DSO', v: dso != null ? `${dso} days` : '—' }]),
   });
   const drillBucket = (label: string) => setDrill({
     title: `Open Invoices · ${label}`, sub: `${invoices.filter((i) => bucketOf(i.dueDate, refMs) === label).length} invoices in this bucket`,
@@ -235,8 +245,8 @@ export function ReceivablesTab() {
               delta={cashD} foot={`${payments.count} payments`} onClick={explainCash} />
             <KpiR ico="users" tint="#7C3AED" label="Accounts" value={customers.count}
               deltaText={`${customers.customers.filter((c) => /active/i.test(c.status)).length} active`} foot="on record" />
-            <KpiR ico="clock" tint="#D97706" label="Days Sales Outstanding" value={dso ?? 0}
-              format={(n) => `${Math.round(n)} days`} deltaText="avg collection period" foot="open AR ÷ daily revenue" onClick={explainDso} />
+            <KpiR ico="clock" tint="#D97706" label="PI Days Sales Outstanding" value={dso ?? 0}
+              format={(n) => `${Math.round(n)} days`} deltaText="PI only · fixed-cycle payers excluded" foot="avg age of open PI receivables" onClick={explainDso} />
           </div>
 
           <div className="exec-grid12">
