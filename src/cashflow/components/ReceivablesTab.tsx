@@ -352,6 +352,12 @@ export function ReceivablesTab() {
                   </select>
                 </div>
               </div>
+              {progFilter !== 'All' && PROG_NOTE[progFilter] && (
+                <div className="info-banner" style={{ marginBottom: 12 }}>
+                  <span className="info-banner-icon">ℹ</span>
+                  <span>{PROG_NOTE[progFilter]}</span>
+                </div>
+              )}
               <div className="table-wrap">
                 <table className="data-table">
                   <thead>
@@ -456,3 +462,12 @@ export function ReceivablesTab() {
     </div>
   );
 }
+
+// Per-segment plain-language explanation shown when a program tab is selected —
+// so Kevin never has to ask "what is this?" (esp. the PI residual).
+const PROG_NOTE: Record<string, string> = {
+  PI: 'PI invoices stay open until settlement. The 15% advance is applied and the remainder stays open — often for a long time. An outstanding PI balance is normal here, not a collection problem.',
+  VA: 'VA pays on fixed cycles (Integrated on the 5th & 15th, HIDAL by the 5th) and settles one-for-one, so VA invoices close cleanly. An open VA balance usually just means the cycle hasn’t run yet.',
+  TriCare: 'Tri-Care is paid by the TriCare program on a fixed cycle. Open balances clear when that cycle runs.',
+  Unassigned: 'Invoices whose payer isn’t classified to a program yet. Set the payer on the order in Striven to route them.',
+};

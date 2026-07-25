@@ -225,6 +225,6 @@ export const autoSoCreate = (soId: number) => get<AutoSoRunResult>(`/api/auto-so
 
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
-export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };
+export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; lastName: string; item: string; itemCount: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };
 export type OrdersResult = { count: number; orders: OrderRow[]; enriched: boolean; phiMasked: boolean };
 export const fetchStrivenOrders = () => get<OrdersResult>('/api/orders');

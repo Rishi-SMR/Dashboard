@@ -65,6 +65,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
       (progF === 'All' || o.pi === progF) &&
       (!q ||
         o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q) || (o.pi || '').toLowerCase().includes(q) ||
+        (o.lastName || '').toLowerCase().includes(q) || (o.item || '').toLowerCase().includes(q) ||
         o.pos.some((p) => p.ref.toLowerCase().includes(q) || (p.vendor || '').toLowerCase().includes(q)) ||
         o.invoices.some((i) => i.ref.toLowerCase().includes(q))));
   }, [orders, query, statusF, progF]);
@@ -97,8 +98,8 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
   function exportCsv() {
     const esc = (s: string | number) => `"${String(s).replace(/"/g, '""')}"`;
     const lines = [
-      ['Order #', 'Program', 'Sales rep', 'Payer', 'Value', 'Status', 'POs', 'PO value', 'Invoices', 'Invoice open'].map(esc).join(','),
-      ...sorted.map((o) => [o.ref, o.pi, o.rep || '', o.payer || '', o.value, o.status || '', o.pos.length, o.poValue, o.invoices.length, o.invOpen].map(esc).join(',')),
+      ['Order #', 'Last name', 'Item', 'Program', 'Sales rep', 'Payer', 'Value', 'Status', 'POs', 'PO value', 'Invoices', 'Invoice open'].map(esc).join(','),
+      ...sorted.map((o) => [o.ref, o.lastName || '', o.item || '', o.pi, o.rep || '', o.payer || '', o.value, o.status || '', o.pos.length, o.poValue, o.invoices.length, o.invOpen].map(esc).join(',')),
     ];
     const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     const a = document.createElement('a');
@@ -116,7 +117,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
             <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Order Tracking</h1>
             <div className="page-sub">
               <span className="live-dot" /> Sports Med Recovery · Sales Order → Purchase Order → Invoice, by number{agoText ? ` · updated ${agoText}` : ''}
-              <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>🔒 no patient data</span>
+              <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>🔒 last name only</span>
             </div>
           </div>
           <div className="ov-headright">
@@ -172,6 +173,8 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
                 <thead>
                   <tr>
                     <th className="sortable" onClick={() => setSortKey('ref')}>Order # {sortInd('ref')}</th>
+                    <th>Patient</th>
+                    <th>Item</th>
                     <th>P/I/VA</th>
                     <th>Sales Rep</th>
                     <th>Payer</th>
@@ -185,7 +188,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
                   {shown.map((o) => (
                     <OrderRowView key={o.ref} o={o} open={openRef === o.ref} onToggle={() => setOpenRef((r) => (r === o.ref ? null : o.ref))} />
                   ))}
-                  {shown.length === 0 && <tr><td colSpan={8} className="muted-note">{query ? 'No orders match your search.' : 'No orders.'}</td></tr>}
+                  {shown.length === 0 && <tr><td colSpan={10} className="muted-note">{query ? 'No orders match your search.' : 'No orders.'}</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -213,6 +216,8 @@ function OrderRowView({ o, open, onToggle }: { o: OrderRow; open: boolean; onTog
     <>
       <tr onClick={onToggle} style={{ cursor: 'pointer' }}>
         <td><strong>{open ? '▾ ' : '▸ '}{o.ref}</strong></td>
+        <td style={{ fontWeight: 600 }}>{o.lastName || '—'}</td>
+        <td title={o.itemCount > 1 ? `${o.itemCount} items` : undefined}>{o.item || '—'}{o.itemCount > 1 ? ` +${o.itemCount - 1}` : ''}</td>
         <td><StatusPill status={o.pi} /></td>
         <td>{o.rep || '—'}</td>
         <td>{o.payer || '—'}</td>
@@ -223,7 +228,7 @@ function OrderRowView({ o, open, onToggle }: { o: OrderRow; open: boolean; onTog
       </tr>
       {open && (
         <tr>
-          <td colSpan={8} style={{ background: 'var(--accent-soft)', padding: '10px 16px' }}>
+          <td colSpan={10} style={{ background: 'var(--accent-soft)', padding: '10px 16px' }}>
             <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: C.muted, marginBottom: 6 }}>Purchase Orders</div>

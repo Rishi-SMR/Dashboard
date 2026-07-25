@@ -840,16 +840,27 @@ async function getSO() {
 async function getOrders() {
   const sb = await sbCacheRead('order_chain');
   const chain = (sb && sb.data) || {};
-  const orders = Object.values(chain)
-    .filter((o) => !isDemoType(o.type))
-    .map((o) => ({
-      ref: o.ref, pi: soClass(o.type), type: o.type, rep: cleanRep(o.rep), payer: payerOf(o), value: round2(Number(o.value || 0)),
-      status: o.status || '', invStatus: o.invStatus || '',
-      pos: (o.pos || []).map((p) => ({ ...p, value: round2(Number(p.value || 0)) })),
-      invoices: (o.invoices || []).map((i) => ({ ...i, total: round2(Number(i.total || 0)), open: round2(Number(i.open || 0)) })),
-      poValue: round2((o.pos || []).reduce((s, p) => s + Number(p.value || 0), 0)),
-      invOpen: round2((o.invoices || []).reduce((s, i) => s + Number(i.open || 0), 0)),
-    }))
+  // Join patient LAST NAME + item from the SO-wise report cache so reps (who lose
+  // Striven access) can identify an order by SO# + last name + item. Minimum-
+  // necessary PHI (client-authorized); the report cache already carries it.
+  const rep = await sbCacheRead('report_patient_items');
+  const bySo = new Map();
+  for (const o of (rep?.data?.orders || [])) bySo.set(String(o.soId), o);
+  const orders = Object.entries(chain)
+    .filter(([, o]) => !isDemoType(o.type))
+    .map(([soId, o]) => {
+      const r = bySo.get(String(soId));
+      const items = (r?.items || []).map((i) => i.item).filter(Boolean);
+      return {
+        ref: o.ref, pi: soClass(o.type), type: o.type, rep: cleanRep(o.rep), payer: payerOf(o), value: round2(Number(o.value || 0)),
+        lastName: r?.lastName || '', item: items[0] || '', itemCount: items.length,
+        status: o.status || '', invStatus: o.invStatus || '',
+        pos: (o.pos || []).map((p) => ({ ...p, value: round2(Number(p.value || 0)) })),
+        invoices: (o.invoices || []).map((i) => ({ ...i, total: round2(Number(i.total || 0)), open: round2(Number(i.open || 0)) })),
+        poValue: round2((o.pos || []).reduce((s, p) => s + Number(p.value || 0), 0)),
+        invOpen: round2((o.invoices || []).reduce((s, i) => s + Number(i.open || 0), 0)),
+      };
+    })
     .sort((a, b) => b.value - a.value);
   return { count: orders.length, orders, enriched: Object.keys(chain).length > 0, phiMasked: MASK_PHI };
 }
