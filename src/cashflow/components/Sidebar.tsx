@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { invalidateAllCaches } from '../api';
 import type { ViewKey } from '../CashflowApp';
 
 // 16px stroke icons per nav item (lucide-style, currentColor).
@@ -82,10 +81,10 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
   const [refreshing, setRefreshing] = useState(false);
   const me = readIdentity();
 
-  async function handleRefreshAll() {
+  function handleRefreshAll() {
     if (refreshing) return;
     setRefreshing(true);
-    try { await invalidateAllCaches(); } catch { /* even if it fails, reload below */ }
+    // A full reload makes every tab re-fetch fresh data from the server.
     window.location.reload();
   }
 

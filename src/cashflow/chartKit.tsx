@@ -263,24 +263,6 @@ export function BarList({ data, money = true, showPct = true, onSelect }: {
 }
 
 // Grouped vertical bars per month — e.g. revenue vs expenses side-by-side.
-export function GroupedBars({ data, series }: { data: Record<string, number | string>[]; series: { key: string; name: string; color: string }[] }) {
-  return (
-    <div className="chart-box">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 14, right: 16, left: 4, bottom: 2 }} barGap={3} barCategoryGap="26%">
-          <CartesianGrid {...gridProps} />
-          <XAxis dataKey="month" {...axisProps} tickFormatter={(m: string) => monthLabel(String(m))} />
-          <YAxis {...axisProps} width={54} tickFormatter={compactMoney} />
-          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.08)' }} formatter={(v: number | string, n: string) => [formatCurrency(Number(v)), n]} />
-          {series.map((s) => (
-            <Bar key={s.key} {...NOANIM} dataKey={s.key} name={s.name} fill={s.color} radius={[4, 4, 0, 0]} maxBarSize={26} />
-          ))}
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
 // Horizontal ranked bar — the ONLY chart for category/status/ranking data (no pies).
 // Pass onSelect to make bars clickable (drill).
 export function RankBar({ data, money = false, colorAt, onSelect }: { data: { name: string; value: number }[]; money?: boolean; colorAt?: (i: number) => string; onSelect?: (name: string) => void }) {
@@ -383,37 +365,6 @@ export function TrendArea({ data, series, idPrefix, dots = false }: { data: Reco
           ))}
         </AreaChart>
       </ResponsiveContainer>
-    </div>
-  );
-}
-
-// Donut with a value in the hole. For share-of-total breakdowns (revenue mix, etc.).
-export function Donut({ data, centerValue, centerLabel, onSelect }: {
-  data: { name: string; value: number; color: string }[];
-  centerValue?: string; centerLabel?: string; onSelect?: (name: string) => void;
-}) {
-  return (
-    <div className="chart-box" style={{ position: 'relative' }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie data={data} dataKey="value" nameKey="name" innerRadius="60%" outerRadius="88%" paddingAngle={2} stroke="none"
-            cursor={onSelect ? 'pointer' : undefined} onClick={onSelect ? (p: any) => onSelect(p?.name) : undefined} {...NOANIM}>
-            {data.map((d, i) => <Cell key={i} fill={d.color} />)}
-          </Pie>
-          <Tooltip {...tooltipStyle} formatter={(v: number | string, n: string) => [formatCurrency(Number(v)), n]} />
-        </PieChart>
-      </ResponsiveContainer>
-      {(centerValue || centerLabel) && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          {centerValue && <div style={{ fontSize: 21, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text)' }}>{centerValue}</div>}
-          {centerLabel && <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600, marginTop: 2 }}>{centerLabel}</div>}
-        </div>
-      )}
-      <div className="donut-legend">
-        {data.map((d) => (
-          <div key={d.name} className="donut-legend-item"><span className="donut-dot" style={{ background: d.color }} />{d.name}</div>
-        ))}
-      </div>
     </div>
   );
 }

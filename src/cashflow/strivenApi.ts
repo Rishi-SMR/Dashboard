@@ -111,8 +111,6 @@ export const fetchStrivenPODetail = (id: number) => get<PoDetail>(`/api/po/${id}
 export const fetchStrivenSODetail = (id: number) => get<SoDetail>(`/api/so/${id}`);
 export const fetchStrivenPayments = () => get<PaymentsResult>('/api/payments');
 export const fetchStrivenBillPayments = () => get<BillPaymentsResult>('/api/billpayments');
-export const fetchStrivenTasks = () => get<TasksResult>('/api/tasks');
-export const fetchStrivenProjects = () => get<ProjectsResult>('/api/projects');
 
 export type ExceptionGroup = { key: string; severity: 'high' | 'warn' | 'info'; title: string; count: number; value?: number; note: string; columns: string[]; rows: Record<string, string | number>[] };
 export type ExceptionsResult = { totalOpen: number; groups: ExceptionGroup[]; note: string };
@@ -143,7 +141,6 @@ export type QbInvoiceDocPlan = {
 };
 
 export const fetchQbStatus = () => get<QbStatus>('/api/qb/status');
-export const fetchQbReconcileCustomers = () => get<QbReconcileCustomers>('/api/qb/reconcile-customers');
 export const fetchQbReconcile = (kind: QbEntityKind) =>
   get<QbReconcile>(kind === 'customers' ? '/api/qb/reconcile-customers' : `/api/qb/reconcile-${kind}`);
 const post = async <T>(path: string): Promise<T> => {
@@ -214,8 +211,6 @@ export type AutoPoSoPos = { ok: boolean; soId: number; pos: AutoPoPoGroup[] };
 export const fetchAutoPoSoPos = (soId: number) => get<AutoPoSoPos>(`/api/auto-po?action=so-pos&so=${soId}`);
 export const autoPoSendEmail = (poId: number, to: string, subject?: string, body?: string) =>
   get<AutoPoEmailResult>(`/api/auto-po?action=email&po=${poId}&to=${encodeURIComponent(to)}${subject ? `&subject=${encodeURIComponent(subject)}` : ''}${body ? `&body=${encodeURIComponent(body)}` : ''}`);
-/** Build the PO plan for one SO WITHOUT creating anything (dry run). */
-export const fetchAutoPoPlan = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?so=${soId}&mode=dry`);
 /** Actually create the vendor PO(s) in Striven for one SO (live). Demo-gated server-side. */
 export const autoPoRaise = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?so=${soId}&mode=live`);
 

@@ -35,9 +35,6 @@ export const AGING_LABELS: { key: 'current' | 'd1_30' | 'd31_60' | 'd61_90' | 'd
   { key: 'd90plus', label: '90+' },
 ];
 
-// Standard Recharts animation props — spread onto any chart primitive.
-export const ANIM = { isAnimationActive: true, animationDuration: 900, animationEasing: 'ease-out' as const };
-
 // Shared axis / grid / tooltip styling.
 export const axisProps = { tick: { fill: C.muted, fontSize: 11 }, tickLine: false, axisLine: { stroke: C.grid } };
 export const gridProps = { stroke: C.grid, strokeDasharray: '3 3', vertical: false };
@@ -61,9 +58,6 @@ export const monthLabel = (ym: string): string => {
   return ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m] || ym;
 };
 
-// Full currency (tooltips / values): $12,345 (no decimals).
-export const money = (n: number): string =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n) || 0);
 export const compactMoney = kCurrency; // axis ticks
 
 // Severity/aging ramp keyed by the visible bucket label (sky→green→…→red).

@@ -14,17 +14,6 @@ export function formatCurrency(n: number, detailed = false): string {
   return (detailed ? currencyDetailed : currency).format(n);
 }
 
-export function formatSigned(n: number): string {
-  const sign = n > 0 ? '+' : '';
-  return `${sign}${formatCurrency(n)}`;
-}
-
-export function formatMonths(n: number | null): string {
-  if (n === null) return '∞';
-  if (!Number.isFinite(n)) return '∞';
-  return `${n.toFixed(1)} mo`;
-}
-
 // US phone: "9566275137" -> "(956) 627-5137"; 11-digit "1..." -> "+1 (…) …".
 // Leaves anything that isn't a 10/11-digit US number as-is (trimmed).
 export function formatPhone(raw: string | null | undefined): string {
