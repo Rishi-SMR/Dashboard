@@ -41,19 +41,12 @@ export type ItemsResult = { count: number; items: Item[] };
 export type TrendPoint = { month: string; revenue: number; expenses: number; net: number };
 export type TrendsResult = { series: TrendPoint[] };
 
-export type NamedCount = { name: string; count: number };
-
 export type Payment = { id: number; ref: string; customer: string; date: string | null; amount: number; status: string };
 export type PaymentsResult = { count: number; total: number; byMonth: { month: string; amount: number }[]; recent: Payment[]; phiMasked: boolean };
 
 export type BillPayment = { id: number; ref: string; vendor: string; account: string; date: string | null; amount: number; status: string };
 export type BillPaymentsResult = { count: number; total: number; recent: BillPayment[] };
 
-export type Task = { id: number; title: string; type: string; status: string; date: string | null };
-export type TasksResult = { count: number; byStatus: NamedCount[]; byType: NamedCount[]; recent: Task[]; phiMasked: boolean };
-
-export type Project = { id: number; name: string; type: string; status: string; date: string | null };
-export type ProjectsResult = { count: number; byStatus: NamedCount[]; recent: Project[]; phiMasked: boolean };
 
 export type LineItem = { item: string; description: string; qty: number; unit: number; amount: number };
 export type PoDetail = {
@@ -123,7 +116,6 @@ export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: st
 
 /** For customers, `missingInQb[].name` carries a PT-<id> REFERENCE (phi=true), not a patient name. */
 export type QbReconcile = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string }[]; phi?: boolean };
-export type QbReconcileCustomers = QbReconcile & { matched: { name: string }[] };
 export type QbCreateMissingResult = { kind: string; created: { name: string; id: string }[]; createdCount: number; failed: { name: string; error: string }[]; remaining: number; totalMissing: number };
 export type QbEntityKind = 'customers' | 'vendors' | 'items';
 
