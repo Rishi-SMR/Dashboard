@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { AutoPoTab } from './AutoPoTab';
 import { AutoSoTab } from './AutoSoTab';
+import { TrackingTab } from './TrackingTab';
 import {
-  fetchAutoPoCandidates, fetchAutoSoCandidates,
-  type AutoPoCandidatesResult, type AutoSoResult,
+  fetchAutoPoCandidates, fetchAutoSoCandidates, fetchTracking,
+  type AutoPoCandidatesResult, type AutoSoResult, type TrackingResult,
 } from '../strivenApi';
 import { C } from '../chartTheme';
 
-type Sub = 'overview' | 'autopo' | 'autoso';
+type Sub = 'overview' | 'autopo' | 'autoso' | 'tracking';
 const fmtWhen = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
 
@@ -28,11 +29,13 @@ export function AutomationHub({ initialTab = 'overview' }: { initialTab?: Sub } 
         <button className={`ov-tab ${sub === 'overview' ? 'active' : ''}`} onClick={() => setSub('overview')}>Overview</button>
         <button className={`ov-tab ${sub === 'autopo' ? 'active' : ''}`} onClick={() => setSub('autopo')}>Auto-PO</button>
         <button className={`ov-tab ${sub === 'autoso' ? 'active' : ''}`} onClick={() => setSub('autoso')}>Auto-SO</button>
+        <button className={`ov-tab ${sub === 'tracking' ? 'active' : ''}`} onClick={() => setSub('tracking')}>Tracking</button>
       </div>
 
       {sub === 'overview' && <AutomationOverview onOpen={setSub} />}
       {sub === 'autopo' && <AutoPoTab embedded />}
       {sub === 'autoso' && <AutoSoTab embedded />}
+      {sub === 'tracking' && <TrackingTab embedded />}
     </div>
   );
 }
@@ -53,14 +56,16 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
 function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
   const [po, setPo] = useState<AutoPoCandidatesResult | null>(null);
   const [so, setSo] = useState<AutoSoResult | null>(null);
+  const [tr, setTr] = useState<TrackingResult | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
-    Promise.allSettled([fetchAutoPoCandidates(), fetchAutoSoCandidates()]).then(([p, s]) => {
+    Promise.allSettled([fetchAutoPoCandidates(), fetchAutoSoCandidates(), fetchTracking()]).then(([p, s, t]) => {
       if (!alive) return;
       if (p.status === 'fulfilled') setPo(p.value);
       if (s.status === 'fulfilled') setSo(s.value);
+      if (t.status === 'fulfilled') setTr(t.value);
       setLoading(false);
     });
     return () => { alive = false; };
@@ -123,6 +128,29 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <span style={{ fontSize: 11.5, color: C.muted }}>{loading ? 'Checking…' : (so?.ready ? `${so?.dueCount ?? 0} due now` : 'run the report build')}</span>
             <button className="btn" onClick={() => onOpen('autoso')}>Open Auto-SO →</button>
+          </div>
+        </div>
+
+        {/* ── Tracking ── */}
+        <div className="section" style={{ margin: 0 }}>
+          <div className="section-head">
+            <div>
+              <h2 className="section-title">🚚 Shipment Tracking</h2>
+              <div className="section-sub">Find a patient's shipment + live carrier status.</div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <Pill tone={tr?.configured ? 'ok' : 'warn'}>{tr?.configured ? 'Shippo' : 'Shippo: connect'}</Pill>
+            </div>
+          </div>
+          <div style={{ margin: '4px 0 12px' }}>
+            <Step n={1}>Add the vendor <b>tracking number</b> (from the email/portal) + patient <b>last name / ship-to</b>.</Step>
+            <Step n={2}>Carrier is <b>auto-detected</b> (UPS / FedEx / USPS / DHL).</Step>
+            <Step n={3}>Live <b>status</b> pulls from Shippo — Delivered / In transit / Exception + ETA.</Step>
+            <Step n={4}>Search a <b>last name</b> → see where it is. No more email crafting.</Step>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <span style={{ fontSize: 11.5, color: C.muted }}>{loading ? 'Checking…' : `${tr?.count ?? 0} tracked`}</span>
+            <button className="btn" onClick={() => onOpen('tracking')}>Open Tracking →</button>
           </div>
         </div>
       </div>

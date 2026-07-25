@@ -1207,6 +1207,96 @@ export async function autoSoRun(params = {}) {
   return getAutoSoCandidates();
 }
 
+// ============================================================================
+// SHIPMENT TRACKING — vendor tracking numbers matched to a patient (last name /
+// ship-to), with LIVE carrier status via Shippo. Vendor invoices carry NO SO
+// number, so entries are keyed by last name / ship-to (client-authorized min-
+// necessary PHI). Store = Supabase cache `shipment_tracking`. Token read from
+// app_config SHIPPO_TOKEN (or env) — never in code/git.
+// ============================================================================
+async function shippoToken() {
+  const t = await readConfigTable().catch(() => ({}));
+  return t.SHIPPO_TOKEN || process.env.SHIPPO_TOKEN || '';
+}
+// Heuristic carrier detection → Shippo carrier token (user can override in the UI).
+function detectCarrier(tnRaw) {
+  const tn = String(tnRaw || '').replace(/\s+/g, '').toUpperCase();
+  if (!tn) return null;
+  if (/^1Z[0-9A-Z]{16}$/.test(tn)) return 'ups';
+  if (/^(92|93|94|95)\d{18,20}$/.test(tn) || /^420\d{5}9[0-5]/.test(tn)) return 'usps';
+  if (/^(96|61|77|79|98)\d{10,}$/.test(tn)) return 'fedex';
+  if (/^\d{10}$/.test(tn)) return 'dhl_express';
+  if (tn.length === 12 || tn.length === 15) return 'fedex';
+  if (/^\d{20,22}$/.test(tn)) return 'usps';
+  return null;
+}
+const CARRIER_NAME = { ups: 'UPS', fedex: 'FedEx', usps: 'USPS', dhl_express: 'DHL' };
+const CARRIER_URL = {
+  ups: (tn) => `https://www.ups.com/track?tracknum=${encodeURIComponent(tn)}`,
+  fedex: (tn) => `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(tn)}`,
+  usps: (tn) => `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(tn)}`,
+  dhl_express: (tn) => `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encodeURIComponent(tn)}`,
+};
+const SHIPPO_STATUS = { PRE_TRANSIT: 'Label created', TRANSIT: 'In transit', DELIVERED: 'Delivered', RETURNED: 'Returned', FAILURE: 'Exception', UNKNOWN: 'Unknown' };
+async function shippoTrack(carrier, tn) {
+  const token = await shippoToken();
+  if (!token) return { ok: false, error: 'no_token', status: 'Shippo not configured' };
+  if (!carrier) return { ok: false, error: 'no_carrier', status: 'Pick a carrier' };
+  try {
+    const r = await fetch(`https://api.goshippo.com/tracks/${carrier}/${encodeURIComponent(tn)}`, { headers: { Authorization: `ShippoToken ${token}` } });
+    if (r.status === 401) return { ok: false, error: 'bad_token', status: 'Shippo token invalid' };
+    if (!r.ok) return { ok: false, error: `http_${r.status}`, status: 'Lookup failed' };
+    const j = await r.json();
+    const ts = j.tracking_status || {};
+    return {
+      ok: true, raw: ts.status || 'UNKNOWN', status: SHIPPO_STATUS[ts.status] || ts.status || 'Unknown',
+      detail: ts.status_details || '', eta: j.eta || null, updatedAt: ts.status_date || null,
+      location: ts.location ? [ts.location.city, ts.location.state].filter(Boolean).join(', ') : '',
+    };
+  } catch { return { ok: false, error: 'fetch_failed', status: 'Lookup failed' }; }
+}
+async function trackingStore() { const sb = await sbCacheRead('shipment_tracking'); return (sb && sb.data) || { entries: [] }; }
+async function trackingList() {
+  const store = await trackingStore();
+  const entries = store.entries || [];
+  const configured = Boolean(await shippoToken());
+  const out = await Promise.all(entries.map(async (e) => {
+    const carrier = e.carrier || detectCarrier(e.tn) || '';
+    const st = await shippoTrack(carrier, e.tn);
+    return {
+      id: e.id, patient: e.patient || '', vendor: e.vendor || '', tn: e.tn, addedAt: e.addedAt || null,
+      carrier, carrierName: CARRIER_NAME[carrier] || (carrier ? carrier.toUpperCase() : '—'),
+      trackingUrl: (CARRIER_URL[carrier] || (() => ''))(e.tn),
+      status: st.status, statusRaw: st.raw || '', detail: st.detail || '', eta: st.eta || null,
+      statusUpdatedAt: st.updatedAt || null, location: st.location || '', lookupError: st.ok ? null : st.error,
+    };
+  }));
+  return { ok: true, configured, count: out.length, entries: out };
+}
+async function trackingAdd(body) {
+  const tn = String(body?.tn || '').replace(/\s+/g, '').trim();
+  if (!tn) return { ok: false, error: 'tracking number required' };
+  const store = await trackingStore();
+  const id = `TRK-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`;
+  const entry = { id, patient: String(body?.patient || '').trim(), vendor: String(body?.vendor || '').trim(),
+    carrier: String(body?.carrier || '').trim() || detectCarrier(tn) || '', tn, addedAt: new Date().toISOString() };
+  store.entries = [entry, ...(store.entries || [])].slice(0, 2000);
+  await sbCacheWrite('shipment_tracking', store);
+  return { ok: true, id };
+}
+async function trackingRemove(id) {
+  const store = await trackingStore();
+  store.entries = (store.entries || []).filter((e) => e.id !== String(id));
+  await sbCacheWrite('shipment_tracking', store);
+  return { ok: true };
+}
+export async function trackingRun(params = {}, body = null) {
+  const action = params.action || 'list';
+  if (action === 'add') return trackingAdd(body || {});
+  if (action === 'remove') return trackingRemove(params.id);
+  return trackingList();
+}
+
 export const ROUTES = {
   '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
   '/api/reports/vendor-items': getReportVendorItems,

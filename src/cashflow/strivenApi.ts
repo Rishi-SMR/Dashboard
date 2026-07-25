@@ -223,6 +223,18 @@ export type AutoSoRunResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly?: bo
 /** Create the resupply SO (live). */
 export const autoSoCreate = (soId: number) => get<AutoSoRunResult>(`/api/auto-so?so=${soId}&mode=live`);
 
+// ── Shipment tracking (vendor tracking # → live carrier status via Shippo) ──
+export type TrackingEntry = {
+  id: string; patient: string; vendor: string; tn: string; addedAt: string | null;
+  carrier: string; carrierName: string; trackingUrl: string;
+  status: string; statusRaw: string; detail: string; eta: string | null; statusUpdatedAt: string | null; location: string; lookupError: string | null;
+};
+export type TrackingResult = { ok: boolean; configured: boolean; count: number; entries: TrackingEntry[] };
+export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
+/** Add a tracking row. Last name goes in the POST body (never the URL). */
+export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);
+export const trackingRemove = (id: string) => get<{ ok: boolean }>(`/api/tracking?action=remove&id=${encodeURIComponent(id)}`);
+
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
 export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; lastName: string; item: string; itemCount: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };

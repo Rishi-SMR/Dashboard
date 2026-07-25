@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun } from './_striven.js';
 import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
@@ -66,6 +66,14 @@ export default async function handler(req, res) {
         mode: url.searchParams.get('mode') || undefined,
         action: url.searchParams.get('action') || undefined,
       }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  if (pathname === '/api/tracking') {
+    if (!verifySession(cookieVal(req.headers.cookie, 'smr_session'))) return res.status(401).json({ error: 'auth required' });
+    try {
+      const body = req.method === 'POST' ? req.body : null;
+      return res.status(200).json(await trackingRun({ action: url.searchParams.get('action') || undefined, id: url.searchParams.get('id') || undefined }, body));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
