@@ -15,7 +15,7 @@ const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 const entryOf = (r: AutoPoRunResult | null): AutoPoEntry | null => r?.processed?.[0] ?? null;
 
-export function AutoPoTab() {
+export function AutoPoTab({ embedded = false }: { embedded?: boolean } = {}) {
   const [data, setData] = useState<AutoPoCandidatesResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -51,17 +51,19 @@ export function AutoPoTab() {
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
-      <div className="page-head deck-head" style={{ marginBottom: 16 }}>
-        <div>
-          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Auto-PO</h1>
-          <div className="page-sub">
-            <span className="live-dot" /> Sales Order → vendor Purchase Order. Pick an order → vendor auto-fills from your reports → generate the PO → email it{agoText ? ` · synced ${agoText}` : ''}
+      {!embedded && (
+        <div className="page-head deck-head" style={{ marginBottom: 16 }}>
+          <div>
+            <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Auto-PO</h1>
+            <div className="page-sub">
+              <span className="live-dot" /> Sales Order → vendor Purchase Order. Pick an order → vendor auto-fills from your reports → generate the PO → email it{agoText ? ` · synced ${agoText}` : ''}
+            </div>
+          </div>
+          <div className="ov-headright">
+            <button className="btn ghost" onClick={load} disabled={loading}>{loading ? 'Loading…' : '↻ Refresh'}</button>
           </div>
         </div>
-        <div className="ov-headright">
-          <button className="btn ghost" onClick={load} disabled={loading}>{loading ? 'Loading…' : '↻ Refresh'}</button>
-        </div>
-      </div>
+      )}
 
       <div className={`qb-flash ${demoOnly ? 'warn' : 'err'}`} style={{ marginBottom: 14 }}>
         {demoOnly

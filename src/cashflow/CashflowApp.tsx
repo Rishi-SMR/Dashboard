@@ -13,12 +13,11 @@ const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({
 const ExceptionsTab = lazy(() => import('./components/ExceptionsTab').then((m) => ({ default: m.ExceptionsTab })));
 const QuickBooksTab = lazy(() => import('./components/QuickBooksTab').then((m) => ({ default: m.QuickBooksTab })));
 const ReportsTab = lazy(() => import('./components/ReportsTab').then((m) => ({ default: m.ReportsTab })));
-const AutoPoTab = lazy(() => import('./components/AutoPoTab').then((m) => ({ default: m.AutoPoTab })));
-const AutoSoTab = lazy(() => import('./components/AutoSoTab').then((m) => ({ default: m.AutoSoTab })));
+const AutomationHub = lazy(() => import('./components/AutomationHub').then((m) => ({ default: m.AutomationHub })));
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'reports' | 'quickbooks';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'reports' | 'quickbooks';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -77,7 +76,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'reports', 'quickbooks'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'reports', 'quickbooks'];
 const initialView = (): ViewKey => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
   return VIEW_KEYS.includes(h) ? h : 'overview';
@@ -107,8 +106,9 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     pl: <PLTab />,
     orders: <OrdersTab />,
     tracking: <OrdersTab initialMode="tracking" />,
-    autopo: <AutoPoTab />,
-    autoso: <AutoSoTab />,
+    automation: <AutomationHub />,
+    autopo: <AutomationHub initialTab="autopo" />,
+    autoso: <AutomationHub initialTab="autoso" />,
     vendors: <VendorsItemsTab initialMode="vendors" />,
     catalog: <VendorsItemsTab initialMode="items" />,
     accounts: <AccountsTab />,

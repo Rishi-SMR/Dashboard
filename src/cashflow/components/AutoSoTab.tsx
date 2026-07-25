@@ -11,7 +11,7 @@ const fmtDate = (s: string | null) =>
 // patients are due for a repeat order and the draft (their last order's items).
 // It creates NOTHING; live SO creation is a deliberate, separately-gated step
 // that will be turned on only after the client verifies these previews.
-export function AutoSoTab() {
+export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
   const [data, setData] = useState<AutoSoResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,17 +40,19 @@ export function AutoSoTab() {
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
-      <div className="page-head deck-head" style={{ marginBottom: 16 }}>
-        <div>
-          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Auto-SO · Resupply</h1>
-          <div className="page-sub">
-            <span className="live-dot" /> Patients due for a repeat order — draft previews from their last order{agoText ? ` · updated ${agoText}` : ''}
+      {!embedded && (
+        <div className="page-head deck-head" style={{ marginBottom: 16 }}>
+          <div>
+            <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Auto-SO · Resupply</h1>
+            <div className="page-sub">
+              <span className="live-dot" /> Patients due for a repeat order — draft previews from their last order{agoText ? ` · updated ${agoText}` : ''}
+            </div>
+          </div>
+          <div className="ov-headright">
+            <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
           </div>
         </div>
-        <div className="ov-headright">
-          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
-        </div>
-      </div>
+      )}
 
       {error && <div className="error" style={{ marginBottom: 14 }}>{error}</div>}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
