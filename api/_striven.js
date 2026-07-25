@@ -1077,6 +1077,46 @@ async function getReportPatientItems() {
   return r?.data ?? { patients: [], count: 0, generatedAt: null, note: 'Report not generated yet.' };
 }
 
+// AUTO-SO (recurring resupply) — READ-ONLY candidate preview. Reads the SO-wise
+// order cache (built by scripts/gen-reports.mjs) and, per patient, surfaces their
+// most recent order + how long ago it was, so staff can see who is due for a
+// resupply and one-click-draft a repeat order. Creates NOTHING — live SO creation
+// is a deliberate, separately-gated follow-up. Nothing is written to Striven here.
+async function getAutoSoCandidates() {
+  const r = await sbCacheRead('report_patient_items');
+  const orders = r?.data?.orders || [];
+  if (!orders.length) {
+    return { ok: true, ready: false, candidates: [], count: 0, dueCount: 0,
+      note: 'Run `node scripts/gen-reports.mjs` to build the sales-order-wise data this reads.' };
+  }
+  const DUE_DAYS = Number(process.env.AUTO_SO_DUE_DAYS || 30);
+  const byPatient = new Map();
+  for (const o of orders) {
+    if (o.incomplete) continue;
+    const key = o.custRef || o.ref || `SO-${o.soId}`;
+    if (!byPatient.has(key)) byPatient.set(key, []);
+    byPatient.get(key).push(o);
+  }
+  const now = Date.now();
+  const candidates = [];
+  for (const [key, os] of byPatient) {
+    os.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    const last = os[0];
+    const lastMs = last.date ? new Date(last.date).getTime() : NaN;
+    const daysSince = Number.isFinite(lastMs) ? Math.floor((now - lastMs) / 86_400_000) : null;
+    candidates.push({
+      patient: key, lastName: last.lastName || '', program: last.program || '—',
+      orderCount: os.length, lastSo: last.so, lastDate: last.date || null, daysSince,
+      due: daysSince != null && daysSince >= DUE_DAYS,
+      items: (last.items || []).map((i) => ({ item: i.item, qty: i.qty })),
+      value: last.value || 0,
+    });
+  }
+  candidates.sort((a, b) => (b.daysSince ?? -1) - (a.daysSince ?? -1));
+  return { ok: true, ready: true, dueDays: DUE_DAYS, count: candidates.length,
+    dueCount: candidates.filter((c) => c.due).length, generatedAt: r?.data?.generatedAt ?? null, candidates };
+}
+
 export const ROUTES = {
   '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
   '/api/reports/vendor-items': getReportVendorItems,
@@ -1098,6 +1138,7 @@ export const ROUTES = {
   '/api/projects': getProjects,
   '/api/exceptions': getExceptions,
   '/api/orders': getOrders,
+  '/api/auto-so': getAutoSoCandidates,
 };
 export const DYNAMIC = [
   { re: /^\/api\/po\/(\d+)$/, handler: (m) => getPODetail(m[1]) },

@@ -219,6 +219,15 @@ export const fetchAutoPoPlan = (soId: number) => get<AutoPoRunResult>(`/api/auto
 /** Actually create the vendor PO(s) in Striven for one SO (live). Demo-gated server-side. */
 export const autoPoRaise = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?so=${soId}&mode=live`);
 
+// ── Auto-SO (recurring resupply) ─────────────────────────────────────────────
+/** READ-ONLY resupply candidate: a patient's most recent order + how long ago it
+ *  was, so staff can see who's due and draft a repeat. `lastName` is minimum-
+ *  necessary PHI (authorized); creates nothing. */
+export type AutoSoItem = { item: string; qty: number };
+export type AutoSoCandidate = { patient: string; lastName: string; program: string; orderCount: number; lastSo: string; lastDate: string | null; daysSince: number | null; due: boolean; items: AutoSoItem[]; value: number };
+export type AutoSoResult = { ok: boolean; ready: boolean; note?: string; dueDays?: number; count?: number; dueCount?: number; generatedAt?: string | null; candidates: AutoSoCandidate[] };
+export const fetchAutoSoCandidates = () => get<AutoSoResult>('/api/auto-so');
+
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
 export type OrderRow = { ref: string; pi: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; pos: OrderPo[]; invoices: OrderInv[]; poValue: number; invOpen: number };
