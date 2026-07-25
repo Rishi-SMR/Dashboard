@@ -1106,15 +1106,94 @@ async function getAutoSoCandidates() {
     const daysSince = Number.isFinite(lastMs) ? Math.floor((now - lastMs) / 86_400_000) : null;
     candidates.push({
       patient: key, lastName: last.lastName || '', program: last.program || '—',
-      orderCount: os.length, lastSo: last.so, lastDate: last.date || null, daysSince,
+      orderCount: os.length, lastSo: last.so, lastSoId: last.soId, lastDate: last.date || null, daysSince,
       due: daysSince != null && daysSince >= DUE_DAYS,
       items: (last.items || []).map((i) => ({ item: i.item, qty: i.qty })),
       value: last.value || 0,
     });
   }
   candidates.sort((a, b) => (b.daysSince ?? -1) - (a.daysSince ?? -1));
-  return { ok: true, ready: true, dueDays: DUE_DAYS, count: candidates.length,
+  return { ok: true, ready: true, dueDays: DUE_DAYS, count: candidates.length, demoOnly: autoSoDemoOnly(),
     dueCount: candidates.filter((c) => c.due).length, generatedAt: r?.data?.generatedAt ?? null, candidates };
+}
+
+// ---- AUTO-SO: create a resupply Sales Order (dry-run default, DEMO-gated) ----
+// Mirrors the Auto-PO safety model: cron-key OR UI-session, dry-run unless
+// mode=live, and a pilot gate so only DEMO/test patients can create until the
+// client flips AUTO_SO_DEMO_ONLY=false. Nothing is written to Striven unless
+// mode=live AND the gate passes.
+export const autoSoTokenOk = (t) => { const want = process.env.AUTO_SO_KEY || ''; return Boolean(want) && String(t ?? '') === want; };
+const autoSoDemoOnly = () => (process.env.AUTO_SO_DEMO_ONLY ?? 'true') !== 'false';
+async function autoSoState() { const sb = await sbCacheRead('auto_so_state'); return (sb && sb.data) || { created: [] }; }
+
+// Build the new SO payload by cloning the patient's last order — reset every
+// transaction/audit/status field and line id, keep customer + type + shipTo +
+// case customFields + the line items, stamp today's order date.
+function autoSoBuildPayload(lastSo) {
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const p = clone(lastSo);
+  p.id = 0;
+  for (const k of ['orderNumber', 'number', 'dateCreated', 'createdDate', 'createdBy', 'lastUpdatedDate',
+    'lastUpdatedBy', 'total', 'subTotal', 'subtotal', 'taxTotal', 'balance', 'invoiceStatus', 'invoiceStatusName',
+    'status', 'statusName', 'shippedDate', 'completedDate', 'closedDate']) delete p[k];
+  p.orderDate = new Date().toISOString();
+  p.title = 'Auto resupply';
+  if ('memo' in p) p.memo = 'Auto-created resupply (repeat of the patient’s prior order)';
+  p.lineItems = (lastSo.lineItems ?? []).map((l) => {
+    const nl = clone(l);
+    nl.id = 0;
+    for (const k of ['salesOrderLineItemId', 'salesOrderId', 'quantityShipped', 'quantityInvoiced',
+      'quantityBackordered', 'amountInvoiced', 'amountShipped']) delete nl[k];
+    return nl;
+  });
+  return p;
+}
+
+const soIsTesty = (so) => isDemoType(so?.type?.name ?? '') || /demo|test/i.test(so?.customer?.name ?? '') || /demo|test/i.test(so?.name ?? '');
+
+// Dry preview: what the resupply SO WOULD contain (no write, no patient name).
+async function autoSoPreview(soId) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const payload = autoSoBuildPayload(so);
+  const items = (payload.lineItems ?? []).map((l) => ({ itemName: l.item?.name ?? l.itemName ?? '', qty: Number(l.quantity ?? l.qty ?? 0) }));
+  return {
+    ok: true, mode: 'dry', demoOnly: autoSoDemoOnly(), testy: soIsTesty(so),
+    templateSo: safeRef('SO', soId, so.orderNumber ?? so.number), customerId: so.customer?.id ?? null,
+    type: so.type?.name ?? '', itemCount: items.length, items,
+  };
+}
+
+// Create the resupply SO for the patient whose last order is `soId`.
+async function autoSoCreate(soId, mode) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const testy = soIsTesty(so);
+  const entry = { at: new Date().toISOString(), templateSoId: Number(soId), mode, testy, ref: safeRef('SO', soId, so.orderNumber ?? so.number) };
+  if (autoSoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test patient (pilot gate)'; return { ok: true, mode, demoOnly: true, processed: [entry] }; }
+  // Idempotency: don't re-create a resupply for the same customer within the window.
+  const state = await autoSoState();
+  const custId = so.customer?.id ?? 0;
+  const dedupMs = Number(process.env.AUTO_SO_DEDUP_DAYS || 14) * 86_400_000;
+  const recent = (state.created ?? []).find((c) => c.custId === custId && (Date.now() - new Date(c.at).getTime()) < dedupMs);
+  if (recent) { entry.skipped = `resupply already created for this patient on ${String(recent.at).slice(0, 10)}`; return { ok: true, mode, demoOnly: autoSoDemoOnly(), processed: [entry] }; }
+  const payload = autoSoBuildPayload(so);
+  entry.itemCount = (payload.lineItems ?? []).length;
+  if (mode !== 'live') { entry.dryRun = true; return { ok: true, mode: 'dry', demoOnly: autoSoDemoOnly(), processed: [entry] }; }
+  const created = await striven('POST', '/v1/sales-orders', payload);
+  const newId = created?.id ?? created?.Id ?? null;
+  entry.createdSoId = newId;
+  state.created = [...(state.created ?? []), { custId, at: entry.at, soId: newId }].slice(-1000);
+  await sbCacheWrite('auto_so_state', state);
+  return { ok: true, mode: 'live', demoOnly: autoSoDemoOnly(), processed: [entry], createdSoId: newId };
+}
+
+// Dispatcher for /api/auto-so — action=candidates (default) | preview | create.
+export async function autoSoRun(params = {}) {
+  const action = params.action || '';
+  const soId = params.so;
+  const mode = params.mode || (process.env.AUTO_SO_MODE || 'dry');
+  if (action === 'preview' && soId) return autoSoPreview(soId);
+  if (soId && action !== 'candidates') return autoSoCreate(soId, mode);
+  return getAutoSoCandidates();
 }
 
 export const ROUTES = {
@@ -1138,7 +1217,6 @@ export const ROUTES = {
   '/api/projects': getProjects,
   '/api/exceptions': getExceptions,
   '/api/orders': getOrders,
-  '/api/auto-so': getAutoSoCandidates,
 };
 export const DYNAMIC = [
   { re: /^\/api\/po\/(\d+)$/, handler: (m) => getPODetail(m[1]) },

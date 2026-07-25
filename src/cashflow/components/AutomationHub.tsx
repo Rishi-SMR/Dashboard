@@ -109,7 +109,7 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
               <div className="section-sub">Flags patients due for a repeat order and drafts it.</div>
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <Pill tone="info">● PREVIEW</Pill>
+              <Pill tone={so?.demoOnly === false ? 'danger' : 'warn'}>{so?.demoOnly === false ? 'Live: all' : 'Pilot: demo only'}</Pill>
               <Pill tone={so?.ready ? 'ok' : 'warn'}>{so?.ready ? 'Data ready' : 'Needs data build'}</Pill>
             </div>
           </div>
@@ -118,7 +118,7 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
             <Step n={2}>Works out <b>how long</b> since each patient's last order.</Step>
             <Step n={3}>Flags who is <b>due</b> for a resupply ({so?.dueDays ?? 30}+ days).</Step>
             <Step n={4}>Drafts the repeat from their <b>last order's items</b>.</Step>
-            <Step n={5}><b>Creates the sales order</b> in Striven — <i>coming next, stays OFF until you approve the previews</i>.</Step>
+            <Step n={5}><b>Creates the sales order</b> in Striven on your click — <b>demo/test patients only</b> in pilot, and it won't double-create.</Step>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <span style={{ fontSize: 11.5, color: C.muted }}>{loading ? 'Checking…' : (so?.ready ? `${so?.dueCount ?? 0} due now` : 'run the report build')}</span>

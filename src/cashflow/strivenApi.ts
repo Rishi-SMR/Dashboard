@@ -211,9 +211,17 @@ export const autoPoRaise = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?
  *  was, so staff can see who's due and draft a repeat. `lastName` is minimum-
  *  necessary PHI (authorized); creates nothing. */
 export type AutoSoItem = { item: string; qty: number };
-export type AutoSoCandidate = { patient: string; lastName: string; program: string; orderCount: number; lastSo: string; lastDate: string | null; daysSince: number | null; due: boolean; items: AutoSoItem[]; value: number };
-export type AutoSoResult = { ok: boolean; ready: boolean; note?: string; dueDays?: number; count?: number; dueCount?: number; generatedAt?: string | null; candidates: AutoSoCandidate[] };
-export const fetchAutoSoCandidates = () => get<AutoSoResult>('/api/auto-so');
+export type AutoSoCandidate = { patient: string; lastName: string; program: string; orderCount: number; lastSo: string; lastSoId: number; lastDate: string | null; daysSince: number | null; due: boolean; items: AutoSoItem[]; value: number };
+export type AutoSoResult = { ok: boolean; ready: boolean; note?: string; dueDays?: number; count?: number; dueCount?: number; demoOnly?: boolean; generatedAt?: string | null; candidates: AutoSoCandidate[] };
+export const fetchAutoSoCandidates = () => get<AutoSoResult>('/api/auto-so?action=candidates');
+/** Dry preview of the resupply SO that WOULD be created (no write). */
+export type AutoSoPreview = { ok: boolean; mode: 'dry'; demoOnly: boolean; testy: boolean; templateSo: string; customerId: number | null; type: string; itemCount: number; items: { itemName: string; qty: number }[] };
+export const fetchAutoSoPreview = (soId: number) => get<AutoSoPreview>(`/api/auto-so?action=preview&so=${soId}`);
+/** Create the resupply SO in Striven (live). Demo-gated + idempotent server-side. */
+export type AutoSoEntry = { at: string; templateSoId: number; mode: string; testy: boolean; ref: string; skipped?: string; dryRun?: boolean; itemCount?: number; createdSoId?: number | null };
+export type AutoSoRunResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly?: boolean; processed?: AutoSoEntry[]; createdSoId?: number | null };
+/** Create the resupply SO (live). */
+export const autoSoCreate = (soId: number) => get<AutoSoRunResult>(`/api/auto-so?so=${soId}&mode=live`);
 
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };

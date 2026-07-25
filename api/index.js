@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun } from './_striven.js';
 import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
@@ -52,6 +52,19 @@ export default async function handler(req, res) {
         to: url.searchParams.get('to') || undefined,
         subject: url.searchParams.get('subject') || undefined,
         body: url.searchParams.get('body') || undefined,
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  if (pathname === '/api/auto-so') {
+    const keyOk = autoSoTokenOk(url.searchParams.get('key') || req.headers['x-auto-so-key']);
+    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
+    if (!keyOk && !sessionOk) return res.status(401).json({ error: 'auth required' });
+    try {
+      return res.status(200).json(await autoSoRun({
+        so: url.searchParams.get('so') || undefined,
+        mode: url.searchParams.get('mode') || undefined,
+        action: url.searchParams.get('action') || undefined,
       }));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }

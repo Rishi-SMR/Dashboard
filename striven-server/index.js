@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun } from '../api/_striven.js';
 import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -49,6 +49,25 @@ const server = http.createServer(async (req, res) => {
         to: reqUrl.searchParams.get('to') || undefined,
         subject: reqUrl.searchParams.get('subject') || undefined,
         body: reqUrl.searchParams.get('body') || undefined,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // Auto-SO (recurring resupply → SO created) — cron token OR a logged-in session.
+  if (pathname === '/api/auto-so') {
+    const keyOk = autoSoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-so-key']);
+    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
+    if (!keyOk && !sessionOk) {
+      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
+    }
+    try {
+      const out = await autoSoRun({
+        so: reqUrl.searchParams.get('so') || undefined,
+        mode: reqUrl.searchParams.get('mode') || undefined,
+        action: reqUrl.searchParams.get('action') || undefined,
       });
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
     } catch (e) {
