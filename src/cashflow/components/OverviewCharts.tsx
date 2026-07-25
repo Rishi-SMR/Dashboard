@@ -203,7 +203,19 @@ export function OverviewCharts() {
   const soValue = so ? (prog === 'All' ? so.totalValue : so.piva[prog === 'Unassigned' ? 'Other' : prog].value) : 0;
 
   const collectionPct = fRev > 0 ? Math.round((cashFY / fRev) * 100) : 0;
-  const dsoApprox = fRev > 0 ? Math.round(arOpenF / (fRev / (revSeries.filter((r) => r.value > 0).length * 30 || 30))) : null;
+  // DSO restricted to PI (client SOW): VA / TriCare pay on fixed cycles, so DSO
+  // is meaningless there. Computed by the aging method — the amount-weighted
+  // average age of OPEN PI receivables — because revenue isn't program-split, so
+  // a sales-based DSO can't be scoped to PI honestly. Always PI, regardless of
+  // the header program filter (DSO is inherently a PI metric here).
+  const piOpenInv = (ar?.invoices ?? []).filter((i) => i.open > 0 && programOfPayer(i.payer) === 'PI');
+  const piOpenSum = piOpenInv.reduce((s, i) => s + i.open, 0);
+  const piDso = piOpenSum > 0
+    ? Math.round(piOpenInv.reduce((s, i) => {
+        const age = i.dueDate ? Math.max(0, Math.floor((refMs - new Date(i.dueDate).getTime()) / 86_400_000)) : 0;
+        return s + i.open * age;
+      }, 0) / piOpenSum)
+    : null;
 
   // Action Center — items derived live from the same datasets.
   const soon = refMs + 7 * 86_400_000;
@@ -368,7 +380,7 @@ export function OverviewCharts() {
               delta={cashD} sub={`customer payments · FY${fy}`} spark={completeVals(cashSeries, asOfYm)}
               chip={fyLatest ? `${payments.count} payments` : `FY${fy}`} onClick={go('accounts')} />
             <KpiExec label="AR Open" value={arOpenF} format={formatCurrency} hue={HUE.ar}
-              sub={`${arInv.length} unpaid · ${PROG_LABEL[prog]}`} chip={dsoApprox != null ? `Avg DSO: ${dsoApprox} days` : undefined} onClick={go('receivables')} />
+              sub={`${arInv.length} unpaid · ${PROG_LABEL[prog]}`} chip={piDso != null ? `PI DSO: ${piDso}d` : undefined} onClick={go('receivables')} />
             <KpiExec label="AP Open" value={ap.totalOpen} format={formatCurrency} hue={HUE.ap}
               sub="unpaid bills · snapshot" chip={`${ap.count} bills`} onClick={go('payables')} />
             <KpiExec label="Sales Orders" value={soCount} format={(n) => n.toLocaleString()} hue={HUE.sales}
@@ -415,7 +427,7 @@ export function OverviewCharts() {
               </div>
               <div className="cfoot" style={{ marginTop: 0 }}>
                 <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${pctText(cashD.pct)}` : '—'}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">DSO</div><div className="v">{dsoApprox != null ? `${dsoApprox} days` : '—'}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">PI DSO</div><div className="v">{piDso != null ? `${piDso} days` : '—'}</div></div>
               </div>
             </ChartCard>
 
