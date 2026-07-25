@@ -32,23 +32,13 @@ const lastNameOnly = (name) => {
   const parts = v.split(/\s+/).filter(Boolean);
   return parts[parts.length - 1] || '';
 };
-// The shared "patient reference number" (e.g. 273 / 316) that can group multiple
-// SOs. Best-effort: it lives in a Striven custom field whose exact name we can't
-// see from here, so try the common ones, then any reference/claim/case-looking
-// field, then the SO's own referenceNumber. If none, '' (shows as — = unmapped,
-// so it's obvious we need the field name confirmed against live data).
-const REF_FIELDS = ['Reference', 'Patient Reference', 'Reference #', 'Ref', 'Ref #', 'Claim', 'Claim #', 'Claim Number', 'Case', 'Case #', 'Case Number', 'File #', 'File Number', 'Matter', 'Matter #'];
-const refOf = (d) => {
-  const cfs = Array.isArray(d?.customFields) ? d.customFields : [];
-  for (const name of REF_FIELDS) {
-    const f = cfs.find((x) => String(x.name || '').toLowerCase() === name.toLowerCase());
-    const val = String(f?.valueText ?? '').trim();
-    if (val) return val;
-  }
-  const fuzzy = cfs.find((x) => /reference|claim|case|matter|file\s*#/i.test(String(x.name || '')) && String(x.valueText ?? '').trim());
-  if (fuzzy) return String(fuzzy.valueText).trim();
-  return String(d?.referenceNumber ?? '').trim();
-};
+// SMR's "patient reference" (Crystal's 273 / 316) is the SO's ORDER NUMBER —
+// confirmed against live data. There is NO dedicated Reference/Claim custom field
+// (the SO custom fields are Payer, Law Firm, Case Manager, ICD-10, etc.; an
+// earlier fuzzy scan wrongly grabbed "Case Manager"). orderNumber is often a
+// small sequence number, but for many orders staff typed initials+surname
+// (e.g. "AAvila") instead — show whatever it holds; it is the key staff use.
+const refOf = (d) => String(d?.orderNumber ?? d?.number ?? d?.referenceNumber ?? '').trim();
 const progOf = (t) => { const s = String(t?.name ?? t ?? '').toLowerCase(); if (/tri.?care/.test(s)) return 'TriCare'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/\bpi\b|personal injury/.test(s)) return 'PI'; return 'Other'; };
 // Retry the detail fetch once — a single transient failure used to silently drop
 // the SO (continue), which hid orders from the sequence (e.g. a missing 316).
