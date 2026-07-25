@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  fetchStrivenAR, fetchStrivenPayments, fetchStrivenCustomers, fetchStrivenPL,
-  type ArResult, type PaymentsResult, type CustomersResult, type PlResult,
+  fetchStrivenAR, fetchStrivenPayments, fetchStrivenCustomers,
+  type ArResult, type PaymentsResult, type CustomersResult,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
@@ -54,7 +54,6 @@ export function ReceivablesTab() {
   const [ar, setAr] = useState<ArResult | null>(null);
   const [payments, setPayments] = useState<PaymentsResult | null>(null);
   const [customers, setCustomers] = useState<CustomersResult | null>(null);
-  const [pl, setPl] = useState<PlResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<null | { title: string; sub: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] }>(null);
@@ -79,10 +78,10 @@ export function ReceivablesTab() {
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
     try {
-      const [a, pay, cust, p] = await Promise.all([
-        fetchStrivenAR(), fetchStrivenPayments(), fetchStrivenCustomers(), fetchStrivenPL().catch(() => null),
+      const [a, pay, cust] = await Promise.all([
+        fetchStrivenAR(), fetchStrivenPayments(), fetchStrivenCustomers(),
       ]);
-      setAr(a); setPayments(pay); setCustomers(cust); setPl(p);
+      setAr(a); setPayments(pay); setCustomers(cust);
       setLastSync(Date.now());
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : 'Failed to load Receivables data.');
@@ -103,7 +102,6 @@ export function ReceivablesTab() {
   // meaningless there. Aging method: amount-weighted average age of open PI
   // receivables (revenue isn't program-split, so a sales-based PI DSO can't be
   // scoped honestly).
-  const revMonths = (pl?.series ?? []).filter((s) => s.revenue > 0).length;
   const piOpenInv = invoices.filter((i) => (i.open || 0) > 0 && programOfPayer(i.payer || i.customer) === 'PI');
   const piOpenSum = piOpenInv.reduce((s, i) => s + (i.open || 0), 0);
   const dso = piOpenSum > 0

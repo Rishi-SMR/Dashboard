@@ -200,7 +200,6 @@ export function OverviewCharts() {
 
   // Program-scoped sales orders.
   const soCount = so ? (prog === 'All' ? so.count : so.piva[prog === 'Unassigned' ? 'Other' : prog].count) : 0;
-  const soValue = so ? (prog === 'All' ? so.totalValue : so.piva[prog === 'Unassigned' ? 'Other' : prog].value) : 0;
 
   const collectionPct = fRev > 0 ? Math.round((cashFY / fRev) * 100) : 0;
   // DSO restricted to PI (client SOW): VA / TriCare pay on fixed cycles, so DSO
