@@ -171,7 +171,11 @@ export type VendorItemsReport = { vendors: ReportVendor[]; count: number; genera
 export type ReportPatientItem = { item: string; qty: number; value: number; soCount: number };
 /** Patients are identified ONLY by a reference (PT-<Striven customer id>) — names are PHI and are never sent to the browser. */
 export type ReportPatient = { ref: string; soCount: number; totalValue: number; items: ReportPatientItem[] };
-export type PatientItemsReport = { patients: ReportPatient[]; count: number; generatedAt: string | null; note: string };
+// SO-wise row (client SOW): one per sales order. `ref` = the shared patient
+// reference (273/316-style); `lastName` = minimum-necessary PHI; `incomplete` =
+// detail fetch failed so it's a flagged placeholder, not dropped.
+export type ReportOrder = { soId: number; so: string; ref: string; custRef?: string; lastName: string; program: string; date: string | null; value: number; items: { item: string; qty: number; value: number }[]; incomplete?: boolean };
+export type PatientItemsReport = { patients: ReportPatient[]; orders?: ReportOrder[]; count: number; orderCount?: number; generatedAt: string | null; note: string };
 export const fetchVendorItemsReport = () => get<VendorItemsReport>('/api/reports/vendor-items');
 export const fetchPatientItemsReport = () => get<PatientItemsReport>('/api/reports/patient-items');
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   fetchVendorItemsReport, fetchPatientItemsReport,
   type VendorItemsReport, type PatientItemsReport,
@@ -64,7 +64,7 @@ export function ReportsTab() {
 
       {loading && !vend && !pat && <div className="page-sub" style={{ padding: 16 }}>Loading reports…</div>}
       {tab === 'vendors' && vend && <VendorReport data={vend} />}
-      {tab === 'patients' && pat && <PatientReport data={pat} />}
+      {tab === 'patients' && pat && (pat.orders?.length ? <OrdersReport data={pat} /> : <PatientReport data={pat} />)}
     </div>
   );
 }
@@ -211,6 +211,96 @@ function FragmentRow({ rank, name, a, b, c, open, onToggle, columns, rows }: {
         </tr>
       )}
     </>
+  );
+}
+
+// SO-wise patient orders (client SOW): one row per sales order, with the shared
+// patient reference, last name (minimum-necessary PHI) and its line items.
+const PROG_C: Record<string, string> = { PI: '#2563EB', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };
+function OrdersReport({ data }: { data: PatientItemsReport }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState<number | null>(null);
+  const all = data.orders ?? [];
+
+  const orders = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return all;
+    return all.filter((o) =>
+      o.so.toLowerCase().includes(t) || String(o.ref).toLowerCase().includes(t) ||
+      (o.lastName || '').toLowerCase().includes(t) || (o.program || '').toLowerCase().includes(t) ||
+      o.items.some((i) => i.item.toLowerCase().includes(t)));
+  }, [all, q]);
+
+  const totalValue = all.reduce((s, o) => s + o.value, 0);
+  const patients = new Set(all.map((o) => o.custRef || o.ref).filter(Boolean)).size;
+
+  function exportCsv() {
+    const rows = all.flatMap((o) => (o.items.length ? o.items : [{ item: '—', qty: 0, value: 0 }])
+      .map((i) => [o.so, o.ref || '', o.lastName || '', o.program || '', i.item, i.qty, i.value]));
+    downloadCsv('patient-orders.csv', ['Sales order', 'Reference', 'Last name', 'Program', 'Item', 'Qty', 'Value'], rows);
+  }
+
+  if (!all.length) return <NotReady note={data.note} />;
+
+  return (
+    <div className="section">
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+        <KpiR ico="clip" tint={C.brand} label="Sales orders" value={all.length} foot="one row per SO" deltaText="non-cancelled" />
+        <KpiR ico="users" tint="#8B5CF6" label="Patients" value={patients} foot="distinct references" deltaText="by PT-<id>" />
+        <KpiR ico="cash" tint="#16A34A" label="Total order value" value={totalValue} format={formatCurrency} foot="from non-cancelled SOs" deltaText="all orders" />
+      </div>
+
+      <div className="qb-flash warn" style={{ marginBottom: 12 }}>
+        🔒 Minimum-necessary PHI: patient <b>last name</b> is shown for order matching (per client request). Full name, DOB and
+        address are never shown or stored, and every view is audit-logged. Look the reference up in Striven for full identity.
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>One row per sales order, ordered by reference. Click a row to see its items.</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input className="login-input" style={{ maxWidth: 260, height: 38 }} placeholder="Search SO / ref / last name / item…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <button className="btn ghost" onClick={exportCsv}>⭳ CSV</button>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr>
+            <th style={{ width: 40 }}>#</th><th>Sales order</th><th>Reference</th><th>Last name</th><th>Program</th>
+            <th className="num">Items</th><th className="num">Value</th>
+          </tr></thead>
+          <tbody>
+            {orders.length === 0 && <tr><td colSpan={7} style={{ color: C.muted }}>No orders match.</td></tr>}
+            {orders.map((o, i) => (
+              <Fragment key={o.soId}>
+                <tr onClick={() => o.items.length && setOpen(open === o.soId ? null : o.soId)}
+                  style={{ cursor: o.items.length ? 'pointer' : 'default', background: open === o.soId ? 'var(--accent-soft-2)' : undefined, opacity: o.incomplete ? 0.6 : undefined }}>
+                  <td style={{ color: 'var(--muted)' }}>{i + 1}</td>
+                  <td style={{ fontWeight: 700 }}>{o.items.length ? (open === o.soId ? '▾ ' : '▸ ') : ''}{o.so}</td>
+                  <td style={{ fontWeight: 600 }}>{o.ref || '—'}</td>
+                  <td>{o.lastName || '—'}{o.incomplete && <span className="pill-tag tag-warn" style={{ marginLeft: 6, fontSize: 10 }}>incomplete</span>}</td>
+                  <td><span className="pill-tag" style={{ color: PROG_C[o.program] || PROG_C.Other, borderColor: 'currentColor' }}>{o.program || '—'}</span></td>
+                  <td className="num">{o.items.length}</td>
+                  <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.value)}</td>
+                </tr>
+                {open === o.soId && o.items.length > 0 && (
+                  <tr><td colSpan={7} style={{ padding: '0 0 8px 0', background: 'var(--accent-soft-2)' }}>
+                    <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
+                      <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Value</th></tr></thead>
+                      <tbody>
+                        {o.items.map((it, j) => (
+                          <tr key={j}><td style={{ fontWeight: 600 }}>{it.item}</td><td className="num">{it.qty}</td><td className="num">{formatCurrency(it.value)}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
