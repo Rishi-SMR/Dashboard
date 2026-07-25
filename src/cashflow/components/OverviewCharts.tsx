@@ -8,8 +8,7 @@ import {
   type OrdersResult, type ExceptionsResult, type Aging,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
-import { StatusPill } from './StatusPill';
-import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, statusTone, programOfPayer, type Program } from '../chartTheme';
+import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
 import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, DrillModal, useSyncAgo, pctText } from '../chartKit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
@@ -267,12 +266,6 @@ export function OverviewCharts() {
     rows: (ap?.bills ?? []).filter((b) => b.open > 0 && bucketKeyOf(b.dueDate, refMs) === LABEL_KEY[label]).sort((a, b) => b.open - a.open)
       .map((b) => ({ n: `#${b.number}`, v: b.vendor || '—', d: shortDate(b.dueDate), o: formatCurrency(b.open) })),
   });
-  const drillPayer = (name: string) => setDrill({
-    title: name, sub: 'Open invoices for this payer',
-    columns: [{ key: 'n', label: 'Invoice #' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
-    rows: arInv.filter((i) => (i.payer || i.customer || 'Unassigned') === name).sort((a, b) => b.open - a.open)
-      .map((i) => ({ n: `#${i.number}`, d: shortDate(i.dueDate), o: formatCurrency(i.open) })),
-  });
   const drillVendor = (name: string) => setDrill({
     title: name, sub: 'Recent purchase orders for this vendor',
     columns: [{ key: 'r', label: 'PO ref' }, { key: 'd', label: 'Date' }, { key: 'a', label: 'Amount', num: true }],
@@ -290,30 +283,6 @@ export function OverviewCharts() {
   if (bestMonth) insights.push({ tone: 'brand', ico: '★', text: <>Highest revenue month: <b>{monthLabel(bestMonth.month)}</b> ({compactMoney(bestMonth.revenue)})</> });
   if (pl?.avgInvoice) insights.push({ tone: 'purple', ico: '$', text: <>Avg invoice value <b>{formatCurrency(pl.avgInvoice)}</b></> });
   if (topCust[0]) insights.push({ tone: 'teal', ico: '◆', text: <>Top AR payer: <b>{trunc(topCust[0].name, 18)}</b> ({formatCurrency(topCust[0].open)} open)</> });
-
-  // Recent activity — a few of each stream (payments / orders / POs) so one
-  // busy source can't crowd out the others; merged newest first.
-  type Act = { date: string | null; bg: string; fg: string; ico: string; text: ReactNode; amt: string; cls?: string; view: string };
-  const money0 = (n: number) => (n > 0 ? formatCurrency(n) : '—');
-  const acts: Act[] = [
-    ...(payments?.recent ?? []).slice(0, 4).map((r): Act => ({
-      date: r.date, bg: 'rgba(22,163,74,0.12)', fg: '#16A34A', ico: '$',
-      text: <>Payment <b>{r.ref}</b> received{r.customer ? <> from <b>{trunc(r.customer, 24)}</b></> : null}</>,
-      amt: `+${formatCurrency(r.amount)}`, cls: 'pos', view: 'accounts',
-    })),
-    ...(so?.recent ?? []).slice(0, 3).map((r): Act => ({
-      date: r.date, bg: 'rgba(37,99,235,0.10)', fg: '#2563EB', ico: '›',
-      text: <>Sales Order <b>{r.ref}</b> created · {r.type || 'order'}</>, amt: money0(r.value), view: 'orders',
-    })),
-    ...(po?.recent ?? []).slice(0, 3).map((r): Act => ({
-      date: r.date, bg: 'rgba(124,58,237,0.10)', fg: '#7C3AED', ico: '◧',
-      text: <>PO <b>{r.ref}</b> · {trunc(r.vendor, 22)}</>, amt: money0(r.total), view: 'tracking',
-    })),
-  ].filter((a) => a.date && String(a.date).slice(0, 10) <= asOfStr)
-    .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
-
-  // Pending approvals — POs whose status reads as pending/awaiting.
-  const approvals = (po?.recent ?? []).filter((r) => statusTone(r.status || '') === 'warn').slice(0, 6);
 
   const excGroups = exc ? [...exc.groups].sort((a, b) => b.count - a.count).slice(0, 6) : [];
 
@@ -402,8 +371,8 @@ export function OverviewCharts() {
               sub={`${arInv.length} unpaid · ${PROG_LABEL[prog]}`} chip={dsoApprox != null ? `Avg DSO: ${dsoApprox} days` : undefined} onClick={go('receivables')} />
             <KpiExec label="AP Open" value={ap.totalOpen} format={formatCurrency} hue={HUE.ap}
               sub="unpaid bills · snapshot" chip={`${ap.count} bills`} onClick={go('payables')} />
-            <KpiExec label="Sales Orders" value={soValue} format={formatCurrency} hue={HUE.sales}
-              sub={`order book · ${PROG_LABEL[prog]}`} chip={`${soCount} orders`} onClick={go('orders')} />
+            <KpiExec label="Sales Orders" value={soCount} format={(n) => n.toLocaleString()} hue={HUE.sales}
+              sub={`open order book · ${PROG_LABEL[prog]}`} chip="count only" onClick={go('orders')} />
             <KpiExec label="PO Spend" value={po.totalValue} format={formatCurrency} hue={HUE.po}
               sub="committed · active only" chip={`${po.count} POs`} onClick={go('tracking')} />
             <KpiExec label="Open Exceptions" value={exc?.totalOpen ?? 0} hue={HUE.exc}
@@ -459,21 +428,6 @@ export function OverviewCharts() {
             </ChartCard>
 
             <div className="section chart-card g12-3">
-              <div className="section-head"><div><h2 className="section-title">Top Payers (by AR)</h2><div className="section-sub">Largest open balances · {PROG_LABEL[prog]}</div></div></div>
-              <div className="rank-list">
-                {topCust.map((c) => (
-                  <div key={c.name} className="rk-row" style={{ cursor: 'pointer' }} onClick={() => drillPayer(c.name)}>
-                    <span className="rk-ico">{initials(c.name)}</span>
-                    <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
-                    <span className="rk-val">{formatCurrency(c.open)}</span>
-                  </div>
-                ))}
-                {topCust.length === 0 && <div className="muted-note">No open receivables.</div>}
-              </div>
-              <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('receivables')}>View all receivables →</button>
-            </div>
-
-            <div className="section chart-card g12-3">
               <div className="section-head"><div><h2 className="section-title">Top Vendors (by Spend)</h2><div className="section-sub">Committed PO spend</div></div></div>
               <div className="rank-list">
                 {topVend.map((v) => (
@@ -488,7 +442,7 @@ export function OverviewCharts() {
               <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('vendors')}>View all vendors →</button>
             </div>
 
-            <ChartCard className="g12-4" title="Sales Orders by Program" sub={`${so.count} orders · click a program to filter`}>
+            <ChartCard className="g12-3" title="Sales Orders by Program" sub={`${so.count} orders · click a program to filter`}>
               <div className="card-body">
                 <BarList data={programBars} money={false}
                   onSelect={(name) => setProg((p) => {
@@ -498,7 +452,7 @@ export function OverviewCharts() {
               </div>
               <div className="cfoot">
                 <div className="cf-i"><div className="l">{prog === 'All' ? 'Total Orders' : `${PROG_LABEL[prog]} Orders`}</div><div className="v">{soCount.toLocaleString()}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Order Book</div><div className="v accent">{formatCurrency(soValue)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Programs</div><div className="v accent">{programBars.length || '—'}</div></div>
               </div>
             </ChartCard>
 
@@ -512,7 +466,7 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <div className="section chart-card g12-4 g12-w">
+            <div className="section chart-card g12-4">
               <div className="section-head"><div><h2 className="section-title">Financial Insights</h2><div className="section-sub">Computed from live data</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 <div className="ins-list">
@@ -526,40 +480,7 @@ export function OverviewCharts() {
               </div>
             </div>
 
-            <ChartCard className="g12-5" title="Recent Activity" sub="Payments · orders · POs"
-              right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('accounts')}>View all →</button>}>
-              <div className="act-list">
-                {acts.map((a, i) => (
-                  <div key={i} className="act-row" style={{ cursor: 'pointer' }} onClick={go(a.view)}>
-                    <span className="act-time">{shortDate(a.date)}</span>
-                    <span className="act-ico" style={{ background: a.bg, color: a.fg }}>{a.ico}</span>
-                    <span className="act-text">{a.text}</span>
-                    <span className={`act-amt${a.cls ? ` ${a.cls}` : ''}`}>{a.amt}</span>
-                  </div>
-                ))}
-                {acts.length === 0 && <div className="muted-note">No recent activity.</div>}
-              </div>
-            </ChartCard>
-
-            <ChartCard className="g12-4" title="Pending Approvals" sub="POs awaiting action"
-              right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('orders')}>View all →</button>}>
-              {approvals.length ? (
-                <div className="appr-list">
-                  {approvals.map((r) => (
-                    <div key={r.id} className="appr-row" style={{ cursor: 'pointer' }} onClick={go('tracking')}>
-                      <div className="appr-main">
-                        <div className="t">{r.ref} · {trunc(r.vendor, 24)}</div>
-                        <div className="s">{shortDate(r.date)}</div>
-                      </div>
-                      <span className="appr-amt">{formatCurrency(r.total)}</span>
-                      <StatusPill status={r.status || 'Pending'} />
-                    </div>
-                  ))}
-                </div>
-              ) : <div className="qb-placeholder"><span className="qb-icon">✓</span>Nothing awaiting approval</div>}
-            </ChartCard>
-
-            <ChartCard className="g12-3" title="Exceptions" sub={`${exc?.totalOpen ?? 0} data-quality items`}
+            <ChartCard className="g12-4" title="Exceptions" sub={`${exc?.totalOpen ?? 0} data-quality items`}
               right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('exceptions')}>View all →</button>}>
               {excGroups.length ? (
                 <div className="exc-list">

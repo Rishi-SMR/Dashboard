@@ -407,8 +407,10 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               <RankBar data={statusData} colorAt={(i) => STATUS_COLOR(statusData[i]?.name ?? '')} onSelect={drillSoStatus} />
             </ChartCard>
 
-            <ChartCard className="g12-12" title="Top Sales Reps by Order Value" sub="Sales rep on the sales order — referral group removed, no patient data">
-              <RankBar data={so.byRep.slice(0, repsShown).map((r) => ({ name: r.rep, value: r.value }))} money colorAt={() => C.brand}
+            <ChartCard className="g12-12" title="Top Sales Reps by Order Count"
+              sub="Leaderboard ranked by number of sales orders — the fair measure of rep activity (dollar value varies by program). Referral group removed, no patient data"
+              right={<span className="deck-pill muted">by count</span>}>
+              <RankBar data={so.byRep.slice(0, repsShown).map((r) => ({ name: r.rep, value: r.count }))} colorAt={() => C.brand}
                 onSelect={(rep) => {
                   setSoQuery(rep); setSoStatusF('All'); setSoProgF('All'); setSoPage(1);
                   soTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });

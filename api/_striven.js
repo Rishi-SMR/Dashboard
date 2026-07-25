@@ -620,6 +620,16 @@ function payerOf(d) {
   if (/\bpi\b|personal injury/i.test(type)) return String(cfVal(d, 'Law Firm') ?? '').trim();
   return '';
 }
+// Payer text → program bucket (mirrors the client's programOfPayer). PI = a law
+// firm / attorney's office (anything not VA or TriCare); VA = Veterans Affairs;
+// TriCare = the TriCare program. Empty payer → Unassigned.
+const programOfPayer = (payer) => {
+  const s = String(payer ?? '').trim();
+  if (!s) return 'Unassigned';
+  if (/tri.?care/i.test(s)) return 'TriCare';
+  if (/veteran|\bva\b/i.test(s)) return 'VA';
+  return 'PI';
+};
 
 // ---- endpoints ----------------------------------------------------------
 async function getStatus() {
@@ -809,9 +819,12 @@ async function getSO() {
   for (const r of live) { const s = soStatusOf(r); byStatusMap[s] = (byStatusMap[s] || 0) + 1; }
   const byStatus = Object.entries(byStatusMap).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
 
+  // By rep: track both order COUNT and dollar value. Ranked by COUNT per client
+  // SOW — dollar value misranks reps because program billing rates differ (a VA
+  // rep can out-produce a PI rep on volume yet show a lower dollar figure).
   const byRepMap = {};
-  for (const r of book) { const rep = cleanRep(r.d.rep) || 'Unassigned'; byRepMap[rep] = (byRepMap[rep] || 0) + Number(r.d.total || 0); }
-  const byRep = Object.entries(byRepMap).map(([rep, value]) => ({ rep, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 15);
+  for (const r of book) { const rep = cleanRep(r.d.rep) || 'Unassigned'; if (!byRepMap[rep]) byRepMap[rep] = { count: 0, value: 0 }; byRepMap[rep].count += 1; byRepMap[rep].value += Number(r.d.total || 0); }
+  const byRep = Object.entries(byRepMap).map(([rep, v]) => ({ rep, count: v.count, value: round2(v.value) })).sort((a, b) => b.count - a.count || b.value - a.value).slice(0, 15);
 
   // The COMPLETE live order list (each row carries its status for filtering).
   const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
@@ -1000,23 +1013,29 @@ async function getExceptions() {
   const push = (o) => { if (o.count > 0) groups.push(o); };
 
   const payments = await allPayments();
-  const unapplied = payments.filter((p) => Number(p.openBalance || 0) > 0);
-  push({ key: 'unapplied_payments', severity: 'warn', title: 'Unapplied customer payments', count: unapplied.length, value: round2(unapplied.reduce((s, p) => s + Number(p.openBalance || 0), 0)), note: 'Customer paid but the payment is not applied to a specific invoice — inflates open AR until applied.', columns: ['ref', 'paid', 'unapplied', 'date'], rows: unapplied.slice(0, 25).map((p) => ({ ref: `PMT-${p.id}`, paid: round2(Number(p.paymentAmount || 0)), unapplied: round2(Number(p.openBalance || 0)), date: (p.paymentDate || p.dateCreated || '').slice(0, 10) })) });
-
   const invs = await allInvoices();
+  // Classify each customer's program from their invoices' payer so PI can be
+  // excluded from the unapplied-payment check: a PI claim files a 15% advance
+  // that ALWAYS leaves a residual by design, which would otherwise flood this
+  // list. VA / TriCare / other payments should apply one-for-one, so an
+  // unapplied balance there is a genuine anomaly worth surfacing.
+  const payerByInv = await invoicePayerMap();
+  const custProgram = new Map();
+  for (const r of invs) {
+    const cid = r.customer?.id; if (!cid || custProgram.has(cid)) continue;
+    const prog = programOfPayer(payerByInv[String(r.txnNumber ?? r.id)] || '');
+    if (prog !== 'Unassigned') custProgram.set(cid, prog);
+  }
+  const unapplied = payments.filter((p) => Number(p.openBalance || 0) > 0 && custProgram.get(p.customer?.id) !== 'PI');
+  push({ key: 'unapplied_payments', severity: 'warn', title: 'Unapplied customer payments (excl. PI advances)', count: unapplied.length, value: round2(unapplied.reduce((s, p) => s + Number(p.openBalance || 0), 0)), note: 'VA / other payments should apply one-for-one, so an unapplied balance is a real anomaly. PI advances (15% retainer) always leave a residual by design and are excluded here.', columns: ['ref', 'paid', 'unapplied', 'date'], rows: unapplied.slice(0, 25).map((p) => ({ ref: `PMT-${p.id}`, paid: round2(Number(p.paymentAmount || 0)), unapplied: round2(Number(p.openBalance || 0)), date: (p.paymentDate || p.dateCreated || '').slice(0, 10) })) });
+
   const voidedOpen = invs.filter((r) => Number(r.openBalance || 0) > 0 && isVoidStatus(INVOICE_STATUS[r.id]));
   push({ key: 'voided_open_invoices', severity: 'high', title: 'Voided invoices still carrying an open balance', count: voidedOpen.length, value: round2(voidedOpen.reduce((s, r) => s + Number(r.openBalance || 0), 0)), note: 'Voided in Striven but still shows open — excluded from AR here. Should be cleared in Striven.', columns: ['ref', 'open', 'status'], rows: voidedOpen.slice(0, 25).map((r) => ({ ref: `#${r.txnNumber || r.id}`, open: round2(Number(r.openBalance || 0)), status: 'Voided' })) });
 
-  const po = await poStatusMap();
-  const cancelledPO = po.filter((r) => r.classified && poIsVoid(r));
-  push({ key: 'cancelled_pos', severity: 'info', title: 'Cancelled POs excluded from PO spend', count: cancelledPO.length, value: round2(cancelledPO.reduce((s, r) => s + Number(r.poTotal || 0), 0)), note: 'Correctly excluded from PO Spend — listed for transparency.', columns: ['ref', 'vendor', 'value'], rows: cancelledPO.slice(0, 25).map((r) => ({ ref: `PO-${r.id}`, vendor: r.vendor?.name || '—', value: round2(Number(r.poTotal || 0)) })) });
-
-  // Active POs whose line items carry no sales-order link — cannot be traced
-  // to an order (may be stock/bulk purchases; worth reviewing in Striven).
-  const revMap = await poToSoMap();
-  const activePos = po.filter((r) => r.classified && !poIsVoid(r));
-  const unlinked = activePos.filter((r) => !revMap[`PO-${r.id}`] && !revMap[String(r.poNumber ?? '')]);
-  push({ key: 'unlinked_pos', severity: 'warn', title: 'Active POs not linked to a sales order', count: unlinked.length, value: round2(unlinked.reduce((s, r) => s + Number(r.poTotal || 0), 0)), note: 'No sales order on the PO line items — untraceable in Order Tracking. Some may be legitimate stock purchases.', columns: ['ref', 'vendor', 'value', 'status'], rows: unlinked.slice(0, 25).map((r) => ({ ref: `PO-${r.id}`, vendor: r.vendor?.name || '—', value: round2(Number(r.poTotal || 0)), status: r.statusName || '' })) });
+  // (Per client SOW) Cancelled POs and active POs not linked to a sales order
+  // are intentionally NOT flagged here: cancelled POs are correctly excluded
+  // from PO spend already, and unlinked POs are by design (true stock/bulk
+  // purchases ordered outside an order) — surfacing them was just noise.
 
   const sos = await allSO(); const det = await soDetailMap();
   const demo = sos.filter((r) => isDemoType(det[r.id]?.type));
