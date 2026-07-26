@@ -95,7 +95,7 @@ export function CommissionTab() {
           {/* Pay-period tabs (from the sheet's monthly tab names) */}
           <SheetPeriodTabs periods={data.periods} value={sheetMonth} onChange={setSheetMonth} />
 
-          {sheetMonth !== 'all' && <SheetMonthTable periods={data.periods} monthKey={sheetMonth} />}
+          {sheetMonth !== 'all' && <SheetMonthTable periods={data.periods} monthKey={sheetMonth} reps={data.reps} onRep={setRepSel} />}
 
           {sheetMonth === 'all' && <>
           {/* Patient-level reconciliation anomaly callouts */}
@@ -557,7 +557,7 @@ function SheetPeriodTabs({ periods, value, onChange }: { periods: CommissionPeri
 }
 
 // Per-rep breakdown for one selected pay period (from the sheet).
-function SheetMonthTable({ periods, monthKey }: { periods: CommissionPeriod[]; monthKey: string }) {
+function SheetMonthTable({ periods, monthKey, reps: allReps, onRep }: { periods: CommissionPeriod[]; monthKey: string; reps: CommissionRep[]; onRep: (r: CommissionRep) => void }) {
   const m = mergePeriods(periods).find((x) => x.key === monthKey);
   if (!m) return null;
   const reps = m.reps;
@@ -567,7 +567,7 @@ function SheetMonthTable({ periods, monthKey }: { periods: CommissionPeriod[]; m
     <div className="section chart-card">
       <div className="section-head"><div>
         <h2 className="section-title">{m.label} - commission by rep (from the sheet)</h2>
-        <div className="section-sub">{m.lines} lines · {formatCurrency(m.total)} this pay period.</div>
+        <div className="section-sub">{m.lines} lines · {formatCurrency(m.total)} this pay period. Click a rep for full detail.</div>
       </div></div>
       <div className="table-wrap">
         <table className="data-table">
@@ -577,10 +577,12 @@ function SheetMonthTable({ periods, monthKey }: { periods: CommissionPeriod[]; m
             <th className="num">Lines</th><th className="num">Total</th><th style={{ width: '22%' }} />
           </tr></thead>
           <tbody>
-            {reps.map((r, i) => (
-              <tr key={r.rep}>
+            {reps.map((r, i) => {
+              const full = allReps.find((x) => x.rep === r.rep);
+              return (
+              <tr key={r.rep} onClick={() => full && onRep(full)} style={{ cursor: full ? 'pointer' : 'default' }} title={full ? "Click for this rep's full detail" : undefined}>
                 <td style={{ color: C.muted }}>{i + 1}</td>
-                <td style={{ fontWeight: 700 }}>{r.rep}</td>
+                <td style={{ fontWeight: 700, color: full ? C.brand : C.ink }}>{r.rep}</td>
                 <td className="num">{r.tricare ? formatCurrency(r.tricare) : '-'}</td>
                 <td className="num">{r.va ? formatCurrency(r.va) : '-'}</td>
                 <td className="num">{r.pi ? formatCurrency(r.pi) : '-'}</td>
@@ -588,7 +590,8 @@ function SheetMonthTable({ periods, monthKey }: { periods: CommissionPeriod[]; m
                 <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(r.total)}</td>
                 <td><div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(r.total / maxRep) * 100}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} /></div></td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
           <tfoot><tr className="total-row">
             <td /><td>Total</td>
