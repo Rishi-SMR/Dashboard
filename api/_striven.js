@@ -1307,6 +1307,63 @@ export async function trackingRun(params = {}, body = null) {
   return trackingList();
 }
 
+// ============================================================================
+// COMMISSION — reads Crystal's commission workbook(s) (Google Sheets, public CSV
+// export) and aggregates accrual by rep + program. Rows are Patient | Rep |
+// Device | Commission, under TRICARE / PERSONAL INJURY / VA section headers.
+// The sheets carry FULL patient names (PHI) — we NEVER emit them, only per-rep /
+// program / total aggregates. Configure via app_config COMMISSION_SHEETS = JSON
+// array [{id,gid,label}] (defaults to the two known sheets / current-period tab).
+// ============================================================================
+const COMMISSION_DEFAULT = [
+  { id: '1C3_X-Rf3ZKZBSHgd-D0zvxSbO2nbvPGgnIdwpwCE49w', gid: '739114886', label: 'Team' },
+  { id: '16aBJZSCNbkPU6h8kUTw7u44NTsi21XxRVIkxyyazZI0', gid: '1321345556', label: 'Christy' },
+];
+const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
+const commRep = (r) => { const s = String(r || '').trim(); if (/cassie/i.test(s)) return 'Cassie'; if (/jillian/i.test(s)) return 'Jillian'; if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann'; if (/christ/i.test(s)) return 'Christy'; return s || 'Unknown'; };
+function commParseRow(line) { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (c === ',' && !q) { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; }
+async function getCommission() {
+  const cfg = await readConfigTable().catch(() => ({}));
+  let sheets = COMMISSION_DEFAULT;
+  try { if (cfg.COMMISSION_SHEETS) sheets = JSON.parse(cfg.COMMISSION_SHEETS); } catch { /* keep default */ }
+  const agg = {};
+  const byProgram = { TriCare: 0, PI: 0, VA: 0 };
+  let grandTotal = 0, rowCount = 0, sheetsRead = 0;
+  const errors = [];
+  for (const sh of sheets) {
+    let csv;
+    try { csv = await (await fetch(`https://docs.google.com/spreadsheets/d/${sh.id}/export?format=csv&gid=${sh.gid || 0}`)).text(); }
+    catch { errors.push(sh.label || sh.id); continue; }
+    if (/^\s*<(!doctype|html)/i.test(csv)) { errors.push(`${sh.label || sh.id} (private/unshared)`); continue; }
+    sheetsRead++;
+    let prog = null;
+    for (const line of csv.split(/\r?\n/)) {
+      const c = commParseRow(line);
+      const a = (c[0] || '').trim().toUpperCase();
+      if (a.includes('TRICARE')) prog = 'TriCare';
+      else if (a.includes('PERSONAL INJURY')) prog = 'PI';
+      else if (a.includes('VA COMMISSION')) prog = 'VA';
+      if (!prog || !c[1]) continue;
+      const patient = (c[0] || '').trim();
+      if (!/^[A-Za-z]/.test(patient) || patient.toUpperCase() === 'PATIENT') continue;
+      const comm = commMoney(c[3]);
+      if (!comm) continue;
+      const rep = commRep(c[1]);
+      agg[rep] = agg[rep] || { TriCare: 0, PI: 0, VA: 0, count: 0 };
+      agg[rep][prog] += comm; agg[rep].count++;
+      byProgram[prog] += comm; grandTotal += comm; rowCount++;
+    }
+  }
+  const reps = Object.entries(agg).map(([rep, v]) => ({ rep, tricare: round2(v.TriCare), pi: round2(v.PI), va: round2(v.VA), total: round2(v.TriCare + v.PI + v.VA), count: v.count }))
+    .sort((a, b) => b.total - a.total);
+  return {
+    ok: true, grandTotal: round2(grandTotal),
+    byProgram: { TriCare: round2(byProgram.TriCare), PI: round2(byProgram.PI), VA: round2(byProgram.VA) },
+    reps, itemCount: rowCount, sheetsRead, sheetsConfigured: sheets.length, errors,
+    sources: sheets.map((s) => ({ label: s.label || 'sheet', url: `https://docs.google.com/spreadsheets/d/${s.id}/edit#gid=${s.gid || 0}` })),
+  };
+}
+
 export const ROUTES = {
   '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
   '/api/reports/vendor-items': getReportVendorItems,
@@ -1328,6 +1385,7 @@ export const ROUTES = {
   '/api/projects': getProjects,
   '/api/exceptions': getExceptions,
   '/api/orders': getOrders,
+  '/api/commission': getCommission,
 };
 export const DYNAMIC = [
   { re: /^\/api\/po\/(\d+)$/, handler: (m) => getPODetail(m[1]) },
