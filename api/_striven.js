@@ -819,12 +819,22 @@ async function getSO() {
   for (const r of live) { const s = soStatusOf(r); byStatusMap[s] = (byStatusMap[s] || 0) + 1; }
   const byStatus = Object.entries(byStatusMap).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
 
-  // By rep: track both order COUNT and dollar value. Ranked by COUNT per client
-  // SOW — dollar value misranks reps because program billing rates differ (a VA
-  // rep can out-produce a PI rep on volume yet show a lower dollar figure).
+  // By rep: order COUNT + dollar value + UNIT count. Client SOW: rank PI reps by
+  // order count, VA reps by UNIT count (VA pays per unit) — dollar value misranks
+  // (a VA rep can out-produce a PI rep on volume yet show a lower $ figure). The
+  // UI toggles which metric to rank by. Units join from the SO-wise report cache.
+  const repRep = await sbCacheRead('report_patient_items');
+  const unitsBySo = new Map();
+  for (const o of (repRep?.data?.orders || [])) unitsBySo.set(String(o.soId), (o.items || []).reduce((s, i) => s + Number(i.qty || 0), 0));
   const byRepMap = {};
-  for (const r of book) { const rep = cleanRep(r.d.rep) || 'Unassigned'; if (!byRepMap[rep]) byRepMap[rep] = { count: 0, value: 0 }; byRepMap[rep].count += 1; byRepMap[rep].value += Number(r.d.total || 0); }
-  const byRep = Object.entries(byRepMap).map(([rep, v]) => ({ rep, count: v.count, value: round2(v.value) })).sort((a, b) => b.count - a.count || b.value - a.value).slice(0, 15);
+  for (const r of book) {
+    const rep = cleanRep(r.d.rep) || 'Unassigned';
+    if (!byRepMap[rep]) byRepMap[rep] = { count: 0, value: 0, units: 0 };
+    byRepMap[rep].count += 1;
+    byRepMap[rep].value += Number(r.d.total || 0);
+    byRepMap[rep].units += unitsBySo.get(String(r.id)) || 0;
+  }
+  const byRep = Object.entries(byRepMap).map(([rep, v]) => ({ rep, count: v.count, value: round2(v.value), units: v.units })).sort((a, b) => b.count - a.count || b.value - a.value);
 
   // The COMPLETE live order list (each row carries its status for filtering).
   const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))

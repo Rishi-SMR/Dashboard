@@ -156,6 +156,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
   // Dynamic chart toggles.
   const [typeMode, setTypeMode] = useState<'value' | 'count'>('value');
   const [repsShown, setRepsShown] = useState(8);
+  const [repMetric, setRepMetric] = useState<'orders' | 'units' | 'value'>('orders');
 
   // Recent-orders table filters (KPI cards click into these).
   const [soStatusF, setSoStatusF] = useState<'All' | SoGroup>('All');
@@ -407,10 +408,21 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               <RankBar data={statusData} colorAt={(i) => STATUS_COLOR(statusData[i]?.name ?? '')} onSelect={drillSoStatus} />
             </ChartCard>
 
-            <ChartCard className="g12-12" title="Top Sales Reps by Order Count"
-              sub="Leaderboard ranked by number of sales orders — the fair measure of rep activity (dollar value varies by program). Referral group removed, no patient data"
-              right={<span className="deck-pill muted">by count</span>}>
-              <RankBar data={so.byRep.slice(0, repsShown).map((r) => ({ name: r.rep, value: r.count }))} colorAt={() => C.brand}
+            <ChartCard className="g12-12" title="Top Sales Reps · Leaderboard"
+              sub="PI reps by order count, VA reps by units (VA pays per unit) — dollar value varies by program. Referral group removed, no patient data"
+              right={
+                <div className="smr-seg" style={{ marginBottom: 0 }}>
+                  <button className={repMetric === 'orders' ? 'active' : ''} onClick={() => setRepMetric('orders')}>Orders</button>
+                  <button className={repMetric === 'units' ? 'active' : ''} onClick={() => setRepMetric('units')}>Units</button>
+                  <button className={repMetric === 'value' ? 'active' : ''} onClick={() => setRepMetric('value')}>Value</button>
+                </div>
+              }>
+              <RankBar
+                data={[...so.byRep]
+                  .sort((a, b) => (repMetric === 'orders' ? b.count - a.count : repMetric === 'units' ? b.units - a.units : b.value - a.value))
+                  .slice(0, repsShown)
+                  .map((r) => ({ name: r.rep, value: repMetric === 'orders' ? r.count : repMetric === 'units' ? r.units : r.value }))}
+                money={repMetric === 'value'} colorAt={() => C.brand}
                 onSelect={(rep) => {
                   setSoQuery(rep); setSoStatusF('All'); setSoProgF('All'); setSoPage(1);
                   soTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });

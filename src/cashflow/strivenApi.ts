@@ -20,7 +20,7 @@ export type SoResult = {
   piva: Record<SoPivaKey, { count: number; value: number }>;
   byType: { type: string; count: number; value: number }[];
   byStatus: { status: string; count: number }[];
-  byRep: { rep: string; count: number; value: number }[];
+  byRep: { rep: string; count: number; value: number; units: number }[];
   recent: SoRecent[];
   statusGroups: Record<SoStatusGroup, { count: number; value: number }>;
   liveCount: number; demoCount: number; enriched: boolean; phiMasked: boolean;
