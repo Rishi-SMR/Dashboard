@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchCommission, type CommissionResult, type StrivenCommission, type StrivenCommRep } from '../strivenApi';
+import { fetchCommission, type CommissionResult, type CommissionRep, type StrivenCommission, type StrivenCommRep, type StrivenCommMonth } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
@@ -18,6 +18,7 @@ export function CommissionTab() {
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [detail, setDetail] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI'>(null);
   const [source, setSource] = useState<'sheet' | 'striven'>('sheet');
+  const [repSel, setRepSel] = useState<CommissionRep | null>(null);
   const agoText = useSyncAgo(lastSync);
 
   async function load(silent = false) {
@@ -116,9 +117,9 @@ export function CommissionTab() {
                 <tbody>
                   {reps.length === 0 && <tr><td colSpan={13} style={{ color: C.muted }}>No commission data.</td></tr>}
                   {reps.map((r, i) => (
-                    <tr key={r.rep}>
+                    <tr key={r.rep} onClick={() => setRepSel(r)} style={{ cursor: 'pointer' }} title="Click for this rep's full detail">
                       <td style={{ color: C.muted }}>{i + 1}</td>
-                      <td style={{ fontWeight: 700 }}>
+                      <td style={{ fontWeight: 700, color: C.brand }}>
                         {r.flag && <span title={r.flag === 'no-striven' ? 'Not found in Striven' : 'Commission far exceeds Striven order value'} style={{ marginRight: 5 }}>⚠️</span>}
                         {r.rep}
                       </td>
@@ -200,6 +201,8 @@ export function CommissionTab() {
           </div>
         </>
       )}
+
+      {repSel && <SheetRepModal rep={repSel} onClose={() => setRepSel(null)} />}
     </div>
   );
 }
@@ -212,6 +215,7 @@ const monthLabel = (m: string) => { if (!m || m === 'unknown') return 'Undated';
 // per-rep TriCare/VA/PI bifurcation. Replaces dependence on the manual workbook.
 function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommission; sheetTotal: number }) {
   const [month, setMonth] = useState<string>('all');
+  const [repSel, setRepSel] = useState<StrivenCommRep | null>(null);
   if (!striven || !striven.available) {
     return <div className="section"><div className="page-sub" style={{ padding: 16 }}>Striven order data isn't loaded yet — computed commission needs the Striven sales-order cache. Try Refresh, or open the Orders tab first.</div></div>;
   }
@@ -266,9 +270,9 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
             <tbody>
               {reps.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No orders in this period.</td></tr>}
               {reps.map((r, i) => (
-                <tr key={r.rep}>
+                <tr key={r.rep} onClick={() => setRepSel(r)} style={{ cursor: 'pointer' }} title="Click for this rep's full detail">
                   <td style={{ color: C.muted }}>{i + 1}</td>
-                  <td style={{ fontWeight: 700 }} title={`${r.units} units`}>{r.rep}</td>
+                  <td style={{ fontWeight: 700, color: C.brand }}>{r.rep}</td>
                   <td className="num">{r.tricare ? formatCurrency(r.tricare) : '—'}</td>
                   <td className="num">{r.va ? formatCurrency(r.va) : '—'}</td>
                   <td className="num">{r.pi ? formatCurrency(r.pi) : '—'}</td>
@@ -311,7 +315,153 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
           <span style={{ color: C.muted }}>TriCare &amp; PI stay estimates until Kevin/Crystal confirm the official rate card — then these become exact too. 🔒 No patient names are used.</span>
         </div>
       </details>
+
+      {repSel && <StrivenRepModal rep={repSel} months={striven.months} onClose={() => setRepSel(null)} />}
     </>
+  );
+}
+
+// Modal shell — backdrop + card, closes on Esc / backdrop click.
+function Modal({ title, sub, accent, onClose, children }: { title: string; sub?: string; accent?: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(680px, 100%)', maxHeight: '88vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${accent || C.brand}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff' }}>
+          <div><div style={{ fontSize: 19, fontWeight: 800, color: C.ink }}>{title}</div>{sub && <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>{sub}</div>}</div>
+          <button className="btn ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div style={{ padding: '18px 22px' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// Small stat tile used inside the rep modals.
+function Stat({ label, value, tint }: { label: string; value: string; tint?: string }) {
+  return (
+    <div style={{ background: 'var(--panel-2)', borderRadius: 10, padding: '10px 12px' }}>
+      <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: tint || C.ink, marginTop: 2 }}>{value}</div>
+    </div>
+  );
+}
+
+// Full-detail popup for one rep in the "From Striven" view.
+function StrivenRepModal({ rep, months, onClose }: { rep: StrivenCommRep; months: StrivenCommMonth[]; onClose: () => void }) {
+  const perMonth = months.map((m) => ({ month: m.month, r: m.reps.find((x) => x.rep === rep.rep) })).filter((x) => x.r) as { month: string; r: StrivenCommRep }[];
+  const cpo = rep.orders ? rep.total / rep.orders : 0;
+  const progs: [string, number, string][] = [['TriCare', rep.tricare, PROG_C.TriCare], ['VA', rep.va, PROG_C.VA], ['Personal Injury', rep.pi, PROG_C.PI]];
+  const maxM = Math.max(1, ...perMonth.map((x) => x.r.total));
+  return (
+    <Modal title={rep.rep} sub={`Commission from Striven · ${formatCurrency(rep.total)} total`} onClose={onClose}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+        <Stat label="Commission" value={formatCurrency(rep.total)} tint={C.brand} />
+        <Stat label="Orders" value={String(rep.orders)} />
+        <Stat label="Units" value={String(rep.units)} />
+        <Stat label="Per order" value={formatCurrency(cpo)} />
+      </div>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By program</div>
+      <div style={{ marginBottom: 18 }}>
+        {progs.filter(([, v]) => v > 0).map(([name, v, c]) => (
+          <div key={name} style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 3 }}>
+              <span style={{ fontWeight: 600 }}>{name}</span>
+              <span style={{ fontWeight: 700 }}>{formatCurrency(v)} · {Math.round((v / rep.total) * 100)}%</span>
+            </div>
+            <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${(v / rep.total) * 100}%`, background: c, borderRadius: 999 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>Month by month</div>
+      <table className="data-table">
+        <thead><tr><th>Month</th><th className="num">TriCare</th><th className="num">VA</th><th className="num">PI</th><th className="num">Orders</th><th className="num">Total</th><th style={{ width: '22%' }} /></tr></thead>
+        <tbody>
+          {perMonth.map(({ month, r }) => (
+            <tr key={month}>
+              <td style={{ fontWeight: 600 }}>{monthLabel(month)}</td>
+              <td className="num">{r.tricare ? formatCurrency(r.tricare) : '—'}</td>
+              <td className="num">{r.va ? formatCurrency(r.va) : '—'}</td>
+              <td className="num">{r.pi ? formatCurrency(r.pi) : '—'}</td>
+              <td className="num">{r.orders}</td>
+              <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(r.total)}</td>
+              <td><div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(r.total / maxM) * 100}%`, background: C.brand, borderRadius: 999 }} /></div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Modal>
+  );
+}
+
+// Full-detail popup for one rep in the "From the sheet" view — the reconciliation
+// story: how much of their commission actually ties back to their Striven orders.
+function SheetRepModal({ rep, onClose }: { rep: CommissionRep; onClose: () => void }) {
+  const rc = rep.recon;
+  const accent = rep.flag ? C.negative : C.brand;
+  const progs: [string, number, string][] = [['TriCare', rep.tricare, PROG_C.TriCare], ['VA', rep.va, PROG_C.VA], ['Personal Injury', rep.pi, PROG_C.PI]];
+  const parts: [string, number, number, string][] = [
+    ['Credited to this rep in Striven', rc.same, rc.commSame, C.positive],
+    ['Booked under a different rep', rc.diff, rc.commDiff, C.warning],
+    ['No matching order in Striven', rc.none, rc.commNone, C.negative],
+  ];
+  return (
+    <Modal title={rep.rep} accent={accent} sub={`From the commission sheet · ${formatCurrency(rep.total)} across ${rep.count} lines`} onClose={onClose}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+        <Stat label="Commission" value={formatCurrency(rep.total)} tint={C.brand} />
+        <Stat label="Lines" value={String(rep.count)} />
+        <Stat label="Striven orders" value={String(rep.strivenOrders)} />
+        <Stat label="Patient match" value={rep.matchRate != null ? `${rep.matchRate}%` : '—'} tint={rep.matchRate != null && rep.matchRate < 50 ? C.negative : C.ink} />
+      </div>
+
+      {rep.flag && (
+        <div className="qb-flash warn" style={{ marginBottom: 16, borderLeft: `3px solid ${C.negative}` }}>
+          ⚠️ <b>Attribution flag.</b> Only {rc.same} of {rep.count} commission lines ({rep.matchRate}%) tie back to an order booked under {rep.rep} in Striven. Commission is being paid on orders that aren't credited to this rep — worth a data check.
+        </div>
+      )}
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By program</div>
+      <div style={{ marginBottom: 18 }}>
+        {progs.filter(([, v]) => v > 0).map(([name, v, c]) => (
+          <div key={name} style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 3 }}>
+              <span style={{ fontWeight: 600 }}>{name}</span>
+              <span style={{ fontWeight: 700 }}>{formatCurrency(v)} · {Math.round((v / rep.total) * 100)}%</span>
+            </div>
+            <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${(v / rep.total) * 100}%`, background: c, borderRadius: 999 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>Where Striven books these patients</div>
+      <table className="data-table">
+        <thead><tr><th /><th className="num">Lines</th><th className="num">Commission</th></tr></thead>
+        <tbody>
+          {parts.map(([label, n, c, tint]) => (
+            <tr key={label}>
+              <td><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 999, background: tint, marginRight: 8 }} />{label}</td>
+              <td className="num">{n}</td>
+              <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(c)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rc.bookedUnder.length > 0 && (
+        <div style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>
+          Booked under: {rc.bookedUnder.map((b) => `${b.rep} (${b.count})`).join(', ')}
+        </div>
+      )}
+    </Modal>
   );
 }
 
