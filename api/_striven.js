@@ -329,7 +329,10 @@ async function searchAll(endpoint, filter = {}, cap = 2000) {
     const body = await striven('POST', endpoint, { ...filter, PageIndex: pageIndex, PageSize: pageSize });
     const data = body.data ?? body.Data ?? [];
     rows.push(...data);
-    const total = body.totalCount ?? body.TotalCount ?? rows.length;
+    // Fall back to Infinity (not rows.length) when the API omits a count — else a
+    // full page with no total would stop pagination after page 1. A short page
+    // (data.length < pageSize) reliably marks the last page.
+    const total = body.totalCount ?? body.TotalCount ?? Infinity;
     pageIndex += 1;
     if (data.length < pageSize || rows.length >= total || rows.length >= cap) break;
   }
@@ -732,7 +735,10 @@ async function getAccounts() {
 async function getPL() {
   const yearStart = `${new Date().getFullYear()}-01-01`;
   const inYear = (r) => String(r.dateCreated ?? '').slice(0, 10) >= yearStart;
-  const inv = (await allInvoices()).filter((r) => inYear(r) && notVoid(r));
+  // Invoice status isn't on the search payload — resolve voids from INVOICE_STATUS
+  // (same as getAR); notVoid(r) would be a no-op here and leak voided invoices.
+  const invNotVoid = (r) => !isVoidStatus(INVOICE_STATUS[r.id] ?? '');
+  const inv = (await allInvoices()).filter((r) => inYear(r) && invNotVoid(r));
   const bills = (await allBills()).filter((r) => inYear(r) && notVoid(r));
   const payments = (await allPayments()).filter((r) => notVoid(r) && String(r.paymentDate ?? r.dateCreated ?? '').slice(0, 10) >= yearStart);
 
@@ -781,7 +787,9 @@ async function invoicePayerMap() {
   }
   return out;
 }
-const soClass = (t) => { const s = (t || '').toLowerCase(); if (/pi/.test(s)) return 'PI'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/tri.?care/.test(s)) return 'TriCare'; return 'Other'; };
+// TriCare/VA checked before PI, and PI is word-bounded, so a type merely
+// containing "pi" (e.g. "Shipping") can't be misbooked as Personal Injury.
+const soClass = (t) => { const s = (t || '').toLowerCase(); if (/tri.?care/.test(s)) return 'TriCare'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/\bpi\b|personal injury/.test(s)) return 'PI'; return 'Other'; };
 const isDemoType = (t) => /demo|test|sample/i.test(t || '');
 // Cancelled / completed / active(open) status grouping — cancelled orders must
 // never inflate the order book (same rule the PO side already follows).
@@ -1015,7 +1023,9 @@ async function getSODetail(id) {
 }
 async function getTrends() {
   const [invAll, billsAll] = await Promise.all([allInvoices(), allBills()]);
-  const inv = invAll.filter(notVoid);
+  // Invoice voids come from INVOICE_STATUS (search payload omits status); notVoid
+  // is a no-op on invoices and would leak voided invoices into the revenue trend.
+  const inv = invAll.filter((r) => !isVoidStatus(INVOICE_STATUS[r.id] ?? ''));
   const bills = billsAll.filter(notVoid);
   const months = {};
   const bump = (dateStr, key, amt) => { if (!dateStr) return; const m = String(dateStr).slice(0, 7); months[m] = months[m] || { month: m, revenue: 0, expenses: 0 }; months[m][key] += amt; };
@@ -1980,8 +1990,12 @@ export async function autoPoRun(params = {}) {
     for (const soId of fresh) {
       const entry = await autoPoProcessSo(soId, mode);
       results.push(entry);
-      state.lastSoId = Math.max(state.lastSoId, soId);
-      if (mode === 'live' && !entry.skipped) state.processed.push(soId);
+      // Advance the checkpoint ONLY for actually-processed live orders — else a
+      // dry run marches the checkpoint past orders that live mode would then skip.
+      if (mode === 'live' && !entry.skipped) {
+        state.lastSoId = Math.max(state.lastSoId, soId);
+        state.processed.push(soId);
+      }
     }
   }
   state.processed = state.processed.slice(-500);

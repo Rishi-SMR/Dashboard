@@ -158,7 +158,11 @@ export function OverviewCharts() {
     ...(trends?.series ?? []).map((s) => s.month.slice(0, 4)),
     ...(payments?.byMonth ?? []).map((m) => m.month.slice(0, 4)),
   ])).sort();
-  const fy = fyPick && years.includes(fyPick) ? fyPick : years[years.length - 1] ?? String(new Date().getFullYear());
+  // When the user hasn't pinned a FY, follow the As-of year so moving As-of into
+  // a prior year re-scopes the charts instead of blanking them.
+  const asOfYear = asOfStr.slice(0, 4);
+  const fy = (fyPick && years.includes(fyPick)) ? fyPick
+    : (years.includes(asOfYear) ? asOfYear : (years[years.length - 1] ?? String(new Date().getFullYear())));
   const fyLatest = fy === (years[years.length - 1] ?? fy);
   const inFy = (m: string) => m.startsWith(fy) && m <= asOfYm;
 
