@@ -46,7 +46,13 @@ export function CommissionTab() {
       {error && <div className="error" style={{ marginBottom: 14 }}>{error}</div>}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
 
-      {data && (
+      {data && data.configured === false && (
+        <div className="section"><div className="page-sub" style={{ padding: 16 }}>
+          {data.note || 'No commission sheet configured yet.'} Share the commission workbook(s) and I'll wire them in.
+        </div></div>
+      )}
+
+      {data && data.configured !== false && (
         <>
           {(data.errors?.length > 0 || data.sheetsRead < data.sheetsConfigured) && (
             <div className="qb-flash warn" style={{ marginBottom: 12 }}>

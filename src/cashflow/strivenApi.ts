@@ -234,7 +234,7 @@ export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=lis
 
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
 export type CommissionRep = { rep: string; tricare: number; pi: number; va: number; total: number; count: number };
-export type CommissionResult = { ok: boolean; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[] };
+export type CommissionResult = { ok: boolean; configured?: boolean; note?: string; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[] };
 export const fetchCommission = () => get<CommissionResult>('/api/commission');
 /** Add a tracking row. Last name goes in the POST body (never the URL). */
 export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);

@@ -1315,10 +1315,10 @@ export async function trackingRun(params = {}, body = null) {
 // program / total aggregates. Configure via app_config COMMISSION_SHEETS = JSON
 // array [{id,gid,label}] (defaults to the two known sheets / current-period tab).
 // ============================================================================
-const COMMISSION_DEFAULT = [
-  { id: '1C3_X-Rf3ZKZBSHgd-D0zvxSbO2nbvPGgnIdwpwCE49w', gid: '739114886', label: 'Team' },
-  { id: '16aBJZSCNbkPU6h8kUTw7u44NTsi21XxRVIkxyyazZI0', gid: '1321345556', label: 'Christy' },
-];
+// No sheet IDs are hardcoded — the commission workbook(s) live in Supabase
+// app_config key COMMISSION_SHEETS (JSON array of {id,gid,label}), the same
+// config-not-code pattern as the Striven / Shippo / QB creds. Empty = not set up.
+const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 const commRep = (r) => { const s = String(r || '').trim(); if (/cassie/i.test(s)) return 'Cassie'; if (/jillian/i.test(s)) return 'Jillian'; if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann'; if (/christ/i.test(s)) return 'Christy'; return s || 'Unknown'; };
 function commParseRow(line) { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (c === ',' && !q) { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; }
@@ -1326,6 +1326,9 @@ async function getCommission() {
   const cfg = await readConfigTable().catch(() => ({}));
   let sheets = COMMISSION_DEFAULT;
   try { if (cfg.COMMISSION_SHEETS) sheets = JSON.parse(cfg.COMMISSION_SHEETS); } catch { /* keep default */ }
+  if (!Array.isArray(sheets) || sheets.length === 0) {
+    return { ok: true, configured: false, note: 'No commission sheet configured — set COMMISSION_SHEETS in app_config (JSON array of {id,gid,label}).', grandTotal: 0, byProgram: { TriCare: 0, PI: 0, VA: 0 }, reps: [], itemCount: 0, sheetsRead: 0, sheetsConfigured: 0, errors: [], sources: [] };
+  }
   const agg = {};
   const byProgram = { TriCare: 0, PI: 0, VA: 0 };
   let grandTotal = 0, rowCount = 0, sheetsRead = 0;
@@ -1357,7 +1360,7 @@ async function getCommission() {
   const reps = Object.entries(agg).map(([rep, v]) => ({ rep, tricare: round2(v.TriCare), pi: round2(v.PI), va: round2(v.VA), total: round2(v.TriCare + v.PI + v.VA), count: v.count }))
     .sort((a, b) => b.total - a.total);
   return {
-    ok: true, grandTotal: round2(grandTotal),
+    ok: true, configured: true, grandTotal: round2(grandTotal),
     byProgram: { TriCare: round2(byProgram.TriCare), PI: round2(byProgram.PI), VA: round2(byProgram.VA) },
     reps, itemCount: rowCount, sheetsRead, sheetsConfigured: sheets.length, errors,
     sources: sheets.map((s) => ({ label: s.label || 'sheet', url: `https://docs.google.com/spreadsheets/d/${s.id}/edit#gid=${s.gid || 0}` })),
