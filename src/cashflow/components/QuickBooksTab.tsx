@@ -264,7 +264,7 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
                   {missing.map((c, i) => (
                     <tr key={i} onClick={() => toggle(c.name)} style={{ cursor: 'pointer', background: sel.has(c.name) ? 'var(--accent-soft-2)' : undefined }}>
                       <td><input type="checkbox" checked={sel.has(c.name)} onChange={() => toggle(c.name)} onClick={(e) => e.stopPropagation()} /></td>
-                      <td style={{ fontWeight: 600 }}>{c.name}</td>
+                      <td style={{ fontWeight: 600 }}>{c.ref ?? c.name}</td>
                       <td><span className="pill-tag" style={{ background: 'rgba(245,158,11,.12)', color: '#92400E' }}>○ Not in QuickBooks</span></td>
                     </tr>
                   ))}

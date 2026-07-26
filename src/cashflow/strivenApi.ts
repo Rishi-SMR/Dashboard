@@ -114,8 +114,9 @@ export type QbStatus = { connected: boolean; env: 'sandbox' | 'production'; conf
 export type QbPosted = { invoiceId: string; docNumber: string; total?: number; customer?: string; at: string };
 export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: string; action: string; name: string; id: string }[]; soNumber?: string; alreadyPosted?: QbPosted; message?: string };
 
-/** For customers, `missingInQb[].name` carries a PT-<id> REFERENCE (phi=true), not a patient name. */
-export type QbReconcile = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string }[]; phi?: boolean };
+/** For customers, `missingInQb[].name` carries a PT-<id> REFERENCE (phi=true), not a patient name.
+ *  For vendors, `missingInQb[].ref` (VN-<id>) is a display alias — `name` (the real vendor name) is still what QB stores. */
+export type QbReconcile = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string; ref?: string }[]; phi?: boolean };
 export type QbCreateMissingResult = { kind: string; created: { name: string; id: string }[]; createdCount: number; failed: { name: string; error: string }[]; remaining: number; totalMissing: number };
 export type QbEntityKind = 'customers' | 'vendors' | 'items';
 

@@ -269,18 +269,20 @@ async function qbAllOf(entity, nameField) {
   }
   return out;
 }
-async function reconcileKind(strivenRows, qbEntity, qbNameField) {
+async function reconcileKind(strivenRows, qbEntity, qbNameField, refOf = null) {
   const qbRows = await qbAllOf(qbEntity, qbNameField);
   const qbSet = new Set(qbRows.map((r) => normName(r[qbNameField])));
-  const stri = strivenRows.filter((r) => (r.name ?? '').trim()).map((r) => ({ name: r.name, inQb: qbSet.has(normName(r.name)) }));
+  const stri = strivenRows.filter((r) => (r.name ?? '').trim()).map((r) => ({ name: r.name, ref: refOf ? refOf(r) : null, inQb: qbSet.has(normName(r.name)) }));
   const missing = stri.filter((c) => !c.inQb);
   return {
     strivenCount: stri.length, qbCount: qbRows.length,
     matchedCount: stri.length - missing.length, missingCount: missing.length,
-    missingInQb: missing.slice(0, 500).map((c) => ({ name: c.name })),
+    // `ref` (when present) is a display-only alias for the UI — matching and the
+    // QB create still use the real `name` (vendors keep their name inside QB).
+    missingInQb: missing.slice(0, 500).map((c) => ({ name: c.name, ...(c.ref ? { ref: c.ref } : {}) })),
   };
 }
-export async function qbReconcileVendors() { return reconcileKind(await allVendors(), 'Vendor', 'DisplayName'); }
+export async function qbReconcileVendors() { return reconcileKind(await allVendors(), 'Vendor', 'DisplayName', (r) => `VN-${r.id}`); }
 export async function qbReconcileItems() { return reconcileKind((await allItems()).map((i) => ({ name: i.name })), 'Item', 'Name'); }
 
 // QuickBooks item names cannot contain ':' (sub-item separator).
