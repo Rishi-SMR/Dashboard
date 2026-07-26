@@ -1483,16 +1483,23 @@ async function getCommission() {
     if (R.basis === 'order') return o.orders * R.rate;
     return o.value * R.rate;
   };
+  // Restrict Striven commission to the reps that appear on the sheet (the actual
+  // commission-earning reps), and normalize names to match the sheet ("Cassie
+  // Wates" → "Cassie"). House/clinic accounts and other staff are left out.
+  const sheetReps = new Set(Object.keys(agg));
   const months = {}; const sByRep = {}; const sByProgram = { TriCare: 0, VA: 0, PI: 0 }; let sGrand = 0;
   for (const o of commByMonth) {
+    const rep = commRep(o.rep);
+    if (!sheetReps.has(rep)) continue;
     const c = round2(commFor(o.program, o));
     if (!c) continue;
+    const pk = o.program === 'TriCare' ? 'tricare' : o.program === 'VA' ? 'va' : 'pi';
     const M = months[o.month] = months[o.month] || { month: o.month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, reps: {} };
     M[o.program] += c; M.total += c; M.orders += o.orders; M.units += o.units; M.value += o.value;
-    const MR = M.reps[o.rep] = M.reps[o.rep] || { rep: o.rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
-    MR[o.program === 'TriCare' ? 'tricare' : o.program === 'VA' ? 'va' : 'pi'] += c; MR.total += c; MR.orders += o.orders; MR.units += o.units; MR.value += o.value;
-    const BR = sByRep[o.rep] = sByRep[o.rep] || { rep: o.rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
-    BR[o.program === 'TriCare' ? 'tricare' : o.program === 'VA' ? 'va' : 'pi'] += c; BR.total += c; BR.orders += o.orders; BR.units += o.units; BR.value += o.value;
+    const MR = M.reps[rep] = M.reps[rep] || { rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
+    MR[pk] += c; MR.total += c; MR.orders += o.orders; MR.units += o.units; MR.value += o.value;
+    const BR = sByRep[rep] = sByRep[rep] || { rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
+    BR[pk] += c; BR.total += c; BR.orders += o.orders; BR.units += o.units; BR.value += o.value;
     sByProgram[o.program] += c; sGrand += c;
   }
   const rnd = (o, ks) => { for (const k of ks) o[k] = round2(o[k]); return o; };
@@ -1515,7 +1522,8 @@ async function getCommission() {
     const rc = await sbCacheRead('report_patient_items');
     const linesByRep = {};
     for (const o of (rc?.data?.orders || [])) {
-      const rep = soRep.get(String(o.soId)); if (!rep) continue;
+      const raw = soRep.get(String(o.soId)); if (!raw) continue;
+      const rep = commRep(raw); if (!sheetReps.has(rep)) continue;
       const program = o.program; if (!RATE[program]) continue;
       const units = (o.items || []).reduce((s, i) => s + Number(i.qty || 0), 0);
       const value = Number(o.value || 0);
