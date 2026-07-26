@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchCommission, type CommissionResult, type CommissionRep, type StrivenCommission, type StrivenCommRep, type StrivenCommMonth } from '../strivenApi';
+import { fetchCommission, type CommissionResult, type CommissionRep, type CommissionPeriod, type CommissionPeriodRep, type CommissionReconcile, type StrivenCommission, type StrivenCommRep, type StrivenCommMonth } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
@@ -17,7 +17,8 @@ export function CommissionTab() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [detail, setDetail] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI'>(null);
-  const [source, setSource] = useState<'sheet' | 'striven'>('sheet');
+  const [source, setSource] = useState<'sheet' | 'striven' | 'reconcile'>('sheet');
+  const [sheetMonth, setSheetMonth] = useState<string>('all');
   const [repSel, setRepSel] = useState<CommissionRep | null>(null);
   const agoText = useSyncAgo(lastSync);
 
@@ -49,6 +50,7 @@ export function CommissionTab() {
           <div className="seg" style={{ display: 'inline-flex', background: 'var(--panel-2)', borderRadius: 8, padding: 3 }}>
             <button className={`btn ghost ${source === 'sheet' ? 'active' : ''}`} style={segStyle(source === 'sheet')} onClick={() => setSource('sheet')}>From the sheet</button>
             <button className={`btn ghost ${source === 'striven' ? 'active' : ''}`} style={segStyle(source === 'striven')} onClick={() => setSource('striven')}>From Striven</button>
+            <button className={`btn ghost ${source === 'reconcile' ? 'active' : ''}`} style={segStyle(source === 'reconcile')} onClick={() => setSource('reconcile')}>Reconcile</button>
           </div>
           <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
         </div>
@@ -65,6 +67,10 @@ export function CommissionTab() {
 
       {data && data.configured !== false && source === 'striven' && (
         <StrivenCommissionView striven={data.striven} sheetTotal={data.grandTotal} />
+      )}
+
+      {data && data.configured !== false && source === 'reconcile' && (
+        <ReconcileView reconcile={data.reconcile} />
       )}
 
       {data && data.configured !== false && source === 'sheet' && (
@@ -86,6 +92,12 @@ export function CommissionTab() {
           {/* KPI drill-down panel */}
           {detail && <KpiDetail detail={detail} data={data} onClose={() => setDetail(null)} />}
 
+          {/* Pay-period tabs (from the sheet's monthly tab names) */}
+          <SheetPeriodTabs periods={data.periods} value={sheetMonth} onChange={setSheetMonth} />
+
+          {sheetMonth !== 'all' && <SheetMonthTable periods={data.periods} monthKey={sheetMonth} />}
+
+          {sheetMonth === 'all' && <>
           {/* Patient-level reconciliation anomaly callouts */}
           {flagged.map((r) => (
             <div key={r.rep} className="qb-flash warn" style={{ marginBottom: 12, borderLeft: `3px solid ${C.negative}` }}>
@@ -194,6 +206,8 @@ export function CommissionTab() {
               </div>
             </div>
           )}
+
+          </>}
 
           <div className="qb-flash warn" style={{ marginTop: 12 }}>
             🔒 Aggregated from the commission sheet(s) — <b>no patient names</b> are shown or stored. VA/TriCare = flat per-device rate; PI = computed. Reconciliation matches on rep name only (no patient-level join).
@@ -462,6 +476,152 @@ function SheetRepModal({ rep, onClose }: { rep: CommissionRep; onClose: () => vo
         </div>
       )}
     </Modal>
+  );
+}
+
+// Merge the sheet's pay-period tabs by month key (Team + Christy workbooks → one
+// month), summing per-rep. Gives clean month tabs across both workbooks.
+function mergePeriods(periods: CommissionPeriod[]) {
+  const byKey: Record<string, { key: string; label: string; total: number; lines: number; reps: Record<string, CommissionPeriodRep> }> = {};
+  for (const p of periods) {
+    const k = byKey[p.key] = byKey[p.key] || { key: p.key, label: p.label, total: 0, lines: 0, reps: {} };
+    k.total += p.total; k.lines += p.lines;
+    for (const r of p.reps) {
+      const R = k.reps[r.rep] = k.reps[r.rep] || { rep: r.rep, tricare: 0, va: 0, pi: 0, total: 0, count: 0 };
+      R.tricare += r.tricare; R.va += r.va; R.pi += r.pi; R.total += r.total; R.count += r.count;
+    }
+  }
+  return Object.values(byKey).map((k) => ({ ...k, reps: Object.values(k.reps).sort((a, b) => b.total - a.total) })).sort((a, b) => b.key.localeCompare(a.key));
+}
+
+function SheetPeriodTabs({ periods, value, onChange }: { periods: CommissionPeriod[]; value: string; onChange: (v: string) => void }) {
+  const months = mergePeriods(periods);
+  if (months.length <= 1) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '0 0 14px', alignItems: 'center' }}>
+      <span style={{ fontSize: 12.5, color: C.muted, fontWeight: 600, marginRight: 4 }}>Pay period:</span>
+      <button className="btn ghost" style={segStyle(value === 'all')} onClick={() => onChange('all')}>All</button>
+      {months.map((m) => <button key={m.key} className="btn ghost" style={segStyle(value === m.key)} onClick={() => onChange(m.key)}>{m.label}</button>)}
+    </div>
+  );
+}
+
+// Per-rep breakdown for one selected pay period (from the sheet).
+function SheetMonthTable({ periods, monthKey }: { periods: CommissionPeriod[]; monthKey: string }) {
+  const m = mergePeriods(periods).find((x) => x.key === monthKey);
+  if (!m) return null;
+  const reps = m.reps;
+  const maxRep = Math.max(1, ...reps.map((r) => r.total));
+  const tc = reps.reduce((s, r) => s + r.tricare, 0), va = reps.reduce((s, r) => s + r.va, 0), pi = reps.reduce((s, r) => s + r.pi, 0);
+  return (
+    <div className="section chart-card">
+      <div className="section-head"><div>
+        <h2 className="section-title">{m.label} — commission by rep (from the sheet)</h2>
+        <div className="section-sub">{m.lines} lines · {formatCurrency(m.total)} this pay period.</div>
+      </div></div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr>
+            <th style={{ width: 34 }}>#</th><th>Rep</th>
+            <th className="num">TriCare</th><th className="num">VA</th><th className="num">PI</th>
+            <th className="num">Lines</th><th className="num">Total</th><th style={{ width: '22%' }} />
+          </tr></thead>
+          <tbody>
+            {reps.map((r, i) => (
+              <tr key={r.rep}>
+                <td style={{ color: C.muted }}>{i + 1}</td>
+                <td style={{ fontWeight: 700 }}>{r.rep}</td>
+                <td className="num">{r.tricare ? formatCurrency(r.tricare) : '—'}</td>
+                <td className="num">{r.va ? formatCurrency(r.va) : '—'}</td>
+                <td className="num">{r.pi ? formatCurrency(r.pi) : '—'}</td>
+                <td className="num">{r.count}</td>
+                <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(r.total)}</td>
+                <td><div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(r.total / maxRep) * 100}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} /></div></td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr className="total-row">
+            <td /><td>Total</td>
+            <td className="num">{formatCurrency(tc)}</td><td className="num">{formatCurrency(va)}</td><td className="num">{formatCurrency(pi)}</td>
+            <td className="num">{m.lines}</td><td className="num" style={{ fontWeight: 800 }}>{formatCurrency(m.total)}</td><td />
+          </tr></tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Reconcile — sheet (paid) vs Striven-computed (orders support), side by side per
+// rep, so a person can see the gap without flipping between tabs.
+function ReconcileView({ reconcile }: { reconcile?: CommissionReconcile }) {
+  if (!reconcile || !reconcile.reps.length) {
+    return <div className="section"><div className="page-sub" style={{ padding: 16 }}>Reconcile needs both the sheet and Striven data loaded. Try Refresh.</div></div>;
+  }
+  const { reps, totals } = reconcile;
+  const max = Math.max(1, ...reps.map((r) => Math.max(r.sheet, r.striven)));
+  return (
+    <>
+      <div style={{ marginBottom: 14, padding: '11px 14px', background: 'var(--panel-2)', borderRadius: 10, fontSize: 13.5, color: C.sub, lineHeight: 1.5 }}>
+        Two numbers per rep, side by side: <b style={{ color: C.ink }}>Sheet</b> = what the workbook paid; <b style={{ color: C.ink }}>Striven</b> = what their orders actually support. A big gap means the two don't agree — worth a look.
+      </div>
+
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+        <KpiR ico="clip" tint={C.info} label="Sheet total" value={totals.sheet} format={formatCurrency} foot="paid per the workbook" deltaText="all periods" />
+        <KpiR ico="cash" tint={C.brand} label="Striven total" value={totals.striven} format={formatCurrency} foot="orders support (rate card)" deltaText="all periods" />
+        <KpiR ico="trend" tint={totals.diff >= 0 ? C.negative : C.positive} label="Difference" value={Math.abs(totals.diff)} format={formatCurrency} foot={totals.diff >= 0 ? 'sheet paid more' : 'Striven says more'} deltaText={`${totals.diff >= 0 ? '+' : '−'}${formatCurrency(Math.abs(totals.diff))}`} />
+      </div>
+
+      <div className="section chart-card">
+        <div className="section-head"><div>
+          <h2 className="section-title">Sheet vs Striven — by rep</h2>
+          <div className="section-sub">Sorted by biggest gap. 🔵 sheet · 🟦 Striven bars. “Sheet-only” = paid but no Striven orders; “Striven-only” = orders with commission but never on the sheet.</div>
+        </div></div>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead><tr>
+              <th style={{ width: 34 }}>#</th><th>Rep</th>
+              <th className="num">Sheet</th><th className="num">Striven</th><th className="num">Difference</th><th className="num">Match</th>
+              <th style={{ width: '30%' }}>Sheet vs Striven</th>
+            </tr></thead>
+            <tbody>
+              {reps.map((r, i) => (
+                <tr key={r.rep}>
+                  <td style={{ color: C.muted }}>{i + 1}</td>
+                  <td style={{ fontWeight: 700 }}>
+                    {r.rep}
+                    {!r.inStriven && <span style={{ fontSize: 11, color: C.warning, marginLeft: 6 }}>sheet-only</span>}
+                    {!r.onSheet && <span style={{ fontSize: 11, color: C.info, marginLeft: 6 }}>Striven-only</span>}
+                  </td>
+                  <td className="num">{r.sheet ? formatCurrency(r.sheet) : '—'}</td>
+                  <td className="num">{r.striven ? formatCurrency(r.striven) : '—'}</td>
+                  <td className="num" style={{ fontWeight: 700, color: Math.abs(r.diff) < 1 ? C.muted : r.diff > 0 ? C.negative : C.positive }}>
+                    {Math.abs(r.diff) < 1 ? '—' : `${r.diff > 0 ? '+' : '−'}${formatCurrency(Math.abs(r.diff))}`}
+                  </td>
+                  <td className="num" style={{ color: r.matchRate != null && r.matchRate < 50 ? C.negative : C.ink }}>{r.matchRate != null ? `${r.matchRate}%` : '—'}</td>
+                  <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <div style={{ height: 7, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(r.sheet / max) * 100}%`, background: C.info, borderRadius: 999 }} /></div>
+                      <div style={{ height: 7, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(r.striven / max) * 100}%`, background: C.brand, borderRadius: 999 }} /></div>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot><tr className="total-row">
+              <td /><td>Total</td>
+              <td className="num">{formatCurrency(totals.sheet)}</td>
+              <td className="num">{formatCurrency(totals.striven)}</td>
+              <td className="num" style={{ fontWeight: 700 }}>{`${totals.diff > 0 ? '+' : '−'}${formatCurrency(Math.abs(totals.diff))}`}</td>
+              <td /><td />
+            </tr></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div className="qb-flash warn" style={{ marginTop: 12 }}>
+        🔒 Aggregated — <b>no patient names</b>. Sheet = actual workbook payout; Striven = commission the orders support via the rate card (VA exact; TriCare/PI estimated). Differences come from orders not on the sheet, sheet lines with no Striven order, or the estimated rates.
+      </div>
+    </>
   );
 }
 

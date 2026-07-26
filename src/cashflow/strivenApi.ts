@@ -246,12 +246,15 @@ export type CommissionRep = {
   matchRate: number | null; recon: CommissionRecon;
   flag: 'no-striven' | 'high-ratio' | 'attribution' | null;
 };
-export type CommissionPeriod = { workbook: string; gid: string; lines: number; total: number };
+export type CommissionPeriodRep = { rep: string; tricare: number; va: number; pi: number; total: number; count: number };
+export type CommissionPeriod = { workbook: string; gid: string; label: string; key: string; lines: number; total: number; reps: CommissionPeriodRep[] };
+export type ReconcileRep = { rep: string; sheet: number; striven: number; sheetProg: { TriCare: number; VA: number; PI: number }; strivenProg: { TriCare: number; VA: number; PI: number }; lines: number; orders: number; matchRate: number | null; diff: number; onSheet: boolean; inStriven: boolean };
+export type CommissionReconcile = { reps: ReconcileRep[]; totals: { sheet: number; striven: number; diff: number } };
 // Commission computed FROM Striven (rate card) — sheet-shaped (monthly + program).
 export type StrivenCommRep = { rep: string; tricare: number; va: number; pi: number; total: number; orders: number; units: number; value: number };
 export type StrivenCommMonth = { month: string; total: number; TriCare: number; VA: number; PI: number; orders: number; units: number; value: number; reps: StrivenCommRep[] };
 export type StrivenCommission = { available: boolean; grandTotal: number; byProgram: { TriCare: number; VA: number; PI: number }; months: StrivenCommMonth[]; byRep: StrivenCommRep[]; rateCard: { program: string; note: string; exact: boolean }[] };
-export type CommissionResult = { ok: boolean; configured?: boolean; note?: string; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; periods: CommissionPeriod[]; periodCount: number; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[]; striven?: StrivenCommission };
+export type CommissionResult = { ok: boolean; configured?: boolean; note?: string; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; periods: CommissionPeriod[]; periodCount: number; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[]; striven?: StrivenCommission; reconcile?: CommissionReconcile };
 export const fetchCommission = () => get<CommissionResult>('/api/commission');
 /** Add a tracking row. Last name goes in the POST body (never the URL). */
 export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);

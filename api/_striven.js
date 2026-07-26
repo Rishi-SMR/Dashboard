@@ -1342,13 +1342,24 @@ const commRep = (r) => { const s = String(r || '').trim(); if (/cassie/i.test(s)
 // Patient last name from either "Last, First" or "FIRST LAST" — normalized for join.
 const commLastName = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z]/g, '').toUpperCase(); };
 function commParseRow(line) { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (c === ',' && !q) { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; }
-// Enumerate every tab (gid) of a workbook from its public htmlview.
+// Enumerate every tab (gid + name) of a workbook from its public htmlview.
+// Tab names are pay-period dates like "6/15/2026" → surfaced as month labels.
 async function commissionTabs(id) {
   try {
     const html = await (await fetch(`https://docs.google.com/spreadsheets/d/${id}/htmlview`)).text();
+    const names = {};
+    const re = /gid=(\d+)",\s*gid:\s*"\d+",initialSheet:[^}]*\}\);items\.push\(\{name:\s*"([^"]*)"/g;
+    let m; while ((m = re.exec(html))) names[m[1]] = m[2].replace(/\\\//g, '/');
     const gids = [...new Set((html.match(/gid=(\d+)/g) || []).map((x) => x.slice(4)))];
-    return gids.length ? gids : ['0'];
-  } catch { return ['0']; }
+    return (gids.length ? gids : ['0']).map((gid) => ({ gid, name: names[gid] || '' }));
+  } catch { return [{ gid: '0', name: '' }]; }
+}
+// "6/15/2026" (pay date) → { label:'Jun 2026', key:'2026-06' } for clean tabs.
+function commPeriodMeta(name, gid) {
+  const M = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const d = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((name || '').trim());
+  if (d) return { label: `${M[+d[1]] || d[1]} ${d[3]}`, key: `${d[3]}-${String(+d[1]).padStart(2, '0')}` };
+  return { label: name || `Tab ${gid}`, key: name || gid };
 }
 function commParseCsv(csv) {
   let prog = null; const rows = [];
@@ -1375,10 +1386,12 @@ async function getCommission() {
   const periods = [];
   let grandTotal = 0, rowCount = 0, sheetsRead = 0;
   const errors = [];
+  const progKey = (p) => (p === 'TriCare' ? 'tricare' : p === 'VA' ? 'va' : 'pi');
   for (const sh of sheets) {
-    const gids = await commissionTabs(sh.id);
+    const tabs = await commissionTabs(sh.id);
     let anyTab = false;
-    for (const gid of gids) {
+    for (const t of tabs) {
+      const gid = t.gid;
       let csv;
       try { csv = await (await fetch(`https://docs.google.com/spreadsheets/d/${sh.id}/export?format=csv&gid=${gid}`)).text(); } catch { continue; }
       if (/^\s*<(!doctype|html)/i.test(csv)) continue;
@@ -1386,13 +1399,19 @@ async function getCommission() {
       if (!rows.length) continue;
       anyTab = true;
       const ptot = rows.reduce((s, r) => s + r.comm, 0);
-      periods.push({ workbook: sh.label || 'sheet', gid, lines: rows.length, total: round2(ptot) });
+      const meta = commPeriodMeta(t.name, gid);
+      // per-rep within this pay period
+      const prMap = {};
       for (const r of rows) {
+        prMap[r.rep] = prMap[r.rep] || { rep: r.rep, tricare: 0, va: 0, pi: 0, total: 0, count: 0 };
+        prMap[r.rep][progKey(r.prog)] += r.comm; prMap[r.rep].total += r.comm; prMap[r.rep].count++;
         agg[r.rep] = agg[r.rep] || { TriCare: 0, PI: 0, VA: 0, count: 0 };
         agg[r.rep][r.prog] += r.comm; agg[r.rep].count++;
         byProgram[r.prog] += r.comm; grandTotal += r.comm; rowCount++;
         allLines.push({ rep: r.rep, last: r.last, comm: r.comm });
       }
+      const preps = Object.values(prMap).map((x) => ({ ...x, tricare: round2(x.tricare), va: round2(x.va), pi: round2(x.pi), total: round2(x.total) })).sort((a, b) => b.total - a.total);
+      periods.push({ workbook: sh.label || 'sheet', gid, label: meta.label, key: meta.key, lines: rows.length, total: round2(ptot), reps: preps });
     }
     if (anyTab) sheetsRead++; else errors.push(`${sh.label || sh.id} (no readable tabs — share as "anyone with the link can view")`);
   }
@@ -1438,7 +1457,7 @@ async function getCommission() {
       commPerOrder: sc ? Math.round(total / sc) : null, pctOfValue, matchRate, recon, flag,
     };
   }).sort((a, b) => b.total - a.total);
-  periods.sort((a, b) => b.total - a.total);
+  periods.sort((a, b) => String(b.key).localeCompare(String(a.key)));
 
   // ── Commission computed FROM STRIVEN (rate card) — mirrors the sheet's monthly
   // + TriCare/PI/VA structure, but sourced from Striven orders, so it no longer
@@ -1479,11 +1498,30 @@ async function getCommission() {
     rateCard: Object.entries(RATE).map(([program, r]) => ({ program, note: r.note, exact: r.exact })),
   };
 
+  // ── Reconcile: sheet (what was paid) vs Striven-computed (what orders support),
+  // per rep, side by side, so the gap is visible per person. Both keyed by the
+  // normalized rep name so "Cassie Wates" (Striven) ties to "Cassie" (sheet).
+  const recMap = {};
+  const ensureRec = (rep) => (recMap[rep] = recMap[rep] || { rep, sheet: 0, striven: 0, sheetProg: { TriCare: 0, VA: 0, PI: 0 }, strivenProg: { TriCare: 0, VA: 0, PI: 0 }, lines: 0, orders: 0, matchRate: null });
+  for (const rp of reps) { const R = ensureRec(rp.rep); R.sheet = rp.total; R.sheetProg = { TriCare: rp.tricare, VA: rp.va, PI: rp.pi }; R.lines = rp.count; R.matchRate = rp.matchRate; }
+  for (const b of striven.byRep) {
+    const rep = commRep(b.rep); const R = ensureRec(rep);
+    R.striven = round2(R.striven + b.total); R.orders += b.orders;
+    R.strivenProg.TriCare = round2(R.strivenProg.TriCare + b.tricare);
+    R.strivenProg.VA = round2(R.strivenProg.VA + b.va);
+    R.strivenProg.PI = round2(R.strivenProg.PI + b.pi);
+  }
+  const reconcile = {
+    reps: Object.values(recMap).map((R) => ({ ...R, diff: round2(R.sheet - R.striven), onSheet: R.sheet > 0, inStriven: R.striven > 0 }))
+      .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)),
+    totals: { sheet: round2(grandTotal), striven: striven.grandTotal, diff: round2(grandTotal - striven.grandTotal) },
+  };
+
   return {
     ok: true, configured: true, grandTotal: round2(grandTotal),
     byProgram: { TriCare: round2(byProgram.TriCare), PI: round2(byProgram.PI), VA: round2(byProgram.VA) },
     reps, periods, periodCount: periods.length, itemCount: rowCount, sheetsRead, sheetsConfigured: sheets.length, errors,
-    striven,
+    striven, reconcile,
     sources: sheets.map((s) => ({ label: s.label || 'sheet', url: `https://docs.google.com/spreadsheets/d/${s.id}/edit` })),
   };
 }
