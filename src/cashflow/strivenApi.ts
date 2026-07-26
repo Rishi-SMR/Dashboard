@@ -233,8 +233,14 @@ export type TrackingResult = { ok: boolean; configured: boolean; count: number; 
 export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
 
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
-export type CommissionRep = { rep: string; tricare: number; pi: number; va: number; total: number; count: number };
-export type CommissionResult = { ok: boolean; configured?: boolean; note?: string; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[] };
+export type CommissionRep = {
+  rep: string; tricare: number; pi: number; va: number; total: number; count: number;
+  // CFO reconciliation vs Striven order attribution
+  strivenOrders: number; strivenUnits: number; strivenValue: number;
+  commPerOrder: number | null; pctOfValue: number | null; flag: 'no-striven' | 'high-ratio' | null;
+};
+export type CommissionPeriod = { workbook: string; gid: string; lines: number; total: number };
+export type CommissionResult = { ok: boolean; configured?: boolean; note?: string; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; periods: CommissionPeriod[]; periodCount: number; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[] };
 export const fetchCommission = () => get<CommissionResult>('/api/commission');
 /** Add a tracking row. Last name goes in the POST body (never the URL). */
 export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);

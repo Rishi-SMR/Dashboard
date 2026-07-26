@@ -1322,6 +1322,26 @@ const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 const commRep = (r) => { const s = String(r || '').trim(); if (/cassie/i.test(s)) return 'Cassie'; if (/jillian/i.test(s)) return 'Jillian'; if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann'; if (/christ/i.test(s)) return 'Christy'; return s || 'Unknown'; };
 function commParseRow(line) { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (c === ',' && !q) { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; }
+// Enumerate every tab (gid) of a workbook from its public htmlview.
+async function commissionTabs(id) {
+  try {
+    const html = await (await fetch(`https://docs.google.com/spreadsheets/d/${id}/htmlview`)).text();
+    const gids = [...new Set((html.match(/gid=(\d+)/g) || []).map((x) => x.slice(4)))];
+    return gids.length ? gids : ['0'];
+  } catch { return ['0']; }
+}
+function commParseCsv(csv) {
+  let prog = null; const rows = [];
+  for (const line of csv.split(/\r?\n/)) {
+    const c = commParseRow(line); const a = (c[0] || '').trim().toUpperCase();
+    if (a.includes('TRICARE')) prog = 'TriCare'; else if (a.includes('PERSONAL INJURY')) prog = 'PI'; else if (a.includes('VA COMMISSION')) prog = 'VA';
+    if (!prog || !c[1]) continue;
+    const p = (c[0] || '').trim(); if (!/^[A-Za-z]/.test(p) || p.toUpperCase() === 'PATIENT') continue;
+    const comm = commMoney(c[3]); if (!comm) continue;
+    rows.push({ rep: commRep(c[1]), prog, comm });
+  }
+  return rows;
+}
 async function getCommission() {
   const cfg = await readConfigTable().catch(() => ({}));
   let sheets = COMMISSION_DEFAULT;
@@ -1331,39 +1351,51 @@ async function getCommission() {
   }
   const agg = {};
   const byProgram = { TriCare: 0, PI: 0, VA: 0 };
+  const periods = [];
   let grandTotal = 0, rowCount = 0, sheetsRead = 0;
   const errors = [];
   for (const sh of sheets) {
-    let csv;
-    try { csv = await (await fetch(`https://docs.google.com/spreadsheets/d/${sh.id}/export?format=csv&gid=${sh.gid || 0}`)).text(); }
-    catch { errors.push(sh.label || sh.id); continue; }
-    if (/^\s*<(!doctype|html)/i.test(csv)) { errors.push(`${sh.label || sh.id} (private/unshared)`); continue; }
-    sheetsRead++;
-    let prog = null;
-    for (const line of csv.split(/\r?\n/)) {
-      const c = commParseRow(line);
-      const a = (c[0] || '').trim().toUpperCase();
-      if (a.includes('TRICARE')) prog = 'TriCare';
-      else if (a.includes('PERSONAL INJURY')) prog = 'PI';
-      else if (a.includes('VA COMMISSION')) prog = 'VA';
-      if (!prog || !c[1]) continue;
-      const patient = (c[0] || '').trim();
-      if (!/^[A-Za-z]/.test(patient) || patient.toUpperCase() === 'PATIENT') continue;
-      const comm = commMoney(c[3]);
-      if (!comm) continue;
-      const rep = commRep(c[1]);
-      agg[rep] = agg[rep] || { TriCare: 0, PI: 0, VA: 0, count: 0 };
-      agg[rep][prog] += comm; agg[rep].count++;
-      byProgram[prog] += comm; grandTotal += comm; rowCount++;
+    const gids = await commissionTabs(sh.id);
+    let anyTab = false;
+    for (const gid of gids) {
+      let csv;
+      try { csv = await (await fetch(`https://docs.google.com/spreadsheets/d/${sh.id}/export?format=csv&gid=${gid}`)).text(); } catch { continue; }
+      if (/^\s*<(!doctype|html)/i.test(csv)) continue;
+      const rows = commParseCsv(csv);
+      if (!rows.length) continue;
+      anyTab = true;
+      const ptot = rows.reduce((s, r) => s + r.comm, 0);
+      periods.push({ workbook: sh.label || 'sheet', gid, lines: rows.length, total: round2(ptot) });
+      for (const r of rows) {
+        agg[r.rep] = agg[r.rep] || { TriCare: 0, PI: 0, VA: 0, count: 0 };
+        agg[r.rep][r.prog] += r.comm; agg[r.rep].count++;
+        byProgram[r.prog] += r.comm; grandTotal += r.comm; rowCount++;
+      }
     }
+    if (anyTab) sheetsRead++; else errors.push(`${sh.label || sh.id} (no readable tabs — share as "anyone with the link can view")`);
   }
-  const reps = Object.entries(agg).map(([rep, v]) => ({ rep, tricare: round2(v.TriCare), pi: round2(v.PI), va: round2(v.VA), total: round2(v.TriCare + v.PI + v.VA), count: v.count }))
-    .sort((a, b) => b.total - a.total);
+  // CFO reconciliation vs Striven order attribution (rep-level, no patient match).
+  let byRep = [];
+  try { byRep = (await getSO()).byRep || []; } catch { /* Striven optional */ }
+  const findSr = (rep) => byRep.find((x) => commRep(x.rep) === rep);
+  const reps = Object.entries(agg).map(([rep, v]) => {
+    const total = v.TriCare + v.PI + v.VA;
+    const sr = findSr(rep);
+    const sv = sr ? sr.value : 0, sc = sr ? sr.count : 0, su = sr ? sr.units : 0;
+    const pctOfValue = sv > 0 ? Math.round((total / sv) * 1000) / 10 : null;
+    const flag = !sr ? 'no-striven' : (pctOfValue != null && pctOfValue > 60 ? 'high-ratio' : null);
+    return {
+      rep, tricare: round2(v.TriCare), pi: round2(v.PI), va: round2(v.VA), total: round2(total), count: v.count,
+      strivenOrders: sc, strivenUnits: su, strivenValue: round2(sv),
+      commPerOrder: sc ? Math.round(total / sc) : null, pctOfValue, flag,
+    };
+  }).sort((a, b) => b.total - a.total);
+  periods.sort((a, b) => b.total - a.total);
   return {
     ok: true, configured: true, grandTotal: round2(grandTotal),
     byProgram: { TriCare: round2(byProgram.TriCare), PI: round2(byProgram.PI), VA: round2(byProgram.VA) },
-    reps, itemCount: rowCount, sheetsRead, sheetsConfigured: sheets.length, errors,
-    sources: sheets.map((s) => ({ label: s.label || 'sheet', url: `https://docs.google.com/spreadsheets/d/${s.id}/edit#gid=${s.gid || 0}` })),
+    reps, periods, periodCount: periods.length, itemCount: rowCount, sheetsRead, sheetsConfigured: sheets.length, errors,
+    sources: sheets.map((s) => ({ label: s.label || 'sheet', url: `https://docs.google.com/spreadsheets/d/${s.id}/edit` })),
   };
 }
 
