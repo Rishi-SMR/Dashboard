@@ -39,9 +39,9 @@ export function CommissionTab() {
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
       <div className="page-head deck-head" style={{ marginBottom: 16 }}>
         <div>
-          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Commission · CFO Analysis</h1>
+          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Commission</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sheet payout · Striven-computed · reconciled, per rep, program &amp; pay period{agoText ? ` · updated ${agoText}` : ''}
+            <span className="live-dot" /> By rep, program &amp; pay period{agoText ? ` · updated ${agoText}` : ''}
           </div>
         </div>
         <div className="ov-headright" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -96,23 +96,18 @@ export function CommissionTab() {
           {sheetMonth !== 'all' && <SheetMonthTable periods={data.periods} monthKey={sheetMonth} reps={data.reps} onRep={setRepSel} />}
 
           {sheetMonth === 'all' && <>
-          {/* Patient-level reconciliation anomaly callouts */}
+          {/* Attribution anomaly - one concise line per flagged rep */}
           {flagged.map((r) => (
             <div key={r.rep} className="qb-flash warn" style={{ marginBottom: 12, borderLeft: `3px solid ${C.negative}` }}>
-              ⚠️ <b>{r.rep} - attribution break.</b>{' '}
-              Only <b>{r.recon.same} of {r.count}</b> commission lines ({r.matchRate}%) match an order booked under {r.rep} in Striven
-              {' '}({formatCurrency(r.recon.commSame)}).
-              {r.recon.diff > 0 && <> {r.recon.diff} line{r.recon.diff === 1 ? '' : 's'} ({formatCurrency(r.recon.commDiff)}) are booked under {r.recon.bookedUnder.map((b, j) => <span key={b.rep}><b>{b.rep}</b> ({b.count}){j < r.recon.bookedUnder.length - 1 ? ', ' : ''}</span>)}.</>}
-              {r.recon.none > 0 && <> <b>{r.recon.none} line{r.recon.none === 1 ? '' : 's'} ({formatCurrency(r.recon.commNone)})</b> have no matching order in Striven at all.</>}
-              {' '}Commission is being paid on orders that aren't credited to this rep in Striven - worth a data-integrity check.
+              ⚠️ <b>{r.rep}</b>: only {r.matchRate}% of lines ({r.recon.same} of {r.count}) match their Striven orders. Tap the row for detail.
             </div>
           ))}
 
           {/* Rep leaderboard + Striven reconciliation */}
           <div className="section chart-card">
             <div className="section-head"><div>
-              <h2 className="section-title">By rep · commission vs Striven attribution</h2>
-              <div className="section-sub">Commission (from the workbook) reconciled against each rep's Striven orders. “% of value” = commission ÷ Striven order value; a very high ratio means orders aren't landing under that rep in Striven.</div>
+              <h2 className="section-title">By rep</h2>
+              <div className="section-sub">Commission vs each rep's Striven orders. Tap a row for detail.</div>
             </div></div>
             <div className="table-wrap">
               <table className="data-table">
@@ -176,10 +171,11 @@ export function CommissionTab() {
 
           </>}
 
-          <div className="qb-flash warn" style={{ marginTop: 12 }}>
-            🔒 Aggregated from the commission sheet(s) - <b>no patient names</b> are shown or stored. VA/TriCare = flat per-device rate; PI = computed. Reconciliation matches on rep name only (no patient-level join).
-            {data.sources?.length > 0 && <> · {data.sources.map((s, i) => <span key={i}><a href={s.url} target="_blank" rel="noreferrer">{s.label} sheet ↗</a>{i < data.sources.length - 1 ? ' · ' : ''}</span>)}</>}
-          </div>
+          {data.sources?.length > 0 && (
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
+              🔒 No patient names · {data.sources.map((s, i) => <span key={i}><a href={s.url} target="_blank" rel="noreferrer">{s.label} sheet ↗</a>{i < data.sources.length - 1 ? ' · ' : ''}</span>)}
+            </div>
+          )}
         </>
       )}
 
@@ -211,11 +207,6 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
 
   return (
     <>
-      {/* One plain-language line: what this screen is */}
-      <div style={{ marginBottom: 14, padding: '11px 14px', background: 'var(--panel-2)', borderRadius: 10, fontSize: 13.5, color: C.sub, lineHeight: 1.5 }}>
-        Commission worked out <b style={{ color: C.ink }}>directly from Striven orders</b> - same shape as Crystal's sheet (by month, by rep, split into TriCare / VA / PI), but nothing is typed by hand. Cancelled &amp; test orders are left out.
-      </div>
-
       {/* KPI strip - total + the three programs. Tap any card for the breakdown. */}
       <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: drill ? 8 : 14 }}>
         <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={formatCurrency} foot={sel ? `${sel.orders} orders · tap for detail` : `${totalOrders} orders · tap for detail`} deltaText={sel ? 'selected month' : 'all months'} onClick={() => setDrill(drill === 'total' ? null : 'total')} />
@@ -246,8 +237,8 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
       {/* Per-rep bifurcation for the selected scope */}
       <div className="section chart-card">
         <div className="section-head"><div>
-          <h2 className="section-title">{sel ? monthLabel(sel.month) : 'All months'} - commission by rep</h2>
-          <div className="section-sub">What each rep earned, split into TriCare / VA / PI. Only the reps on the commission sheet (house &amp; clinic accounts are left out).</div>
+          <h2 className="section-title">{sel ? monthLabel(sel.month) : 'All months'} · by rep</h2>
+          <div className="section-sub">Tap a row for order-by-order detail.</div>
         </div></div>
         <div className="table-wrap">
           <table className="data-table">
@@ -593,10 +584,6 @@ function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: Comm
   const selRec = repSel ? reps.find((x) => x.rep === repSel) : null;
   return (
     <>
-      <div style={{ marginBottom: 14, padding: '11px 14px', background: 'var(--panel-2)', borderRadius: 10, fontSize: 13.5, color: C.sub, lineHeight: 1.5 }}>
-        Two numbers per rep, side by side: <b style={{ color: C.ink }}>Sheet</b> = what the workbook paid; <b style={{ color: C.ink }}>Striven</b> = what their orders actually support. A big gap means the two don't agree - worth a look.
-      </div>
-
       <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: drill ? 8 : 14 }}>
         <KpiR ico="clip" tint={C.info} label="Sheet total" value={totals.sheet} format={formatCurrency} foot="paid per the workbook · tap" deltaText="all periods" onClick={() => setDrill(drill === 'sheet' ? null : 'sheet')} />
         <KpiR ico="cash" tint={C.brand} label="Striven total" value={totals.striven} format={formatCurrency} foot="orders support · tap" deltaText="all periods" onClick={() => setDrill(drill === 'striven' ? null : 'striven')} />
@@ -613,8 +600,8 @@ function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: Comm
 
       <div className="section chart-card">
         <div className="section-head"><div>
-          <h2 className="section-title">Sheet vs Striven - by rep</h2>
-          <div className="section-sub">Sorted by biggest gap. 🔵 sheet · 🟦 Striven bars. Only the reps on the commission sheet.</div>
+          <h2 className="section-title">Sheet vs Striven · by rep</h2>
+          <div className="section-sub">Biggest gap first. Tap a row for order-by-order detail.</div>
         </div></div>
         <div className="table-wrap">
           <table className="data-table">
@@ -658,8 +645,8 @@ function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: Comm
         </div>
       </div>
 
-      <div className="qb-flash warn" style={{ marginTop: 12 }}>
-        🔒 <b>Last name only</b>. Sheet = actual workbook payout; Striven = commission the orders support via the rate card (VA exact; TriCare/PI estimated). Click a rep to reconcile order by order. Differences come from orders not on the sheet, sheet lines with no Striven order, or the estimated rates.
+      <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
+        🔒 No patient names · Sheet = workbook payout · Striven = orders via rate card (VA exact, TriCare/PI estimated)
       </div>
 
       {repSel && selRec && (
