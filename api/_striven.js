@@ -1424,26 +1424,34 @@ async function getCommission() {
   const findSr = (rep) => byRep.find((x) => commRep(x.rep) === rep);
   // Patient-level join: last name → which rep Striven books the order under.
   // Names stay backend-only; only per-rep aggregates leave this function (PHI-safe).
+  // Single ref source (recent = SO book) so sheet-matched refs and Striven line
+  // refs are the same "SO-XXX" format and reconcile can merge on them.
+  const soInfo = new Map();
+  for (const o of recent) soInfo.set(String(o.id), { rep: commRep(o.rep || 'Unassigned'), ref: o.ref || `SO-${o.id}` });
+  let rcOrders = [];
+  try { rcOrders = (await sbCacheRead('report_patient_items'))?.data?.orders || []; } catch { /* optional */ }
   const nameIdx = new Map();
-  try {
-    for (const o of ((await getOrders()).orders || [])) {
-      const ln = commLastName(o.lastName); if (!ln) continue;
-      if (!nameIdx.has(ln)) nameIdx.set(ln, []);
-      nameIdx.get(ln).push(commRep(o.rep));
-    }
-  } catch { /* Striven optional */ }
+  for (const o of rcOrders) {
+    const ln = commLastName(o.lastName); if (!ln) continue;
+    const info = soInfo.get(String(o.soId)); if (!info) continue;
+    if (!nameIdx.has(ln)) nameIdx.set(ln, []);
+    nameIdx.get(ln).push({ rep: info.rep, ref: info.ref });
+  }
   const reconOf = (rep) => {
     const R = { same: 0, diff: 0, none: 0, commSame: 0, commDiff: 0, commNone: 0, under: {} };
     const lines = [];
     for (const L of allLines) {
       if (L.rep !== rep) continue;
       const cand = L.last ? nameIdx.get(L.last) : null;
-      let status, under = null;
+      let status, under = null, ref = '';
       if (!cand || !cand.length) { R.none++; R.commNone += L.comm; status = 'none'; }
-      else if (cand.includes(rep)) { R.same++; R.commSame += L.comm; status = 'same'; }
-      else { R.diff++; R.commDiff += L.comm; under = cand[0]; R.under[under] = (R.under[under] || 0) + 1; status = 'diff'; }
-      // line detail — last name only (HIPAA minimum-necessary), device, program, $
-      lines.push({ last: L.lastDisp || '', device: L.device || '', prog: L.prog, comm: round2(L.comm), status, under });
+      else {
+        const same = cand.find((c) => c.rep === rep);
+        if (same) { R.same++; R.commSame += L.comm; status = 'same'; ref = same.ref; }
+        else { R.diff++; R.commDiff += L.comm; under = cand[0].rep; ref = cand[0].ref; R.under[under] = (R.under[under] || 0) + 1; status = 'diff'; }
+      }
+      // Identified by SO ref (no patient name) + device + program + $ + status.
+      lines.push({ ref, device: L.device || '', prog: L.prog, comm: round2(L.comm), status, under });
     }
     lines.sort((a, b) => b.comm - a.comm);
     const bookedUnder = Object.entries(R.under).map(([r, n]) => ({ rep: r, count: n })).sort((a, b) => b.count - a.count);
@@ -1514,21 +1522,18 @@ async function getCommission() {
   };
 
   // Per-order Striven lines for the rep popup — mirror the sheet's line view, but
-  // sourced from Striven orders (patient last name + item + value + computed $).
-  // Join report cache (lastName/program/units/value) with rep from the SO book.
-  const soRep = new Map();
-  for (const o of recent) soRep.set(String(o.id), o.rep || 'Unassigned');
+  // sourced from Striven orders (SO ref + item + value + computed $). Same soInfo
+  // ref source as the sheet match above.
   try {
-    const rc = await sbCacheRead('report_patient_items');
     const linesByRep = {};
-    for (const o of (rc?.data?.orders || [])) {
-      const raw = soRep.get(String(o.soId)); if (!raw) continue;
-      const rep = commRep(raw); if (!sheetReps.has(rep)) continue;
+    for (const o of rcOrders) {
+      const info = soInfo.get(String(o.soId)); if (!info) continue;
+      const rep = info.rep; if (!sheetReps.has(rep)) continue;
       const program = o.program; if (!RATE[program]) continue;
       const units = (o.items || []).reduce((s, i) => s + Number(i.qty || 0), 0);
       const value = Number(o.value || 0);
       const comm = round2(commFor(program, { units, orders: 1, value }));
-      (linesByRep[rep] = linesByRep[rep] || []).push({ last: commLastDisp(o.lastName), item: (o.items || [])[0]?.item || '', prog: program, value: round2(value), units, comm });
+      (linesByRep[rep] = linesByRep[rep] || []).push({ ref: info.ref, item: (o.items || [])[0]?.item || '', prog: program, value: round2(value), units, comm });
     }
     for (const r of striven.byRep) r.lines = (linesByRep[r.rep] || []).sort((a, b) => b.comm - a.comm);
   } catch { /* report cache optional */ }

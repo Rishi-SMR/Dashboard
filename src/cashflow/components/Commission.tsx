@@ -418,11 +418,11 @@ function StrivenRepModal({ rep, months, lines, onClose }: { rep: StrivenCommRep;
         <>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {lines.length} orders</span></div>
           <table className="data-table">
-            <thead><tr><th>Patient</th><th>Item</th><th>Program</th><th className="num">Units</th><th className="num">Order value</th><th className="num">Commission</th></tr></thead>
+            <thead><tr><th>Order</th><th>Item</th><th>Program</th><th className="num">Units</th><th className="num">Order value</th><th className="num">Commission</th></tr></thead>
             <tbody>
               {lines.map((ln, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{ln.last || '-'}</td>
+                  <td style={{ fontWeight: 600, color: C.brand }}>{ln.ref || '-'}</td>
                   <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.item || '-'}</td>
                   <td>{ln.prog}</td>
                   <td className="num">{ln.units}</td>
@@ -432,7 +432,7 @@ function StrivenRepModal({ rep, months, lines, onClose }: { rep: StrivenCommRep;
               ))}
             </tbody>
           </table>
-          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Last name only. Commission per order from the rate card (VA $425/unit exact; TriCare $369.78/order &amp; PI 2.677% of value are estimates).</div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Orders shown by SO reference, no patient names. Commission per order from the rate card (VA $425/unit exact; TriCare $369.78/order &amp; PI 2.677% of value are estimates).</div>
         </>
       )}
     </Modal>
@@ -505,11 +505,11 @@ function SheetRepModal({ rep, onClose }: { rep: CommissionRep; onClose: () => vo
         <>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>Line by line <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {rc.lines.length} lines</span></div>
           <table className="data-table">
-            <thead><tr><th>Patient</th><th>Device</th><th>Program</th><th className="num">Commission</th><th>In Striven?</th></tr></thead>
+            <thead><tr><th>Order</th><th>Device</th><th>Program</th><th className="num">Commission</th><th>In Striven?</th></tr></thead>
             <tbody>
               {rc.lines.map((ln, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{ln.last || '-'}</td>
+                  <td style={{ fontWeight: 600, color: ln.ref ? C.brand : C.muted }}>{ln.ref || 'no order'}</td>
                   <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.device || '-'}</td>
                   <td>{ln.prog}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
@@ -522,7 +522,7 @@ function SheetRepModal({ rep, onClose }: { rep: CommissionRep; onClose: () => vo
               ))}
             </tbody>
           </table>
-          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Last name only (minimum-necessary). “In Striven?” shows whether that patient's order is booked under this rep, a different rep, or isn't in Striven.</div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Shown by SO reference, no patient names. “In Striven?” shows whether the order is booked under this rep, a different rep, or isn't in Striven (‘no order’ = no matching Striven order).</div>
         </>
       )}
     </Modal>
@@ -671,7 +671,7 @@ function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: Comm
       </div>
 
       <div className="qb-flash warn" style={{ marginTop: 12 }}>
-        🔒 <b>Last name only</b>. Sheet = actual workbook payout; Striven = commission the orders support via the rate card (VA exact; TriCare/PI estimated). Click a rep to reconcile patient by patient. Differences come from orders not on the sheet, sheet lines with no Striven order, or the estimated rates.
+        🔒 <b>Last name only</b>. Sheet = actual workbook payout; Striven = commission the orders support via the rate card (VA exact; TriCare/PI estimated). Click a rep to reconcile order by order. Differences come from orders not on the sheet, sheet lines with no Striven order, or the estimated rates.
       </div>
 
       {repSel && selRec && (
@@ -692,19 +692,18 @@ function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: Comm
 // their Striven order lines by last name → matched / only-on-sheet (not in
 // Striven) / only-in-Striven (not on sheet).
 function ReconcileRepModal({ rep, sheetLines, strivenLines, sheetTotal, strivenTotal, onClose }: { rep: string; sheetLines: CommissionLine[]; strivenLines: StrivenOrderLine[]; sheetTotal: number; strivenTotal: number; onClose: () => void }) {
-  const up = (s: string) => (s || '').toUpperCase().replace(/[^A-Z]/g, '');
-  type Row = { last: string; prog: string; sheet: number; striven: number; detail: string; status: 'both' | 'sheet' | 'striven' };
+  type Row = { id: string; prog: string; sheet: number; striven: number; detail: string; status: 'both' | 'sheet' | 'striven' };
   const map = new Map<string, Row>();
-  for (const l of sheetLines) {
-    const k = up(l.last); if (!k) continue;
-    const e = map.get(k) || { last: l.last, prog: l.prog, sheet: 0, striven: 0, detail: l.device, status: 'sheet' };
+  sheetLines.forEach((l, i) => {
+    const k = l.ref || `s${i}`; // sheet lines with no matching order stay separate
+    const e = map.get(k) || { id: l.ref || 'no order', prog: l.prog, sheet: 0, striven: 0, detail: l.device, status: 'sheet' };
     e.sheet += l.comm; if (!e.detail) e.detail = l.device; map.set(k, e);
-  }
-  for (const l of strivenLines) {
-    const k = up(l.last); if (!k) continue;
-    const e = map.get(k) || { last: l.last, prog: l.prog, sheet: 0, striven: 0, detail: l.item, status: 'striven' };
+  });
+  strivenLines.forEach((l, i) => {
+    const k = l.ref || `v${i}`;
+    const e = map.get(k) || { id: l.ref || '-', prog: l.prog, sheet: 0, striven: 0, detail: l.item, status: 'striven' };
     e.striven += l.comm; if (!e.detail) e.detail = l.item; map.set(k, e);
-  }
+  });
   const rows = [...map.values()].map((e) => ({ ...e, status: (e.sheet > 0 && e.striven > 0 ? 'both' : e.sheet > 0 ? 'sheet' : 'striven') as Row['status'] }))
     .sort((a, b) => Math.max(b.sheet, b.striven) - Math.max(a.sheet, a.striven));
   const nBoth = rows.filter((r) => r.status === 'both').length;
@@ -713,18 +712,18 @@ function ReconcileRepModal({ rep, sheetLines, strivenLines, sheetTotal, strivenT
   const sumSheet = nSheet.reduce((s, r) => s + r.sheet, 0);
   const sumStriven = nStriven.reduce((s, r) => s + r.striven, 0);
   return (
-    <Modal title={rep} accent={C.info} sub={`Sheet ${formatCurrency(sheetTotal)} vs Striven ${formatCurrency(strivenTotal)} · patient by patient`} onClose={onClose}>
+    <Modal title={rep} accent={C.info} sub={`Sheet ${formatCurrency(sheetTotal)} vs Striven ${formatCurrency(strivenTotal)} · order by order`} onClose={onClose}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
         <Stat label="In both" value={String(nBoth)} tint={C.positive} />
         <Stat label="Only on sheet" value={`${nSheet.length} · ${formatCurrency(sumSheet)}`} tint={C.negative} />
         <Stat label="Only in Striven" value={`${nStriven.length} · ${formatCurrency(sumStriven)}`} tint={C.warning} />
       </div>
       <table className="data-table">
-        <thead><tr><th>Patient</th><th>Item / device</th><th>Program</th><th className="num">Sheet</th><th className="num">Striven</th><th>Status</th></tr></thead>
+        <thead><tr><th>Order</th><th>Item / device</th><th>Program</th><th className="num">Sheet</th><th className="num">Striven</th><th>Status</th></tr></thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={i}>
-              <td style={{ fontWeight: 600 }}>{r.last || '-'}</td>
+              <td style={{ fontWeight: 600, color: r.id.startsWith('SO') ? C.brand : C.muted }}>{r.id}</td>
               <td style={{ color: C.sub, fontSize: 12.5 }}>{r.detail || '-'}</td>
               <td>{r.prog}</td>
               <td className="num">{r.sheet ? formatCurrency(r.sheet) : '-'}</td>
@@ -738,7 +737,7 @@ function ReconcileRepModal({ rep, sheetLines, strivenLines, sheetTotal, strivenT
           ))}
         </tbody>
       </table>
-      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Last name only. Matched by last name: "in both" = on the sheet and in this rep's Striven orders; "not in Striven" = paid but no order under this rep; "not on sheet" = Striven order never paid on the sheet.</div>
+      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 By SO reference, no patient names. "in both" = paid on the sheet and in this rep's Striven orders; "not in Striven" = paid but no matching order under this rep ('no order' = never matched); "not on sheet" = Striven order never paid on the sheet.</div>
     </Modal>
   );
 }

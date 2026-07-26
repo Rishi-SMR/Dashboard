@@ -233,7 +233,7 @@ export type TrackingResult = { ok: boolean; configured: boolean; count: number; 
 export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
 
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
-export type CommissionLine = { last: string; device: string; prog: 'TriCare' | 'VA' | 'PI'; comm: number; status: 'same' | 'diff' | 'none'; under: string | null };
+export type CommissionLine = { ref: string; device: string; prog: 'TriCare' | 'VA' | 'PI'; comm: number; status: 'same' | 'diff' | 'none'; under: string | null };
 export type CommissionRecon = {
   same: number; diff: number; none: number;
   commSame: number; commDiff: number; commNone: number;
@@ -253,7 +253,7 @@ export type CommissionPeriod = { workbook: string; gid: string; label: string; k
 export type ReconcileRep = { rep: string; sheet: number; striven: number; sheetProg: { TriCare: number; VA: number; PI: number }; strivenProg: { TriCare: number; VA: number; PI: number }; lines: number; orders: number; matchRate: number | null; diff: number; onSheet: boolean; inStriven: boolean };
 export type CommissionReconcile = { reps: ReconcileRep[]; totals: { sheet: number; striven: number; diff: number } };
 // Commission computed FROM Striven (rate card) — sheet-shaped (monthly + program).
-export type StrivenOrderLine = { last: string; item: string; prog: 'TriCare' | 'VA' | 'PI'; value: number; units: number; comm: number };
+export type StrivenOrderLine = { ref: string; item: string; prog: 'TriCare' | 'VA' | 'PI'; value: number; units: number; comm: number };
 export type StrivenCommRep = { rep: string; tricare: number; va: number; pi: number; total: number; orders: number; units: number; value: number; lines?: StrivenOrderLine[] };
 export type StrivenCommMonth = { month: string; total: number; TriCare: number; VA: number; PI: number; orders: number; units: number; value: number; reps: StrivenCommRep[] };
 export type StrivenCommission = { available: boolean; grandTotal: number; byProgram: { TriCare: number; VA: number; PI: number }; months: StrivenCommMonth[]; byRep: StrivenCommRep[]; rateCard: { program: string; note: string; exact: boolean }[] };
