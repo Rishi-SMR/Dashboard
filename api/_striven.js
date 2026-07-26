@@ -1233,11 +1233,11 @@ function detectCarrier(tnRaw) {
   const tn = String(tnRaw || '').replace(/\s+/g, '').toUpperCase();
   if (!tn) return null;
   if (/^1Z[0-9A-Z]{16}$/.test(tn)) return 'ups';
-  if (/^(92|93|94|95)\d{18,20}$/.test(tn) || /^420\d{5}9[0-5]/.test(tn)) return 'usps';
+  if (/^9[0-5]\d{16,}$/.test(tn) || /^420\d{5}9[0-5]/.test(tn)) return 'usps';   // USPS: 9x… (19–22 digits)
   if (/^(96|61|77|79|98)\d{10,}$/.test(tn)) return 'fedex';
   if (/^\d{10}$/.test(tn)) return 'dhl_express';
   if (tn.length === 12 || tn.length === 15) return 'fedex';
-  if (/^\d{20,22}$/.test(tn)) return 'usps';
+  if (/^\d{18,22}$/.test(tn)) return 'usps';
   return null;
 }
 const CARRIER_NAME = { ups: 'UPS', fedex: 'FedEx', usps: 'USPS', dhl_express: 'DHL' };
