@@ -70,7 +70,7 @@ export function CommissionTab() {
       )}
 
       {data && data.configured !== false && source === 'reconcile' && (
-        <ReconcileView reconcile={data.reconcile} />
+        <ReconcileView reconcile={data.reconcile} sheetReps={data.reps} strivenReps={data.striven?.byRep} />
       )}
 
       {data && data.configured !== false && source === 'sheet' && (
@@ -603,12 +603,14 @@ function SheetMonthTable({ periods, monthKey }: { periods: CommissionPeriod[]; m
 
 // Reconcile - sheet (paid) vs Striven-computed (orders support), side by side per
 // rep, so a person can see the gap without flipping between tabs.
-function ReconcileView({ reconcile }: { reconcile?: CommissionReconcile }) {
+function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: CommissionReconcile; sheetReps: CommissionRep[]; strivenReps?: StrivenCommRep[] }) {
+  const [repSel, setRepSel] = useState<string | null>(null);
   if (!reconcile || !reconcile.reps.length) {
     return <div className="section"><div className="page-sub" style={{ padding: 16 }}>Reconcile needs both the sheet and Striven data loaded. Try Refresh.</div></div>;
   }
   const { reps, totals } = reconcile;
   const max = Math.max(1, ...reps.map((r) => Math.max(r.sheet, r.striven)));
+  const selRec = repSel ? reps.find((x) => x.rep === repSel) : null;
   return (
     <>
       <div style={{ marginBottom: 14, padding: '11px 14px', background: 'var(--panel-2)', borderRadius: 10, fontSize: 13.5, color: C.sub, lineHeight: 1.5 }}>
@@ -635,9 +637,9 @@ function ReconcileView({ reconcile }: { reconcile?: CommissionReconcile }) {
             </tr></thead>
             <tbody>
               {reps.map((r, i) => (
-                <tr key={r.rep}>
+                <tr key={r.rep} onClick={() => setRepSel(r.rep)} style={{ cursor: 'pointer' }} title="Click to see patient-by-patient reconcile">
                   <td style={{ color: C.muted }}>{i + 1}</td>
-                  <td style={{ fontWeight: 700 }}>
+                  <td style={{ fontWeight: 700, color: C.brand }}>
                     {r.rep}
                     {!r.inStriven && <span style={{ fontSize: 11, color: C.warning, marginLeft: 6 }}>sheet-only</span>}
                     {!r.onSheet && <span style={{ fontSize: 11, color: C.info, marginLeft: 6 }}>Striven-only</span>}
@@ -669,9 +671,75 @@ function ReconcileView({ reconcile }: { reconcile?: CommissionReconcile }) {
       </div>
 
       <div className="qb-flash warn" style={{ marginTop: 12 }}>
-        🔒 Aggregated - <b>no patient names</b>. Sheet = actual workbook payout; Striven = commission the orders support via the rate card (VA exact; TriCare/PI estimated). Differences come from orders not on the sheet, sheet lines with no Striven order, or the estimated rates.
+        🔒 <b>Last name only</b>. Sheet = actual workbook payout; Striven = commission the orders support via the rate card (VA exact; TriCare/PI estimated). Click a rep to reconcile patient by patient. Differences come from orders not on the sheet, sheet lines with no Striven order, or the estimated rates.
       </div>
+
+      {repSel && selRec && (
+        <ReconcileRepModal
+          rep={repSel}
+          sheetLines={sheetReps.find((x) => x.rep === repSel)?.recon.lines || []}
+          strivenLines={strivenReps?.find((x) => x.rep === repSel)?.lines || []}
+          sheetTotal={selRec.sheet}
+          strivenTotal={selRec.striven}
+          onClose={() => setRepSel(null)}
+        />
+      )}
     </>
+  );
+}
+
+// Patient-by-patient reconcile for one rep: merge the rep's sheet lines with
+// their Striven order lines by last name → matched / only-on-sheet (not in
+// Striven) / only-in-Striven (not on sheet).
+function ReconcileRepModal({ rep, sheetLines, strivenLines, sheetTotal, strivenTotal, onClose }: { rep: string; sheetLines: CommissionLine[]; strivenLines: StrivenOrderLine[]; sheetTotal: number; strivenTotal: number; onClose: () => void }) {
+  const up = (s: string) => (s || '').toUpperCase().replace(/[^A-Z]/g, '');
+  type Row = { last: string; prog: string; sheet: number; striven: number; detail: string; status: 'both' | 'sheet' | 'striven' };
+  const map = new Map<string, Row>();
+  for (const l of sheetLines) {
+    const k = up(l.last); if (!k) continue;
+    const e = map.get(k) || { last: l.last, prog: l.prog, sheet: 0, striven: 0, detail: l.device, status: 'sheet' };
+    e.sheet += l.comm; if (!e.detail) e.detail = l.device; map.set(k, e);
+  }
+  for (const l of strivenLines) {
+    const k = up(l.last); if (!k) continue;
+    const e = map.get(k) || { last: l.last, prog: l.prog, sheet: 0, striven: 0, detail: l.item, status: 'striven' };
+    e.striven += l.comm; if (!e.detail) e.detail = l.item; map.set(k, e);
+  }
+  const rows = [...map.values()].map((e) => ({ ...e, status: (e.sheet > 0 && e.striven > 0 ? 'both' : e.sheet > 0 ? 'sheet' : 'striven') as Row['status'] }))
+    .sort((a, b) => Math.max(b.sheet, b.striven) - Math.max(a.sheet, a.striven));
+  const nBoth = rows.filter((r) => r.status === 'both').length;
+  const nSheet = rows.filter((r) => r.status === 'sheet');
+  const nStriven = rows.filter((r) => r.status === 'striven');
+  const sumSheet = nSheet.reduce((s, r) => s + r.sheet, 0);
+  const sumStriven = nStriven.reduce((s, r) => s + r.striven, 0);
+  return (
+    <Modal title={rep} accent={C.info} sub={`Sheet ${formatCurrency(sheetTotal)} vs Striven ${formatCurrency(strivenTotal)} · patient by patient`} onClose={onClose}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
+        <Stat label="In both" value={String(nBoth)} tint={C.positive} />
+        <Stat label="Only on sheet" value={`${nSheet.length} · ${formatCurrency(sumSheet)}`} tint={C.negative} />
+        <Stat label="Only in Striven" value={`${nStriven.length} · ${formatCurrency(sumStriven)}`} tint={C.warning} />
+      </div>
+      <table className="data-table">
+        <thead><tr><th>Patient</th><th>Item / device</th><th>Program</th><th className="num">Sheet</th><th className="num">Striven</th><th>Status</th></tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td style={{ fontWeight: 600 }}>{r.last || '-'}</td>
+              <td style={{ color: C.sub, fontSize: 12.5 }}>{r.detail || '-'}</td>
+              <td>{r.prog}</td>
+              <td className="num">{r.sheet ? formatCurrency(r.sheet) : '-'}</td>
+              <td className="num">{r.striven ? formatCurrency(r.striven) : '-'}</td>
+              <td>
+                {r.status === 'both' && <span style={{ color: C.positive, fontWeight: 600 }}>✓ in both</span>}
+                {r.status === 'sheet' && <span style={{ color: C.negative, fontWeight: 600 }}>✗ not in Striven</span>}
+                {r.status === 'striven' && <span style={{ color: C.warning, fontWeight: 600 }}>✗ not on sheet</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Last name only. Matched by last name: "in both" = on the sheet and in this rep's Striven orders; "not in Striven" = paid but no order under this rep; "not on sheet" = Striven order never paid on the sheet.</div>
+    </Modal>
   );
 }
 
