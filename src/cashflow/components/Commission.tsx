@@ -80,7 +80,7 @@ export function CommissionTab() {
           )}
 
           {/* Total + program tiles - click any card to drill into its breakdown */}
-          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: detail ? 8 : 14 }}>
+          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
             <KpiR ico="cash" tint={C.brand} label="Total commission" value={data.grandTotal} format={formatCurrency} foot={`${data.itemCount} lines · ${data.periodCount} pay periods · tap for detail`} deltaText="all periods" onClick={() => setDetail(detail === 'total' ? null : 'total')} />
             <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={formatCurrency} foot="flat per device · tap for detail" deltaText={pct(bp.TriCare, data.grandTotal)} onClick={() => setDetail(detail === 'TriCare' ? null : 'TriCare')} />
             <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={formatCurrency} foot="flat per device · tap for detail" deltaText={pct(bp.VA, data.grandTotal)} onClick={() => setDetail(detail === 'VA' ? null : 'VA')} />
@@ -208,7 +208,7 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
   return (
     <>
       {/* KPI strip - total + the three programs. Tap any card for the breakdown. */}
-      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: drill ? 8 : 14 }}>
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
         <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={formatCurrency} foot={sel ? `${sel.orders} orders · tap for detail` : `${totalOrders} orders · tap for detail`} deltaText={sel ? 'selected month' : 'all months'} onClick={() => setDrill(drill === 'total' ? null : 'total')} />
         <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={formatCurrency} foot="per order · tap for detail" deltaText={pct(bp.TriCare, total)} onClick={() => setDrill(drill === 'TriCare' ? null : 'TriCare')} />
         <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={formatCurrency} foot="per unit · tap for detail" deltaText={pct(bp.VA, total)} onClick={() => setDrill(drill === 'VA' ? null : 'VA')} />
@@ -584,7 +584,7 @@ function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: Comm
   const selRec = repSel ? reps.find((x) => x.rep === repSel) : null;
   return (
     <>
-      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: drill ? 8 : 14 }}>
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
         <KpiR ico="clip" tint={C.info} label="Sheet total" value={totals.sheet} format={formatCurrency} foot="paid per the workbook · tap" deltaText="all periods" onClick={() => setDrill(drill === 'sheet' ? null : 'sheet')} />
         <KpiR ico="cash" tint={C.brand} label="Striven total" value={totals.striven} format={formatCurrency} foot="orders support · tap" deltaText="all periods" onClick={() => setDrill(drill === 'striven' ? null : 'striven')} />
         <KpiR ico="trend" tint={totals.diff >= 0 ? C.negative : C.positive} label="Difference" value={Math.abs(totals.diff)} format={formatCurrency} foot={`${totals.diff >= 0 ? 'sheet paid more' : 'Striven says more'} · tap`} deltaText={`${totals.diff >= 0 ? '+' : '−'}${formatCurrency(Math.abs(totals.diff))}`} onClick={() => setDrill(drill === 'diff' ? null : 'diff')} />
@@ -726,32 +726,23 @@ function KpiDrill({ title, sub, accent, rows, onClose }: { title: string; sub?: 
   const max = Math.max(1, ...sorted.map((r) => Math.abs(r.value)));
   const anyNeg = sorted.some((r) => r.value < 0);
   return (
-    <div className="section chart-card" style={{ marginBottom: 14, borderLeft: `3px solid ${accent}` }}>
-      <div className="section-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 className="section-title">{title}</h2>
-          {sub && <div className="section-sub">{sub}</div>}
-        </div>
-        <button className="btn ghost" onClick={onClose} aria-label="Close detail">✕ Close</button>
-      </div>
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead><tr><th style={{ width: 34 }}>#</th><th>Rep</th><th className="num">Amount</th><th className="num">Share</th><th style={{ width: '34%' }} /></tr></thead>
-          <tbody>
-            {sorted.length === 0 && <tr><td colSpan={5} style={{ color: C.muted }}>No data.</td></tr>}
-            {sorted.map((r, i) => (
-              <tr key={r.name}>
-                <td style={{ color: C.muted }}>{i + 1}</td>
-                <td style={{ fontWeight: 700 }}>{r.name}</td>
-                <td className="num" style={{ fontWeight: 800, color: r.value < 0 ? C.positive : C.ink }}>{formatCurrency(r.value)}</td>
-                <td className="num">{!anyNeg && sum > 0 ? `${Math.round((r.value / sum) * 100)}%` : '-'}</td>
-                <td><div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(Math.abs(r.value) / max) * 100}%`, background: accent, borderRadius: 999 }} /></div></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <Modal title={title} sub={sub} accent={accent} onClose={onClose}>
+      <table className="data-table">
+        <thead><tr><th style={{ width: 34 }}>#</th><th>Rep</th><th className="num">Amount</th><th className="num">Share</th><th style={{ width: '34%' }} /></tr></thead>
+        <tbody>
+          {sorted.length === 0 && <tr><td colSpan={5} style={{ color: C.muted }}>No data.</td></tr>}
+          {sorted.map((r, i) => (
+            <tr key={r.name}>
+              <td style={{ color: C.muted }}>{i + 1}</td>
+              <td style={{ fontWeight: 700 }}>{r.name}</td>
+              <td className="num" style={{ fontWeight: 800, color: r.value < 0 ? C.positive : C.ink }}>{formatCurrency(r.value)}</td>
+              <td className="num">{!anyNeg && sum > 0 ? `${Math.round((r.value / sum) * 100)}%` : '-'}</td>
+              <td><div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(Math.abs(r.value) / max) * 100}%`, background: accent, borderRadius: 999 }} /></div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Modal>
   );
 }
 
@@ -763,42 +754,33 @@ function KpiDetail({ detail, data, onClose }: { detail: 'total' | 'TriCare' | 'V
     .filter((r) => r.amount > 0)
     .sort((a, b) => b.amount - a.amount);
   const sum = rows.reduce((s, r) => s + r.amount, 0);
-  const title = isTotal ? 'Total commission - by rep (all programs)' : `${detail === 'PI' ? 'Personal Injury' : detail} commission - by rep`;
+  const title = isTotal ? 'Total commission · by rep' : `${detail === 'PI' ? 'Personal Injury' : detail} · by rep`;
   return (
-    <div className="section chart-card" style={{ marginBottom: 14, borderLeft: `3px solid ${isTotal ? C.brand : PROG_C[detail]}` }}>
-      <div className="section-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 className="section-title">{title}</h2>
-          <div className="section-sub">{rows.length} rep{rows.length === 1 ? '' : 's'} · {formatCurrency(sum)}{isTotal ? ' across all pay periods' : ''}</div>
-        </div>
-        <button className="btn ghost" onClick={onClose} aria-label="Close detail">✕ Close</button>
-      </div>
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead><tr>
-            <th style={{ width: 34 }}>#</th><th>Rep</th><th className="num">Amount</th><th className="num">Share</th>
-            {isTotal && <><th className="num">Lines</th><th className="num">Patient match</th></>}
-            <th style={{ width: '30%' }} />
-          </tr></thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={r.rep}>
-                <td style={{ color: C.muted }}>{i + 1}</td>
-                <td style={{ fontWeight: 700 }}>{r.flag && <span style={{ marginRight: 5 }}>⚠️</span>}{r.rep}</td>
-                <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(r.amount)}</td>
-                <td className="num">{sum > 0 ? `${Math.round((r.amount / sum) * 100)}%` : '-'}</td>
-                {isTotal && <><td className="num">{r.count}</td>
-                  <td className="num" style={{ color: r.match != null && r.match < 50 ? C.negative : C.ink }}>{r.match != null ? `${r.match}%` : '-'}</td></>}
-                <td>
-                  <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${sum > 0 ? (r.amount / rows[0].amount) * 100 : 0}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} />
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <Modal title={title} sub={`${rows.length} rep${rows.length === 1 ? '' : 's'} · ${formatCurrency(sum)}`} accent={isTotal ? C.brand : PROG_C[detail]} onClose={onClose}>
+      <table className="data-table">
+        <thead><tr>
+          <th style={{ width: 34 }}>#</th><th>Rep</th><th className="num">Amount</th><th className="num">Share</th>
+          {isTotal && <><th className="num">Lines</th><th className="num">Patient match</th></>}
+          <th style={{ width: '30%' }} />
+        </tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.rep}>
+              <td style={{ color: C.muted }}>{i + 1}</td>
+              <td style={{ fontWeight: 700 }}>{r.flag && <span style={{ marginRight: 5 }}>⚠️</span>}{r.rep}</td>
+              <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(r.amount)}</td>
+              <td className="num">{sum > 0 ? `${Math.round((r.amount / sum) * 100)}%` : '-'}</td>
+              {isTotal && <><td className="num">{r.count}</td>
+                <td className="num" style={{ color: r.match != null && r.match < 50 ? C.negative : C.ink }}>{r.match != null ? `${r.match}%` : '-'}</td></>}
+              <td>
+                <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${sum > 0 ? (r.amount / rows[0].amount) * 100 : 0}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} />
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Modal>
   );
 }
