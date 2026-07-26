@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchCommission, type CommissionResult } from '../strivenApi';
+import { fetchCommission, type CommissionResult, type StrivenCommission, type StrivenCommRep } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
@@ -17,6 +17,7 @@ export function CommissionTab() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [detail, setDetail] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI'>(null);
+  const [source, setSource] = useState<'sheet' | 'striven'>('sheet');
   const agoText = useSyncAgo(lastSync);
 
   async function load(silent = false) {
@@ -43,7 +44,11 @@ export function CommissionTab() {
             <span className="live-dot" /> All pay periods, reconciled against Striven order attribution{agoText ? ` · updated ${agoText}` : ''}
           </div>
         </div>
-        <div className="ov-headright">
+        <div className="ov-headright" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className="seg" style={{ display: 'inline-flex', background: 'var(--panel-2)', borderRadius: 8, padding: 3 }}>
+            <button className={`btn ghost ${source === 'sheet' ? 'active' : ''}`} style={segStyle(source === 'sheet')} onClick={() => setSource('sheet')}>Sheet + reconcile</button>
+            <button className={`btn ghost ${source === 'striven' ? 'active' : ''}`} style={segStyle(source === 'striven')} onClick={() => setSource('striven')}>Computed from Striven</button>
+          </div>
           <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
         </div>
       </div>
@@ -57,7 +62,11 @@ export function CommissionTab() {
         </div></div>
       )}
 
-      {data && data.configured !== false && (
+      {data && data.configured !== false && source === 'striven' && (
+        <StrivenCommissionView striven={data.striven} sheetTotal={data.grandTotal} />
+      )}
+
+      {data && data.configured !== false && source === 'sheet' && (
         <>
           {(data.errors?.length > 0) && (
             <div className="qb-flash warn" style={{ marginBottom: 12 }}>
@@ -196,6 +205,104 @@ export function CommissionTab() {
 }
 
 const pct = (n: number, total: number) => (total > 0 ? `${Math.round((n / total) * 100)}% of total` : '—');
+const segStyle = (active: boolean): React.CSSProperties => ({ border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 13, fontWeight: 700, background: active ? C.brand : 'transparent', color: active ? '#fff' : C.sub, cursor: 'pointer' });
+const monthLabel = (m: string) => { if (!m || m === 'unknown') return 'Undated'; const [y, mo] = m.split('-'); const N = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']; return `${N[+mo] || mo} ${y}`; };
+
+// Commission computed FROM Striven (rate card) — sheet-shaped: month selector +
+// per-rep TriCare/VA/PI bifurcation. Replaces dependence on the manual workbook.
+function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommission; sheetTotal: number }) {
+  const [month, setMonth] = useState<string>('all');
+  if (!striven || !striven.available) {
+    return <div className="section"><div className="page-sub" style={{ padding: 16 }}>Striven order data isn't loaded yet — computed commission needs the Striven sales-order cache. Try Refresh, or open the Orders tab first.</div></div>;
+  }
+  const sel = month === 'all' ? null : striven.months.find((m) => m.month === month);
+  const reps: StrivenCommRep[] = sel ? sel.reps : striven.byRep;
+  const bp = sel ? { TriCare: sel.TriCare, VA: sel.VA, PI: sel.PI } : striven.byProgram;
+  const total = sel ? sel.total : striven.grandTotal;
+  const maxRep = Math.max(1, ...reps.map((r) => r.total));
+  const gap = striven.grandTotal - sheetTotal;
+
+  return (
+    <>
+      <div className="qb-flash" style={{ marginBottom: 12, borderLeft: `3px solid ${C.brand}` }}>
+        🧮 <b>Computed from Striven orders</b> via a rate card — no dependence on the manual workbook. Rates:{' '}
+        {striven.rateCard.map((r, i) => <span key={r.program}><b>{r.program}</b> {r.note}{r.exact ? ' ✓' : ' (est.)'}{i < striven.rateCard.length - 1 ? ' · ' : ''}</span>)}.
+        {' '}TriCare/PI are estimates until the client confirms the official rate card.
+      </div>
+
+      {/* Striven KPI strip */}
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+        <KpiR ico="cash" tint={C.brand} label={sel ? `${monthLabel(sel.month)} commission` : 'Total (all months)'} value={total} format={formatCurrency} foot={sel ? `${sel.orders} orders · ${sel.units} units` : `${striven.months.length} months · Striven-computed`} deltaText={sel ? '' : `${gap >= 0 ? '+' : ''}${formatCurrency(gap)} vs sheet`} />
+        <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={formatCurrency} foot="$369.78/order (est.)" deltaText={pct(bp.TriCare, total)} />
+        <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={formatCurrency} foot="$425/unit ✓" deltaText={pct(bp.VA, total)} />
+        <KpiR ico="trend" tint={PROG_C.PI} label="Personal Injury" value={bp.PI} format={formatCurrency} foot="2.677% of value (est.)" deltaText={pct(bp.PI, total)} />
+      </div>
+
+      {/* Month selector (sheet-style monthly tabs) */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+        <button className="btn ghost" style={segStyle(month === 'all')} onClick={() => setMonth('all')}>All months</button>
+        {striven.months.map((m) => (
+          <button key={m.month} className="btn ghost" style={segStyle(month === m.month)} onClick={() => setMonth(m.month)}>
+            {monthLabel(m.month)} · {formatCurrency(m.total)}
+          </button>
+        ))}
+      </div>
+
+      {/* Per-rep bifurcation for the selected scope */}
+      <div className="section chart-card">
+        <div className="section-head"><div>
+          <h2 className="section-title">{sel ? monthLabel(sel.month) : 'All months'} · by rep — TriCare / VA / PI</h2>
+          <div className="section-sub">Commission Striven would pay on {sel ? 'this month\'s' : 'all'} orders, split by program. Full rep names (Striven attribution) — includes house/clinic accounts.</div>
+        </div></div>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead><tr>
+              <th style={{ width: 34 }}>#</th><th>Rep</th>
+              <th className="num">TriCare</th><th className="num">VA</th><th className="num">PI</th>
+              <th className="num">Orders</th><th className="num">Units</th><th className="num">Commission</th>
+              <th style={{ width: '18%' }} />
+            </tr></thead>
+            <tbody>
+              {reps.length === 0 && <tr><td colSpan={9} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+              {reps.map((r, i) => (
+                <tr key={r.rep}>
+                  <td style={{ color: C.muted }}>{i + 1}</td>
+                  <td style={{ fontWeight: 700 }}>{r.rep}</td>
+                  <td className="num">{r.tricare ? formatCurrency(r.tricare) : '—'}</td>
+                  <td className="num">{r.va ? formatCurrency(r.va) : '—'}</td>
+                  <td className="num">{r.pi ? formatCurrency(r.pi) : '—'}</td>
+                  <td className="num">{r.orders}</td>
+                  <td className="num">{r.units}</td>
+                  <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(r.total)}</td>
+                  <td>
+                    <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${(r.total / maxRep) * 100}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            {reps.length > 0 && (
+              <tfoot><tr className="total-row">
+                <td /><td>Total</td>
+                <td className="num">{formatCurrency(bp.TriCare)}</td>
+                <td className="num">{formatCurrency(bp.VA)}</td>
+                <td className="num">{formatCurrency(bp.PI)}</td>
+                <td className="num">{reps.reduce((s, r) => s + r.orders, 0)}</td>
+                <td className="num">{reps.reduce((s, r) => s + r.units, 0)}</td>
+                <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(total)}</td><td />
+              </tr></tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      <div className="qb-flash warn" style={{ marginTop: 12 }}>
+        🔒 Aggregated from Striven — <b>no patient names</b>. Sheet total {formatCurrency(sheetTotal)} vs Striven-computed {formatCurrency(striven.grandTotal)} ({gap >= 0 ? '+' : ''}{formatCurrency(gap)}); the gap reflects orders in Striven not on the sheet (and vice-versa) plus estimated TriCare/PI rates.
+      </div>
+    </>
+  );
+}
 
 // Drill-down for a tapped KPI card: the metric's full per-rep breakdown.
 function KpiDetail({ detail, data, onClose }: { detail: 'total' | 'TriCare' | 'VA' | 'PI'; data: CommissionResult; onClose: () => void }) {

@@ -840,8 +840,26 @@ async function getSO() {
   const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
     .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: soStatusOf(r), invStatus: r.d.invStatus || '', date: r.dateCreated ?? null }));
 
+  // Commission engine base: month × program × rep volume (orders + units + value)
+  // from the same enriched book. getCommission applies the rate card → $ (mirrors
+  // Crystal's monthly workbook, but sourced from Striven instead of the sheet).
+  const commAgg = {};
+  for (const r of book) {
+    const prog = soClass(r.d.type);
+    if (prog === 'Other') continue;
+    const month = (r.dateCreated || '').slice(0, 7) || 'unknown';
+    const rep = cleanRep(r.d.rep) || 'Unassigned';
+    const key = `${month}|${prog}|${rep}`;
+    commAgg[key] = commAgg[key] || { month, program: prog, rep, orders: 0, units: 0, value: 0 };
+    commAgg[key].orders += 1;
+    commAgg[key].units += unitsBySo.get(String(r.id)) || 0;
+    commAgg[key].value += Number(r.d.total || 0);
+  }
+  const commByMonth = Object.values(commAgg).map((x) => ({ ...x, value: round2(x.value) }));
+
   return {
     count: book.length, totalValue, piva, byType, byStatus, byRep, recent, statusGroups,
+    commByMonth,
     liveCount: live.length, demoCount: enriched.length - live.length,
     enriched: Object.keys(det).length > 0, phiMasked: MASK_PHI,
   };
@@ -1379,8 +1397,8 @@ async function getCommission() {
     if (anyTab) sheetsRead++; else errors.push(`${sh.label || sh.id} (no readable tabs — share as "anyone with the link can view")`);
   }
   // CFO reconciliation vs Striven order attribution.
-  let byRep = [];
-  try { byRep = (await getSO()).byRep || []; } catch { /* Striven optional */ }
+  let byRep = [], commByMonth = [];
+  try { const so = await getSO(); byRep = so.byRep || []; commByMonth = so.commByMonth || []; } catch { /* Striven optional */ }
   const findSr = (rep) => byRep.find((x) => commRep(x.rep) === rep);
   // Patient-level join: last name → which rep Striven books the order under.
   // Names stay backend-only; only per-rep aggregates leave this function (PHI-safe).
@@ -1421,10 +1439,51 @@ async function getCommission() {
     };
   }).sort((a, b) => b.total - a.total);
   periods.sort((a, b) => b.total - a.total);
+
+  // ── Commission computed FROM STRIVEN (rate card) — mirrors the sheet's monthly
+  // + TriCare/PI/VA structure, but sourced from Striven orders, so it no longer
+  // depends on the manual workbook. VA is exact; TriCare/PI are estimates from a
+  // rate card derived off the historical sheet (update RATE when the client
+  // confirms the official rates).
+  const RATE = {
+    VA: { basis: 'unit', rate: 425, exact: true, note: '$425 / unit (validated)' },
+    TriCare: { basis: 'order', rate: 369.78, exact: false, note: '$369.78 / order (est., sheet avg)' },
+    PI: { basis: 'value', rate: 0.02677, exact: false, note: '2.677% of order value (est., derived)' },
+  };
+  const commFor = (prog, o) => {
+    const R = RATE[prog]; if (!R) return 0;
+    if (R.basis === 'unit') return o.units * R.rate;
+    if (R.basis === 'order') return o.orders * R.rate;
+    return o.value * R.rate;
+  };
+  const months = {}; const sByRep = {}; const sByProgram = { TriCare: 0, VA: 0, PI: 0 }; let sGrand = 0;
+  for (const o of commByMonth) {
+    const c = round2(commFor(o.program, o));
+    if (!c) continue;
+    const M = months[o.month] = months[o.month] || { month: o.month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, reps: {} };
+    M[o.program] += c; M.total += c; M.orders += o.orders; M.units += o.units; M.value += o.value;
+    const MR = M.reps[o.rep] = M.reps[o.rep] || { rep: o.rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
+    MR[o.program === 'TriCare' ? 'tricare' : o.program === 'VA' ? 'va' : 'pi'] += c; MR.total += c; MR.orders += o.orders; MR.units += o.units; MR.value += o.value;
+    const BR = sByRep[o.rep] = sByRep[o.rep] || { rep: o.rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
+    BR[o.program === 'TriCare' ? 'tricare' : o.program === 'VA' ? 'va' : 'pi'] += c; BR.total += c; BR.orders += o.orders; BR.units += o.units; BR.value += o.value;
+    sByProgram[o.program] += c; sGrand += c;
+  }
+  const rnd = (o, ks) => { for (const k of ks) o[k] = round2(o[k]); return o; };
+  const sMonths = Object.values(months).map((M) => rnd({ ...M, reps: Object.values(M.reps).map((r) => rnd(r, ['tricare', 'va', 'pi', 'total', 'value'])).sort((a, b) => b.total - a.total) }, ['total', 'TriCare', 'VA', 'PI', 'value'])).sort((a, b) => b.month.localeCompare(a.month));
+  const striven = {
+    available: commByMonth.length > 0,
+    grandTotal: round2(sGrand),
+    byProgram: { TriCare: round2(sByProgram.TriCare), VA: round2(sByProgram.VA), PI: round2(sByProgram.PI) },
+    months: sMonths,
+    byRep: Object.values(sByRep).map((r) => rnd(r, ['tricare', 'va', 'pi', 'total', 'value'])).sort((a, b) => b.total - a.total),
+    rateCard: Object.entries(RATE).map(([program, r]) => ({ program, note: r.note, exact: r.exact })),
+  };
+
   return {
     ok: true, configured: true, grandTotal: round2(grandTotal),
     byProgram: { TriCare: round2(byProgram.TriCare), PI: round2(byProgram.PI), VA: round2(byProgram.VA) },
     reps, periods, periodCount: periods.length, itemCount: rowCount, sheetsRead, sheetsConfigured: sheets.length, errors,
+    striven,
     sources: sheets.map((s) => ({ label: s.label || 'sheet', url: `https://docs.google.com/spreadsheets/d/${s.id}/edit` })),
   };
 }
