@@ -475,6 +475,33 @@ function SheetRepModal({ rep, onClose }: { rep: CommissionRep; onClose: () => vo
           Booked under: {rc.bookedUnder.map((b) => `${b.rep} (${b.count})`).join(', ')}
         </div>
       )}
+
+      {/* Line-by-line, like the sheet — patient last name + device + commission,
+          plus where Striven books each one. Last name only (HIPAA-safe). */}
+      {rc.lines?.length > 0 && (
+        <>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>Line by line <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {rc.lines.length} lines</span></div>
+          <table className="data-table">
+            <thead><tr><th>Patient</th><th>Device</th><th>Program</th><th className="num">Commission</th><th>In Striven?</th></tr></thead>
+            <tbody>
+              {rc.lines.map((ln, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{ln.last || '—'}</td>
+                  <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.device || '—'}</td>
+                  <td>{ln.prog}</td>
+                  <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
+                  <td>
+                    {ln.status === 'same' && <span style={{ color: C.positive, fontWeight: 600 }}>✓ this rep</span>}
+                    {ln.status === 'diff' && <span style={{ color: C.warning, fontWeight: 600 }}>↪ {ln.under}</span>}
+                    {ln.status === 'none' && <span style={{ color: C.negative, fontWeight: 600 }}>✗ not found</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Last name only (minimum-necessary). “In Striven?” shows whether that patient's order is booked under this rep, a different rep, or isn't in Striven.</div>
+        </>
+      )}
     </Modal>
   );
 }

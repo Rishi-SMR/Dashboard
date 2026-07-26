@@ -233,10 +233,12 @@ export type TrackingResult = { ok: boolean; configured: boolean; count: number; 
 export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
 
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
+export type CommissionLine = { last: string; device: string; prog: 'TriCare' | 'VA' | 'PI'; comm: number; status: 'same' | 'diff' | 'none'; under: string | null };
 export type CommissionRecon = {
   same: number; diff: number; none: number;
   commSame: number; commDiff: number; commNone: number;
   bookedUnder: { rep: string; count: number }[];
+  lines: CommissionLine[];
 };
 export type CommissionRep = {
   rep: string; tricare: number; pi: number; va: number; total: number; count: number;

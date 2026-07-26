@@ -1341,6 +1341,9 @@ const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 const commRep = (r) => { const s = String(r || '').trim(); if (/cassie/i.test(s)) return 'Cassie'; if (/jillian/i.test(s)) return 'Jillian'; if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann'; if (/christ/i.test(s)) return 'Christy'; return s || 'Unknown'; };
 // Patient last name from either "Last, First" or "FIRST LAST" — normalized for join.
 const commLastName = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z]/g, '').toUpperCase(); };
+// Display last name — original case, HIPAA minimum-necessary (last name only, no
+// first name), matching the authorized last-name pattern used in order-tracking.
+const commLastDisp = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z\-']/g, '').trim(); };
 function commParseRow(line) { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (c === ',' && !q) { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; }
 // Enumerate every tab (gid + name) of a workbook from its public htmlview.
 // Tab names are pay-period dates like "6/15/2026" → surfaced as month labels.
@@ -1369,7 +1372,7 @@ function commParseCsv(csv) {
     if (!prog || !c[1]) continue;
     const p = (c[0] || '').trim(); if (!/^[A-Za-z]/.test(p) || p.toUpperCase() === 'PATIENT') continue;
     const comm = commMoney(c[3]); if (!comm) continue;
-    rows.push({ rep: commRep(c[1]), prog, comm, last: commLastName(p) });
+    rows.push({ rep: commRep(c[1]), prog, comm, last: commLastName(p), lastDisp: commLastDisp(p), device: (c[2] || '').trim() });
   }
   return rows;
 }
@@ -1408,7 +1411,7 @@ async function getCommission() {
         agg[r.rep] = agg[r.rep] || { TriCare: 0, PI: 0, VA: 0, count: 0 };
         agg[r.rep][r.prog] += r.comm; agg[r.rep].count++;
         byProgram[r.prog] += r.comm; grandTotal += r.comm; rowCount++;
-        allLines.push({ rep: r.rep, last: r.last, comm: r.comm });
+        allLines.push({ rep: r.rep, last: r.last, lastDisp: r.lastDisp, device: r.device, prog: r.prog, comm: r.comm });
       }
       const preps = Object.values(prMap).map((x) => ({ ...x, tricare: round2(x.tricare), va: round2(x.va), pi: round2(x.pi), total: round2(x.total) })).sort((a, b) => b.total - a.total);
       periods.push({ workbook: sh.label || 'sheet', gid, label: meta.label, key: meta.key, lines: rows.length, total: round2(ptot), reps: preps });
@@ -1431,15 +1434,20 @@ async function getCommission() {
   } catch { /* Striven optional */ }
   const reconOf = (rep) => {
     const R = { same: 0, diff: 0, none: 0, commSame: 0, commDiff: 0, commNone: 0, under: {} };
+    const lines = [];
     for (const L of allLines) {
       if (L.rep !== rep) continue;
       const cand = L.last ? nameIdx.get(L.last) : null;
-      if (!cand || !cand.length) { R.none++; R.commNone += L.comm; continue; }
-      if (cand.includes(rep)) { R.same++; R.commSame += L.comm; }
-      else { R.diff++; R.commDiff += L.comm; const b = cand[0]; R.under[b] = (R.under[b] || 0) + 1; }
+      let status, under = null;
+      if (!cand || !cand.length) { R.none++; R.commNone += L.comm; status = 'none'; }
+      else if (cand.includes(rep)) { R.same++; R.commSame += L.comm; status = 'same'; }
+      else { R.diff++; R.commDiff += L.comm; under = cand[0]; R.under[under] = (R.under[under] || 0) + 1; status = 'diff'; }
+      // line detail — last name only (HIPAA minimum-necessary), device, program, $
+      lines.push({ last: L.lastDisp || '', device: L.device || '', prog: L.prog, comm: round2(L.comm), status, under });
     }
+    lines.sort((a, b) => b.comm - a.comm);
     const bookedUnder = Object.entries(R.under).map(([r, n]) => ({ rep: r, count: n })).sort((a, b) => b.count - a.count);
-    return { same: R.same, diff: R.diff, none: R.none, commSame: round2(R.commSame), commDiff: round2(R.commDiff), commNone: round2(R.commNone), bookedUnder };
+    return { same: R.same, diff: R.diff, none: R.none, commSame: round2(R.commSame), commDiff: round2(R.commDiff), commNone: round2(R.commNone), bookedUnder, lines };
   };
   const reps = Object.entries(agg).map(([rep, v]) => {
     const total = v.TriCare + v.PI + v.VA;
