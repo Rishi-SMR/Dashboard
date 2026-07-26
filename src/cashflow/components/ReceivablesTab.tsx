@@ -3,7 +3,7 @@ import {
   fetchStrivenAR, fetchStrivenPayments, fetchStrivenCustomers,
   type ArResult, type PaymentsResult, type CustomersResult,
 } from '../strivenApi';
-import { formatCurrency } from '../format';
+import { formatCurrency, pageList, clickableProps } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTheme';
 import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo, pctText } from '../chartKit';
@@ -283,7 +283,7 @@ export function ReceivablesTab() {
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 <div className="rank-list">
                   {overdueRows.map((r) => (
-                    <div key={r.label} className="rk-row" style={{ cursor: 'pointer' }} onClick={() => drillBucket(r.label.replace(' days', ''))}>
+                    <div key={r.label} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillBucket(r.label.replace(' days', '')))}>
                       <span className="donut-dot" style={{ background: r.color }} />
                       <span className="rk-name">{r.label}</span>
                       <span className="rk-val">{formatCurrency(r.value)}</span>
@@ -302,7 +302,7 @@ export function ReceivablesTab() {
               <div className="rank-list">
                 {topPayers.map((c) => (
                   <div key={c.name} className="rk-row" style={{ cursor: 'pointer' }}
-                    onClick={() => { setQuery(c.name); setBucketFilter('All'); setProgFilter('All'); setPage(1); tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
+                    {...clickableProps(() => { setQuery(c.name); setBucketFilter('All'); setProgFilter('All'); setPage(1); tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); })}>
                     <span className="rk-ico">{initials(c.name)}</span>
                     <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
                     <span className="rk-val">{formatCurrency(c.open)}</span>
@@ -409,8 +409,10 @@ export function ReceivablesTab() {
                 <span className="pgn-info">Showing {sorted.length === 0 ? 0 : (pageSafe - 1) * PAGE_SIZE + 1} to {Math.min(pageSafe * PAGE_SIZE, sorted.length)} of {sorted.length} entries</span>
                 <div className="pgn-pages">
                   <button disabled={pageSafe <= 1} onClick={() => setPage(pageSafe - 1)}>‹</button>
-                  {Array.from({ length: pages }, (_, i) => i + 1).slice(0, 7).map((p) => (
-                    <button key={p} className={p === pageSafe ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
+                  {pageList(pageSafe, pages).map((p, i) => (
+                    p === '…'
+                      ? <button key={`e${i}`} disabled>…</button>
+                      : <button key={p} className={p === pageSafe ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
                   ))}
                   <button disabled={pageSafe >= pages} onClick={() => setPage(pageSafe + 1)}>›</button>
                 </div>

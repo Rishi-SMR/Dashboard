@@ -7,7 +7,7 @@ import {
   type TrendsResult, type PaymentsResult, type BillPaymentsResult,
   type OrdersResult, type ExceptionsResult, type Aging,
 } from '../strivenApi';
-import { formatCurrency } from '../format';
+import { formatCurrency, clickableProps } from '../format';
 import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
 import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, DrillModal, useSyncAgo, pctText } from '../chartKit';
 
@@ -447,7 +447,7 @@ export function OverviewCharts() {
               <div className="section-head"><div><h2 className="section-title">Top Vendors (by Spend)</h2><div className="section-sub">Committed PO spend</div></div></div>
               <div className="rank-list">
                 {topVend.map((v) => (
-                  <div key={v.vendor} className="rk-row" style={{ cursor: 'pointer' }} onClick={() => drillVendor(v.vendor)}>
+                  <div key={v.vendor} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillVendor(v.vendor))}>
                     <span className="rk-ico" style={{ background: 'rgba(124,58,237,0.10)', color: '#7C3AED' }}>{initials(v.vendor)}</span>
                     <span className="rk-name" title={v.vendor}>{trunc(v.vendor, 26)}</span>
                     <span className="rk-val">{formatCurrency(v.total)}</span>
@@ -501,7 +501,7 @@ export function OverviewCharts() {
               {excGroups.length ? (
                 <div className="exc-list">
                   {excGroups.map((g) => (
-                    <div key={g.key} className="exc-row" onClick={go('exceptions')}>
+                    <div key={g.key} className="exc-row" style={{ cursor: 'pointer' }} {...clickableProps(go('exceptions'))}>
                       <span className={`exc-badge ${g.severity}`}>{g.count}</span>
                       <span className="exc-title" title={g.title}>{g.title}</span>
                       <span className="exc-val">{g.value ? formatCurrency(g.value) : ''}</span>

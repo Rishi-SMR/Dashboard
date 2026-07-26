@@ -336,6 +336,8 @@ async function searchAll(endpoint, filter = {}, cap = 2000) {
     pageIndex += 1;
     if (data.length < pageSize || rows.length >= total || rows.length >= cap) break;
   }
+  // Surface (don't silently swallow) a cap-hit so undercounting is visible in logs.
+  if (rows.length >= cap) console.warn(`[searchAll] ${endpoint}: hit ${cap}-row cap — dataset may be truncated. Raise the cap if this business exceeds it.`);
   return rows;
 }
 

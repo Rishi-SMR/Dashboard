@@ -3,7 +3,7 @@ import {
   fetchStrivenAP, fetchStrivenVendors, fetchStrivenPO, fetchStrivenBillPayments,
   type ApResult, type VendorsResult, type PoResult, type BillPaymentsResult,
 } from '../strivenApi';
-import { formatCurrency, formatPhone } from '../format';
+import { formatCurrency, formatPhone, pageList } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING_LABELS } from '../chartTheme';
 import { ChartCard, RankBar, AgingBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
@@ -309,8 +309,10 @@ export function PayablesTab() {
                 <span className="pgn-info">Showing {sorted.length === 0 ? 0 : (pageSafe - 1) * PAGE_SIZE + 1} to {Math.min(pageSafe * PAGE_SIZE, sorted.length)} of {sorted.length} entries</span>
                 <div className="pgn-pages">
                   <button disabled={pageSafe <= 1} onClick={() => setPage(pageSafe - 1)}>‹</button>
-                  {Array.from({ length: pages }, (_, i) => i + 1).slice(0, 7).map((p) => (
-                    <button key={p} className={p === pageSafe ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
+                  {pageList(pageSafe, pages).map((p, i) => (
+                    p === '…'
+                      ? <button key={`e${i}`} disabled>…</button>
+                      : <button key={p} className={p === pageSafe ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
                   ))}
                   <button disabled={pageSafe >= pages} onClick={() => setPage(pageSafe + 1)}>›</button>
                 </div>
