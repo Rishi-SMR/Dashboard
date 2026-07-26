@@ -16,6 +16,7 @@ export function CommissionTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
+  const [detail, setDetail] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI'>(null);
   const agoText = useSyncAgo(lastSync);
 
   async function load(silent = false) {
@@ -64,13 +65,16 @@ export function CommissionTab() {
             </div>
           )}
 
-          {/* Total + program tiles */}
-          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-            <KpiR ico="cash" tint={C.brand} label="Total commission" value={data.grandTotal} format={formatCurrency} foot={`${data.itemCount} lines · ${data.periodCount} pay periods`} deltaText="all periods" />
-            <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={formatCurrency} foot="flat per device" deltaText={pct(bp.TriCare, data.grandTotal)} />
-            <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={formatCurrency} foot="flat per device" deltaText={pct(bp.VA, data.grandTotal)} />
-            <KpiR ico="trend" tint={PROG_C.PI} label="Personal Injury" value={bp.PI} format={formatCurrency} foot="computed" deltaText={pct(bp.PI, data.grandTotal)} />
+          {/* Total + program tiles — click any card to drill into its breakdown */}
+          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: detail ? 8 : 14 }}>
+            <KpiR ico="cash" tint={C.brand} label="Total commission" value={data.grandTotal} format={formatCurrency} foot={`${data.itemCount} lines · ${data.periodCount} pay periods · tap for detail`} deltaText="all periods" onClick={() => setDetail(detail === 'total' ? null : 'total')} />
+            <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={formatCurrency} foot="flat per device · tap for detail" deltaText={pct(bp.TriCare, data.grandTotal)} onClick={() => setDetail(detail === 'TriCare' ? null : 'TriCare')} />
+            <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={formatCurrency} foot="flat per device · tap for detail" deltaText={pct(bp.VA, data.grandTotal)} onClick={() => setDetail(detail === 'VA' ? null : 'VA')} />
+            <KpiR ico="trend" tint={PROG_C.PI} label="Personal Injury" value={bp.PI} format={formatCurrency} foot="computed · tap for detail" deltaText={pct(bp.PI, data.grandTotal)} onClick={() => setDetail(detail === 'PI' ? null : 'PI')} />
           </div>
+
+          {/* KPI drill-down panel */}
+          {detail && <KpiDetail detail={detail} data={data} onClose={() => setDetail(null)} />}
 
           {/* Patient-level reconciliation anomaly callouts */}
           {flagged.map((r) => (
@@ -192,3 +196,52 @@ export function CommissionTab() {
 }
 
 const pct = (n: number, total: number) => (total > 0 ? `${Math.round((n / total) * 100)}% of total` : '—');
+
+// Drill-down for a tapped KPI card: the metric's full per-rep breakdown.
+function KpiDetail({ detail, data, onClose }: { detail: 'total' | 'TriCare' | 'VA' | 'PI'; data: CommissionResult; onClose: () => void }) {
+  const isTotal = detail === 'total';
+  const key = detail === 'TriCare' ? 'tricare' : detail === 'VA' ? 'va' : detail === 'PI' ? 'pi' : 'total';
+  const rows = data.reps
+    .map((r) => ({ rep: r.rep, amount: r[key as 'tricare' | 'va' | 'pi' | 'total'], match: r.matchRate, flag: r.flag, count: r.count }))
+    .filter((r) => r.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
+  const sum = rows.reduce((s, r) => s + r.amount, 0);
+  const title = isTotal ? 'Total commission — by rep (all programs)' : `${detail === 'PI' ? 'Personal Injury' : detail} commission — by rep`;
+  return (
+    <div className="section chart-card" style={{ marginBottom: 14, borderLeft: `3px solid ${isTotal ? C.brand : PROG_C[detail]}` }}>
+      <div className="section-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 className="section-title">{title}</h2>
+          <div className="section-sub">{rows.length} rep{rows.length === 1 ? '' : 's'} · {formatCurrency(sum)}{isTotal ? ' across all pay periods' : ''}</div>
+        </div>
+        <button className="btn ghost" onClick={onClose} aria-label="Close detail">✕ Close</button>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr>
+            <th style={{ width: 34 }}>#</th><th>Rep</th><th className="num">Amount</th><th className="num">Share</th>
+            {isTotal && <><th className="num">Lines</th><th className="num">Patient match</th></>}
+            <th style={{ width: '30%' }} />
+          </tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.rep}>
+                <td style={{ color: C.muted }}>{i + 1}</td>
+                <td style={{ fontWeight: 700 }}>{r.flag && <span style={{ marginRight: 5 }}>⚠️</span>}{r.rep}</td>
+                <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(r.amount)}</td>
+                <td className="num">{sum > 0 ? `${Math.round((r.amount / sum) * 100)}%` : '—'}</td>
+                {isTotal && <><td className="num">{r.count}</td>
+                  <td className="num" style={{ color: r.match != null && r.match < 50 ? C.negative : C.ink }}>{r.match != null ? `${r.match}%` : '—'}</td></>}
+                <td>
+                  <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${sum > 0 ? (r.amount / rows[0].amount) * 100 : 0}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
