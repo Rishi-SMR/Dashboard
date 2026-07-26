@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchCommission, type CommissionResult, type CommissionRep, type CommissionPeriod, type CommissionPeriodRep, type CommissionReconcile, type StrivenCommission, type StrivenCommRep, type StrivenCommMonth } from '../strivenApi';
+import { fetchCommission, type CommissionResult, type CommissionRep, type CommissionLine, type CommissionPeriod, type CommissionPeriodRep, type CommissionReconcile, type StrivenCommission, type StrivenCommRep, type StrivenCommMonth, type StrivenOrderLine } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
@@ -31,10 +31,8 @@ export function CommissionTab() {
   useEffect(() => { load(); const r = setInterval(() => load(true), 120_000); return () => clearInterval(r); }, []);
 
   const reps = data?.reps ?? [];
-  const periods = data?.periods ?? [];
   const bp = data?.byProgram ?? { TriCare: 0, PI: 0, VA: 0 };
   const maxRep = Math.max(1, ...reps.map((r) => r.total));
-  const maxPeriod = Math.max(1, ...periods.map((p) => p.total));
   const flagged = reps.filter((r) => r.flag);
 
   return (
@@ -43,7 +41,7 @@ export function CommissionTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Commission · CFO Analysis</h1>
           <div className="page-sub">
-            <span className="live-dot" /> All pay periods, reconciled against Striven order attribution{agoText ? ` · updated ${agoText}` : ''}
+            <span className="live-dot" /> Sheet payout · Striven-computed · reconciled, per rep, program &amp; pay period{agoText ? ` · updated ${agoText}` : ''}
           </div>
         </div>
         <div className="ov-headright" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -175,37 +173,6 @@ export function CommissionTab() {
             </div>
           </div>
 
-          {/* Per-period trend */}
-          {periods.length > 0 && (
-            <div className="section chart-card" style={{ marginTop: 14 }}>
-              <div className="section-head"><div>
-                <h2 className="section-title">By pay period</h2>
-                <div className="section-sub">Every tab read across the commission workbook(s), largest first.</div>
-              </div></div>
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead><tr>
-                    <th>Workbook</th><th>Tab</th><th className="num">Lines</th><th className="num">Commission</th><th style={{ width: '38%' }} />
-                  </tr></thead>
-                  <tbody>
-                    {periods.map((p, i) => (
-                      <tr key={`${p.workbook}-${p.gid}`}>
-                        <td style={{ fontWeight: 600 }}>{p.workbook}</td>
-                        <td style={{ color: C.muted }}>gid {p.gid}</td>
-                        <td className="num">{p.lines}</td>
-                        <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(p.total)}</td>
-                        <td>
-                          <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: `${(p.total / maxPeriod) * 100}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} />
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
 
           </>}
 
@@ -230,6 +197,7 @@ const monthLabel = (m: string) => { if (!m || m === 'unknown') return 'Undated';
 function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommission; sheetTotal: number }) {
   const [month, setMonth] = useState<string>('all');
   const [repSel, setRepSel] = useState<StrivenCommRep | null>(null);
+  const [drill, setDrill] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI'>(null);
   if (!striven || !striven.available) {
     return <div className="section"><div className="page-sub" style={{ padding: 16 }}>Striven order data isn't loaded yet - computed commission needs the Striven sales-order cache. Try Refresh, or open the Orders tab first.</div></div>;
   }
@@ -248,13 +216,21 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
         Commission worked out <b style={{ color: C.ink }}>directly from Striven orders</b> - same shape as Crystal's sheet (by month, by rep, split into TriCare / VA / PI), but nothing is typed by hand. Cancelled &amp; test orders are left out.
       </div>
 
-      {/* KPI strip - total + the three programs */}
-      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={formatCurrency} foot={sel ? `${sel.orders} orders this month` : `${totalOrders} orders · ${striven.months.length} months`} deltaText={sel ? 'selected month' : 'all months'} />
-        <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={formatCurrency} foot="flat rate per order" deltaText={pct(bp.TriCare, total)} />
-        <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={formatCurrency} foot="flat rate per unit" deltaText={pct(bp.VA, total)} />
-        <KpiR ico="trend" tint={PROG_C.PI} label="Personal Injury" value={bp.PI} format={formatCurrency} foot="% of order value" deltaText={pct(bp.PI, total)} />
+      {/* KPI strip - total + the three programs. Tap any card for the breakdown. */}
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: drill ? 8 : 14 }}>
+        <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={formatCurrency} foot={sel ? `${sel.orders} orders · tap for detail` : `${totalOrders} orders · tap for detail`} deltaText={sel ? 'selected month' : 'all months'} onClick={() => setDrill(drill === 'total' ? null : 'total')} />
+        <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={formatCurrency} foot="per order · tap for detail" deltaText={pct(bp.TriCare, total)} onClick={() => setDrill(drill === 'TriCare' ? null : 'TriCare')} />
+        <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={formatCurrency} foot="per unit · tap for detail" deltaText={pct(bp.VA, total)} onClick={() => setDrill(drill === 'VA' ? null : 'VA')} />
+        <KpiR ico="trend" tint={PROG_C.PI} label="Personal Injury" value={bp.PI} format={formatCurrency} foot="% of value · tap for detail" deltaText={pct(bp.PI, total)} onClick={() => setDrill(drill === 'PI' ? null : 'PI')} />
       </div>
+
+      {drill && <KpiDrill
+        title={`${drill === 'total' ? 'Total commission' : drill === 'PI' ? 'Personal Injury' : drill} - by rep${sel ? ` · ${monthLabel(sel.month)}` : ''}`}
+        sub="Computed from Striven orders"
+        accent={drill === 'total' ? C.brand : PROG_C[drill]}
+        rows={reps.map((r) => ({ name: r.rep, value: drill === 'total' ? r.total : drill === 'TriCare' ? r.tricare : drill === 'VA' ? r.va : r.pi }))}
+        onClose={() => setDrill(null)}
+      />}
 
       {/* Month selector - pick a month or see all */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, alignItems: 'center' }}>
@@ -608,6 +584,7 @@ function SheetMonthTable({ periods, monthKey, reps: allReps, onRep }: { periods:
 // rep, so a person can see the gap without flipping between tabs.
 function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: CommissionReconcile; sheetReps: CommissionRep[]; strivenReps?: StrivenCommRep[] }) {
   const [repSel, setRepSel] = useState<string | null>(null);
+  const [drill, setDrill] = useState<null | 'sheet' | 'striven' | 'diff'>(null);
   if (!reconcile || !reconcile.reps.length) {
     return <div className="section"><div className="page-sub" style={{ padding: 16 }}>Reconcile needs both the sheet and Striven data loaded. Try Refresh.</div></div>;
   }
@@ -620,11 +597,19 @@ function ReconcileView({ reconcile, sheetReps, strivenReps }: { reconcile?: Comm
         Two numbers per rep, side by side: <b style={{ color: C.ink }}>Sheet</b> = what the workbook paid; <b style={{ color: C.ink }}>Striven</b> = what their orders actually support. A big gap means the two don't agree - worth a look.
       </div>
 
-      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KpiR ico="clip" tint={C.info} label="Sheet total" value={totals.sheet} format={formatCurrency} foot="paid per the workbook" deltaText="all periods" />
-        <KpiR ico="cash" tint={C.brand} label="Striven total" value={totals.striven} format={formatCurrency} foot="orders support (rate card)" deltaText="all periods" />
-        <KpiR ico="trend" tint={totals.diff >= 0 ? C.negative : C.positive} label="Difference" value={Math.abs(totals.diff)} format={formatCurrency} foot={totals.diff >= 0 ? 'sheet paid more' : 'Striven says more'} deltaText={`${totals.diff >= 0 ? '+' : '−'}${formatCurrency(Math.abs(totals.diff))}`} />
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: drill ? 8 : 14 }}>
+        <KpiR ico="clip" tint={C.info} label="Sheet total" value={totals.sheet} format={formatCurrency} foot="paid per the workbook · tap" deltaText="all periods" onClick={() => setDrill(drill === 'sheet' ? null : 'sheet')} />
+        <KpiR ico="cash" tint={C.brand} label="Striven total" value={totals.striven} format={formatCurrency} foot="orders support · tap" deltaText="all periods" onClick={() => setDrill(drill === 'striven' ? null : 'striven')} />
+        <KpiR ico="trend" tint={totals.diff >= 0 ? C.negative : C.positive} label="Difference" value={Math.abs(totals.diff)} format={formatCurrency} foot={`${totals.diff >= 0 ? 'sheet paid more' : 'Striven says more'} · tap`} deltaText={`${totals.diff >= 0 ? '+' : '−'}${formatCurrency(Math.abs(totals.diff))}`} onClick={() => setDrill(drill === 'diff' ? null : 'diff')} />
       </div>
+
+      {drill && <KpiDrill
+        title={drill === 'sheet' ? 'Sheet payout - by rep' : drill === 'striven' ? 'Striven-computed - by rep' : 'Difference (sheet − Striven) - by rep'}
+        sub={drill === 'diff' ? 'Sheet minus Striven per rep (green = Striven-computed is higher)' : undefined}
+        accent={drill === 'sheet' ? C.info : drill === 'striven' ? C.brand : C.warning}
+        rows={reps.map((r) => ({ name: r.rep, value: drill === 'sheet' ? r.sheet : drill === 'striven' ? r.striven : r.diff }))}
+        onClose={() => setDrill(null)}
+      />}
 
       <div className="section chart-card">
         <div className="section-head"><div>
@@ -746,6 +731,43 @@ function ReconcileRepModal({ rep, sheetLines, strivenLines, sheetTotal, strivenT
 }
 
 // Drill-down for a tapped KPI card: the metric's full per-rep breakdown.
+// Generic KPI drill-down panel (used by the Striven + Reconcile views): a clean
+// per-rep breakdown of the tapped metric. Shares the look of KpiDetail.
+function KpiDrill({ title, sub, accent, rows, onClose }: { title: string; sub?: string; accent: string; rows: { name: string; value: number }[]; onClose: () => void }) {
+  const sorted = rows.filter((r) => Math.abs(r.value) > 0.005).sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const sum = sorted.reduce((s, r) => s + r.value, 0);
+  const max = Math.max(1, ...sorted.map((r) => Math.abs(r.value)));
+  const anyNeg = sorted.some((r) => r.value < 0);
+  return (
+    <div className="section chart-card" style={{ marginBottom: 14, borderLeft: `3px solid ${accent}` }}>
+      <div className="section-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 className="section-title">{title}</h2>
+          {sub && <div className="section-sub">{sub}</div>}
+        </div>
+        <button className="btn ghost" onClick={onClose} aria-label="Close detail">✕ Close</button>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr><th style={{ width: 34 }}>#</th><th>Rep</th><th className="num">Amount</th><th className="num">Share</th><th style={{ width: '34%' }} /></tr></thead>
+          <tbody>
+            {sorted.length === 0 && <tr><td colSpan={5} style={{ color: C.muted }}>No data.</td></tr>}
+            {sorted.map((r, i) => (
+              <tr key={r.name}>
+                <td style={{ color: C.muted }}>{i + 1}</td>
+                <td style={{ fontWeight: 700 }}>{r.name}</td>
+                <td className="num" style={{ fontWeight: 800, color: r.value < 0 ? C.positive : C.ink }}>{formatCurrency(r.value)}</td>
+                <td className="num">{!anyNeg && sum > 0 ? `${Math.round((r.value / sum) * 100)}%` : '-'}</td>
+                <td><div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${(Math.abs(r.value) / max) * 100}%`, background: accent, borderRadius: 999 }} /></div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function KpiDetail({ detail, data, onClose }: { detail: 'total' | 'TriCare' | 'VA' | 'PI'; data: CommissionResult; onClose: () => void }) {
   const isTotal = detail === 'total';
   const key = detail === 'TriCare' ? 'tricare' : detail === 'VA' ? 'va' : detail === 'PI' ? 'pi' : 'total';
