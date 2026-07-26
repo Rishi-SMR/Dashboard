@@ -81,6 +81,7 @@ type Props = {
 export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Props) {
   // Global Refresh All - reload the page so every tab re-fetches fresh data.
   const [refreshing, setRefreshing] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const me = readIdentity();
 
   function handleRefreshAll() {
@@ -89,9 +90,21 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
     // A full reload makes every tab re-fetch fresh data from the server.
     window.location.reload();
   }
+  // Nav pick also closes the mobile drawer.
+  const pick = (v: ViewKey) => { onChange(v); setMobileOpen(false); };
+  const active = ITEMS.find((i) => i.key === view || VIEW_ALIAS[view] === i.key)?.label ?? 'SMR Dashboard';
 
   return (
-    <aside className="sidebar">
+    <>
+      {/* Mobile top bar (≤900px via CSS) — hamburger opens the nav drawer. */}
+      <div className="mobile-topbar">
+        <button className="hamburger" onClick={() => setMobileOpen(true)} aria-label="Open menu" aria-expanded={mobileOpen}>☰</button>
+        <img className="mt-logo" src="/SMR%20Logo.png" alt="SMR" />
+        <span className="mt-title">{active}</span>
+      </div>
+      {mobileOpen && <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />}
+
+      <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
       <div className="brand">
         <div className="brand-logo" style={{ background: '#fff', padding: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <img src="/SMR%20Logo.png" alt="SMR" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
@@ -106,7 +119,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
         <button
           key={item.key}
           className={`nav-item ${view === item.key || VIEW_ALIAS[view] === item.key ? 'active' : ''}`}
-          onClick={() => onChange(item.key)}
+          onClick={() => pick(item.key)}
         >
           <span className="nav-icon">{NAV_ICONS[item.key]}</span>
           <span>{item.label}</span>
@@ -150,6 +163,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
           <button className="btn ghost" onClick={onSignOut} style={{ marginTop: 4 }}>Sign out</button>
         )}
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

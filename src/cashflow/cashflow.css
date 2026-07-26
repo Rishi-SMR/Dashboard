@@ -1718,3 +1718,50 @@ code {
   /* A touch of tactility elsewhere: buttons + big tabs press in slightly. */
   .btn:active:not(:disabled), .ov-tab:active, .segmented button:active, .filter-tab:active { transform: translateY(1px) scale(.985); }
 }
+
+/* ============================================================
+   Mobile navigation drawer (≤900px). Appended last so it wins
+   over the earlier horizontal-strip sidebar rules. Adds a
+   hamburger top bar; sidebar slides in as an off-canvas drawer
+   (with its footer/sign-out visible, unlike the old strip).
+   ============================================================ */
+.mobile-topbar { display: none; }
+.sidebar-backdrop { display: none; }
+@media (max-width: 900px) {
+  .shell { display: block; }
+  .mobile-topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 30;
+  }
+  .mobile-topbar .hamburger {
+    font-size: 22px; line-height: 1; background: none; border: 0;
+    color: var(--text); cursor: pointer; padding: 4px 10px; border-radius: 8px;
+  }
+  .mobile-topbar .hamburger:active { background: var(--panel-2); }
+  .mobile-topbar .mt-logo { width: 28px; height: 28px; object-fit: contain; border-radius: 6px; background: #fff; padding: 2px; }
+  .mobile-topbar .mt-title { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .sidebar {
+    position: fixed !important; top: 0; left: 0; bottom: 0;
+    width: 264px !important; height: 100dvh !important;
+    flex-direction: column !important; gap: 4px !important;
+    overflow-y: auto !important; overflow-x: hidden !important;
+    transform: translateX(-100%); transition: transform .22s ease;
+    z-index: 45; border-right: 1px solid var(--border) !important; border-bottom: 0 !important;
+    padding: 16px 12px !important;
+  }
+  .sidebar.open { transform: translateX(0); box-shadow: 0 0 44px rgba(0,0,0,.35); }
+  .sidebar .brand {
+    border-bottom: 1px solid var(--border) !important; border-right: 0 !important;
+    padding: 8px 8px 16px !important; margin: 0 0 12px !important; flex-direction: row;
+  }
+  .sidebar .nav-item { flex: 0 0 auto; width: 100%; }
+  .sidebar-footer { display: flex !important; }
+  .sidebar-backdrop {
+    display: block; position: fixed; inset: 0;
+    background: rgba(15,27,46,.45); z-index: 44;
+  }
+  .main { max-width: 100% !important; }
+}
