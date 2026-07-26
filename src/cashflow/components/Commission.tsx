@@ -330,7 +330,7 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
         </div>
       </details>
 
-      {repSel && <StrivenRepModal rep={repSel} months={striven.months} onClose={() => setRepSel(null)} />}
+      {repSel && <StrivenRepModal rep={repSel} months={striven.months} lines={striven.byRep.find((x) => x.rep === repSel.rep)?.lines || repSel.lines || []} onClose={() => setRepSel(null)} />}
     </>
   );
 }
@@ -366,7 +366,7 @@ function Stat({ label, value, tint }: { label: string; value: string; tint?: str
 }
 
 // Full-detail popup for one rep in the "From Striven" view.
-function StrivenRepModal({ rep, months, onClose }: { rep: StrivenCommRep; months: StrivenCommMonth[]; onClose: () => void }) {
+function StrivenRepModal({ rep, months, lines, onClose }: { rep: StrivenCommRep; months: StrivenCommMonth[]; lines: StrivenOrderLine[]; onClose: () => void }) {
   const perMonth = months.map((m) => ({ month: m.month, r: m.reps.find((x) => x.rep === rep.rep) })).filter((x) => x.r) as { month: string; r: StrivenCommRep }[];
   const cpo = rep.orders ? rep.total / rep.orders : 0;
   const progs: [string, number, string][] = [['TriCare', rep.tricare, PROG_C.TriCare], ['VA', rep.va, PROG_C.VA], ['Personal Injury', rep.pi, PROG_C.PI]];
@@ -412,6 +412,29 @@ function StrivenRepModal({ rep, months, onClose }: { rep: StrivenCommRep; months
           ))}
         </tbody>
       </table>
+
+      {/* Line by line — each Striven order for this rep (mirrors the sheet). */}
+      {lines.length > 0 && (
+        <>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {lines.length} orders</span></div>
+          <table className="data-table">
+            <thead><tr><th>Patient</th><th>Item</th><th>Program</th><th className="num">Units</th><th className="num">Order value</th><th className="num">Commission</th></tr></thead>
+            <tbody>
+              {lines.map((ln, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{ln.last || '—'}</td>
+                  <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.item || '—'}</td>
+                  <td>{ln.prog}</td>
+                  <td className="num">{ln.units}</td>
+                  <td className="num">{formatCurrency(ln.value)}</td>
+                  <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>🔒 Last name only. Commission per order from the rate card (VA $425/unit exact; TriCare $369.78/order &amp; PI 2.677% of value are estimates).</div>
+        </>
+      )}
     </Modal>
   );
 }

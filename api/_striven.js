@@ -1419,8 +1419,8 @@ async function getCommission() {
     if (anyTab) sheetsRead++; else errors.push(`${sh.label || sh.id} (no readable tabs — share as "anyone with the link can view")`);
   }
   // CFO reconciliation vs Striven order attribution.
-  let byRep = [], commByMonth = [];
-  try { const so = await getSO(); byRep = so.byRep || []; commByMonth = so.commByMonth || []; } catch { /* Striven optional */ }
+  let byRep = [], commByMonth = [], recent = [];
+  try { const so = await getSO(); byRep = so.byRep || []; commByMonth = so.commByMonth || []; recent = so.recent || []; } catch { /* Striven optional */ }
   const findSr = (rep) => byRep.find((x) => commRep(x.rep) === rep);
   // Patient-level join: last name → which rep Striven books the order under.
   // Names stay backend-only; only per-rep aggregates leave this function (PHI-safe).
@@ -1505,6 +1505,25 @@ async function getCommission() {
     byRep: Object.values(sByRep).map((r) => rnd(r, ['tricare', 'va', 'pi', 'total', 'value'])).sort((a, b) => b.total - a.total),
     rateCard: Object.entries(RATE).map(([program, r]) => ({ program, note: r.note, exact: r.exact })),
   };
+
+  // Per-order Striven lines for the rep popup — mirror the sheet's line view, but
+  // sourced from Striven orders (patient last name + item + value + computed $).
+  // Join report cache (lastName/program/units/value) with rep from the SO book.
+  const soRep = new Map();
+  for (const o of recent) soRep.set(String(o.id), o.rep || 'Unassigned');
+  try {
+    const rc = await sbCacheRead('report_patient_items');
+    const linesByRep = {};
+    for (const o of (rc?.data?.orders || [])) {
+      const rep = soRep.get(String(o.soId)); if (!rep) continue;
+      const program = o.program; if (!RATE[program]) continue;
+      const units = (o.items || []).reduce((s, i) => s + Number(i.qty || 0), 0);
+      const value = Number(o.value || 0);
+      const comm = round2(commFor(program, { units, orders: 1, value }));
+      (linesByRep[rep] = linesByRep[rep] || []).push({ last: commLastDisp(o.lastName), item: (o.items || [])[0]?.item || '', prog: program, value: round2(value), units, comm });
+    }
+    for (const r of striven.byRep) r.lines = (linesByRep[r.rep] || []).sort((a, b) => b.comm - a.comm);
+  } catch { /* report cache optional */ }
 
   // ── Reconcile: sheet (what was paid) vs Striven-computed (what orders support),
   // per rep, side by side, so the gap is visible per person. Both keyed by the
