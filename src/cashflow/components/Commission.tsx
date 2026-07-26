@@ -72,20 +72,17 @@ export function CommissionTab() {
             <KpiR ico="trend" tint={PROG_C.PI} label="Personal Injury" value={bp.PI} format={formatCurrency} foot="computed" deltaText={pct(bp.PI, data.grandTotal)} />
           </div>
 
-          {/* Reconciliation anomaly callout */}
-          {flagged.length > 0 && (
-            <div className="qb-flash warn" style={{ marginBottom: 12, borderLeft: `3px solid ${C.negative}` }}>
-              ⚠️ <b>Reconciliation flags ({flagged.length}):</b>{' '}
-              {flagged.map((r, i) => (
-                <span key={r.rep}>
-                  <b>{r.rep}</b> — {r.flag === 'no-striven'
-                    ? 'no matching orders in Striven (name/attribution mismatch?)'
-                    : `commission is ${r.pctOfValue}% of Striven order value (${formatCurrency(r.total)} on ${r.strivenOrders} order${r.strivenOrders === 1 ? '' : 's'} / ${formatCurrency(r.strivenValue)}) — orders may be booked under a house account`}
-                  {i < flagged.length - 1 ? ' · ' : ''}
-                </span>
-              ))}
+          {/* Patient-level reconciliation anomaly callouts */}
+          {flagged.map((r) => (
+            <div key={r.rep} className="qb-flash warn" style={{ marginBottom: 12, borderLeft: `3px solid ${C.negative}` }}>
+              ⚠️ <b>{r.rep} — attribution break.</b>{' '}
+              Only <b>{r.recon.same} of {r.count}</b> commission lines ({r.matchRate}%) match an order booked under {r.rep} in Striven
+              {' '}({formatCurrency(r.recon.commSame)}).
+              {r.recon.diff > 0 && <> {r.recon.diff} line{r.recon.diff === 1 ? '' : 's'} ({formatCurrency(r.recon.commDiff)}) are booked under {r.recon.bookedUnder.map((b, j) => <span key={b.rep}><b>{b.rep}</b> ({b.count}){j < r.recon.bookedUnder.length - 1 ? ', ' : ''}</span>)}.</>}
+              {r.recon.none > 0 && <> <b>{r.recon.none} line{r.recon.none === 1 ? '' : 's'} ({formatCurrency(r.recon.commNone)})</b> have no matching order in Striven at all.</>}
+              {' '}Commission is being paid on orders that aren't credited to this rep in Striven — worth a data-integrity check.
             </div>
-          )}
+          ))}
 
           {/* Rep leaderboard + Striven reconciliation */}
           <div className="section chart-card">
@@ -100,11 +97,11 @@ export function CommissionTab() {
                   <th className="num">TriCare</th><th className="num">VA</th><th className="num">PI</th>
                   <th className="num">Lines</th><th className="num">Commission</th>
                   <th className="num">Striven ord.</th><th className="num">Striven $</th>
-                  <th className="num">Comm / ord.</th><th className="num">% of value</th>
-                  <th style={{ width: '14%' }} />
+                  <th className="num">Comm / ord.</th><th className="num" title="% of a rep's commission lines that match an order booked under them in Striven">Patient match</th><th className="num">% of value</th>
+                  <th style={{ width: '12%' }} />
                 </tr></thead>
                 <tbody>
-                  {reps.length === 0 && <tr><td colSpan={12} style={{ color: C.muted }}>No commission data.</td></tr>}
+                  {reps.length === 0 && <tr><td colSpan={13} style={{ color: C.muted }}>No commission data.</td></tr>}
                   {reps.map((r, i) => (
                     <tr key={r.rep}>
                       <td style={{ color: C.muted }}>{i + 1}</td>
@@ -120,6 +117,10 @@ export function CommissionTab() {
                       <td className="num">{r.strivenOrders || '—'}</td>
                       <td className="num">{r.strivenValue ? formatCurrency(r.strivenValue) : '—'}</td>
                       <td className="num">{r.commPerOrder != null ? formatCurrency(r.commPerOrder) : '—'}</td>
+                      <td className="num" style={{ fontWeight: 700, color: r.matchRate != null && r.matchRate < 50 ? C.negative : C.ink }}
+                        title={`${r.recon.same} same rep · ${r.recon.diff} other rep · ${r.recon.none} not in Striven`}>
+                        {r.matchRate != null ? `${r.matchRate}%` : '—'}
+                      </td>
                       <td className="num" style={{ fontWeight: 700, color: r.flag === 'high-ratio' ? C.negative : C.ink }}>
                         {r.pctOfValue != null ? `${r.pctOfValue}%` : '—'}
                       </td>
@@ -141,7 +142,7 @@ export function CommissionTab() {
                     <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(data.grandTotal)}</td>
                     <td className="num">{reps.reduce((s, r) => s + r.strivenOrders, 0)}</td>
                     <td className="num">{formatCurrency(reps.reduce((s, r) => s + r.strivenValue, 0))}</td>
-                    <td /><td /><td />
+                    <td /><td /><td /><td />
                   </tr></tfoot>
                 )}
               </table>

@@ -233,11 +233,18 @@ export type TrackingResult = { ok: boolean; configured: boolean; count: number; 
 export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
 
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
+export type CommissionRecon = {
+  same: number; diff: number; none: number;
+  commSame: number; commDiff: number; commNone: number;
+  bookedUnder: { rep: string; count: number }[];
+};
 export type CommissionRep = {
   rep: string; tricare: number; pi: number; va: number; total: number; count: number;
   // CFO reconciliation vs Striven order attribution
   strivenOrders: number; strivenUnits: number; strivenValue: number;
-  commPerOrder: number | null; pctOfValue: number | null; flag: 'no-striven' | 'high-ratio' | null;
+  commPerOrder: number | null; pctOfValue: number | null;
+  matchRate: number | null; recon: CommissionRecon;
+  flag: 'no-striven' | 'high-ratio' | 'attribution' | null;
 };
 export type CommissionPeriod = { workbook: string; gid: string; lines: number; total: number };
 export type CommissionResult = { ok: boolean; configured?: boolean; note?: string; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; periods: CommissionPeriod[]; periodCount: number; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[] };

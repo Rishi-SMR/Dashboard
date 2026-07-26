@@ -1321,6 +1321,8 @@ export async function trackingRun(params = {}, body = null) {
 const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 const commRep = (r) => { const s = String(r || '').trim(); if (/cassie/i.test(s)) return 'Cassie'; if (/jillian/i.test(s)) return 'Jillian'; if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann'; if (/christ/i.test(s)) return 'Christy'; return s || 'Unknown'; };
+// Patient last name from either "Last, First" or "FIRST LAST" — normalized for join.
+const commLastName = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z]/g, '').toUpperCase(); };
 function commParseRow(line) { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (c === ',' && !q) { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; }
 // Enumerate every tab (gid) of a workbook from its public htmlview.
 async function commissionTabs(id) {
@@ -1338,7 +1340,7 @@ function commParseCsv(csv) {
     if (!prog || !c[1]) continue;
     const p = (c[0] || '').trim(); if (!/^[A-Za-z]/.test(p) || p.toUpperCase() === 'PATIENT') continue;
     const comm = commMoney(c[3]); if (!comm) continue;
-    rows.push({ rep: commRep(c[1]), prog, comm });
+    rows.push({ rep: commRep(c[1]), prog, comm, last: commLastName(p) });
   }
   return rows;
 }
@@ -1350,6 +1352,7 @@ async function getCommission() {
     return { ok: true, configured: false, note: 'No commission sheet configured — set COMMISSION_SHEETS in app_config (JSON array of {id,gid,label}).', grandTotal: 0, byProgram: { TriCare: 0, PI: 0, VA: 0 }, reps: [], itemCount: 0, sheetsRead: 0, sheetsConfigured: 0, errors: [], sources: [] };
   }
   const agg = {};
+  const allLines = [];
   const byProgram = { TriCare: 0, PI: 0, VA: 0 };
   const periods = [];
   let grandTotal = 0, rowCount = 0, sheetsRead = 0;
@@ -1370,24 +1373,51 @@ async function getCommission() {
         agg[r.rep] = agg[r.rep] || { TriCare: 0, PI: 0, VA: 0, count: 0 };
         agg[r.rep][r.prog] += r.comm; agg[r.rep].count++;
         byProgram[r.prog] += r.comm; grandTotal += r.comm; rowCount++;
+        allLines.push({ rep: r.rep, last: r.last, comm: r.comm });
       }
     }
     if (anyTab) sheetsRead++; else errors.push(`${sh.label || sh.id} (no readable tabs — share as "anyone with the link can view")`);
   }
-  // CFO reconciliation vs Striven order attribution (rep-level, no patient match).
+  // CFO reconciliation vs Striven order attribution.
   let byRep = [];
   try { byRep = (await getSO()).byRep || []; } catch { /* Striven optional */ }
   const findSr = (rep) => byRep.find((x) => commRep(x.rep) === rep);
+  // Patient-level join: last name → which rep Striven books the order under.
+  // Names stay backend-only; only per-rep aggregates leave this function (PHI-safe).
+  const nameIdx = new Map();
+  try {
+    for (const o of ((await getOrders()).orders || [])) {
+      const ln = commLastName(o.lastName); if (!ln) continue;
+      if (!nameIdx.has(ln)) nameIdx.set(ln, []);
+      nameIdx.get(ln).push(commRep(o.rep));
+    }
+  } catch { /* Striven optional */ }
+  const reconOf = (rep) => {
+    const R = { same: 0, diff: 0, none: 0, commSame: 0, commDiff: 0, commNone: 0, under: {} };
+    for (const L of allLines) {
+      if (L.rep !== rep) continue;
+      const cand = L.last ? nameIdx.get(L.last) : null;
+      if (!cand || !cand.length) { R.none++; R.commNone += L.comm; continue; }
+      if (cand.includes(rep)) { R.same++; R.commSame += L.comm; }
+      else { R.diff++; R.commDiff += L.comm; const b = cand[0]; R.under[b] = (R.under[b] || 0) + 1; }
+    }
+    const bookedUnder = Object.entries(R.under).map(([r, n]) => ({ rep: r, count: n })).sort((a, b) => b.count - a.count);
+    return { same: R.same, diff: R.diff, none: R.none, commSame: round2(R.commSame), commDiff: round2(R.commDiff), commNone: round2(R.commNone), bookedUnder };
+  };
   const reps = Object.entries(agg).map(([rep, v]) => {
     const total = v.TriCare + v.PI + v.VA;
     const sr = findSr(rep);
     const sv = sr ? sr.value : 0, sc = sr ? sr.count : 0, su = sr ? sr.units : 0;
     const pctOfValue = sv > 0 ? Math.round((total / sv) * 1000) / 10 : null;
-    const flag = !sr ? 'no-striven' : (pctOfValue != null && pctOfValue > 60 ? 'high-ratio' : null);
+    const recon = reconOf(rep);
+    const matchRate = v.count > 0 ? Math.round((recon.same / v.count) * 100) : null;
+    // Flag on patient-level attribution: <50% of a rep's lines match their own
+    // Striven orders is a real attribution break (not just a $-ratio artifact).
+    const flag = (matchRate != null && matchRate < 50) ? 'attribution' : (!sr ? 'no-striven' : (pctOfValue != null && pctOfValue > 60 ? 'high-ratio' : null));
     return {
       rep, tricare: round2(v.TriCare), pi: round2(v.PI), va: round2(v.VA), total: round2(total), count: v.count,
       strivenOrders: sc, strivenUnits: su, strivenValue: round2(sv),
-      commPerOrder: sc ? Math.round(total / sc) : null, pctOfValue, flag,
+      commPerOrder: sc ? Math.round(total / sc) : null, pctOfValue, matchRate, recon, flag,
     };
   }).sort((a, b) => b.total - a.total);
   periods.sort((a, b) => b.total - a.total);
