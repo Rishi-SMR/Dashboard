@@ -323,8 +323,8 @@ export function PayablesTab() {
               </div>
               {payments.length > 0 && (
                 <div className="paid-banner">
-                  <span className="paid-banner-check">✓</span>
-                  <span><strong>All settled.</strong> {paidCount === payments.length ? 'Every' : `${paidCount} of ${payments.length}`} recorded bill payment{payments.length === 1 ? ' has' : 's have'} been paid to the vendor.</span>
+                  <span className="paid-banner-check">{paidCount === payments.length ? '✓' : '•'}</span>
+                  <span><strong>{paidCount === payments.length ? 'All settled.' : `${paidCount} of ${payments.length} settled.`}</strong> {paidCount === payments.length ? 'Every' : `${paidCount} of ${payments.length}`} recorded bill payment{payments.length === 1 ? ' has' : 's have'} been paid to the vendor.</span>
                 </div>
               )}
               <div className="table-wrap">

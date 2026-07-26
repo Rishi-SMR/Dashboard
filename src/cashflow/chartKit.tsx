@@ -316,6 +316,11 @@ export function DrillModal({ title, sub, columns, rows, onClose }: {
   title: string; sub?: string; columns: { key: string; label: string; num?: boolean }[];
   rows: Record<string, ReactNode>[]; onClose: () => void;
 }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
   return (
     <div className="drill-backdrop" onClick={onClose}>
       <div className="drill" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">

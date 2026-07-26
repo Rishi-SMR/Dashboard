@@ -97,7 +97,7 @@ export function CommissionTab() {
 
           {sheetMonth === 'all' && <>
           {/* Attribution anomaly - one concise line per flagged rep */}
-          {flagged.map((r) => (
+          {flagged.filter((r) => r.matchRate != null).map((r) => (
             <div key={r.rep} className="qb-flash warn" style={{ marginBottom: 12, borderLeft: `3px solid ${C.negative}` }}>
               ⚠️ <b>{r.rep}</b>: only {r.matchRate}% of lines ({r.recon.same} of {r.count}) match their Striven orders. Tap the row for detail.
             </div>
@@ -297,7 +297,13 @@ function StrivenCommissionView({ striven, sheetTotal }: { striven?: StrivenCommi
         </div>
       </details>
 
-      {repSel && <StrivenRepModal rep={repSel} months={striven.months} lines={striven.byRep.find((x) => x.rep === repSel.rep)?.lines || repSel.lines || []} onClose={() => setRepSel(null)} />}
+      {repSel && (() => {
+        // Always resolve to the all-months rep so the header stats, program
+        // split, month-by-month table and order list all agree (clicking a
+        // rep inside a single month still opens their full all-time detail).
+        const full = striven.byRep.find((x) => x.rep === repSel.rep) || repSel;
+        return <StrivenRepModal rep={full} months={striven.months} lines={full.lines || []} onClose={() => setRepSel(null)} />;
+      })()}
     </>
   );
 }
@@ -310,13 +316,13 @@ function Modal({ title, sub, accent, onClose, children }: { title: string; sub?:
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(680px, 100%)', maxHeight: '88vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${accent || C.brand}` }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff' }}>
-          <div><div style={{ fontSize: 19, fontWeight: 800, color: C.ink }}>{title}</div>{sub && <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>{sub}</div>}</div>
-          <button className="btn ghost" onClick={onClose} aria-label="Close">✕</button>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(680px, 100%)', maxHeight: '90vh', overflowY: 'auto', overflowX: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${accent || C.brand}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+          <div style={{ minWidth: 0 }}><div style={{ fontSize: 18, fontWeight: 800, color: C.ink, wordBreak: 'break-word' }}>{title}</div>{sub && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>{sub}</div>}</div>
+          <button className="btn ghost" onClick={onClose} aria-label="Close" style={{ flex: 'none' }}>✕</button>
         </div>
-        <div style={{ padding: '18px 22px' }}>{children}</div>
+        <div style={{ padding: '16px 18px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>{children}</div>
       </div>
     </div>
   );
@@ -340,7 +346,7 @@ function StrivenRepModal({ rep, months, lines, onClose }: { rep: StrivenCommRep;
   const maxM = Math.max(1, ...perMonth.map((x) => x.r.total));
   return (
     <Modal title={rep.rep} sub={`Commission from Striven · ${formatCurrency(rep.total)} total`} onClose={onClose}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+      <div className="cm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
         <Stat label="Commission" value={formatCurrency(rep.total)} tint={C.brand} />
         <Stat label="Orders" value={String(rep.orders)} />
         <Stat label="Units" value={String(rep.units)} />
@@ -419,7 +425,7 @@ function SheetRepModal({ rep, onClose }: { rep: CommissionRep; onClose: () => vo
   ];
   return (
     <Modal title={rep.rep} accent={accent} sub={`From the commission sheet · ${formatCurrency(rep.total)} across ${rep.count} lines`} onClose={onClose}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+      <div className="cm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
         <Stat label="Commission" value={formatCurrency(rep.total)} tint={C.brand} />
         <Stat label="Lines" value={String(rep.count)} />
         <Stat label="Striven orders" value={String(rep.strivenOrders)} />
@@ -688,7 +694,7 @@ function ReconcileRepModal({ rep, sheetLines, strivenLines, sheetTotal, strivenT
   const sumStriven = nStriven.reduce((s, r) => s + r.striven, 0);
   return (
     <Modal title={rep} accent={C.info} sub={`Sheet ${formatCurrency(sheetTotal)} vs Striven ${formatCurrency(strivenTotal)} · order by order`} onClose={onClose}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
+      <div className="cm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
         <Stat label="In both" value={String(nBoth)} tint={C.positive} />
         <Stat label="Only on sheet" value={`${nSheet.length} · ${formatCurrency(sumSheet)}`} tint={C.negative} />
         <Stat label="Only in Striven" value={`${nStriven.length} · ${formatCurrency(sumStriven)}`} tint={C.warning} />

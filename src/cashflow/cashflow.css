@@ -1419,8 +1419,20 @@ code {
 /* Receivables KPI cards — icon tile + label, count-up value, delta, pinned foot. */
 .kpi-r-strip { display:grid; grid-template-columns: repeat(5, 1fr); gap:14px; margin-bottom:20px; }
 @media (max-width:1300px){ .kpi-r-strip{ grid-template-columns: repeat(3,1fr);} }
-@media (max-width:900px){ .kpi-r-strip{ grid-template-columns: repeat(2,1fr);} }
-@media (max-width:560px){ .kpi-r-strip{ grid-template-columns: 1fr;} }
+/* !important so inline grid-template-columns (repeat(4,1fr) etc. set per tab)
+   still collapses on phones — inline styles otherwise defeat these breakpoints. */
+@media (max-width:900px){ .kpi-r-strip{ grid-template-columns: repeat(2,1fr) !important;} }
+@media (max-width:560px){ .kpi-r-strip{ grid-template-columns: 1fr !important;} }
+
+/* Commission rep/KPI modal stat rows: collapse 3-4 tiles to 2 on phones. */
+@media (max-width:520px){ .cm-stat-grid{ grid-template-columns: repeat(2,1fr) !important; } }
+
+/* Header controls (source toggle + Refresh) wrap and stay tappable on phones. */
+@media (max-width:768px){
+  .ov-headright{ width:100%; flex-wrap:wrap; }
+  .ov-headright .seg{ max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .ov-headright .seg > button{ white-space:nowrap; }
+}
 .kpi-r { display:flex; flex-direction:column; min-height:150px; border-radius:16px; padding:15px 16px 12px;
   background:var(--panel); border:1px solid var(--border); box-shadow:0 1px 2px rgba(14,27,46,.04), 0 8px 22px -14px rgba(14,27,46,.10); }
 .kpi-r .kr-head { display:flex; align-items:center; gap:9px; }

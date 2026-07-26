@@ -201,7 +201,8 @@ export function OverviewCharts() {
   // Program-scoped sales orders.
   const soCount = so ? (prog === 'All' ? so.count : so.piva[prog === 'Unassigned' ? 'Other' : prog].count) : 0;
 
-  const collectionPct = fRev > 0 ? Math.round((cashFY / fRev) * 100) : 0;
+  // Cap at 100 so the printed label can't exceed the gauge arc (which clamps).
+  const collectionPct = fRev > 0 ? Math.min(100, Math.round((cashFY / fRev) * 100)) : 0;
   // DSO restricted to PI (client SOW): VA / TriCare pay on fixed cycles, so DSO
   // is meaningless there. Computed by the aging method — the amount-weighted
   // average age of OPEN PI receivables — because revenue isn't program-split, so
