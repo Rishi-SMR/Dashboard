@@ -57,7 +57,8 @@
       "Bash(sort -t: -k2 -rn)",
       "Bash(grep -oE \"'[^']{25,110}'|\\\\\"[^\\\\\"]{25,110}\\\\\"\")",
       "Bash(grep -rhoE \"\\(sub|label|title|foot|note\\)=\\\\{?\\\\\"[^\\\\\"]{30,100}\\\\\"\" src/cashflow/components/RepsTab.tsx src/cashflow/components/OverviewCharts.tsx src/cashflow/components/DashboardOverview.tsx)",
-      "Bash(pkill -f \"grep -rhoE\")"
+      "Bash(pkill -f \"grep -rhoE\")",
+      "Bash(git rebase *)"
     ]
   }
 }
