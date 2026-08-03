@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchStrivenOrders, type OrdersResult, type OrderRow } from '../strivenApi';
-import { formatCurrency } from '../format';
+import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
@@ -11,7 +11,7 @@ type SoGroup = 'active' | 'completed' | 'cancelled';
 const GROUP_OF = (status: string): SoGroup => {
   const s = (status || '').toLowerCase();
   if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
-  if (/complete|closed|done/.test(s)) return 'completed';
+  if (isCompletedStatus(s)) return 'completed';
   return 'active';
 };
 
@@ -86,7 +86,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
   const setSortKey = (key: SortKey) => { setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === 'ref' ? 1 : -1 })); setPage(1); };
   const sortInd = (key: SortKey) => <span className="sort-ind">{sort.key === key ? (sort.dir === 1 ? '↑' : '↓') : '⇅'}</span>;
 
-  // KPIs count the real book — cancelled orders are excluded (and shown separately).
+  // KPIs count the real book: cancelled orders are excluded (and shown separately).
   const book = useMemo(() => orders.filter((o) => GROUP_OF(o.status) !== 'cancelled'), [orders]);
   const cancelledCount = orders.length - book.length;
   const totalValue = book.reduce((s, o) => s + o.value, 0);
@@ -133,7 +133,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
       {data && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="box" tint="#2563EB" label="Orders Tracked" value={book.length}
+            <KpiR ico="box" tint="#0A369F" label="Orders Tracked" value={book.length}
               deltaText={`${cancelledCount} cancelled excluded`} foot="DEMO excluded · full SO → PO → invoice chain" />
             <KpiR ico="cash" tint="#16A34A" label="Order Value" value={totalValue} format={formatCurrency}
               deltaText="cancelled excluded" foot="order book, not revenue" />
@@ -143,7 +143,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
               deltaText={`${pctOf(invoiced)}% of tracked orders`} foot="at least one invoice raised" />
           </div>
 
-          {!data.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order chain is still populating — links will fill in shortly.</span></div>}
+          {!data.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order chain is still populating: links will fill in shortly.</span></div>}
 
           <div className="section chart-card">
             <div className="section-head">
@@ -216,15 +216,15 @@ function OrderRowView({ o, open, onToggle }: { o: OrderRow; open: boolean; onTog
     <>
       <tr onClick={onToggle} style={{ cursor: 'pointer' }}>
         <td><strong>{open ? '▾ ' : '▸ '}{o.ref}</strong></td>
-        <td style={{ fontWeight: 600 }}>{o.lastName || '—'}</td>
-        <td title={o.itemCount > 1 ? `${o.itemCount} items` : undefined}>{o.item || '—'}{o.itemCount > 1 ? ` +${o.itemCount - 1}` : ''}</td>
+        <td style={{ fontWeight: 600 }}>{o.lastName || '-'}</td>
+        <td title={o.itemCount > 1 ? `${o.itemCount} items` : undefined}>{o.item || '-'}{o.itemCount > 1 ? ` +${o.itemCount - 1}` : ''}</td>
         <td><StatusPill status={o.pi} /></td>
-        <td>{o.rep || '—'}</td>
-        <td>{o.payer || '—'}</td>
+        <td>{o.rep || '-'}</td>
+        <td>{o.payer || '-'}</td>
         <td className="num">{formatCurrency(o.value)}</td>
         <td><StatusPill status={o.status} /></td>
-        <td>{o.pos.length ? `${o.pos.length} · ${formatCurrency(o.poValue)}` : '—'}</td>
-        <td>{o.invoices.length ? `${o.invoices.length}${o.invOpen > 0.005 ? ` · ${formatCurrency(o.invOpen)} open` : ' · paid'}` : '—'}</td>
+        <td>{o.pos.length ? `${o.pos.length} · ${formatCurrency(o.poValue)}` : '-'}</td>
+        <td>{o.invoices.length ? `${o.invoices.length}${o.invOpen > 0.005 ? ` · ${formatCurrency(o.invOpen)} open` : ' · paid'}` : '-'}</td>
       </tr>
       {open && (
         <tr>
@@ -233,7 +233,7 @@ function OrderRowView({ o, open, onToggle }: { o: OrderRow; open: boolean; onTog
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: C.muted, marginBottom: 6 }}>Purchase Orders</div>
                 {o.pos.length === 0 ? <div className="muted-note" style={{ margin: 0 }}>No linked PO</div> : o.pos.map((p) => (
-                  <div key={p.ref} style={{ fontSize: 13, marginBottom: 3 }}><strong>{p.ref}</strong> · {p.vendor || '—'} · {formatCurrency(p.value)} · <StatusPill status={p.status} /></div>
+                  <div key={p.ref} style={{ fontSize: 13, marginBottom: 3 }}><strong>{p.ref}</strong> · {p.vendor || '-'} · {formatCurrency(p.value)} · <StatusPill status={p.status} /></div>
                 ))}
               </div>
               <div>

@@ -4,7 +4,7 @@ import { PayablesTab } from './PayablesTab';
 
 type Mode = 'ar' | 'ap';
 
-// AR / AP — one sidebar destination, two sub-views (same pattern as Orders).
+// AR / AP: one sidebar destination, two sub-views (same pattern as Orders).
 // Each sub-view keeps its own header (as-of picker, refresh, KPIs).
 export function ArApTab({ initialMode = 'ar' }: { initialMode?: Mode } = {}) {
   const [mode, setMode] = useState<Mode>(initialMode);

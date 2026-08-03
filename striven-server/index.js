@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getPiStages, setPiStage, getRepOverview, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
 import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -32,6 +32,7 @@ const server = http.createServer(async (req, res) => {
 
   const { gateEnabled } = await getAuth();
   const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
+  let currentUser = null;
 
   // Auto-PO (SO placed → PO raised) — cron token OR a logged-in session (UI).
   if (pathname === '/api/auto-po') {
@@ -110,9 +111,11 @@ const server = http.createServer(async (req, res) => {
       // handler, which is always HTTPS, sets it unconditionally.
       const sec = String(req.headers['x-forwarded-proto'] || '').includes('https') ? ' Secure;' : '';
       if (r.ok) {
+        // SameSite=Strict matches production; smr_user stays display-only and is
+        // never trusted as identity (authorization reads smr_session).
         res.setHeader('Set-Cookie', [
-          `smr_session=${r.session}; HttpOnly;${sec} Path=/; SameSite=Lax; Max-Age=43200`,
-          `smr_user=${encodeURIComponent(r.user)};${sec} Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_session=${r.session}; HttpOnly;${sec} Path=/; SameSite=Strict; Max-Age=43200`,
+          `smr_user=${encodeURIComponent(r.user)};${sec} Path=/; SameSite=Strict; Max-Age=43200`,
         ]);
         res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
       }
@@ -122,15 +125,113 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/logout') {
       const sec = String(req.headers['x-forwarded-proto'] || '').includes('https') ? ' Secure;' : '';
       res.setHeader('Set-Cookie', [
-        `smr_session=; HttpOnly;${sec} Path=/; SameSite=Lax; Max-Age=0`,
-        `smr_user=;${sec} Path=/; SameSite=Lax; Max-Age=0`,
+        `smr_session=; HttpOnly;${sec} Path=/; SameSite=Strict; Max-Age=0`,
+        `smr_user=;${sec} Path=/; SameSite=Strict; Max-Age=0`,
       ]);
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ ok: true }));
     }
     if (pathname !== '/api/health') {
       const sess = verifySession(cookieVal(req.headers.cookie, 'smr_session'));
       if (!sess) { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' })); }
+      currentUser = sess.user;
       logPhiAccess(sess.user, pathname, clientIp);   // HIPAA audit trail
+    }
+  }
+
+  // Who am I — resolved from the VERIFIED session, never from a cookie the
+  // browser could set. Drives role + own-row scoping in the UI.
+  if (pathname === '/api/me') {
+    const me = await getMe({ user: currentUser });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify(me || { email: null, repName: null, role: 'rep' }));
+  }
+
+  // Saved dashboard views — per signed-in user.
+  if (pathname === '/api/views') {
+    try {
+      let out;
+      if (req.method === 'POST') {
+        const body = await readBody(req);
+        out = body?.delete
+          ? await deleteDashboardView(currentUser, body.delete)
+          : await saveDashboardView(currentUser, body);
+      } else out = await listDashboardViews(currentUser);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // Cache freshness. Admin-only: it exposes nothing about any rep, but it is
+  // operational plumbing and reps have no use for it.
+  if (pathname === '/api/cache-health') {
+    try {
+      const me = await getMe({ user: currentUser });
+      if (me?.role !== 'admin') { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'admin only' })); }
+      const out = await getCacheHealth();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // Rep overview — the team from the reps' side, redacted per caller.
+  if (pathname === '/api/rep-overview') {
+    try {
+      const out = await getRepOverview(viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // PI stage pipeline — GET reads the buckets, POST moves one order.
+  if (pathname === '/api/pi-stages') {
+    try {
+      const me = await getMe({ user: currentUser });
+      if (req.method === 'POST') {
+        const body = await readBody(req);
+        const out = await setPiStage({ soId: body.soId, stage: body.stage, user: currentUser });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(out));
+      }
+      const out = await getPiStages(viewerFor(me, reqUrl.searchParams.get('as')));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // Order analytics — identity-scoped like commission.
+  if (pathname === '/api/order-analytics') {
+    try {
+      const out = await getOrderAnalytics(viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // Commission — identity-scoped. Handled here rather than via ROUTES because
+  // the redaction needs the caller, and ROUTES handlers take no arguments.
+  if (pathname === '/api/commission') {
+    try {
+      const out = await getCommissionFor(viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
     }
   }
 

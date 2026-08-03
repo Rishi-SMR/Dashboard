@@ -12,12 +12,12 @@ const PAGE_SIZE = 10;
 type SortKey = 'name' | 'number' | 'status' | 'terms';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 
 const STATUS_HUE = (name: string): string => {
   const s = (name || '').toLowerCase();
   if (/active/.test(s)) return '#16A34A';
-  if (/prospect/.test(s)) return '#2563EB';
+  if (/prospect/.test(s)) return '#0A369F';
   if (/inactive|hold|blocked/.test(s)) return '#DC2626';
   return C.muted;
 };
@@ -80,23 +80,23 @@ export function VendorsTab() {
   const prospectCount = statusCount(/prospect/);
   const pctOf = (n: number) => (vendorCount ? Math.round((n / vendorCount) * 100) : 0);
 
-  // PO spend ranked by vendor — hero chart, click a bar to drill into that vendor's POs.
+  // PO spend ranked by vendor: hero chart, click a bar to drill into that vendor's POs.
   const spendData = useMemo(
     () => [...(po?.byVendor ?? [])]
       .filter((v) => v.total > 0)
       .sort((a, b) => b.total - a.total)
       .slice(0, 12)
-      .map((v) => ({ name: v.vendor || '—', value: v.total })),
+      .map((v) => ({ name: v.vendor || '-', value: v.total })),
     [po],
   );
   function openDrillFor(name: string) {
     const rows = (po?.recent ?? [])
-      .filter((r) => (r.vendor || '—') === name)
+      .filter((r) => (r.vendor || '-') === name)
       .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
       .map((r) => ({ ref: r.ref, date: fmtDate(r.date), amt: formatCurrency(r.total) }));
     setDrill({
       title: name,
-      sub: `${rows.length} purchase order${rows.length === 1 ? '' : 's'} · ${formatCurrency((po?.byVendor ?? []).find((v) => (v.vendor || '—') === name)?.total ?? 0)}`,
+      sub: `${rows.length} purchase order${rows.length === 1 ? '' : 's'} · ${formatCurrency((po?.byVendor ?? []).find((v) => (v.vendor || '-') === name)?.total ?? 0)}`,
       columns: [{ key: 'ref', label: 'PO Ref' }, { key: 'date', label: 'Date' }, { key: 'amt', label: 'Amount', num: true }],
       rows,
     });
@@ -108,10 +108,10 @@ export function VendorsTab() {
       .filter((v) => status === 'Total' || ((v.status || 'Unknown').trim() || 'Unknown') === status)
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
       .map((v) => ({
-        name: <strong>{v.name || '—'}</strong>,
-        number: v.number || '—',
+        name: <strong>{v.name || '-'}</strong>,
+        number: v.number || '-',
         status: <StatusPill status={v.status} />,
-        terms: v.terms || '—',
+        terms: v.terms || '-',
         phone: formatPhone(v.phone),
       }));
     setDrill({
@@ -182,7 +182,7 @@ export function VendorsTab() {
       {vendorsData && po && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="users" tint="#2563EB" label="Suppliers" value={vendorCount}
+            <KpiR ico="users" tint="#0A369F" label="Suppliers" value={vendorCount}
               deltaText="on record" foot="all vendors in Striven" onClick={() => openStatusDrill('Total')} />
             <KpiR ico="shield" tint="#16A34A" label="Active" value={activeCount}
               deltaText={`${pctOf(activeCount)}% of total`} foot="currently trading" onClick={() => openStatusDrill('Active')} />
@@ -232,11 +232,11 @@ export function VendorsTab() {
                   </thead>
                   <tbody>
                     {shown.map((v) => (
-                      <tr key={v.id} onClick={() => openDrillFor(v.name || '—')} style={{ cursor: 'pointer' }}>
-                        <td><strong>{v.name || '—'}</strong></td>
-                        <td>{v.number || '—'}</td>
+                      <tr key={v.id} onClick={() => openDrillFor(v.name || '-')} style={{ cursor: 'pointer' }}>
+                        <td><strong>{v.name || '-'}</strong></td>
+                        <td>{v.number || '-'}</td>
                         <td><StatusPill status={v.status} /></td>
-                        <td>{v.terms || '—'}</td>
+                        <td>{v.terms || '-'}</td>
                         <td>{formatPhone(v.phone)}</td>
                       </tr>
                     ))}

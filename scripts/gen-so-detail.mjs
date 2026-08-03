@@ -35,7 +35,19 @@ const get = async (id) => {
   for (let a = 0; a < 8; a++) {
     const r = await fetch(`${BASE}/v1/sales-orders/${id}`, { headers: { Authorization: `Bearer ${T}`, 'User-Agent': UA } });
     if (r.status === 429) { await wait(1000); continue; }
-    if (r.ok) { const d = await r.json(); map[id] = { type: d.type?.name ?? '', rep: d.salesRep?.name ?? '', payer: payerOf(d), total: Number(d.orderTotal ?? 0), invStatus: d.invoiceStatus?.name ?? '', status: d.status?.name ?? '' }; return; }
+    if (r.ok) {
+      const d = await r.json();
+      map[id] = {
+        type: d.type?.name ?? '', rep: d.salesRep?.name ?? '', payer: payerOf(d),
+        total: Number(d.orderTotal ?? 0), invStatus: d.invoiceStatus?.name ?? '', status: d.status?.name ?? '',
+        // Pipeline stage, IF someone mirrors the Striven tag into a custom field
+        // of this name. Striven's API exposes no tag field, so this is the only
+        // route by which the real stage can reach the portal. Empty until then,
+        // and the portal's own stage store takes over.
+        stage: String(cf(d, 'Stage') || '').trim(),
+      };
+      return;
+    }
     return;
   }
 };

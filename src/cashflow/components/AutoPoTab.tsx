@@ -8,11 +8,11 @@ import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 
-// Demo default recipient — editable per the client's ask ("abhi email mera rahega").
+// Demo default recipient: editable per the client's ask ("abhi email mera rahega").
 const DEFAULT_TO = 'infineedsolutions@gmail.com';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 const entryOf = (r: AutoPoRunResult | null): AutoPoEntry | null => r?.processed?.[0] ?? null;
 
 export function AutoPoTab({ embedded = false }: { embedded?: boolean } = {}) {
@@ -67,8 +67,8 @@ export function AutoPoTab({ embedded = false }: { embedded?: boolean } = {}) {
 
       <div className={`qb-flash ${demoOnly ? 'warn' : 'err'}`} style={{ marginBottom: 14 }}>
         {demoOnly
-          ? <>🧪 <b>Pilot mode</b> — only <b>test / demo</b> orders can generate a PO. Real patient orders are ignored server-side. Every step is a deliberate click.</>
-          : <>🔴 <b>Live for ALL orders</b> — the demo gate is OFF. Switch back to pilot before testing.</>}
+          ? <>🧪 <b>Pilot mode</b>: only <b>test / demo</b> orders can generate a PO. Real patient orders are ignored server-side. Every step is a deliberate click.</>
+          : <>🔴 <b>Live for ALL orders</b>: the demo gate is OFF. Switch back to pilot before testing.</>}
         <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 800, background: live ? 'rgba(220,38,38,.10)' : C.brandLight, color: live ? '#B91C1C' : C.brandDark }}>
           default mode: {live ? '● LIVE' : '● DRY'}
         </span>
@@ -77,7 +77,7 @@ export function AutoPoTab({ embedded = false }: { embedded?: boolean } = {}) {
       {err && <div className="error" style={{ marginBottom: 14 }}>{err}</div>}
 
       {data && (
-        <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
+        <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 12 }}>
           <KpiR ico="doc" tint={C.brand} label="Recent sales orders" value={cands.length} foot="newest first" deltaText="from Striven, live" />
           <KpiR ico="shield" tint="#16A34A" label="Test / demo eligible" value={testCount} foot="can generate in pilot" deltaText="the only ones that fire" />
           <KpiR ico="clip" tint="#F59E0B" label="Without a PO yet" value={noPoCount} foot="no linked PO" deltaText="candidates" />
@@ -88,7 +88,7 @@ export function AutoPoTab({ embedded = false }: { embedded?: boolean } = {}) {
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {seg('test', `Test / demo (${testCount})`)}{seg('no-po', `No PO (${noPoCount})`)}{seg('all', `All (${cands.length})`)}
         </div>
-        <div className="page-sub" style={{ margin: 0, fontSize: 12 }}>🔒 Patients shown as SO-&lt;id&gt; — names never reach this screen.</div>
+        <div className="page-sub" style={{ margin: 0, fontSize: 12 }}>🔒 Patients shown as SO-&lt;id&gt;: names never reach this screen.</div>
       </div>
 
       {loading && !data && <div className="page-sub" style={{ padding: 12 }}>Loading sales orders…</div>}
@@ -155,7 +155,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
 
   async function loadExisting() {
     try { const sp = await fetchAutoPoSoPos(cand.soId); setExistingPos(sp.pos); }
-    catch { /* ignore — note still shows */ }
+    catch { /* ignore: note still shows */ }
   }
 
   async function generate() {
@@ -194,22 +194,22 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
         <div className="drill-body">
           {err && <div className="error" style={{ margin: 8 }}>{err}</div>}
 
-          {/* STEP 3 — created / existing POs: PDF + email */}
+          {/* STEP 3: created / existing POs: PDF + email */}
           {showResult && (
             <div className="section" style={{ margin: 0 }}>
               {genNote && (
                 <div className="qb-flash warn" style={{ marginBottom: 12 }}>
-                  ℹ {genNote}{deliveryPos.length ? ' — showing the PO(s) already created for this order:' : ' Use a fresh test order to run the full flow.'}
+                  ℹ {genNote}{deliveryPos.length ? ': showing the PO(s) already created for this order:' : ' Use a fresh test order to run the full flow.'}
                 </div>
               )}
               {genEntry?.skipped && <div className="qb-flash warn" style={{ marginBottom: 12 }}>⚠ Skipped: {genEntry.skipped}</div>}
-              {genEntry && !genEntry.skipped && <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ {createdPos.length} purchase order(s) created for {cand.ref} — one per vendor.</div>}
+              {genEntry && !genEntry.skipped && <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ {createdPos.length} purchase order(s) created for {cand.ref}: one per vendor.</div>}
 
               {unmatched.length > 0 && (
                 <div className="qb-flash warn" style={{ marginBottom: 12 }}>
-                  ⚠ <b>{unmatched.length} item(s) had no vendor</b> — not added to any PO:
+                  ⚠ <b>{unmatched.length} item(s) had no vendor</b>: not added to any PO:
                   <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
-                    {unmatched.map((u, i) => <li key={i}><b>{u.itemName}</b> ×{u.qty}{u.reason ? ` — ${u.reason}` : ''}</li>)}
+                    {unmatched.map((u, i) => <li key={i}><b>{u.itemName}</b> ×{u.qty}{u.reason ? `: ${u.reason}` : ''}</li>)}
                   </ul>
                   <div style={{ marginTop: 6 }}>Map each to a vendor (add one prior PO for it in Striven), then re-run.</div>
                 </div>
@@ -224,7 +224,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
             </div>
           )}
 
-          {/* STEP 1 — review */}
+          {/* STEP 1: review */}
           {!showResult && (
             <div className="section" style={{ margin: 0 }}>
               {!preview && !prevErr && <div className="page-sub" style={{ padding: 12 }}>Loading order & matching vendors…</div>}
@@ -234,13 +234,13 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
                 <>
                   {blocked && (
                     <div className="qb-flash warn" style={{ marginBottom: 12 }}>
-                      ⚠ <b>{cand.ref}</b> is not a test/demo order — in pilot mode it can't generate a PO (real patient orders are protected).
+                      ⚠ <b>{cand.ref}</b> is not a test/demo order: in pilot mode it can't generate a PO (real patient orders are protected).
                     </div>
                   )}
                   <div className="qb-plan-row"><span className="qb-plan-k">Order</span><span className="qb-plan-v"><b>{preview.ref}</b> <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>· placed {fmtDate(preview.orderDate)} · {preview.type}</span></span></div>
-                  <div className="qb-plan-row"><span className="qb-plan-k">Will create</span><span className="qb-plan-v"><b>{preview.vendorGroups.length}</b> purchase order(s){preview.vendorGroups.length ? ' — one per vendor' : ''}{preview.pending.length ? ` · ${preview.pending.length} item(s) pending` : ''}</span></div>
+                  <div className="qb-plan-row"><span className="qb-plan-k">Will create</span><span className="qb-plan-v"><b>{preview.vendorGroups.length}</b> purchase order(s){preview.vendorGroups.length ? ': one per vendor' : ''}{preview.pending.length ? ` · ${preview.pending.length} item(s) pending` : ''}</span></div>
 
-                  {/* One card per vendor — its items go on ONE PO */}
+                  {/* One card per vendor: its items go on ONE PO */}
                   {preview.vendorGroups.map((g, gi) => (
                     <div key={gi} style={{ border: '1px solid var(--border, #e5e7eb)', borderRadius: 10, padding: 12, marginTop: 10 }}>
                       <div style={{ fontWeight: 800, marginBottom: 6 }}>🏢 {g.vendor} <span className="page-sub" style={{ fontWeight: 400, fontSize: 12 }}>· one PO · {g.items.length} item(s)</span></div>
@@ -248,7 +248,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
                         <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Unit</th></tr></thead>
                         <tbody>
                           {g.items.map((it, ii) => (
-                            <tr key={ii}><td style={{ fontWeight: 600 }}>{it.itemName}</td><td className="num">{it.qty}</td><td className="num">{it.unit != null ? formatCurrency(it.unit) : '—'}</td></tr>
+                            <tr key={ii}><td style={{ fontWeight: 600 }}>{it.itemName}</td><td className="num">{it.qty}</td><td className="num">{it.unit != null ? formatCurrency(it.unit) : '-'}</td></tr>
                           ))}
                         </tbody>
                       </table>
@@ -257,7 +257,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
 
                   {preview.pending.length > 0 && (
                     <div className="qb-flash warn" style={{ marginTop: 10 }}>
-                      ⚠ <b>{preview.pending.length} item(s)</b> not in your vendor-items report — will resolve from its most recent PO on generate, or flag as <b>no vendor</b> if none exists:
+                      ⚠ <b>{preview.pending.length} item(s)</b> not in your vendor-items report: will resolve from its most recent PO on generate, or flag as <b>no vendor</b> if none exists:
                       <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
                         {preview.pending.map((p, i) => <li key={i}><b>{p.itemName}</b> ×{p.qty}</li>)}
                       </ul>
@@ -305,7 +305,7 @@ function PoDeliveryCard({ po }: { po: AutoPoPoGroup }) {
   useEffect(() => {
     setLoadingPdf(true); setPdfErr(null);
     fetchAutoPoPdf(poId).then(setPdf).catch((e) => setPdfErr(e instanceof Error ? e.message : 'Failed to fetch the PDF.')).finally(() => setLoadingPdf(false));
-    // Render the exact email (subject + body + vendor email) — no send.
+    // Render the exact email (subject + body + vendor email): no send.
     fetchAutoPoEmailPreview(poId).then((m) => { setMail(m); setSubject((s) => (s ? s : m.subject)); }).catch(() => { /* preview optional */ });
   }, [poId]);
 
@@ -344,7 +344,7 @@ function PoDeliveryCard({ po }: { po: AutoPoPoGroup }) {
         </div>
       )}
 
-      {/* Email — preview BEFORE sending */}
+      {/* Email: preview BEFORE sending */}
       <div style={{ borderTop: '1px dashed var(--border, #e5e7eb)', paddingTop: 10 }}>
         <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>📧 Review the email before sending <span className="page-sub" style={{ fontWeight: 400, fontSize: 12 }}>· nothing goes out until you click Send</span></div>
 

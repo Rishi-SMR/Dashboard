@@ -9,7 +9,7 @@ import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTh
 import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo, pctText } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 const trunc = (v: string, n = 24) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '•';
@@ -43,7 +43,7 @@ const bucketOf = (dueDate: string | null, refMs = Date.now()): string => {
 const INS_TONES: Record<string, { bg: string; fg: string }> = {
   pos: { bg: 'rgba(22,163,74,0.12)', fg: '#16A34A' },
   neg: { bg: 'rgba(220,38,38,0.10)', fg: '#DC2626' },
-  brand: { bg: 'rgba(37,99,235,0.10)', fg: '#2563EB' },
+  brand: { bg: 'rgba(10,54,159,0.10)', fg: '#0A369F' },
   warn: { bg: 'rgba(217,119,6,0.12)', fg: '#D97706' },
 };
 
@@ -98,7 +98,7 @@ export function ReceivablesTab() {
   const cashSeries = (payments?.byMonth ?? []).map((m) => ({ month: m.month, value: m.amount }));
   const cashD = momDelta(cashSeries);
 
-  // DSO restricted to PI (client SOW) — VA/TriCare pay on fixed cycles so DSO is
+  // DSO restricted to PI (client SOW): VA/TriCare pay on fixed cycles so DSO is
   // meaningless there. Aging method: amount-weighted average age of open PI
   // receivables (revenue isn't program-split, so a sales-based PI DSO can't be
   // scoped honestly).
@@ -146,13 +146,13 @@ export function ReceivablesTab() {
     return [...agg].map(([name, open]) => ({ name, open })).sort((a, b) => b.open - a.open).slice(0, 5);
   }, [invoices]);
 
-  // Insights — all computed from live data above.
+  // Insights: all computed from live data above.
   const biggestBucket = overdueRows.slice().sort((a, b) => b.value - a.value)[0];
   const insights: { tone: keyof typeof INS_TONES; ico: string; text: ReactNode }[] = [];
   if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'increased' : 'dropped'} <b>{pctText(cashD.pct)}</b> vs last month</> });
   if (biggestBucket && biggestBucket.value > 0) insights.push({ tone: 'warn', ico: '!', text: <><b>{biggestBucket.label}</b> overdue is the largest bucket ({formatCurrency(biggestBucket.value)})</> });
   if (dso != null) insights.push({ tone: 'brand', ico: '◷', text: <>PI DSO is <b>{dso} days</b> (avg age of open PI receivables)</> });
-  if ((ar?.unappliedCredits ?? 0) > 0.005) insights.push({ tone: 'warn', ico: '$', text: <><b>{formatCurrency(ar!.unappliedCredits!)}</b> paid but unapplied — netted out of AR</> });
+  if ((ar?.unappliedCredits ?? 0) > 0.005) insights.push({ tone: 'warn', ico: '$', text: <><b>{formatCurrency(ar!.unappliedCredits!)}</b> paid but unapplied: netted out of AR</> });
   if (topPayers[0]) insights.push({ tone: 'pos', ico: '◆', text: <>Top balance: <b>{trunc(topPayers[0].name, 20)}</b> ({formatCurrency(topPayers[0].open)})</> });
 
   // Open-invoices table: filter → sort → paginate.
@@ -190,18 +190,18 @@ export function ReceivablesTab() {
     ...kv([...AGING_LABELS.map((b) => ({ k: `${b.label}`, v: formatCurrency(ar?.aging[b.key] || 0) })), { k: 'Total', v: formatCurrency(ar?.totalOpen || 0) }]),
   });
   const explainCash = () => setDrill({
-    title: 'Cash Received', sub: 'Customer payments recorded in Striven — money actually in the door',
+    title: 'Cash Received', sub: 'Customer payments recorded in Striven: money actually in the door',
     ...kv([{ k: 'Payments recorded', v: String(payments?.count ?? 0) }, { k: 'Total received', v: formatCurrency(collected) }]),
   });
   const explainDso = () => setDrill({
     title: 'PI Days Sales Outstanding', sub: 'PI only (client rule) · avg age of open PI receivables, amount-weighted',
-    ...kv([{ k: 'Open PI AR', v: formatCurrency(piOpenSum) }, { k: 'PI invoices open', v: String(piOpenInv.length) }, { k: 'PI DSO', v: dso != null ? `${dso} days` : '—' }]),
+    ...kv([{ k: 'Open PI AR', v: formatCurrency(piOpenSum) }, { k: 'PI invoices open', v: String(piOpenInv.length) }, { k: 'PI DSO', v: dso != null ? `${dso} days` : '-' }]),
   });
   const drillBucket = (label: string) => setDrill({
     title: `Open Invoices · ${label}`, sub: `${invoices.filter((i) => bucketOf(i.dueDate, refMs) === label).length} invoices in this bucket`,
     columns: [{ key: 'n', label: 'Invoice #' }, { key: 'p', label: 'Payer' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
     rows: invoices.filter((i) => bucketOf(i.dueDate, refMs) === label).sort((a, b) => b.open - a.open)
-      .map((i) => ({ n: `#${i.number}`, p: i.payer || '—', d: fmtDate(i.dueDate), o: formatCurrency(i.open) })),
+      .map((i) => ({ n: `#${i.number}`, p: i.payer || '-', d: fmtDate(i.dueDate), o: formatCurrency(i.open) })),
   });
   const viewAllPayments = () => setDrill({
     title: 'Recent Payments', sub: `${payRows.length} latest customer payments`,
@@ -235,7 +235,7 @@ export function ReceivablesTab() {
       {ar && payments && customers && (
         <>
           <div className="kpi-r-strip">
-            <KpiR ico="doc" tint="#2563EB" label="AR Open" value={ar.totalOpen} format={formatCurrency}
+            <KpiR ico="doc" tint="#0A369F" label="AR Open" value={ar.totalOpen} format={formatCurrency}
               deltaText={`${ar.count} open invoices`} foot="excludes voided invoices" onClick={explainAr} />
             <KpiR ico="clip" tint="#16A34A" label="Open Invoices" value={ar.count}
               deltaText="awaiting payment" foot="matches Striven A/R aging" />
@@ -333,7 +333,7 @@ export function ReceivablesTab() {
                 <div>
                   <h2 className="section-title">Open Invoices</h2>
                   <div className="section-sub">
-                    Unpaid invoices with a remaining balance — matches Striven's A/R aging
+                    Unpaid invoices with a remaining balance: matches Striven's A/R aging
                     {(ar.unappliedCredits ?? 0) > 0.005 && <> · <span style={{ color: '#047857', fontWeight: 700 }}>{formatCurrency(ar.unappliedCredits!)}</span> unapplied netted out</>}
                   </div>
                 </div>
@@ -381,12 +381,12 @@ export function ReceivablesTab() {
                             <strong>#{inv.number}</strong>
                             {recv > 0.005 && <span className="pill-tag tag-ok" style={{ marginLeft: 8, fontSize: 10.5 }}>part-paid</span>}
                           </td>
-                          <td>{inv.payer || '—'}</td>
+                          <td>{inv.payer || '-'}</td>
                           <td>{fmtDate(inv.dueDate)}</td>
                           <td className="num">{formatCurrency(inv.total)}</td>
-                          <td className="num cell-pos">{recv > 0.005 ? formatCurrency(recv) : '—'}</td>
+                          <td className="num cell-pos">{recv > 0.005 ? formatCurrency(recv) : '-'}</td>
                           <td className="num cell-neg">{formatCurrency(inv.open)}</td>
-                          <td className="num cell-neg">{d > 0 ? d : '—'}</td>
+                          <td className="num cell-neg">{d > 0 ? d : '-'}</td>
                         </tr>
                       );
                     })}
@@ -437,7 +437,7 @@ export function ReceivablesTab() {
                   <tbody>
                     {payShown.map((p) => (
                       <tr key={p.id}>
-                        <td><strong>{p.ref || '—'}</strong></td>
+                        <td><strong>{p.ref || '-'}</strong></td>
                         <td>{fmtDate(p.date)}</td>
                         <td className="num cell-pos">{formatCurrency(p.amount)}</td>
                         <td><StatusPill status={p.status} /></td>
@@ -465,10 +465,10 @@ export function ReceivablesTab() {
   );
 }
 
-// Per-segment plain-language explanation shown when a program tab is selected —
+// Per-segment plain-language explanation shown when a program tab is selected,
 // so Kevin never has to ask "what is this?" (esp. the PI residual).
 const PROG_NOTE: Record<string, string> = {
-  PI: 'PI invoices stay open until settlement. The 15% advance is applied and the remainder stays open — often for a long time. An outstanding PI balance is normal here, not a collection problem.',
+  PI: 'PI invoices stay open until settlement. The 15% advance is applied and the remainder stays open: often for a long time. An outstanding PI balance is normal here, not a collection problem.',
   VA: 'VA pays on fixed cycles (Integrated on the 5th & 15th, HIDAL by the 5th) and settles one-for-one, so VA invoices close cleanly. An open VA balance usually just means the cycle hasn’t run yet.',
   TriCare: 'Tri-Care is paid by the TriCare program on a fixed cycle. Open balances clear when that cycle runs.',
   Unassigned: 'Invoices whose payer isn’t classified to a program yet. Set the payer on the order in Striven to route them.',

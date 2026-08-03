@@ -4,12 +4,12 @@ import { C } from '../chartTheme';
 import { KpiR, ChartCard, RankBar, AgingBar, DrillModal, StatCards } from '../chartKit';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AP Register (Sheet) — a manually-maintained accounts-payable register sourced
+// AP Register (Sheet): a manually-maintained accounts-payable register sourced
 // from the "AP_Report_Invoices" spreadsheet (AP Report Base + AP Ledgers status).
 // This is SEEDED from a sheet snapshot, not a live Striven feed, so it sits next
 // to the live Payables tab rather than replacing it.
 //
-// HIPAA: the sheet's "Ship To" column holds patient names — deliberately EXCLUDED
+// HIPAA: the sheet's "Ship To" column holds patient names: deliberately EXCLUDED
 // here. This tab shows vendor/financial data only (no PHI reaches the browser).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ export function ApSheetTab() {
   const [agingMode, setAgingMode] = useState<'amount' | 'count'>('amount');
   const [drill, setDrill] = useState<Drill | null>(null);
 
-  // Headline aggregates — all derived from the one BILLS array so every tile ties.
+  // Headline aggregates: all derived from the one BILLS array so every tile ties.
   const agg = useMemo(() => {
     const billed = BILLS.reduce((s, b) => s + b.total, 0);
     const paid = BILLS.filter((b) => PAID_STATUSES.has(b.status)).reduce((s, b) => s + b.total, 0);
@@ -213,7 +213,7 @@ export function ApSheetTab() {
     rows: spend.map((s) => ({ v: s.name, t: formatCurrency(s.value) })),
   });
 
-  // CSV export — client-side, nothing leaves the browser.
+  // CSV export: client-side, nothing leaves the browser.
   function exportCsv() {
     const esc = (s: string | number) => `"${String(s).replace(/"/g, '""')}"`;
     const lines = [
@@ -238,7 +238,7 @@ export function ApSheetTab() {
       </div>
 
       <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
-        <KpiR ico="doc" tint="#2563EB" label="Total AP Billed" value={agg.billed} format={formatCurrency}
+        <KpiR ico="doc" tint="#0A369F" label="Total AP Billed" value={agg.billed} format={formatCurrency}
           deltaText={`${BILLS.length} invoices`} foot="invoice register" onClick={explainBilled} />
         <KpiR ico="wallet" tint="#16A34A" label="Paid to Date" value={agg.paid} format={formatCurrency}
           deltaText={`${agg.paidCount} bills settled`} foot="incl. paid w/o shipping" />
@@ -309,7 +309,7 @@ export function ApSheetTab() {
                     <td>{fmtDate(b.date)}</td>
                     <td>{fmtDate(b.due)}</td>
                     <td className="num">{formatCurrency(b.total)}</td>
-                    <td className={`num${b.open > 0 ? ' cell-neg' : ''}`}>{b.open > 0 ? formatCurrency(b.open) : '—'}</td>
+                    <td className={`num${b.open > 0 ? ' cell-neg' : ''}`}>{b.open > 0 ? formatCurrency(b.open) : '-'}</td>
                     <td>{statusTag(b.status)}</td>
                   </tr>
                 ))}
@@ -338,7 +338,7 @@ export function ApSheetTab() {
             </div>
           </div>
           <div className="section-sub" style={{ marginTop: 10 }}>
-            Register snapshot from the AP sheet. The live Striven <strong>Payables</strong> tab may differ — it also
+            Register snapshot from the AP sheet. The live Striven <strong>Payables</strong> tab may differ: it also
             captures recent bills not yet entered here.
           </div>
         </div>

@@ -1,0 +1,229 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   SMR DESIGN TOKENS: typography, palette, numerics
+   One system shared by the executive board and the rep dashboard.
+
+   Nothing in this file is audience-specific. The exec/rep split is a DATA rule
+   enforced at build time (see src/design/money.ts and vite.config.ts), never by
+   hiding elements with CSS. There is deliberately no `.rep-hide-money` class
+   here: if such a class existed, someone would eventually use it and ship
+   dollar amounts to a rep's browser with `display:none` on them.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Families ────────────────────────────────────────────────────────────
+     Barlow Semi Condensed: headings, KPI labels, leaderboard names.
+     Inter: body, tables, controls, unit labels.
+     JetBrains Mono: every numeric value, without exception.          */
+  --font-display: 'Barlow Semi Condensed', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body:    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+
+  --fw-display-regular: 600;
+  --fw-display-strong:  700;
+  --fw-body:            400;
+  --fw-body-strong:     500;
+  --fw-mono:            500;
+
+  /* ── Fluid scale ─────────────────────────────────────────────────────────
+     Generated, then verified at both endpoints. The ramp FINISHES at 1100px
+     rather than continuing to 1440: Crystal reviews on a laptop, so the
+     desktop target is the laptop, not an external monitor. Below 768px each
+     step holds at its floor.                                                 */
+  --fs-kpi:  clamp(1.875rem,  0.1401rem + 3.6145vw, 2.625rem);   /* 30 → 42px */
+  --fs-h1:   clamp(1.625rem,  0.4684rem + 2.4096vw, 2.125rem);   /* 26 → 34px */
+  --fs-h2:   clamp(1.25rem,   0.5271rem + 1.5060vw, 1.5625rem);  /* 20 → 25px */
+  --fs-h3:   clamp(1.0313rem, 0.7421rem + 0.6024vw, 1.1563rem);  /* 16.5 → 18.5px */
+  --fs-lead: clamp(0.9063rem, 0.7617rem + 0.3012vw, 0.9688rem);  /* 14.5 → 15.5px */
+
+  /* Fixed steps: these must NOT scale. A micro-label that grows stops being a
+     micro-label, and table text that grows breaks column rhythm. */
+  --fs-body:  0.875rem;    /* 14px */
+  --fs-small: 0.8125rem;   /* 13px */
+  --fs-micro: 0.6875rem;   /* 11px: the uppercase card labels */
+  --fs-unit:  0.75rem;     /* 12px: the "days" beside a DSO figure */
+
+  --lh-tight: 1.05;
+  --lh-head:  1.18;
+  --lh-body:  1.5;
+
+  --ls-micro:   0.08em;    /* TOTAL ORDERS · DSO (PI) */
+  --ls-display: -0.01em;
+  --ls-kpi:     -0.022em;
+
+  /* ── Palette ─────────────────────────────────────────────────────────────
+     PENDING BRAND CONFIRMATION: the five hexes below are as briefed.
+
+     Every value carries a measured contrast ratio against the off-white
+     surface. Two of the briefed brand colours CANNOT be used for text:
+
+       teal  #14B8A6  →  2.38:1  fails AA for text at any size
+       amber #F59E0B  →  2.05:1  fails AA for text at any size
+
+     They stay as briefed for FILLS, rules, and chart marks, where 3:1
+     non-text contrast applies. Each gets a text-safe sibling for anything
+     that carries words. This is why --accent and --accent-ink differ; using
+     --accent on a label is the mistake this split exists to prevent.        */
+  --navy:        #0F2A43;   /* 14.01:1  AAA  base ink */
+  --accent:      #14B8A6;   /* 2.38:1   fills/marks only: never text */
+  --accent-ink:  #0F766E;   /* 5.23:1   AA   text-safe teal */
+  --amber:       #F59E0B;   /* 2.05:1   fills/marks only: never text */
+  --amber-ink:   #B45309;   /* 4.80:1   AA   text-safe amber */
+  --danger:      #DC2626;   /* 4.62:1   AA   passes as text as briefed */
+  --danger-ink:  #B91C1C;   /* 6.18:1   AA   stronger step for dense text */
+  --surface:     #F8FAFC;
+  --surface-raised: #FFFFFF;
+
+  --ink:         var(--navy);
+  --ink-2:       #29405A;   /* 10.16:1  AA  secondary body */
+  --ink-muted:   #52657B;   /*  5.72:1  AA  micro-labels: the AA floor case */
+  /* Rules are decorative separators, not text and not component boundaries, so
+     no contrast minimum applies. Do not put words in these colours. */
+  --rule:        #D9E1EA;
+  --rule-strong: #C2CEDB;
+
+  /* Commission states. Payable and Waiting must differ by WEIGHT and TOKEN,
+     never by colour alone: reps print these and some print greyscale. */
+  --state-payable-ink:    var(--navy);
+  --state-payable-weight: var(--fw-body-strong);
+  --state-waiting-ink:    var(--amber-ink);
+  --state-waiting-weight: var(--fw-body);
+  /* Muted, but still AA. #7A8798 was the natural "greyed out" choice and
+     measured 3.49:1: below the 4.5 floor. Hold rows are text a rep has to
+     read; excluded from totals is not the same as unreadable. #64748B is the
+     lightest step on this surface that still clears AA. */
+  --state-hold-ink:       #64748B;   /* 4.55:1  AA */
+
+  --dur-count: 1000ms;
+  --dur-weight: 180ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+.smr {
+  font-family: var(--font-body);
+  font-weight: var(--fw-body);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--ink);
+  background: var(--surface);
+}
+
+/* ── Headings ─────────────────────────────────────────────────────────────── */
+.t-h1, .t-h2, .t-h3 {
+  font-family: var(--font-display);
+  font-weight: var(--fw-display-strong);
+  line-height: var(--lh-head);
+  letter-spacing: var(--ls-display);
+  color: var(--ink);
+  margin: 0;
+}
+.t-h1 { font-size: var(--fs-h1); }
+.t-h2 { font-size: var(--fs-h2); }
+.t-h3 { font-size: var(--fs-h3); font-weight: var(--fw-display-regular); }
+.t-lead { font-size: var(--fs-lead); color: var(--ink-2); }
+
+/* ── Micro-label: TOTAL ORDERS, DSO (PI) ──────────────────────────────────── */
+.t-micro {
+  font-family: var(--font-display);
+  font-weight: var(--fw-display-strong);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--ls-micro);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  line-height: 1.2;
+}
+
+/* ── Numerics ─────────────────────────────────────────────────────────────────
+   tabular-nums on EVERY number, no exception. `.t-num` is the only correct way
+   to render a figure in this system; the rule below is deliberately broad so a
+   number nested anywhere inside still gets tabular figures.                  */
+.t-num, .t-num * {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'lnum' 1;
+  letter-spacing: 0;
+}
+.t-kpi {
+  font-size: var(--fs-kpi);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-kpi);
+  color: var(--ink);
+}
+
+/* Exec-board amounts. Explicitly NOT the condensed face: condensed digits read
+   faster but less trustworthily, and a board of financials should read like a
+   financial statement. Mono, never --font-display. */
+.t-amount {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The unit beside a figure: "days" after a DSO: is Inter, not mono. It is a
+   word, not a value, and mono makes it read as part of the number. */
+.t-unit {
+  font-family: var(--font-body);
+  font-weight: var(--fw-body);
+  font-size: var(--fs-unit);
+  color: var(--ink-muted);
+  letter-spacing: 0;
+  margin-left: 0.28em;
+}
+
+/* ── Leaderboard ──────────────────────────────────────────────────────────────
+   Barlow Semi Condensed 700 is the right face here: condensed pays off on
+   names in a ranked column.
+
+   NOTE: Google Fonts serves Barlow Semi Condensed as STATIC weights only
+   (a wght@600..700 range request returns HTTP 400), so font-variation-settings
+   cannot interpolate it and the 600→700 change SNAPS. Both static weights are
+   loaded, so this is a clean snap and never synthetic bold. The variable path
+   below activates automatically if a variable build is ever self-hosted.     */
+.lb-name {
+  font-family: var(--font-display);
+  font-weight: var(--lb-wght, 600);
+  font-variation-settings: 'wght' var(--lb-wght, 600);
+  transition: font-variation-settings var(--dur-weight) var(--ease-out),
+              color var(--dur-weight) var(--ease-out);
+}
+.lb-row:hover .lb-name,
+.lb-row[data-rank-changed='true'] .lb-name { --lb-wght: 700; }
+
+/* A 600→700 change makes the name wider and shoves the column. Reserving the
+   bold width up front keeps the row still. */
+.lb-name::after {
+  content: attr(data-name);
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: 700;
+  font-variation-settings: 'wght' 700;
+}
+
+/* ── Commission states ────────────────────────────────────────────────────── */
+.state-payable { color: var(--state-payable-ink); font-weight: var(--state-payable-weight); }
+.state-waiting { color: var(--state-waiting-ink); font-weight: var(--state-waiting-weight); }
+
+/* Hold-label orders are excluded from every total. Muted italic marks them as
+   present-but-not-counted; `line-through` was avoided because these orders are
+   not void, only paused. */
+.state-hold {
+  color: var(--state-hold-ink);
+  font-style: italic;
+  font-weight: var(--fw-body);
+}
+.state-hold .t-num { opacity: 0.72; }
+
+/* ── Exceptions ───────────────────────────────────────────────────────────────
+   Amber is the resting accent. Red is reserved for items past their ageing
+   threshold: if everything is red, nothing is. */
+.exc { --exc-ink: var(--amber-ink); --exc-mark: var(--amber); }
+.exc[data-aged='true'] { --exc-ink: var(--danger-ink); --exc-mark: var(--danger); }
+.exc-label { color: var(--exc-ink); font-weight: var(--fw-body-strong); }
+.exc-mark  { background: var(--exc-mark); }
+
+@media (prefers-reduced-motion: reduce) {
+  .lb-name { transition: none; }
+}

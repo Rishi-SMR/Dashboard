@@ -94,8 +94,8 @@ export function CatalogTab() {
     const rows = items
       .filter((i) => ((i.type || 'Uncategorized').trim() || 'Uncategorized') === type)
       .map((i) => ({
-        number: i.number || '—',
-        name: <strong>{i.name || '—'}</strong>,
+        number: i.number || '-',
+        name: <strong>{i.name || '-'}</strong>,
         price: formatCurrency(i.price),
         cost: formatCurrency(i.cost),
         active: i.active ? <StatusPill status="Active" /> : '–',
@@ -139,7 +139,7 @@ export function CatalogTab() {
       {data && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="box" tint="#2563EB" label="Items" value={items.length}
+            <KpiR ico="box" tint="#0A369F" label="Items" value={items.length}
               deltaText={`${typeData.length} distinct types`} foot="items & services in Striven"
               onClick={() => openDrillForType(typeData[0]?.name ?? '')} />
             <KpiR ico="shield" tint="#16A34A" label="Active" value={activeCount}
@@ -180,9 +180,9 @@ export function CatalogTab() {
                   <tbody>
                     {shown.map((it) => (
                       <tr key={it.id}>
-                        <td>{it.number || '—'}</td>
-                        <td><strong>{it.name || '—'}</strong></td>
-                        <td>{it.type || '—'}</td>
+                        <td>{it.number || '-'}</td>
+                        <td><strong>{it.name || '-'}</strong></td>
+                        <td>{it.type || '-'}</td>
                         <td className="num">{formatCurrency(it.price)}</td>
                         <td className="num">{formatCurrency(it.cost)}</td>
                         <td>{it.active ? <StatusPill status="Active" /> : <span className="muted-note" style={{ margin: 0 }}>–</span>}</td>

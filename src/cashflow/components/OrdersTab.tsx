@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { C } from '../chartTheme';
-import { formatCurrency } from '../format';
+import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
 import { ChartCard, RankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 import {
   fetchStrivenSO,
@@ -19,10 +19,10 @@ import { OrderTrackingTab } from './OrderTrackingTab';
 
 type Mode = 'sales' | 'purchase' | 'tracking';
 
-// Fixed category colors — PI/VA/Tri-Care read the same on every SMR surface.
+// Fixed category colors: PI/VA/Tri-Care read the same on every SMR surface.
 const TYPE_COLOR = (name: string): string => {
   const s = (name || '').toLowerCase();
-  if (/pi/.test(s)) return '#2563EB';
+  if (/pi/.test(s)) return '#0A369F';
   if (/\bva\b|veteran/.test(s)) return '#16A34A';
   if (/tri.?care/.test(s)) return '#7C3AED';
   return C.muted;
@@ -32,7 +32,7 @@ type SoGroup = 'active' | 'completed' | 'cancelled';
 const GROUP_OF = (status: string): SoGroup => {
   const s = (status || '').toLowerCase();
   if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
-  if (/complete|closed|done/.test(s)) return 'completed';
+  if (isCompletedStatus(s)) return 'completed';
   return 'active';
 };
 const GROUP_LABEL: Record<SoGroup | 'All', string> = { All: 'All statuses', active: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
@@ -70,11 +70,11 @@ type Drill = {
 const fmtDate = (s: string | null) =>
   s
     ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : '—';
+    : '-';
 const fmtDateTime = (s: string | null) =>
   s
     ? new Date(s).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : '—';
+    : '-';
 
 const infoGrid: React.CSSProperties = {
   display: 'grid',
@@ -103,7 +103,7 @@ function KV({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// Portal-based detail modal — same house .drill shell the kit DrillModal uses, but
+// Portal-based detail modal: same house .drill shell the kit DrillModal uses, but
 // able to render a 2-col info grid + a full line-items table (the kit modal is table-only).
 function DetailModal({
   title,
@@ -262,25 +262,25 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
   const soPageSafe = Math.min(soPage, soPages);
   const soShown = soRecentFiltered.slice((soPageSafe - 1) * SO_PAGE, soPageSafe * SO_PAGE);
 
-  // SO by status — ranked bar (status-hued), sorted desc, empties dropped.
+  // SO by status: ranked bar (status-hued), sorted desc, empties dropped.
   const statusData = [...(so?.byStatus ?? [])]
     .filter((b) => b.count > 0)
     .sort((a, b) => b.count - a.count)
-    .map((b) => ({ name: b.status || '—', value: b.count }));
+    .map((b) => ({ name: b.status || '-', value: b.count }));
 
-  // Top vendors by PO spend — ranked money bar, brand blue, sorted desc.
+  // Top vendors by PO spend: ranked money bar, brand blue, sorted desc.
   const vendorData = [...(po?.byVendor ?? [])]
     .filter((v) => v.total > 0)
     .sort((a, b) => b.total - a.total)
     .slice(0, 12)
-    .map((v) => ({ name: v.vendor || '—', value: v.total }));
+    .map((v) => ({ name: v.vendor || '-', value: v.total }));
 
-  // Chart drill: SO rows for the clicked status (no patient — ref/type/rep/value).
+  // Chart drill: SO rows for the clicked status (no patient: ref/type/rep/value).
   function drillSoStatus(status: string) {
-    const list = (so?.recent ?? []).filter((o) => (o.status || '—') === status);
+    const list = (so?.recent ?? []).filter((o) => (o.status || '-') === status);
     const sum = list.reduce((t, o) => t + (o.value || 0), 0);
     setDrill({
-      title: `Sales Orders — ${status}`,
+      title: `Sales Orders: ${status}`,
       sub: `${list.length} order${list.length === 1 ? '' : 's'} · ${formatCurrency(sum)}`,
       columns: [
         { key: 'ref', label: 'Order #' },
@@ -293,20 +293,20 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
       rows: list.map((o) => ({
         ref: <strong>{o.ref}</strong>,
         type: <StatusPill status={o.type} />,
-        rep: o.rep || '—',
-        payer: o.payer || '—',
+        rep: o.rep || '-',
+        payer: o.payer || '-',
         value: formatCurrency(o.value),
-        inv: o.invStatus || '—',
+        inv: o.invStatus || '-',
       })),
     });
   }
 
   // Chart drill: PO rows for the clicked vendor.
   function drillPoVendor(vendor: string) {
-    const list = (po?.recent ?? []).filter((o) => (o.vendor || '—') === vendor);
+    const list = (po?.recent ?? []).filter((o) => (o.vendor || '-') === vendor);
     const sum = list.reduce((t, o) => t + o.total, 0);
     setDrill({
-      title: `Purchase Orders — ${vendor}`,
+      title: `Purchase Orders: ${vendor}`,
       sub: `${list.length} recent · ${formatCurrency(sum)}`,
       columns: [
         { key: 'ref', label: 'PO ref' },
@@ -316,7 +316,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
       ],
       rows: list.map((o) => ({
         ref: <strong>{o.ref}</strong>,
-        vendor: o.vendor || '—',
+        vendor: o.vendor || '-',
         total: formatCurrency(o.total),
         created: fmtDate(o.date),
       })),
@@ -366,7 +366,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
       {mode === 'sales' && so && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="bag" tint="#2563EB" label="Total Order Value" value={so.totalValue} format={formatCurrency}
+            <KpiR ico="bag" tint="#0A369F" label="Total Order Value" value={so.totalValue} format={formatCurrency}
               deltaText={`${so.count.toLocaleString()} open + completed orders`}
               foot={`${so.statusGroups.cancelled.count} cancelled + ${so.demoCount} demo excluded`}
               onClick={() => filterTo('All')} />
@@ -381,7 +381,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               onClick={() => filterTo('cancelled')} />
           </div>
 
-          {!so.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order type / rep / value enrichment is still populating — numbers will fill in shortly.</span></div>}
+          {!so.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order type / rep / value enrichment is still populating: numbers will fill in shortly.</span></div>}
 
           <div className="exec-grid12">
             <ChartCard className="g12-6" title="Order Value by Type" sub="PI vs VA vs Tri-Care · DEMO excluded"
@@ -409,7 +409,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
             </ChartCard>
 
             <ChartCard className="g12-12" title="Top Sales Reps · Leaderboard"
-              sub="PI reps by order count, VA reps by units (VA pays per unit) — dollar value varies by program. Referral group removed, no patient data"
+              sub="PI reps by order count, VA reps by units (VA pays per unit): dollar value varies by program. Referral group removed, no patient data"
               right={
                 <div className="smr-seg" style={{ marginBottom: 0 }}>
                   <button className={repMetric === 'orders' ? 'active' : ''} onClick={() => setRepMetric('orders')}>Orders</button>
@@ -465,11 +465,11 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                     <tr key={o.id} onClick={() => openSo(o.id)} style={{ cursor: 'pointer' }}>
                       <td><strong>{o.ref}</strong></td>
                       <td><StatusPill status={o.type} /></td>
-                      <td>{o.rep || '—'}</td>
-                      <td>{o.payer || '—'}</td>
+                      <td>{o.rep || '-'}</td>
+                      <td>{o.payer || '-'}</td>
                       <td className="num">{formatCurrency(o.value)}</td>
                       <td><StatusPill status={o.status} /></td>
-                      <td>{o.invStatus || '—'}</td>
+                      <td>{o.invStatus || '-'}</td>
                     </tr>
                   ))}
                   {soRecentFiltered.length === 0 && (
@@ -498,7 +498,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
       {mode === 'purchase' && po && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="box" tint="#2563EB" label="Purchase Orders" value={po.count}
+            <KpiR ico="box" tint="#0A369F" label="Purchase Orders" value={po.count}
               deltaText="active POs" foot={`${(po.totalCount ?? po.count).toLocaleString()} on record`}
               onClick={() => setDrill({
                 title: 'Purchase Orders', sub: 'Active vs excluded purchase orders',
@@ -512,14 +512,14 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
             <KpiR ico="cash" tint="#16A34A" label="Total PO Value" value={po.totalValue} format={formatCurrency}
               deltaText="committed spend" foot="active POs only"
               onClick={() => setDrill({
-                title: 'Total PO Value', sub: 'Committed spend by vendor — active POs only',
+                title: 'Total PO Value', sub: 'Committed spend by vendor: active POs only',
                 ...kv([
-                  ...[...po.byVendor].sort((a, b) => b.total - a.total).slice(0, 6).map((v) => ({ k: v.vendor || '—', v: formatCurrency(v.total) })),
+                  ...[...po.byVendor].sort((a, b) => b.total - a.total).slice(0, 6).map((v) => ({ k: v.vendor || '-', v: formatCurrency(v.total) })),
                   { k: 'Active total', v: formatCurrency(po.totalValue) },
                 ]),
               })} />
             <KpiR ico="trend" tint="#DC2626" label="Cancelled Excluded" value={po.cancelledCount ?? 0}
-              deltaText={po.cancelledValue ? formatCurrency(po.cancelledValue) : '—'} foot="removed from every figure" />
+              deltaText={po.cancelledValue ? formatCurrency(po.cancelledValue) : '-'} foot="removed from every figure" />
             <KpiR ico="users" tint="#7C3AED" label="Vendors on POs" value={(po.byVendor ?? []).filter((v) => v.total > 0).length}
               deltaText="with active spend" foot="see Top Vendors below" />
           </div>
@@ -565,7 +565,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                   {poShown.map((o) => (
                     <tr key={o.id} onClick={() => openPo(o.id)} style={{ cursor: 'pointer' }}>
                       <td><strong>{o.ref}</strong></td>
-                      <td>{o.vendor || '—'}</td>
+                      <td>{o.vendor || '-'}</td>
                       <td>{o.so ? <span className="pill-tag tag-info">{o.so}</span> : <span className="pill-tag tag-muted">not linked</span>}</td>
                       <td className="num">{formatCurrency(o.total)}</td>
                       <td>{o.status ? <StatusPill status={o.status} /> : <span className="pill-tag tag-ok">Active</span>}</td>
@@ -612,7 +612,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
       {mode === 'sales' && expandedSoId != null && (
         <DetailModal
           title={soDetail?.ref ?? 'Sales Order'}
-          sub={soDetail ? `Sales order · ${soDetail.customer || '—'} · ${soDetail.type || '—'}` : 'Loading…'}
+          sub={soDetail ? `Sales order · ${soDetail.customer || '-'} · ${soDetail.type || '-'}` : 'Loading…'}
           onClose={() => setExpandedSoId(null)}
         >
           {detailErr ? (
@@ -622,27 +622,27 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               <div className="section" style={{ marginTop: 0 }}>
                 <div className="section-head"><h2 className="section-title">Sales Order</h2></div>
                 <div style={infoGrid}>
-                  <KV label="Customer">{soDetail.customer || '—'}</KV>
-                  <KV label="Payer">{soDetail.payer || '—'}</KV>
+                  <KV label="Customer">{soDetail.customer || '-'}</KV>
+                  <KV label="Payer">{soDetail.payer || '-'}</KV>
                   <KV label="Program / Type">
                     <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-                      <StatusPill status={soDetail.program} />{soDetail.type || '—'}
+                      <StatusPill status={soDetail.program} />{soDetail.type || '-'}
                     </span>
                   </KV>
                   <KV label="Status"><StatusPill status={soDetail.status} /></KV>
-                  <KV label="Invoice Status">{soDetail.invoiceStatus || '—'}</KV>
-                  <KV label="Sales Rep">{soDetail.rep || '—'}</KV>
+                  <KV label="Invoice Status">{soDetail.invoiceStatus || '-'}</KV>
+                  <KV label="Sales Rep">{soDetail.rep || '-'}</KV>
                   <KV label="Order Date">{fmtDate(soDetail.orderDate)}</KV>
                   <KV label="Target Date">{fmtDate(soDetail.targetDate)}</KV>
                   <KV label="Created">{fmtDateTime(soDetail.createdDate)}{soDetail.createdBy ? ` · by ${soDetail.createdBy}` : ''}</KV>
                   <KV label="Last Updated">{fmtDateTime(soDetail.lastUpdatedDate)}{soDetail.lastUpdatedBy ? ` · by ${soDetail.lastUpdatedBy}` : ''}</KV>
-                  <KV label="Payment Term">{soDetail.paymentTerm || '—'}</KV>
-                  <KV label="Ship Via">{soDetail.shipVia || '—'}</KV>
-                  <KV label="Tracking #">{soDetail.trackingNumber || '—'}</KV>
-                  <KV label="Customer PO #">{soDetail.customerPONumber || '—'}</KV>
-                  <KV label="AR Account">{soDetail.arAccount || '—'}</KV>
-                  <KV label="Sales Tax">{soDetail.salesTax || '—'}</KV>
-                  <KV label="Invoice Format">{soDetail.invoiceFormat || '—'}</KV>
+                  <KV label="Payment Term">{soDetail.paymentTerm || '-'}</KV>
+                  <KV label="Ship Via">{soDetail.shipVia || '-'}</KV>
+                  <KV label="Tracking #">{soDetail.trackingNumber || '-'}</KV>
+                  <KV label="Customer PO #">{soDetail.customerPONumber || '-'}</KV>
+                  <KV label="AR Account">{soDetail.arAccount || '-'}</KV>
+                  <KV label="Sales Tax">{soDetail.salesTax || '-'}</KV>
+                  <KV label="Invoice Format">{soDetail.invoiceFormat || '-'}</KV>
                   <KV label="Notes / Attachments">{soDetail.notesLogCount} notes · {soDetail.attachmentCount} files</KV>
                   {(soDetail.isChangeOrder || soDetail.isRecurring) && (
                     <KV label="Flags">
@@ -657,7 +657,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               </div>
 
               <div className="section">
-                <div className="section-head"><h2 className="section-title">Line Items — what was ordered</h2></div>
+                <div className="section-head"><h2 className="section-title">Line Items: what was ordered</h2></div>
                 <div className="table-wrap">
                   <table className="data-table">
                     <thead>
@@ -673,12 +673,12 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                     <tbody>
                       {soDetail.lineItems.map((li, i) => (
                         <tr key={i}>
-                          <td><strong>{li.item || '—'}</strong>{li.description ? <div className="muted-note" style={{ margin: 0 }}>{li.description}</div> : null}</td>
+                          <td><strong>{li.item || '-'}</strong>{li.description ? <div className="muted-note" style={{ margin: 0 }}>{li.description}</div> : null}</td>
                           <td className="num">{li.qty.toLocaleString()}</td>
                           <td className="num">{formatCurrency(li.unit)}</td>
-                          <td className="num">{li.shipping ? formatCurrency(li.shipping) : '—'}</td>
+                          <td className="num">{li.shipping ? formatCurrency(li.shipping) : '-'}</td>
                           <td className="num">{formatCurrency(li.amount)}</td>
-                          <td>{li.ordered == null ? '—' : li.ordered ? <span className="pill-tag tag-ok">Yes</span> : <span className="pill-tag tag-warn">Not yet</span>}</td>
+                          <td>{li.ordered == null ? '-' : li.ordered ? <span className="pill-tag tag-ok">Yes</span> : <span className="pill-tag tag-warn">Not yet</span>}</td>
                         </tr>
                       ))}
                       {soDetail.lineItems.length === 0 && (
@@ -702,11 +702,11 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
         </DetailModal>
       )}
 
-      {/* ── PURCHASE-ORDER DETAIL (full — key deliverable) ───────── */}
+      {/* ── PURCHASE-ORDER DETAIL (full: key deliverable) ───────── */}
       {mode === 'purchase' && expandedPoId != null && (
         <DetailModal
           title={poDetail?.ref ?? 'Purchase Order'}
-          sub={poDetail ? `Purchase order · ${poDetail.vendor || '—'}` : 'Loading…'}
+          sub={poDetail ? `Purchase order · ${poDetail.vendor || '-'}` : 'Loading…'}
           onClose={() => setExpandedPoId(null)}
         >
           {detailErr ? (
@@ -716,26 +716,26 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               <div className="section" style={{ marginTop: 0 }}>
                 <div className="section-head"><h2 className="section-title">Purchase Order</h2></div>
                 <div style={infoGrid}>
-                  <KV label="Raised by">{poDetail.createdBy || '—'}{poDetail.createdDate ? ` · ${fmtDateTime(poDetail.createdDate)}` : ''}</KV>
-                  <KV label="Requested by">{poDetail.requestedBy || '—'}</KV>
-                  <KV label="Contact">{poDetail.contact || '—'}</KV>
+                  <KV label="Raised by">{poDetail.createdBy || '-'}{poDetail.createdDate ? ` · ${fmtDateTime(poDetail.createdDate)}` : ''}</KV>
+                  <KV label="Requested by">{poDetail.requestedBy || '-'}</KV>
+                  <KV label="Contact">{poDetail.contact || '-'}</KV>
                   <KV label="Vendor">
                     <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      {poDetail.vendor || '—'}
+                      {poDetail.vendor || '-'}
                       <StatusPill status={poDetail.status} />
                     </span>
                   </KV>
                   <KV label="Linked Sales Order">{poDetail.linkedSo ? <span className="pill-tag tag-info">{poDetail.linkedSo}</span> : 'not linked to an order'}</KV>
-                  <KV label="Type">{poDetail.type || '—'}</KV>
+                  <KV label="Type">{poDetail.type || '-'}</KV>
                   <KV label="PO Date">{fmtDate(poDetail.poDate)}</KV>
                   <KV label="Promise Date">{fmtDate(poDetail.promiseDate)}</KV>
                   <KV label="Approved Date">{fmtDate(poDetail.approvedDate)}</KV>
                   <KV label="Reviewed Date">{fmtDate(poDetail.reviewedDate)}</KV>
-                  <KV label="Accepted by">{poDetail.acceptedBy || '—'}</KV>
-                  <KV label="Payment Term">{poDetail.paymentTerm || '—'}</KV>
-                  <KV label="Account">{poDetail.account || '—'}</KV>
-                  <KV label="Ship Via">{poDetail.shipVia || '—'}</KV>
-                  <KV label="Drop-ship">{poDetail.dropShipCustomer || '—'}</KV>
+                  <KV label="Accepted by">{poDetail.acceptedBy || '-'}</KV>
+                  <KV label="Payment Term">{poDetail.paymentTerm || '-'}</KV>
+                  <KV label="Account">{poDetail.account || '-'}</KV>
+                  <KV label="Ship Via">{poDetail.shipVia || '-'}</KV>
+                  <KV label="Drop-ship">{poDetail.dropShipCustomer || '-'}</KV>
                   <KV label="Last Updated">{fmtDateTime(poDetail.lastUpdatedDate)}{poDetail.lastUpdatedBy ? ` · by ${poDetail.lastUpdatedBy}` : ''}</KV>
                   <KV label="Notes / Attachments">{poDetail.notesLogCount} notes · {poDetail.attachmentCount} files</KV>
                   {(poDetail.isDropShip || poDetail.isBlanket || poDetail.isFixedCost || poDetail.allowPartial || poDetail.isRecurring || poDetail.needsReview) && (
@@ -749,11 +749,11 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                     </KV>
                   )}
                 </div>
-                <div className="muted-note">Drop-ship customer masked — PHI protected.</div>
+                <div className="muted-note">Drop-ship customer masked: PHI protected.</div>
               </div>
 
               <div className="section">
-                <div className="section-head"><h2 className="section-title">Line Items — what was purchased</h2></div>
+                <div className="section-head"><h2 className="section-title">Line Items: what was purchased</h2></div>
                 <div className="table-wrap">
                   <table className="data-table">
                     <thead>
@@ -767,8 +767,8 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                     <tbody>
                       {poDetail.lineItems.map((li, i) => (
                         <tr key={i}>
-                          <td><strong>{li.item || '—'}</strong></td>
-                          <td>{li.description || '—'}</td>
+                          <td><strong>{li.item || '-'}</strong></td>
+                          <td>{li.description || '-'}</td>
                           <td className="num">{li.qty.toLocaleString()}</td>
                           <td className="num">{formatCurrency(li.amount)}</td>
                         </tr>

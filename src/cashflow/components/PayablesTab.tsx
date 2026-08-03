@@ -12,7 +12,7 @@ const VENDOR_CAP = 50;
 const PAGE_SIZE = 8;
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 
 const daysPast = (dueDate: string | null, refMs = Date.now()): number => {
   if (!dueDate) return 0;
@@ -30,7 +30,7 @@ function DuePill({ dueDate, refMs }: { dueDate: string | null; refMs?: number })
   return <span className="pill-tag tag-info">Due in {-d}d</span>;
 }
 
-// A recorded bill payment means the vendor bill HAS been settled — show it as paid,
+// A recorded bill payment means the vendor bill HAS been settled: show it as paid,
 // unless Striven explicitly voided/cancelled the charge.
 const isPaid = (status: string) => !/cancel|void|fail|reject|denied/i.test(status || '');
 const PaidBadge = ({ status }: { status: string }) =>
@@ -99,20 +99,20 @@ export function PayablesTab() {
     return m;
   }, [bills, refMs]);
 
-  // Top vendors by PO spend — brand-blue ranked bars, click to drill into POs.
+  // Top vendors by PO spend: brand-blue ranked bars, click to drill into POs.
   const vendorData = useMemo(
     () => [...(po?.byVendor ?? [])]
       .filter((v) => v.total > 0)
       .sort((a, b) => b.total - a.total)
       .slice(0, 7)
-      .map((v) => ({ name: v.vendor || '—', value: v.total })),
+      .map((v) => ({ name: v.vendor || '-', value: v.total })),
     [po],
   );
   function openVendorDrill(name: string) {
     const rows = (po?.recent ?? [])
-      .filter((r) => (r.vendor || '—') === name)
+      .filter((r) => (r.vendor || '-') === name)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      .map((r) => ({ ref: r.ref || '—', date: fmtDate(r.date), amt: formatCurrency(r.total) }));
+      .map((r) => ({ ref: r.ref || '-', date: fmtDate(r.date), amt: formatCurrency(r.total) }));
     setDrill({
       title: name, sub: `${rows.length} purchase order${rows.length === 1 ? '' : 's'} on record`,
       columns: [{ key: 'ref', label: 'PO ref' }, { key: 'date', label: 'Date' }, { key: 'amt', label: 'Amount', num: true }],
@@ -165,7 +165,7 @@ export function PayablesTab() {
       title: `AP Aging · ${label}`, sub: label === 'Current' ? 'Bills not yet due' : `Bills ${label} days past due`,
       columns: [{ key: 'n', label: 'Bill #' }, { key: 'v', label: 'Vendor' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
       rows: bills.filter((b) => b.open > 0 && inBucket(b)).sort((a, b) => b.open - a.open)
-        .map((b) => ({ n: `#${b.number}`, v: b.vendor || '—', d: fmtDate(b.dueDate), o: formatCurrency(b.open) })),
+        .map((b) => ({ n: `#${b.number}`, v: b.vendor || '-', d: fmtDate(b.dueDate), o: formatCurrency(b.open) })),
     });
   };
 
@@ -179,17 +179,17 @@ export function PayablesTab() {
     ...kv([...AGING_LABELS.map((b) => ({ k: b.label, v: formatCurrency(ap?.aging[b.key] || 0) })), { k: 'Total', v: formatCurrency(ap?.totalOpen || 0) }]),
   });
   const explainPo = () => setDrill({
-    title: 'PO Total', sub: 'Value of ACTIVE purchase orders — cancelled/voided POs excluded',
+    title: 'PO Total', sub: 'Value of ACTIVE purchase orders: cancelled/voided POs excluded',
     ...kv([
-      ...[...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5).map((v) => ({ k: v.vendor || '—', v: formatCurrency(v.total) })),
+      ...[...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5).map((v) => ({ k: v.vendor || '-', v: formatCurrency(v.total) })),
       ...(po?.cancelledValue ? [{ k: 'Cancelled (excluded)', v: formatCurrency(po.cancelledValue) }] : []),
       { k: 'Active total', v: formatCurrency(po?.totalValue ?? 0) },
     ]),
   });
   const explainPaid = () => setDrill({
-    title: 'Bills Paid', sub: 'Vendor bill payments recorded in Striven — the cash side of payables',
+    title: 'Bills Paid', sub: 'Vendor bill payments recorded in Striven: the cash side of payables',
     columns: [{ key: 'r', label: 'Reference' }, { key: 'v', label: 'Vendor' }, { key: 'd', label: 'Paid on' }, { key: 'a', label: 'Amount', num: true }],
-    rows: payments.map((p) => ({ r: p.ref || '—', v: p.vendor || '—', d: fmtDate(p.date), a: formatCurrency(p.amount) })),
+    rows: payments.map((p) => ({ r: p.ref || '-', v: p.vendor || '-', d: fmtDate(p.date), a: formatCurrency(p.amount) })),
   });
 
   const vendorRows = (vendors?.vendors ?? []).slice(0, VENDOR_CAP);
@@ -220,7 +220,7 @@ export function PayablesTab() {
       {ready && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="doc" tint="#2563EB" label="AP Open" value={ap!.totalOpen} format={formatCurrency}
+            <KpiR ico="doc" tint="#0A369F" label="AP Open" value={ap!.totalOpen} format={formatCurrency}
               deltaText={`${ap!.count} open bills`} foot="excludes voided bills" onClick={explainAp} />
             <KpiR ico="clip" tint="#16A34A" label="# Open Bills" value={ap!.count}
               deltaText="awaiting payment" foot="matches Striven AP aging" />
@@ -279,11 +279,11 @@ export function PayablesTab() {
                       return (
                         <tr key={b.id}>
                           <td><strong>#{b.number}</strong></td>
-                          <td>{b.vendor || '—'}</td>
+                          <td>{b.vendor || '-'}</td>
                           <td>{fmtDate(b.dueDate)}</td>
                           <td className="num">{formatCurrency(b.total)}</td>
                           <td className="num cell-neg">{formatCurrency(b.open)}</td>
-                          <td className="num cell-neg">{d > 0 ? d : '—'}</td>
+                          <td className="num cell-neg">{d > 0 ? d : '-'}</td>
                           <td><DuePill dueDate={b.dueDate} refMs={refMs} /></td>
                         </tr>
                       );
@@ -344,9 +344,9 @@ export function PayablesTab() {
                   <tbody>
                     {payments.map((p) => (
                       <tr key={p.id}>
-                        <td><strong>{p.ref || '—'}</strong></td>
-                        <td>{p.vendor || '—'}</td>
-                        <td>{p.account || '—'}</td>
+                        <td><strong>{p.ref || '-'}</strong></td>
+                        <td>{p.vendor || '-'}</td>
+                        <td>{p.account || '-'}</td>
                         <td>{fmtDate(p.date)}</td>
                         <td className="num cell-pos">{formatCurrency(p.amount)}</td>
                         <td><PaidBadge status={p.status} /></td>
@@ -379,9 +379,9 @@ export function PayablesTab() {
                   <tbody>
                     {vendorRows.map((v) => (
                       <tr key={v.id}>
-                        <td><strong>{v.name || '—'}</strong></td>
+                        <td><strong>{v.name || '-'}</strong></td>
                         <td><StatusPill status={v.status} /></td>
-                        <td>{v.terms || '—'}</td>
+                        <td>{v.terms || '-'}</td>
                         <td>{formatPhone(v.phone)}</td>
                       </tr>
                     ))}

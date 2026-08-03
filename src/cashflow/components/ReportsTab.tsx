@@ -8,7 +8,7 @@ import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-';
 
 type Tab = 'vendors' | 'patients';
 
@@ -46,7 +46,7 @@ export function ReportsTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Reports</h1>
           <div className="page-sub">
-            <span className="live-dot" /> What we buy from each vendor · what each patient orders — cancelled excluded{agoText ? ` · loaded ${agoText}` : ''}
+            <span className="live-dot" /> What we buy from each vendor · what each patient orders: cancelled excluded{agoText ? ` · loaded ${agoText}` : ''}
             {generatedAt && <span style={{ marginLeft: 10, fontSize: 12 }}>· data as of {fmtDate(generatedAt)}</span>}
           </div>
         </div>
@@ -90,7 +90,7 @@ function VendorReport({ data }: { data: VendorItemsReport }) {
 
   return (
     <div className="section">
-      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 14 }}>
         <KpiR ico="bag" tint={C.brand} label="Vendors" value={data.vendors.length} foot="vendors we purchase from" deltaText="ranked by spend" />
         <KpiR ico="box" tint="#8B5CF6" label="Distinct items" value={totalItems} foot="unique items purchased" deltaText="across all vendors" />
         <KpiR ico="cash" tint="#16A34A" label="Total purchase cost" value={totalSpend} format={formatCurrency} foot="from non-cancelled POs" deltaText="all vendors" />
@@ -144,15 +144,15 @@ function PatientReport({ data }: { data: PatientItemsReport }) {
 
   return (
     <div className="section">
-      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KpiR ico="users" tint={C.brand} label="Patients" value={data.patients.length} foot="by reference — no names" deltaText="ranked by # orders" />
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 14 }}>
+        <KpiR ico="users" tint={C.brand} label="Patients" value={data.patients.length} foot="by reference: no names" deltaText="ranked by # orders" />
         <KpiR ico="clip" tint="#8B5CF6" label="Sales orders" value={totalSo} foot="non-cancelled orders" deltaText="across all patients" />
         <KpiR ico="cash" tint="#16A34A" label="Total order value" value={totalValue} format={formatCurrency} foot="from non-cancelled SOs" deltaText="all patients" />
       </div>
 
       <div className="qb-flash warn" style={{ marginBottom: 12 }}>
         🔒 Patient names are protected health information and are never shown or stored here. Each patient appears as a reference
-        (<b>PT-&lt;Striven customer id&gt;</b>) — look the reference up inside Striven when you need to identify someone.
+        (<b>PT-&lt;Striven customer id&gt;</b>): look the reference up inside Striven when you need to identify someone.
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -216,7 +216,7 @@ function FragmentRow({ rank, name, a, b, c, open, onToggle, columns, rows }: {
 
 // SO-wise patient orders (client SOW): one row per sales order, with the shared
 // patient reference, last name (minimum-necessary PHI) and its line items.
-const PROG_C: Record<string, string> = { PI: '#2563EB', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };
+const PROG_C: Record<string, string> = { PI: '#0A369F', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };
 function OrdersReport({ data }: { data: PatientItemsReport }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<number | null>(null);
@@ -235,7 +235,7 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
   const patients = new Set(all.map((o) => o.custRef || o.ref).filter(Boolean)).size;
 
   function exportCsv() {
-    const rows = all.flatMap((o) => (o.items.length ? o.items : [{ item: '—', qty: 0, value: 0 }])
+    const rows = all.flatMap((o) => (o.items.length ? o.items : [{ item: '-', qty: 0, value: 0 }])
       .map((i) => [o.so, o.ref || '', o.lastName || '', o.program || '', i.item, i.qty, i.value]));
     downloadCsv('patient-orders.csv', ['Sales order', 'Reference', 'Last name', 'Program', 'Item', 'Qty', 'Value'], rows);
   }
@@ -244,7 +244,7 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
 
   return (
     <div className="section">
-      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 14 }}>
         <KpiR ico="clip" tint={C.brand} label="Sales orders" value={all.length} foot="one row per SO" deltaText="non-cancelled" />
         <KpiR ico="users" tint="#8B5CF6" label="Patients" value={patients} foot="distinct references" deltaText="by PT-<id>" />
         <KpiR ico="cash" tint="#16A34A" label="Total order value" value={totalValue} format={formatCurrency} foot="from non-cancelled SOs" deltaText="all orders" />
@@ -277,9 +277,9 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
                   style={{ cursor: o.items.length ? 'pointer' : 'default', background: open === o.soId ? 'var(--accent-soft-2)' : undefined, opacity: o.incomplete ? 0.6 : undefined }}>
                   <td style={{ color: 'var(--muted)' }}>{i + 1}</td>
                   <td style={{ fontWeight: 700 }}>{o.items.length ? (open === o.soId ? '▾ ' : '▸ ') : ''}{o.so}</td>
-                  <td style={{ fontWeight: 600 }}>{o.ref || '—'}</td>
-                  <td>{o.lastName || '—'}{o.incomplete && <span className="pill-tag tag-warn" style={{ marginLeft: 6, fontSize: 10 }}>incomplete</span>}</td>
-                  <td><span className="pill-tag" style={{ color: PROG_C[o.program] || PROG_C.Other, borderColor: 'currentColor' }}>{o.program || '—'}</span></td>
+                  <td style={{ fontWeight: 600 }}>{o.ref || '-'}</td>
+                  <td>{o.lastName || '-'}{o.incomplete && <span className="pill-tag tag-warn" style={{ marginLeft: 6, fontSize: 10 }}>incomplete</span>}</td>
+                  <td><span className="pill-tag" style={{ color: PROG_C[o.program] || PROG_C.Other, borderColor: 'currentColor' }}>{o.program || '-'}</span></td>
                   <td className="num">{o.items.length}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.value)}</td>
                 </tr>

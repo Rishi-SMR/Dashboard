@@ -10,9 +10,9 @@ import { C, SERIES, monthLabel } from '../chartTheme';
 import { ChartCard, RankBar, TrendArea, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 
-// A recorded bill payment means the vendor bill HAS been settled — show it as paid,
+// A recorded bill payment means the vendor bill HAS been settled: show it as paid,
 // unless Striven explicitly voided/cancelled the charge.
 const isPaid = (status: string) => !/cancel|void|fail|reject|denied/i.test(status || '');
 const PaidBadge = ({ status }: { status: string }) =>
@@ -68,7 +68,7 @@ export function AccountsTab() {
   // Bill payments grouped by vendor → amount paid (ranked money bar).
   const bpByVendor = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of bp?.recent ?? []) m.set(r.vendor || '—', (m.get(r.vendor || '—') ?? 0) + r.amount);
+    for (const r of bp?.recent ?? []) m.set(r.vendor || '-', (m.get(r.vendor || '-') ?? 0) + r.amount);
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [bp]);
 
@@ -90,8 +90,8 @@ export function AccountsTab() {
       .filter((a) => ((a.type || 'Uncategorized').trim() || 'Uncategorized') === type)
       .sort((x, y) => (x.number || '').localeCompare(y.number || '', undefined, { numeric: true }))
       .map((a) => ({
-        number: a.number || '—',
-        name: <strong>{a.name || '—'}</strong>,
+        number: a.number || '-',
+        name: <strong>{a.name || '-'}</strong>,
         active: a.active ? <StatusPill status="Active" /> : <span className="muted-note" style={{ margin: 0 }}>–</span>,
       }));
     setDrill({
@@ -103,17 +103,17 @@ export function AccountsTab() {
   }
 
   function openBpDrill(vendor: string) {
-    const list = (bp?.recent ?? []).filter((r) => (r.vendor || '—') === vendor);
+    const list = (bp?.recent ?? []).filter((r) => (r.vendor || '-') === vendor);
     const sum = list.reduce((t, r) => t + r.amount, 0);
     setDrill({
-      title: `Bill Payments — ${vendor}`,
+      title: `Bill Payments: ${vendor}`,
       sub: `${list.length} paid · ${formatCurrency(sum)}`,
       columns: [
         { key: 'ref', label: 'Reference' }, { key: 'account', label: 'Paid from' },
         { key: 'date', label: 'Paid on' }, { key: 'amount', label: 'Amount', num: true }, { key: 'status', label: 'Status' },
       ],
       rows: list.map((r) => ({
-        ref: <strong>{r.ref}</strong>, account: r.account || '—', date: fmtDate(r.date),
+        ref: <strong>{r.ref}</strong>, account: r.account || '-', date: fmtDate(r.date),
         amount: formatCurrency(r.amount), status: <PaidBadge status={r.status} />,
       })),
     });
@@ -151,7 +151,7 @@ export function AccountsTab() {
       {ready && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="bank" tint="#2563EB" label="GL Accounts" value={accounts.length}
+            <KpiR ico="bank" tint="#0A369F" label="GL Accounts" value={accounts.length}
               deltaText={`${typeData.length} account types`} foot="chart of accounts"
               onClick={() => setDrill({
                 title: 'GL Accounts', sub: 'Every general-ledger account by type',
@@ -170,7 +170,7 @@ export function AccountsTab() {
                 ...kv([...bpByVendor.map((v) => ({ k: v.name, v: formatCurrency(v.value) })), { k: 'Total paid', v: formatCurrency(bp.total) }]),
               })} />
             <KpiR ico="users" tint="#7C3AED" label="Active Accounts" value={activeCount}
-              deltaText={accounts.length ? `${Math.round((activeCount / accounts.length) * 100)}% of ledger` : '—'}
+              deltaText={accounts.length ? `${Math.round((activeCount / accounts.length) * 100)}% of ledger` : '-'}
               foot={`${inactiveCount} archived`} />
           </div>
 
@@ -183,14 +183,14 @@ export function AccountsTab() {
             </ChartCard>
           </div>
 
-          {/* ── Bill payments — PAID ────────────────────────────────── */}
+          {/* ── Bill payments: PAID ────────────────────────────────── */}
           <ChartCard
-            title="Bill Payments — Paid"
+            title="Bill Payments: Paid"
             sub={`${formatCurrency(bp.total)} settled · ${paidCount} of ${bp.count} bill payment${bp.count === 1 ? '' : 's'} marked paid`}
           >
             <div className="paid-banner">
               <span className="paid-banner-check">✓</span>
-              <span><strong>All caught up.</strong> Every recorded bill payment has been settled with the vendor — {formatCurrency(bp.total)} paid.</span>
+              <span><strong>All caught up.</strong> Every recorded bill payment has been settled with the vendor: {formatCurrency(bp.total)} paid.</span>
             </div>
             {bpByVendor.length > 0 && <RankBar data={bpByVendor} money colorAt={() => C.positive} onSelect={openBpDrill} />}
             <div className="table-wrap" style={{ marginTop: 14 }}>
@@ -205,8 +205,8 @@ export function AccountsTab() {
                   {bp.recent.map((r) => (
                     <tr key={r.id}>
                       <td><strong>{r.ref}</strong></td>
-                      <td>{r.vendor || '—'}</td>
-                      <td>{r.account || '—'}</td>
+                      <td>{r.vendor || '-'}</td>
+                      <td>{r.account || '-'}</td>
                       <td>{fmtDate(r.date)}</td>
                       <td className="num">{formatCurrency(r.amount)}</td>
                       <td><PaidBadge status={r.status} /></td>
@@ -234,7 +234,7 @@ export function AccountsTab() {
                   {pay.recent.map((r) => (
                     <tr key={r.id}>
                       <td><strong>{r.ref}</strong></td>
-                      <td>{r.customer || '—'}</td>
+                      <td>{r.customer || '-'}</td>
                       <td>{fmtDate(r.date)}</td>
                       <td className="num">{formatCurrency(r.amount)}</td>
                       <td><StatusPill status={r.status} /></td>
@@ -246,7 +246,7 @@ export function AccountsTab() {
                 </tbody>
               </table>
             </div>
-            <div className="muted-note">Patient names masked — PHI protected.</div>
+            <div className="muted-note">Patient names masked: PHI protected.</div>
           </ChartCard>
 
           {/* ── Chart of accounts (full ledger, every field) ────────── */}
@@ -254,7 +254,7 @@ export function AccountsTab() {
             <div className="info-banner">
               <span className="info-banner-icon">ℹ</span>
               <span>
-                <strong>No running balances shown — and that's correct.</strong> Striven's API does not expose GL account
+                <strong>No running balances shown: and that's correct.</strong> Striven's API does not expose GL account
                 balances (they live only in Striven's Report Builder), so no balance figure here is invented. Every other
                 account field is pulled live below.
               </span>
@@ -270,12 +270,12 @@ export function AccountsTab() {
                 <tbody>
                   {sortedAccounts.map((a) => (
                     <tr key={a.id}>
-                      <td>{a.number || '—'}</td>
-                      <td><strong>{a.name || '—'}</strong></td>
-                      <td>{a.type || '—'}</td>
-                      <td>{a.parent || '—'}</td>
+                      <td>{a.number || '-'}</td>
+                      <td><strong>{a.name || '-'}</strong></td>
+                      <td>{a.type || '-'}</td>
+                      <td>{a.parent || '-'}</td>
                       <td>{a.canPost === false ? <span className="pill-tag tag-warn">No</span> : <span className="pill-tag tag-ok">Yes</span>}</td>
-                      <td>{a.reconcilable ? <span className="pill-tag tag-info">Yes</span> : <span className="muted-note" style={{ margin: 0 }}>—</span>}</td>
+                      <td>{a.reconcilable ? <span className="pill-tag tag-info">Yes</span> : <span className="muted-note" style={{ margin: 0 }}>-</span>}</td>
                       <td>{a.active ? <StatusPill status="Active" /> : <span className="muted-note" style={{ margin: 0 }}>–</span>}</td>
                     </tr>
                   ))}

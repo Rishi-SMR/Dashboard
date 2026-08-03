@@ -102,7 +102,7 @@ export function PLTab() {
               delta={revD} deltaText={`${pl.invoiceCount.toLocaleString()} invoices`} foot={`${pl.invoiceCount.toLocaleString()} invoices · voided excluded`} onClick={explainRevenue} />
             <KpiR ico="trend" tint="#DC2626" label="Expenses" value={pl.expenses} format={formatCurrency}
               delta={expD} deltaInvert deltaText={`${pl.billCount.toLocaleString()} bills`} foot={`${pl.billCount.toLocaleString()} vendor bills`} onClick={explainExpenses} />
-            <KpiR ico="pie" tint="#2563EB" label="Net Profit" value={pl.net} format={formatCurrency}
+            <KpiR ico="pie" tint="#0A369F" label="Net Profit" value={pl.net} format={formatCurrency}
               delta={netD} deltaText="revenue − expenses" foot={`${pct(pl.margin)} net margin`} onClick={explainNet} />
             <KpiR ico="wallet" tint="#4F46E5" label="Cash Received" value={pl.cashReceived} format={formatCurrency}
               delta={cashD} deltaText="collected to date" foot={`${(payments?.count ?? 0).toLocaleString()} payments collected`} />
@@ -173,7 +173,7 @@ export function PLTab() {
                         <td className="num">{formatCurrency(m.revenue)}</td>
                         <td className="num">{formatCurrency(m.expenses)}</td>
                         <td className="num" style={{ color: m.net >= 0 ? '#047857' : '#b91c1c', fontWeight: 700 }}>{formatCurrency(m.net)}</td>
-                        <td className="num">{m.revenue ? pct((m.net / m.revenue) * 100) : '—'}</td>
+                        <td className="num">{m.revenue ? pct((m.net / m.revenue) * 100) : '-'}</td>
                       </tr>
                     ))}
                     {pl.series.length === 0 && <tr><td colSpan={5} className="muted-note">No transactions in the period.</td></tr>}

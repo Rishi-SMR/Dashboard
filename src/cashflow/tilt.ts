@@ -7,7 +7,7 @@
 // so it can never affect layout, data, or the approved resting look.
 //
 // One document-level listener (rAF-throttled) handles every card, including the
-// ones that mount later from lazy tabs — no per-component wiring needed.
+// ones that mount later from lazy tabs: no per-component wiring needed.
 
 const SELECTOR = '.kpi--exec, .kpi-r, .kpi--grad';
 const MAX_DEG = 5; // max tilt per axis (deg)

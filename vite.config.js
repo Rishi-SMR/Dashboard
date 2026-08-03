@@ -8,6 +8,12 @@ import { resolve } from "path";
 // at dev time. Override the target with VITE_SMR_API if the backend runs elsewhere.
 const SMR_API = process.env.VITE_SMR_API || "http://localhost:4747";
 
+// There is ONE bundle. There used to be two — SMR_AUDIENCE=rep aliased `@money`
+// to a throwing stub so the rep build could not render currency — but the rep
+// portal shows dollars on nearly every screen, so that build had already ceased
+// to work. Rep visibility is now enforced by ROLE at runtime: the server denies
+// company routes to non-admins and redacts other reps' figures before it
+// serializes. See src/cashflow/format.ts for the full note.
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -20,6 +26,7 @@ export default defineConfig({
     },
   },
   build: {
+    outDir: "dist",
     chunkSizeWarningLimit: 800,
     rollupOptions: {
       input: {

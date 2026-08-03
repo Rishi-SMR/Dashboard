@@ -4,7 +4,7 @@ import { CatalogTab } from './CatalogTab';
 
 type Mode = 'vendors' | 'items';
 
-// Vendors & Items — one sidebar destination, two sub-views (same pattern as
+// Vendors & Items: one sidebar destination, two sub-views (same pattern as
 // Orders and AR/AP). Each sub-view keeps its own header and controls.
 export function VendorsItemsTab({ initialMode = 'vendors' }: { initialMode?: Mode } = {}) {
   const [mode, setMode] = useState<Mode>(initialMode);

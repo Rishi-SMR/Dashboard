@@ -4,7 +4,7 @@ import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 
 const STATUS_TONE = (raw: string): 'ok' | 'info' | 'warn' | 'none' => {
   if (raw === 'DELIVERED') return 'ok';
@@ -15,7 +15,7 @@ const STATUS_TONE = (raw: string): 'ok' | 'info' | 'warn' | 'none' => {
 };
 const CARRIERS = [{ v: '', l: 'Auto-detect' }, { v: 'ups', l: 'UPS' }, { v: 'fedex', l: 'FedEx' }, { v: 'usps', l: 'USPS' }, { v: 'dhl_express', l: 'DHL' }];
 
-// Shipment tracking — vendor tracking numbers matched to a patient (last name /
+// Shipment tracking: vendor tracking numbers matched to a patient (last name /
 // ship-to), with LIVE carrier status via Shippo. Crystal's use case: search a
 // last name → see where the shipment is, no email crafting.
 export function TrackingTab({ embedded = false }: { embedded?: boolean } = {}) {
@@ -85,20 +85,20 @@ export function TrackingTab({ embedded = false }: { embedded?: boolean } = {}) {
 
       {tokenBad && (
         <div className="qb-flash err" style={{ marginBottom: 12 }}>
-          🔑 <b>Shippo not connected</b> — live status is off until a valid Shippo <b>Live API token</b> is set
+          🔑 <b>Shippo not connected</b>: live status is off until a valid Shippo <b>Live API token</b> is set
           (Settings → API in Shippo). Entries + carrier links work now; statuses will fill in once the token is valid.
         </div>
       )}
 
       <div className="section">
-        <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+        <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 14 }}>
           <KpiR ico="box" tint={C.brand} label="Tracked shipments" value={entries.length} foot="active tracking numbers" deltaText="total" />
           <KpiR ico="clock" tint="#D97706" label="In transit" value={transit} foot="on the way" deltaText="live" />
           <KpiR ico="shield" tint={issues ? '#DC2626' : '#16A34A'} label={issues ? 'Needs attention' : 'Delivered'} value={issues || delivered} foot={issues ? 'returned / exception' : 'completed'} deltaText={issues ? 'check these' : 'ok'} />
         </div>
 
         <div className="qb-flash warn" style={{ marginBottom: 12 }}>
-          🔒 Matched by <b>last name / ship-to</b> (vendor invoices carry no order number) — full patient names are never stored.
+          🔒 Matched by <b>last name / ship-to</b> (vendor invoices carry no order number): full patient names are never stored.
           Add a tracking number below (from the vendor email/portal); status updates automatically via Shippo.
         </div>
 
@@ -123,11 +123,11 @@ export function TrackingTab({ embedded = false }: { embedded?: boolean } = {}) {
                 <th>Patient</th><th>Vendor</th><th>Carrier</th><th>Tracking #</th><th>Status</th><th>Updated</th><th>ETA</th><th />
               </tr></thead>
               <tbody>
-                {rows.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>{entries.length ? 'No shipments match.' : 'No tracking numbers yet — add one above.'}</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>{entries.length ? 'No shipments match.' : 'No tracking numbers yet: add one above.'}</td></tr>}
                 {rows.map((e: TrackingEntry) => (
                   <tr key={e.id}>
-                    <td style={{ fontWeight: 700 }}>{e.patient || '—'}</td>
-                    <td>{e.vendor || '—'}</td>
+                    <td style={{ fontWeight: 700 }}>{e.patient || '-'}</td>
+                    <td>{e.vendor || '-'}</td>
                     <td>{e.carrierName}</td>
                     <td>
                       {e.trackingUrl

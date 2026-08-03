@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
-import { Sidebar } from './components/Sidebar';
-import { fetchStrivenStatus, type StrivenStatus } from './strivenApi';
+import { Sidebar, DEFAULT_VIEW, allowedViews, defaultViewFor, type Mode } from './components/Sidebar';
+import { fetchStrivenStatus, fetchMe, type StrivenStatus } from './strivenApi';
 
 // Lazy-loaded so recharts (heavy) only downloads when a chart tab is opened.
 const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m) => ({ default: m.OverviewCharts })));
@@ -15,10 +15,12 @@ const QuickBooksTab = lazy(() => import('./components/QuickBooksTab').then((m) =
 const ReportsTab = lazy(() => import('./components/ReportsTab').then((m) => ({ default: m.ReportsTab })));
 const AutomationHub = lazy(() => import('./components/AutomationHub').then((m) => ({ default: m.AutomationHub })));
 const CommissionTab = lazy(() => import('./components/Commission').then((m) => ({ default: m.CommissionTab })));
+const RepsTab = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.RepsTab })));
+const TeamStandings = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.TeamStandings })));
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reports' | 'quickbooks';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'repsroster' | 'standings' | 'reports' | 'quickbooks';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -77,14 +79,24 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reports', 'quickbooks'];
-const initialView = (): ViewKey => {
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'repsroster', 'standings', 'reports', 'quickbooks'];
+const readHash = (): ViewKey | null => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
-  return VIEW_KEYS.includes(h) ? h : 'overview';
+  return VIEW_KEYS.includes(h) ? h : null;
+};
+
+const MODE_KEY = 'smr_mode';
+const readMode = (): Mode => {
+  try { return localStorage.getItem(MODE_KEY) === 'company' ? 'company' : 'reps'; } catch { return 'reps'; }
 };
 
 function Dashboard({ onSignOut }: { onSignOut: () => void }) {
-  const [view, setViewRaw] = useState<ViewKey>(initialView);
+  // Role is resolved ONCE here and handed down, so the nav and the router can
+  // never disagree. Null until /api/me answers, and null is treated as 'rep'
+  // by allowedViews: least privilege while the answer is in flight.
+  const [role, setRole] = useState<'admin' | 'rep' | null>(null);
+  const [mode, setModeRaw] = useState<Mode>(readMode);
+  const [view, setViewRaw] = useState<ViewKey>(() => readHash() ?? DEFAULT_VIEW);
   const setView = (v: ViewKey) => { setViewRaw(v); if (typeof history !== 'undefined') history.replaceState(null, '', `#${v}`); };
   const [striven, setStriven] = useState<StrivenStatus | null>(null);
 
@@ -92,12 +104,41 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     fetchStrivenStatus().then(setStriven).catch(() => setStriven({ connected: false, company: null }));
   }, []);
 
-  // Let #hash links (e.g. Overview stat-tiles) switch tabs.
   useEffect(() => {
-    const onHash = () => { const h = location.hash.replace('#', '') as ViewKey; if (VIEW_KEYS.includes(h)) setViewRaw(h); };
+    let live = true;
+    fetchMe().then((m) => { if (live) setRole(m?.role === 'admin' ? 'admin' : 'rep'); })
+      .catch(() => { if (live) setRole('rep'); });   // fail closed: least privilege
+    return () => { live = false; };
+  }, []);
+
+  // ── Role gate ──────────────────────────────────────────────────────────────
+  // The sidebar choosing what to DRAW is not access control. Before this, any
+  // signed-in user could type #pl and open the company P&L, because the router
+  // accepted every key in VIEW_KEYS. Now a view outside the role's allow-list
+  // snaps back to that role's own landing tab: hash navigation included.
+  const allowed = allowedViews(role);
+  useEffect(() => {
+    if (!allowed.has(view)) setView(defaultViewFor(role, mode));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, view]);
+
+  // Let #hash links (e.g. Overview stat-tiles) switch tabs: same gate.
+  useEffect(() => {
+    const onHash = () => {
+      const h = readHash();
+      if (h && allowedViews(role).has(h)) setViewRaw(h);
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, []);
+  }, [role]);
+
+  // Switching side lands on that side's first tab, so the view always matches
+  // the nav the user is looking at.
+  const setMode = (m: Mode) => {
+    setModeRaw(m);
+    try { localStorage.setItem(MODE_KEY, m); } catch { /* private mode: in-memory is fine */ }
+    setView(defaultViewFor(role, m));
+  };
 
   const TABS: Record<ViewKey, ReactNode> = {
     overview: <OverviewCharts />,
@@ -115,6 +156,11 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     accounts: <AccountsTab />,
     exceptions: <ExceptionsTab />,
     commission: <CommissionTab />,
+    reps: <RepsTab initialSub="overview" />,
+    repsorders: <RepsTab initialSub="orders" />,
+    repspipeline: <RepsTab initialSub="pipeline" />,
+    repsroster: <RepsTab initialSub="team" />,
+    standings: <TeamStandings />,
     reports: <ReportsTab />,
     quickbooks: <QuickBooksTab />,
   };
@@ -127,9 +173,15 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
         connected={striven?.connected ?? false}
         onSignOut={onSignOut}
         identifier={striven?.connected ? (striven.company ?? undefined) : undefined}
+        role={role}
+        mode={mode}
+        onMode={setMode}
       />
       <main className="main">
-        {(Object.keys(TABS) as ViewKey[]).map((k) => (
+        {/* Only the role's own views are mounted at all. A disallowed tab is not
+            hidden with CSS: it is never rendered, so its component never runs
+            and never fires its fetches. */}
+        {(Object.keys(TABS) as ViewKey[]).filter((k) => allowed.has(k)).map((k) => (
           <div key={k} style={{ display: view === k ? 'block' : 'none' }}>
             {view === k && <Suspense fallback={<LazyLoading />}>{TABS[k]}</Suspense>}
           </div>

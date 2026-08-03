@@ -1,8 +1,19 @@
-/* Premium LIGHT "board-deck" theme — royal blue (#2563EB) on white, Inter.
+/* Premium LIGHT "board-deck" theme: SMR brand blue (#0A369F) on white, Inter.
    All color decisions flow from the tokens in :root below, so re-skinning the
    whole app (38 components) is a matter of editing these variables. Keep every
-   value on-system: the royal-blue accent family for interactive/brand, and the
-   semantic set (green/amber/red) for status only — no stray legacy hues. */
+   value on-system: the brand-blue accent family for interactive/brand, and the
+   semantic set (green/amber/red) for status only: no stray legacy hues.
+
+   The accent family is sampled from public/SMR Logo.png so the dashboard and the
+   logo are the SAME blue rather than a near-miss (it was #2563EB, a generic
+   royal blue that read as "close but wrong" next to the mark):
+     --accent      #0A369F   the letterforms (~70% of the mark)
+     --brand-green #6EB60A   the swoosh, the dot, the wordmark
+
+   Brand green is a FILL, never text on white: #6EB60A scores 2.4:1 against
+   white, well under the 4.5:1 floor. Use it for washes, chart fills and badge
+   backgrounds carrying dark text. Status green stays --positive (#16A34A): that is a semantic signal and deliberately NOT the brand colour, so "up and
+   to the right" never gets confused with "this is SMR". */
 :root {
   /* Premium LIGHT CFO / board-deck theme (white cards on a soft cool canvas). */
   --bg: #F5F7FA;
@@ -13,10 +24,12 @@
   --text: #0E1B2E;
   --muted: #5B6B85;
   --muted-strong: #334155;
-  --accent: #2563EB;
-  --accent-hover: #1D4ED8;
-  --accent-soft: rgba(37,99,235,0.10);
-  --accent-soft-2: rgba(37,99,235,0.05);
+  --accent: #0A369F;
+  --accent-hover: #082A7C;
+  --accent-soft: rgba(10,54,159,0.10);
+  --accent-soft-2: rgba(10,54,159,0.05);
+  --brand-green: #6EB60A;
+  --brand-green-soft: rgba(110,182,10,0.12);
   --warn: #B45309;
   --warn-soft: rgba(217,119,6,0.12);
   --danger: #DC2626;
@@ -26,7 +39,7 @@
   --positive: #16A34A;
   --negative: #DC2626;
   --gauge-track: #E9EEF5;
-  --chart-payroll: #2563EB;
+  --chart-payroll: #0A369F;
   --chart-nonpayroll: #D97706;
   --highlight: rgba(217,119,6,0.10);
 
@@ -39,9 +52,12 @@ html, body, #root { height: 100%; }
 body {
   margin: 0;
   color: var(--text);
-  background: radial-gradient(1200px 620px at 12% -12%, rgba(37,99,235,0.055), transparent 60%),
-    radial-gradient(1000px 560px at 100% -6%, rgba(124,58,237,0.038), transparent 55%),
-    radial-gradient(900px 600px at 50% 122%, rgba(13,148,136,0.028), transparent 62%),
+  /* Canvas washes are the two logo colours and nothing else: the purple
+     (124,58,237) and teal (13,148,136) that used to sit here were the "stray
+     legacy hues" the note above warns about. */
+  background: radial-gradient(1200px 620px at 12% -12%, rgba(10,54,159,0.055), transparent 60%),
+    radial-gradient(1000px 560px at 100% -6%, rgba(110,182,10,0.045), transparent 55%),
+    radial-gradient(900px 600px at 50% 122%, rgba(10,54,159,0.028), transparent 62%),
     linear-gradient(180deg, #FBFCFE 0%, #F5F7FA 100%);
   background-attachment: fixed;
 }
@@ -427,7 +443,7 @@ code {
 .kpi-stat[data-tone="ok"]   { --tone: #16a34a; }
 .kpi-stat[data-tone="warn"] { --tone: #d97706; }
 .kpi-stat[data-tone="none"] { --tone: #dc2626; }
-.kpi-stat[data-tone="info"] { --tone: #2563EB; }
+.kpi-stat[data-tone="info"] { --tone: #0A369F; }
 /* Total / summary bar under the grid. */
 .kpi-stat-total {
   display: flex; align-items: center; justify-content: space-between; gap: 14px;
@@ -462,12 +478,12 @@ code {
 .info-banner strong { color: #1e40af; }
 .info-banner-icon {
   flex: none; width: 22px; height: 22px; border-radius: 50%; margin-top: 1px;
-  background: #2563eb; color: #fff; font-weight: 800; font-size: 13px;
+  background: #0A369F; color: #fff; font-weight: 800; font-size: 13px;
   display: inline-flex; align-items: center; justify-content: center;
 }
 /* (light theme: no OS-dark override for .info-banner) */
 
-/* Compact status cards (patients / vendors by status) — small, scannable. */
+/* Compact status cards (patients / vendors by status): small, scannable. */
 .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .stat-card {
   position: relative; border: 1px solid var(--border); border-radius: 13px;
@@ -483,8 +499,8 @@ code {
 .stat-card[data-tone="ok"]   { --tone: #16a34a; }
 .stat-card[data-tone="warn"] { --tone: #d97706; }
 .stat-card[data-tone="none"] { --tone: #dc2626; }
-.stat-card[data-tone="info"] { --tone: #2563EB; }
-/* Headline "Total" card — brand-tinted, slightly bolder. */
+.stat-card[data-tone="info"] { --tone: #0A369F; }
+/* Headline "Total" card: brand-tinted, slightly bolder. */
 .stat-card.primary { background: var(--accent-soft); border-color: #bfd3f2; }
 .stat-card.primary .stat-card-value { color: var(--accent); }
 /* (light theme: no OS-dark override) */
@@ -1026,7 +1042,7 @@ code {
   margin-bottom: 20px;
   border-radius: 16px;
   background:
-    radial-gradient(120% 140% at 0% 0%, rgba(37, 99, 235, 0.06), transparent 55%),
+    radial-gradient(120% 140% at 0% 0%, rgba(10,54,159, 0.06), transparent 55%),
     linear-gradient(180deg, var(--panel), var(--panel-2));
   border: 1px solid var(--border);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
@@ -1103,12 +1119,12 @@ code {
 .cf-rowlabel:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* ============================================================================
-   SMR animations — subtle entrance + hover polish for the Striven tabs.
+   SMR animations: subtle entrance + hover polish for the Striven tabs.
    ========================================================================== */
 @keyframes smrFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes smrPop    { from { opacity: 0; transform: scale(.96); }        to { opacity: 1; transform: scale(1); } }
 
-/* Tabs mount into .main — fade their sections/KPIs up, with a gentle stagger. */
+/* Tabs mount into .main: fade their sections/KPIs up, with a gentle stagger. */
 .main .section { animation: smrFadeUp .5s cubic-bezier(.16,.84,.44,1) both; }
 .main .kpis { animation: smrFadeUp .45s cubic-bezier(.16,.84,.44,1) both; }
 .main .kpi { animation: smrPop .5s cubic-bezier(.16,.84,.44,1) both; transition: transform .18s ease, box-shadow .18s ease; }
@@ -1134,7 +1150,11 @@ code {
 .nav-item { transition: background .16s ease, color .16s ease; }
 
 @media (prefers-reduced-motion: reduce) {
-  .main .section, .main .kpis, .main .kpi { animation: none !important; }
+  /* The strip cards and their delta numerals were missing here, so a reader who
+     asked the OS for no motion still got the pop-and-scale on every KPI card: .kpi-r / .kpi--exec are not .kpi, so the selectors above never matched. */
+  .main .section, .main .kpis, .main .kpi,
+  .kpi-strip > *, .kpi-r-strip > *,
+  .ke-delta b, .kr-delta b { animation: none !important; }
 }
 
 /* ---- Design-system atoms the Striven tabs rely on ---- */
@@ -1172,6 +1192,13 @@ code {
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
 @media (max-width: 1000px) { .chart-grid { grid-template-columns: 1fr; } }
 .chart-grid > .section, .chart-card { margin: 0 !important; display: flex; flex-direction: column; }
+/* ...but a .chart-card that is a DIRECT child of .main is a standalone panel,
+   not a grid cell, and the blanket `margin: 0 !important` above silently ate its
+   spacing: the Overview filter bar sets marginBottom:14 inline and computed to
+   0px, so it sat flush against the donut row while every other block in the page
+   kept a 14px rhythm. Grid children are never direct children of .main, so this
+   restores the standalone case without touching them. */
+.main > .chart-card { margin-bottom: 14px !important; }
 .chart-card { padding: 18px; }
 .chart-card .chart-box { width: 100%; height: 260px; }
 
@@ -1186,35 +1213,35 @@ code {
 .mini-stat .n { font-size: 21px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
 .mini-stat .l { font-size: 11.5px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
 
-/* Status pills — semantic colors, independent of the (blue) brand accent. */
+/* Status pills: semantic colors, independent of the (blue) brand accent. */
 .pill-tag.tag-ok, .pill-tag.tag-strong { background: #dcfce7; border-color: #bbf7d0; color: #166534; }
 .pill-tag.tag-warn, .pill-tag.tag-fuzzy { background: #fef3c7; border-color: #fde68a; color: #92400e; }
 .pill-tag.tag-info, .pill-tag.tag-line  { background: #dbeafe; border-color: #bfdbfe; color: #1e40af; }
 .pill-tag.tag-none, .pill-tag.tag-danger { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
 
 /* ============================================================================
-   Login screen — animated, on-brand (SMR blue) sign-in.
+   Login screen: animated, on-brand (SMR blue) sign-in.
    ========================================================================== */
 .login-screen {
   min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px 24px;
   position: relative; overflow: hidden;
   background:
-    radial-gradient(1000px 560px at 50% -12%, rgba(37,99,235,0.10), transparent 60%),
+    radial-gradient(1000px 560px at 50% -12%, rgba(10,54,159,0.10), transparent 60%),
     radial-gradient(760px 540px at 108% 112%, rgba(124,58,237,0.07), transparent 55%),
     radial-gradient(680px 500px at -8% 100%, rgba(13,148,136,0.05), transparent 55%),
     linear-gradient(180deg, #ffffff 0%, #f5f8fd 52%, #eaf0fb 100%);
 }
-/* Faint, slow brand glows — subtle movement, kept professional. */
+/* Faint, slow brand glows: subtle movement, kept professional. */
 .login-screen::before, .login-screen::after {
   content: ''; position: absolute; border-radius: 50%; filter: blur(90px); opacity: .5;
   animation: loginFloat 20s ease-in-out infinite; pointer-events: none;
 }
-.login-screen::before { width: 520px; height: 520px; background: rgba(37,99,235,0.14); top: -200px; left: -160px; }
+.login-screen::before { width: 520px; height: 520px; background: rgba(10,54,159,0.14); top: -200px; left: -160px; }
 .login-screen::after  { width: 460px; height: 460px; background: rgba(124,58,237,0.12); bottom: -200px; right: -150px; animation-delay: -10s; }
 @keyframes loginFloat { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(40px,30px) scale(1.08); } }
 .login-shine { display: none; }
 
-/* No card — logo + fields sit directly on the background, centred column. */
+/* No card: logo + fields sit directly on the background, centred column. */
 .login-card {
   position: relative; z-index: 1; width: min(384px, 100%);
   display: flex; flex-direction: column;
@@ -1223,7 +1250,7 @@ code {
 @keyframes loginRise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
 .login-logo {
   display: block; width: min(292px, 84%); height: auto; margin: 0 auto 26px;
-  filter: drop-shadow(0 6px 18px rgba(37,99,235,0.14));
+  filter: drop-shadow(0 6px 18px rgba(10,54,159,0.14));
   animation: loginRise .7s cubic-bezier(.16,.84,.44,1) both;
 }
 .login-title { display: none; } /* the logo already carries the wordmark */
@@ -1236,15 +1263,15 @@ code {
   background: #fff; transition: border-color .18s ease, box-shadow .18s ease; font-family: inherit;
   box-shadow: 0 1px 2px rgba(16,32,64,0.04);
 }
-.login-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px rgba(37,99,235,0.16); }
+.login-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px rgba(10,54,159,0.16); }
 .login-input::placeholder { color: #9aa7bd; }
 .login-btn {
   width: 100%; padding: 14px; margin-top: 8px; border: 0; border-radius: 12px;
-  background: linear-gradient(135deg, #2563EB, #1D4ED8); color: #fff; font-weight: 700; font-size: 15px;
+  background: linear-gradient(135deg, #0A369F, #082A7C); color: #fff; font-weight: 700; font-size: 15px;
   cursor: pointer; transition: transform .1s ease, box-shadow .2s ease, filter .2s ease; letter-spacing: .01em;
-  box-shadow: 0 10px 24px rgba(37,99,235,0.24);
+  box-shadow: 0 10px 24px rgba(10,54,159,0.24);
 }
-.login-btn:hover { filter: brightness(1.05); box-shadow: 0 14px 30px rgba(37,99,235,0.32); transform: translateY(-1px); }
+.login-btn:hover { filter: brightness(1.05); box-shadow: 0 14px 30px rgba(10,54,159,0.32); transform: translateY(-1px); }
 .login-btn:active { transform: translateY(0); }
 .login-btn:disabled { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
 .login-err { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 11px; padding: 10px 13px; font-size: 13px; margin-bottom: 14px; animation: loginShake .4s; }
@@ -1256,7 +1283,7 @@ code {
   .login-screen::before, .login-screen::after, .login-card, .login-logo, .login-field { animation: none !important; }
 }
 
-/* ============================ PREMIUM LIGHT — EXECUTIVE ============================ */
+/* ============================ PREMIUM LIGHT: EXECUTIVE ============================ */
 /* Board-deck wrapper + titled sections. */
 .exec-deck { max-width: 1560px; margin-inline: auto; }
 .deck-head { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 18px; }
@@ -1267,11 +1294,49 @@ code {
 .kpi-eyebrow .ey-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
 .kpi-eyebrow .ey-pill { font-size:11px; font-weight:700; color:var(--accent); background:var(--accent-soft); border:1px solid var(--border-strong); border-radius:999px; padding:2px 10px; }
 
-/* KPI strip: crisp white cards, gradient top-rail, deep-ink number. */
-.kpi-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 14px; margin-bottom: 20px; }
-@media (max-width:1300px){ .kpi-strip{ grid-template-columns: repeat(4,1fr);} }
-@media (max-width:900px){ .kpi-strip{ grid-template-columns: repeat(2,1fr);} }
-@media (max-width:560px){ .kpi-strip{ grid-template-columns: 1fr;} }
+/* ── THE house KPI strip ─────────────────────────────────────────────────────
+   One standard for every dashboard KPI row, so the company Overview and the rep
+   dashboard show cards of the SAME size instead of 288px vs 187px.
+
+   A 12-column track; each card declares a span, so every row fills edge to edge
+   and no row is left with a hole. 12 divides by 2, 3, 4 and 6, so pick the
+   modifier that matches the card count:
+
+     .kpi-strip-6   6 cards  → span 4  → 3 per row, 2 full rows   (~389px each)
+     .kpi-strip-7   7 cards  → span 3 then span 4 → 4 + 3         (~288 / ~389)
+
+   7 is prime, so it is the one count that cannot be uniform: 4 + 3 is the only
+   split that fills both rows. Every other strip should use an even count.
+
+   Why 12 columns rather than repeat(N, 1fr): `1fr` is minmax(AUTO, 1fr), so a
+   track can never shrink below its card's min-content width. repeat(7, 1fr) at
+   1440px meant ~170px tracks holding ~200px cards: the strip overflowed .main
+   and clipped the 7th card off-screen. minmax(0,1fr) lets tracks shrink, so
+   overflow is structurally impossible. */
+.kpi-strip { display: grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap: 14px; margin-bottom: 20px; }
+.kpi-strip > * { grid-column: span 4; }                              /* default: 3 per row */
+.kpi-strip-7 > * { grid-column: span 3; }                            /* cards 1-4 */
+.kpi-strip-7 > *:nth-child(n+5) { grid-column: span 4; }             /* cards 5-7 */
+/* The desktop layout holds down to ~1000px (a span-3 track is still ~200px
+   there, comfortably above the cards' ~162px min-content). Below that there is
+   not enough room, so 6 goes 2-per-row and 7 goes 2 + 2 + 3. */
+@media (max-width:1000px){
+  .kpi-strip{ grid-template-columns: repeat(6, minmax(0,1fr)); }
+  .kpi-strip > * { grid-column: span 3; }                            /* 2 per row */
+  .kpi-strip-7 > * { grid-column: span 3; }
+  .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 2; }           /* last 3 = 1 row */
+}
+@media (max-width:900px){
+  .kpi-strip{ grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .kpi-strip > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 1; }
+  /* 6 cards land 3x2 here and need no special case; 7 leaves one over, so the
+     last card spans the full width rather than sitting beside a hole. */
+  .kpi-strip-7 > *:last-child { grid-column: span 2; }
+}
+@media (max-width:560px){
+  .kpi-strip{ grid-template-columns: minmax(0,1fr); }
+  .kpi-strip > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5), .kpi-strip-7 > *:last-child { grid-column: span 1; }
+}
 .kpi--grad { position:relative; isolation:isolate; overflow:hidden; display:flex; flex-direction:column; min-height:118px;
   border-radius:16px; padding:16px; color:#0E1B2E; background:#FFFFFF; border:1px solid #E7EBF1;
   box-shadow:0 1px 2px rgba(14,27,46,.04), 0 8px 22px -14px rgba(14,27,46,.10); }
@@ -1286,7 +1351,7 @@ code {
 .kpi--grad .k-spark { position:absolute; left:14px; right:14px; bottom:11px; width:auto; height:20px; opacity:.42; pointer-events:none; z-index:0; }
 .kpi--grad .k-spark polyline { stroke:var(--k-to); stroke-width:1.75; fill:none; }
 .kpi--grad.clickable { cursor:pointer; transition:transform .12s ease, box-shadow .18s ease, border-color .18s ease; }
-.kpi--grad.clickable:hover { transform:translateY(-2px); border-color:#D4DBE5; box-shadow:0 14px 28px -14px var(--k-glow,rgba(37,99,235,.28)), 0 2px 6px rgba(14,27,46,.06); }
+.kpi--grad.clickable:hover { transform:translateY(-2px); border-color:#D4DBE5; box-shadow:0 14px 28px -14px var(--k-glow,rgba(10,54,159,.28)), 0 2px 6px rgba(14,27,46,.06); }
 .kpi--grad.clickable:focus-visible { outline:2px solid var(--k-to); outline-offset:2px; }
 
 .donut-legend { display:flex; flex-wrap:wrap; gap:5px 14px; justify-content:center; margin-top:4px; }
@@ -1302,7 +1367,7 @@ code {
 @media (max-width:1100px){ .exec-grid{ grid-template-columns: repeat(2,1fr);} .exec-grid > .span-3, .exec-grid > .span-4{grid-column: span 2;} }
 @media (max-width:640px){ .exec-grid{ grid-template-columns: 1fr;} .exec-grid > .span-2, .exec-grid > .span-3, .exec-grid > .span-4{grid-column: span 1;} }
 
-/* Card / section elevation — pure-white panels, hairline + two-layer soft shadow. */
+/* Card / section elevation: pure-white panels, hairline + two-layer soft shadow. */
 .section,.card,.kpi { background:var(--panel); border:1px solid var(--border); border-radius:16px; box-shadow:0 1px 2px rgba(14,27,46,.04), 0 8px 22px -14px rgba(14,27,46,.12); }
 .section { padding:22px; margin-bottom:20px; }
 .card,.kpi { padding:20px; }
@@ -1354,7 +1419,7 @@ code {
 .ov-filter select:focus, .ov-filter input[type="date"]:focus { outline:none; }
 .ov-filter:has(select):hover, .ov-filter:has(input[type="date"]):hover { border-color:var(--accent); }
 
-/* Action Center — soft red attention banner. */
+/* Action Center: soft red attention banner. */
 .action-center { display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-bottom:20px; padding:14px 18px;
   background:#FEF3F2; border:1px solid #FBD5D1; border-radius:14px; }
 .ac-head { display:flex; align-items:center; gap:11px; padding-right:8px; }
@@ -1375,7 +1440,7 @@ code {
 .ac-review:hover { background:#B42318; }
 @media (max-width:900px){ .action-center{ align-items:flex-start; } .ac-review{ margin-left:0; } }
 
-/* Exec KPI cards v2 — white card, hue-tinted label, value + spark, delta/chip row. */
+/* Exec KPI cards v2: white card, hue-tinted label, value + spark, delta/chip row. */
 .kpi--exec { position:relative; display:flex; flex-direction:column; min-height:118px; border-radius:16px; padding:15px 16px 13px;
   background:var(--panel); border:1px solid var(--border); box-shadow:0 1px 2px rgba(14,27,46,.04), 0 8px 22px -14px rgba(14,27,46,.10); }
 .kpi--exec .ke-label { font-size:11.5px; font-weight:700; letter-spacing:.02em; color:var(--k-to); display:flex; align-items:center; gap:6px; }
@@ -1391,16 +1456,16 @@ code {
   color:var(--k-to); background:color-mix(in srgb, var(--k-from) 11%, #fff); border:1px solid color-mix(in srgb, var(--k-from) 26%, #fff); }
 .kpi--exec.clickable { cursor:pointer; transition:transform .12s ease, box-shadow .18s ease, border-color .18s ease; }
 .kpi--exec.clickable:hover { transform:translateY(-2px); border-color:var(--border-strong);
-  box-shadow:0 14px 28px -14px var(--k-glow,rgba(37,99,235,.28)), 0 2px 6px rgba(14,27,46,.06); }
+  box-shadow:0 14px 28px -14px var(--k-glow,rgba(10,54,159,.28)), 0 2px 6px rgba(14,27,46,.06); }
 .kpi--exec.clickable:focus-visible { outline:2px solid var(--k-to); outline-offset:2px; }
 
-/* 12-col analytics grid — every row sums to exactly 12, no row spans, so each
+/* 12-col analytics grid: every row sums to exactly 12, no row spans, so each
    row's cards stretch to ONE shared height and every edge lines up. */
 .exec-grid12 { display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:18px; align-items:stretch; }
 .exec-grid12 > * { margin:0 !important; min-width:0; }
 .g12-3 { grid-column: span 3; } .g12-4 { grid-column: span 4; } .g12-5 { grid-column: span 5; } .g12-6 { grid-column: span 6; } .g12-7 { grid-column: span 7; } .g12-12 { grid-column: 1 / -1; }
 /* Consistent internals: fixed head rhythm, chart flex-fills the card body, the
-   stat footer pins to the base — so titles, charts and footers align per row. */
+   stat footer pins to the base: so titles, charts and footers align per row. */
 .exec-grid12 .section-head { margin-bottom: 12px; }
 .exec-grid12 .chart-card .chart-box { height:240px; flex:none; }
 .exec-grid12 .card-body { flex:1 1 auto; display:flex; flex-direction:column; justify-content:center; }
@@ -1416,13 +1481,20 @@ code {
   .g12-3, .g12-4, .g12-5, .g12-6, .g12-7 { grid-column: 1 / -1; }
 }
 
-/* Receivables KPI cards — icon tile + label, count-up value, delta, pinned foot. */
-.kpi-r-strip { display:grid; grid-template-columns: repeat(5, 1fr); gap:14px; margin-bottom:20px; }
-@media (max-width:1300px){ .kpi-r-strip{ grid-template-columns: repeat(3,1fr);} }
-/* !important so inline grid-template-columns (repeat(4,1fr) etc. set per tab)
-   still collapses on phones — inline styles otherwise defeat these breakpoints. */
-@media (max-width:900px){ .kpi-r-strip{ grid-template-columns: repeat(2,1fr) !important;} }
-@media (max-width:560px){ .kpi-r-strip{ grid-template-columns: 1fr !important;} }
+/* Receivables KPI cards: icon tile + label, count-up value, delta, pinned foot. */
+.kpi-r-strip { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:14px; margin-bottom:20px; }
+/* Deliberately NOT !important: this step is for the 5-card base strip only.
+   Ten tabs set their own count inline (repeat(4,1fr) / repeat(3,1fr)), and an
+   inline style beats a stylesheet rule of any specificity, so they keep it: which is right. Forcing those tabs to 3 columns turns a full 4-card row into
+   a ragged 3 + 1, and at 1280px four cards still get ~243px each, comfortably
+   above their ~167px min-content.
+   The !important steps below are the ones that must win, because there is no
+   width at which 3-4 cards across a phone is readable. 1100px is where 4-up
+   genuinely runs out of room (~220px/card); dropping straight to 2 keeps the
+   common 4-card tabs on an exact 2 x 2 instead of another ragged row. */
+@media (max-width:1300px){ .kpi-r-strip{ grid-template-columns: repeat(3,minmax(0,1fr));} }
+@media (max-width:1100px){ .kpi-r-strip{ grid-template-columns: repeat(2,minmax(0,1fr)) !important;} }
+@media (max-width:560px){ .kpi-r-strip{ grid-template-columns: minmax(0,1fr) !important;} }
 
 /* Commission rep/KPI modal stat rows: collapse 3-4 tiles to 2 on phones. */
 @media (max-width:520px){ .cm-stat-grid{ grid-template-columns: repeat(2,1fr) !important; } }
@@ -1439,13 +1511,38 @@ code {
 .kpi-r .kr-ico { flex:none; width:36px; height:36px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; }
 .kpi-r .kr-label { font-size:12px; font-weight:700; color:var(--muted-strong); display:flex; align-items:center; }
 .kpi-r .kr-value { margin-top:10px; font-size:24px; font-weight:800; letter-spacing:-.022em; line-height:1.05; color:var(--text); font-variant-numeric:tabular-nums; }
-.kpi-r .kr-delta { margin-top:6px; font-size:11px; font-weight:600; color:var(--muted); min-height:15px; white-space:nowrap; overflow:hidden; }
+/* The qualifier under the headline figure ("all time", "176 orders", "open").
+   Set as a formal small-caps eyebrow: uppercase with generous tracking reads as
+   a label rather than a stray lowercase phrase, and tabular figures keep the
+   numeric ones from jittering. Size is unchanged. */
+.kpi-r .kr-delta { margin-top:6px; font-size:11px; font-weight:700; color:var(--muted); min-height:15px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  text-transform:uppercase; letter-spacing:.085em; font-variant-numeric:tabular-nums; font-feature-settings:"cpsp" 1; }
+/* The arrow + percentage keeps its own tracking: glyphs, not words. */
+.kpi-r .kr-delta b { letter-spacing:.02em; }
 .kpi-r .kr-delta b.up { color:var(--positive); } .kpi-r .kr-delta b.down { color:var(--negative); }
-.kpi-r .kr-foot { margin-top:auto; padding-top:9px; border-top:1px solid var(--panel-2); font-size:11px; color:var(--muted); }
+/* The footnote is a tinted band bled to the card's edge, carrying that tile's
+   own accent (--kpi-tint, set inline by KpiR) instead of a uniform grey. */
+.kpi-r .kr-foot {
+  margin: auto -16px -12px; padding: 9px 16px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--kpi-tint, var(--muted)) 22%, transparent);
+  border-radius: 0 0 15px 15px;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 6%, transparent) 0%,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 12%, transparent) 100%);
+  font-size: 11px; font-weight: 600; letter-spacing: .01em;
+  color: color-mix(in srgb, var(--kpi-tint, var(--muted)) 82%, var(--text));
+}
+.kpi-r.clickable:hover .kr-foot {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 10%, transparent) 0%,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 18%, transparent) 100%);
+  color: var(--kpi-tint, var(--muted));
+}
 .kpi-r.clickable { cursor:pointer; transition:transform .12s ease, box-shadow .18s ease, border-color .18s ease; }
-.kpi-r.clickable:hover { transform:translateY(-2px); border-color:var(--border-strong); box-shadow:0 14px 28px -14px rgba(37,99,235,.25), 0 2px 6px rgba(14,27,46,.06); }
+.kpi-r.clickable:hover { transform:translateY(-2px); border-color:var(--border-strong); box-shadow:0 14px 28px -14px rgba(10,54,159,.25), 0 2px 6px rgba(14,27,46,.06); }
 
-/* Big segmented sub-tabs (Sales Orders | Purchase Orders | Tracking) — full
+/* Big segmented sub-tabs (Sales Orders | Purchase Orders | Tracking): full
    width, solid-accent active pill, unmissable. */
 .ov-tabs { display:flex; gap:6px; background:var(--panel); border:1px solid var(--border); border-radius:12px;
   padding:6px; margin:4px 0 18px; box-shadow:0 1px 2px rgba(14,27,46,.04); }
@@ -1453,7 +1550,7 @@ code {
   font-size:14px; font-weight:700; color:var(--muted-strong); cursor:pointer; white-space:nowrap;
   transition:background .15s ease, color .15s ease; }
 .ov-tab:hover { background:var(--panel-2); color:var(--text); }
-.ov-tab.active { background:var(--accent); color:#fff; box-shadow:0 4px 12px -4px rgba(37,99,235,.45); }
+.ov-tab.active { background:var(--accent); color:#fff; box-shadow:0 4px 12px -4px rgba(10,54,159,.45); }
 @media (max-width:640px){ .ov-tab { padding:10px 8px; font-size:12.5px; } }
 
 /* Table controls (search + bucket filter) + sortable headers + pagination. */
@@ -1610,7 +1707,269 @@ code {
   .ke-spark polygon { opacity: .12; }
 }
 
-/* QuickBooks tab — flash banners + plan rows */
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL REFINEMENT
+   A pass over the token layer rather than the components, so every panel, table
+   and control inherits it. The goal is lower glare over a long working day:
+   softer surface contrast, elevation carried by shadow instead of hard rules,
+   and ink that stops just short of black.
+
+   Everything below is presentational. Delete this block to return to the
+   original palette exactly.
+   ════════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* Surfaces. The page sits a touch deeper and slightly cooler so white panels
+     lift off it without needing a heavy border. */
+  --bg: #EDF1F7;
+  --panel: #FFFFFF;
+  --panel-2: #F4F7FB;
+
+  /* Card outlines carry the structure. Light enough not to draw the eye on its
+     own, dark enough that every panel has a definite edge rather than floating
+     on shadow alone. */
+  --border: #C6D2E2;
+  --border-strong: #A7B6CA;
+
+  /* Ink. Pure-black-adjacent text on white is the main source of glare in a
+     dense table, so the darkest value stops at a deep navy. */
+  --text: #14243A;
+  --muted: #5D6C85;
+  --muted-strong: #38465C;
+
+  /* Layered elevation, tinted with the page hue rather than neutral grey: a grey shadow over a blue-grey page reads as dirt. */
+  --shadow-1: 0 1px 2px rgba(20, 36, 58, .05);
+  --shadow-2: 0 1px 2px rgba(20, 36, 58, .05), 0 6px 16px -8px rgba(20, 36, 58, .16);
+  --shadow-3: 0 2px 4px rgba(20, 36, 58, .06), 0 18px 40px -18px rgba(20, 36, 58, .28);
+}
+
+/* A very slight vertical wash gives the page depth without a visible gradient. */
+body, .shell {
+  background: linear-gradient(180deg, var(--bg) 0%, #F2F5FA 60%, var(--bg) 100%);
+  background-attachment: fixed;
+}
+
+/* Every panel gets a defined outline, with shadow lifting it off the page. */
+.section, .chart-card, .kpi-r, .kpi-e {
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+}
+.section:hover, .chart-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-2); }
+.section, .chart-card, .kpi-r { transition: box-shadow .2s ease, border-color .2s ease; }
+
+/* Tables: a quiet hover makes a long row traceable across the width, which is
+   what actually makes dense data comfortable to read. */
+.data-table tbody tr { transition: background-color .12s ease; }
+.data-table tbody tr:hover { background: var(--accent-soft-2); }
+.data-table thead th {
+  background: var(--panel-2);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.data-table td, .data-table th { border-bottom-color: var(--border); }
+/* Figures line up column-to-column wherever they are compared. */
+.data-table td.num, .data-table th.num { font-variant-numeric: tabular-nums; }
+
+/* Keyboard focus was invisible in several places; this gives one consistent
+   ring everywhere without touching each control. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Selection picks up the accent instead of the browser default blue. */
+::selection { background: rgba(10,54,159, .16); color: var(--text); }
+
+/* Scrollbars sized down and tinted, so a scrolling table does not gain a heavy
+   grey bar across it. */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; }
+
+/* Type: a little more air between lines, and headings that do not break awkwardly. */
+body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+.page-title, .section-title { text-wrap: balance; letter-spacing: -.01em; }
+.section-sub, .page-sub { max-width: 78ch; }
+
+@media (prefers-reduced-motion: reduce) {
+  .section, .chart-card, .kpi-r, .data-table tbody tr { transition: none !important; }
+}
+
+/* ── Affordance & current-location ──────────────────────────────────────────
+   Two jobs: anything clickable should look clickable before you hover it, and
+   wherever you are should be obvious without re-reading the labels. */
+
+/* WHERE YOU ARE: the active nav entry gets a solid accent rail plus weight, so
+   it wins against eleven similar-looking siblings. */
+.nav-item.active {
+  position: relative;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 3px; border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+.nav-item.active .nav-icon { color: var(--accent); }
+
+/* CLICKABLE TILES: a raised edge and pointer at rest, lifting on hover, so the
+   tile reads as a control rather than a readout. */
+.kpi-r.clickable, .kpi.clickable, .kpi-e.clickable { cursor: pointer; }
+.kpi-r.clickable:hover { border-color: var(--accent); }
+.kpi-r.clickable:active { transform: translateY(0); }
+.kpi-r.clickable .kpi-info-icon { opacity: .55; transition: opacity .15s ease; }
+.kpi-r.clickable:hover .kpi-info-icon { opacity: 1; }
+
+/* CLICKABLE ROWS: a left accent rail appears on hover, so a wide row makes it
+   obvious the whole row is the target, not just the link in the first column. */
+.data-table tbody tr[title]:hover, .data-table tbody tr[style*="pointer"]:hover {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* Any element the app has marked pressed reads as selected. */
+[aria-pressed="true"], [aria-current="page"] { font-weight: 700; }
+
+/* Focus must be visible on every control, not just the ones with a border. */
+.nav-item:focus-visible, .kpi-r.clickable:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kpi-r.clickable, .kpi-r.clickable .kpi-info-icon { transition: none !important; }
+}
+
+/* ── Sidebar, refined ───────────────────────────────────────────────────────
+   Subtle rather than loud: the accent appears only on the item you are on, the
+   hard rules soften into fades, and movement is a couple of pixels. */
+
+/* The panel edge fades instead of ruling: a solid 1px line down 100vh is the
+   heaviest element on the screen and it is only a boundary. */
+.sidebar {
+  border-right: 0;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.7) 0%, rgba(255,255,255,0) 220px),
+    var(--panel);
+  box-shadow: 1px 0 0 rgba(20,36,58,.05), 6px 0 24px -18px rgba(20,36,58,.30);
+}
+
+/* Brand divider tapers off rather than stopping dead at the panel edge. */
+.brand {
+  border-bottom: 0;
+  background-image: linear-gradient(90deg, var(--border) 0%, var(--border) 62%, transparent 100%);
+  background-size: 100% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+}
+.brand-logo { box-shadow: 0 2px 8px -2px rgba(10,54,159,.55); }
+
+/* Items settle rather than snap: colour, background and a 2px nudge. */
+.nav-item {
+  transition: background-color .16s ease, color .16s ease, transform .16s ease;
+  letter-spacing: .005em;
+}
+.nav-item:hover { transform: translateX(2px); }
+.nav-item .nav-icon { transition: color .16s ease, transform .16s ease; opacity: .9; }
+.nav-item:hover .nav-icon { color: var(--accent); opacity: 1; }
+
+/* Active: the accent fades out across the pill instead of filling it flat, so
+   the rail reads as the anchor and the label stays legible. */
+.nav-item.active {
+  background: linear-gradient(90deg, var(--accent-soft) 0%, rgba(10,54,159,.03) 70%, transparent 100%);
+  box-shadow: none;
+  transform: none;
+}
+.nav-item.active::before { box-shadow: 0 0 8px -1px rgba(10,54,159,.7); }
+.nav-item.active .nav-icon { opacity: 1; transform: scale(1.06); }
+
+/* The pressed state should feel like a press. */
+.nav-item:active { transform: translateX(2px) scale(.99); }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item, .nav-item .nav-icon { transition: none !important; transform: none !important; }
+}
+
+/* ── Print / Save-as-PDF ─────────────────────────────────────────────────────
+   The browser's own print pipeline produces the PDF, so the job here is to
+   strip the application shell and let the content reflow onto pages. */
+@media print {
+  /* The app chrome is navigation, not content. */
+  .sidebar, .no-print, .btn, .tbl-search, .qb-flash { display: none !important; }
+
+  html, body, #root {
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Shadows and tints cost toner and print as muddy grey; keep the borders,
+     which are what make a table readable on paper. */
+  .section, .chart-card, .kpi-r, .kpi, .kpi-e {
+    box-shadow: none !important;
+    background: #fff !important;
+    border: 1px solid #C6D2E2 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* A table split mid-row is unreadable; headers repeat on every page. */
+  table { break-inside: auto; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+
+  /* Charts must not be clipped by a page edge. */
+  .recharts-wrapper, .recharts-surface { break-inside: avoid; }
+
+  /* Wide tables scroll on screen; on paper they must shrink to fit instead. */
+  .table-wrap, [style*="overflow-x"] { overflow: visible !important; }
+
+  /* Content that exists only on paper: a statement header, since the modal's
+     own title bar and the page around it are gone. */
+  .print-only { display: block !important; }
+
+  /* Printing a SCOPED region (a modal). visibility rather than display, so the
+     scoped element keeps its layout while everything around it goes blank;
+     display:none on ancestors would take the modal with them. */
+  .printing body * { visibility: hidden; }
+  .printing [data-print-scope],
+  .printing [data-print-scope] * { visibility: visible; }
+  .printing [data-print-scope] {
+    position: absolute;
+    left: 0; top: 0; width: 100%;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  /* The dialog's own chrome: backdrop, close button, scroll cap: is not part
+     of the statement. */
+  .printing .modal-backdrop, .printing .modal-close { display: none !important; }
+
+  @page { margin: 12mm; }
+}
+
+/* Hidden on screen; the print block above reveals it. */
+.print-only { display: none; }
+
+/* When printing a scoped region, everything outside it is hidden. */
+.printing [data-print-scope] { position: static; }
+
+/* Dashboard grids sized to the item count, not to whatever auto-fit happens to
+   land on. Six donuts in an auto-fit grid gave 4 + 2 at desktop width and left
+   two dead cells on the second row; 6 divides evenly into 3 and 2, never 4. */
+.donut-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
+@media (min-width: 660px)  { .donut-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1180px) { .donut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+.pair-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
+@media (min-width: 760px) { .pair-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Ranked-list rows on the dashboard get a hover they previously lacked. */
+.toplist-row { transition: background-color .15s ease; }
+.toplist-row:hover { background: var(--panel-2); }
+
+/* QuickBooks tab: flash banners + plan rows */
 .qb-flash { border-radius: 10px; padding: 10px 14px; font-size: 13.5px; font-weight: 600; border: 1px solid transparent; }
 .qb-flash.ok { background: rgba(34,197,94,.10); color: #15803D; border-color: rgba(34,197,94,.30); }
 .qb-flash.err { background: rgba(220,38,38,.08); color: #B91C1C; border-color: rgba(220,38,38,.25); }
@@ -1620,10 +1979,10 @@ code {
 .qb-plan-v { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* ============================================================================
-   ACCESSIBILITY — keyboard focus + reduced motion (added in the refine pass).
+   ACCESSIBILITY: keyboard focus + reduced motion (added in the refine pass).
    Only :focus-visible is targeted, so mouse/touch users never see a ring; it
    appears solely for keyboard navigation. Every interactive control below
-   previously had NO visible focus state — a WCAG 2.4.7 gap.
+   previously had NO visible focus state: a WCAG 2.4.7 gap.
    ========================================================================== */
 .nav-item:focus-visible,
 .btn:focus-visible,
@@ -1658,14 +2017,14 @@ code {
 /* Table sort headers: inset ring so it never overflows the sticky cell. */
 .data-table th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-/* Close buttons sit on dark modal headers — a currentColor (white) ring reads
+/* Close buttons sit on dark modal headers: a currentColor (white) ring reads
    there, and stays visible on light surfaces too. */
 .kpi-modal-x:focus-visible,
 .cm-modal-close:focus-visible,
 .drill-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 
 /* Filter chips wrap a borderless <select>/<input> that intentionally clears its
-   own outline for a seamless look — surface focus on the chip instead so
+   own outline for a seamless look: surface focus on the chip instead so
    keyboard users still get an indicator (was previously invisible). */
 .ov-filter:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .ov-filter select:focus-visible,
@@ -1684,7 +2043,7 @@ code {
 }
 
 /* ============================================================================
-   DEPTH & MOTION — premium 3D polish (added in the refine pass).
+   DEPTH & MOTION: premium 3D polish (added in the refine pass).
    The interactive lean is driven by tilt.ts (writes inline transform + --mx/--my);
    everything here is the resting feel, the specular sheen, and the spring settle.
    All of it is inside a fine-pointer query and no-ops under reduced motion, so
@@ -1705,8 +2064,7 @@ code {
     box-shadow: 0 2px 6px rgba(14,27,46,.06), 0 28px 54px -22px rgba(14,27,46,.32);
   }
 
-  /* Moving specular highlight that tracks the cursor across the card face —
-     soft-light so it brightens the white panel without washing out the text. */
+  /* Moving specular highlight that tracks the cursor across the card face: soft-light so it brightens the white panel without washing out the text. */
   .kpi--exec::after, .kpi-r::after, .kpi--grad::after {
     content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 3;
     background: radial-gradient(340px circle at var(--mx,50%) var(--my,0%),
@@ -1764,4 +2122,18 @@ code {
     background: rgba(15,27,46,.45); z-index: 44;
   }
   .main { max-width: 100% !important; }
+}
+
+/* Sidebar Company ⇄ Reps switch (admins only). Reuses .segmented, but stretches
+   to the sidebar's width and splits the room evenly so neither side reads as
+   the primary one: they are peers, not a default plus an alternative. */
+.sidebar .segmented.mode-switch {
+  display: flex;
+  width: 100%;
+  margin: 0 0 12px;
+}
+.sidebar .segmented.mode-switch button {
+  flex: 1 1 0;
+  padding: 7px 8px;
+  text-align: center;
 }

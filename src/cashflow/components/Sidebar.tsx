@@ -25,12 +25,30 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   quickbooks: svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 8.5c-1.7 0-2.8.9-2.8 2.2 0 2.6 4.4 1.6 4.4 3.6 0 .9-.8 1.4-1.9 1.4" /><path d="M12 7v10" /></>),
   reports: svg(<><path d="M4 4v16h16" /><rect x="7" y="11" width="3" height="6" /><rect x="12" y="7" width="3" height="10" /><rect x="17" y="13" width="3" height="4" /></>),
   commission: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7v10" /><path d="M14.5 9.3c-.5-.8-1.5-1.3-2.6-1.3-1.5 0-2.6.8-2.6 1.9 0 2.4 5.2 1.4 5.2 3.9 0 1.1-1.1 1.9-2.6 1.9-1.1 0-2.1-.5-2.6-1.3" /></>),
+  // Reps: a person with a rising bar behind them: people plus performance.
+  reps: svg(<><circle cx="8.5" cy="8" r="3.2" /><path d="M2.6 20a5.9 5.9 0 0 1 11.8 0" /><path d="M17 14v6" /><path d="M20.5 10v10" /></>),
+  repsorders: svg(<><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M3 4h2l2.4 11.4a1 1 0 0 0 1 .6h8.8a1 1 0 0 0 1-.8L20 8H6" /></>),
+  repspipeline: svg(<><rect x="3" y="5" width="5" height="14" rx="1.4" /><rect x="9.5" y="5" width="5" height="9" rx="1.4" /><rect x="16" y="5" width="5" height="5" rx="1.4" /></>),
+  repsroster: svg(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
+  // Standings: a podium.
+  standings: svg(<><rect x="9" y="4" width="6" height="16" /><rect x="3" y="10" width="6" height="10" /><rect x="15" y="13" width="6" height="7" /></>),
 };
 
-// Views that live inside another tab — highlight the parent nav item.
+// Views that live inside another tab: highlight the parent nav item.
 const VIEW_ALIAS: Partial<Record<ViewKey, ViewKey>> = { payables: 'receivables', tracking: 'orders', catalog: 'vendors', autopo: 'automation', autoso: 'automation' };
 
-const ITEMS: Array<{ key: ViewKey; label: string }> = [
+// ── Role-driven navigation ───────────────────────────────────────────────────
+// One app, two sides. An admin runs the business AND oversees the reps, so they
+// get a Company/Reps switch. A rep only ever runs their own book: there is no
+// switch, no company side, and no way to reach one.
+//
+// A manager and a rep get different vocabularies for the same underlying views
+// ("Orders & Revenue" vs "My Orders") because the scope genuinely differs: the
+// server has already narrowed a rep's payload to their own figures.
+export type Mode = 'company' | 'reps';
+
+/** Company side: the finance/ops dashboard, exactly as it always was. */
+export const COMPANY_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'receivables', label: 'AR / AP' },
   { key: 'apsheet', label: 'AP Register' },
@@ -40,15 +58,70 @@ const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'vendors', label: 'Vendors & Items' },
   { key: 'accounts', label: 'Accounts' },
   { key: 'exceptions', label: 'Exceptions' },
-  { key: 'commission', label: 'Commission' },
   { key: 'reports', label: 'Reports' },
   { key: 'quickbooks', label: 'QuickBooks' },
 ];
+/** Reps side as an ADMIN sees it: every rep, unredacted. */
+export const REPS_NAV: Array<{ key: ViewKey; label: string }> = [
+  { key: 'reps', label: 'Dashboard' },
+  { key: 'repsorders', label: 'Orders & Revenue' },
+  { key: 'commission', label: 'Commission' },
+  { key: 'repspipeline', label: 'PI Pipeline' },
+  { key: 'repsroster', label: 'Reps' },
+];
+/** What a REP sees. Same views, narrowed to their own book by the server. */
+export const REP_NAV: Array<{ key: ViewKey; label: string }> = [
+  { key: 'reps', label: 'My Dashboard' },
+  { key: 'repsorders', label: 'My Orders' },
+  { key: 'commission', label: 'My Commission' },
+  { key: 'repspipeline', label: 'My Pipeline' },
+  { key: 'standings', label: 'Team Standings' },
+];
+
+/** Nav for a role. Until /api/me answers (role null) we show the rep nav: the
+ *  narrow one: so a rep never sees the manager's entries flash past. */
+export const navFor = (role: 'admin' | 'rep' | null, mode: Mode = 'reps'): Array<{ key: ViewKey; label: string }> =>
+  (role === 'admin' ? (mode === 'company' ? COMPANY_NAV : REPS_NAV) : REP_NAV);
+
+/**
+ * Every view a role may reach: INCLUDING by typing a URL hash.
+ *
+ * The sidebar deciding what to draw is not access control: `#pl` used to open
+ * the company P&L for anyone, because the router accepted any key in VIEW_KEYS.
+ * This is the allow-list the router enforces, so a rep cannot navigate out of
+ * their own book. Aliases (e.g. #payables → receivables) are allowed only when
+ * the view they resolve to is.
+ */
+export const allowedViews = (role: 'admin' | 'rep' | null): Set<ViewKey> => {
+  const base = role === 'admin'
+    ? [...COMPANY_NAV, ...REPS_NAV].map((i) => i.key)
+    : REP_NAV.map((i) => i.key);
+  const set = new Set<ViewKey>(base);
+  for (const [alias, target] of Object.entries(VIEW_ALIAS) as Array<[ViewKey, ViewKey]>) {
+    if (set.has(target)) set.add(alias);
+  }
+  return set;
+};
+
+/** The tab a role opens on: the first one its nav actually offers. */
+export const defaultViewFor = (role: 'admin' | 'rep' | null, mode: Mode = 'reps'): ViewKey =>
+  navFor(role, mode)[0]?.key ?? 'reps';
+/** Back-compat for the pre-role entry point. */
+export const DEFAULT_VIEW: ViewKey = REPS_NAV[0]?.key ?? 'reps';
 
 // Optional profile-photo + title fallbacks keyed by username. Left empty in the
 // generic template; the signed-in user's own values take precedence.
 const PHOTOS: Record<string, string> = {};
 const TITLES: Record<string, string> = {};
+
+// Who gets a role line under their name in the sidebar. Everyone else shows the
+// name alone.
+//
+// This used to be `TITLES[...] || 'Full access'` with TITLES empty: so EVERY
+// signed-in user, reps included, was labelled "Full access". It was only ever a
+// display string (permissions come from the server-side role), but it told four
+// reps they had company-wide access they do not have.
+const ROLE_LINE_FOR = new Set(['rishi', 'crystal']);
 
 function readIdentity() {
   // The server sets a JS-readable smr_user cookie on login (cleared on
@@ -63,10 +136,10 @@ function readIdentity() {
   const raw = get('smr_name') || (email ? email.split('@')[0].split(/[._]/)[0] : 'User');
   const name = raw.charAt(0).toUpperCase() + raw.slice(1);
   const emailUser = email ? email.split('@')[0].toLowerCase() : '';
-  const title = get('smr_title') || TITLES[raw.toLowerCase()] || 'Full access';
+  const title = get('smr_title') || TITLES[raw.toLowerCase()] || '';
   const photo = get('smr_photo') || PHOTOS[raw.toLowerCase()] || PHOTOS[emailUser] || '';
   const initial = (name || 'U').trim().charAt(0).toUpperCase();
-  return { name, title, photo, initial };
+  return { name, title, photo, initial, showRole: ROLE_LINE_FOR.has(emailUser) };
 }
 
 type Props = {
@@ -76,13 +149,20 @@ type Props = {
   identifier?: string;
   connected: boolean;
   onSignOut?: () => void;
+  /** Resolved by the app from /api/me: the sidebar never fetches it itself, so
+   *  the nav and the router can never disagree about who is signed in. */
+  role: 'admin' | 'rep' | null;
+  /** Admin-only Company/Reps switch. Ignored for a rep. */
+  mode: Mode;
+  onMode: (m: Mode) => void;
 };
 
-export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Props) {
+export function Sidebar({ view, onChange, identifier, connected, onSignOut, role, mode, onMode }: Props) {
   // Global Refresh All - reload the page so every tab re-fetches fresh data.
   const [refreshing, setRefreshing] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const me = readIdentity();
+  const ITEMS = navFor(role, mode);
 
   function handleRefreshAll() {
     if (refreshing) return;
@@ -96,7 +176,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
 
   return (
     <>
-      {/* Mobile top bar (≤900px via CSS) — hamburger opens the nav drawer. */}
+      {/* Mobile top bar (≤900px via CSS): hamburger opens the nav drawer. */}
       <div className="mobile-topbar">
         <button className="hamburger" onClick={() => setMobileOpen(true)} aria-label="Open menu" aria-expanded={mobileOpen}>☰</button>
         <img className="mt-logo" src="/SMR%20Logo.png" alt="SMR" />
@@ -114,6 +194,29 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
           <div className="brand-sub">Sports Med Recovery</div>
         </div>
       </div>
+
+      {/* Company ⇄ Reps: admins only. A rep has no second side to switch to, so
+          rendering this for them would advertise a door that is bolted shut. */}
+      {role === 'admin' && (
+        <div className="segmented mode-switch" role="tablist" aria-label="Switch section">
+          <button
+            role="tab"
+            aria-selected={mode === 'company'}
+            className={mode === 'company' ? 'active' : ''}
+            onClick={() => { onMode('company'); setMobileOpen(false); }}
+          >
+            Company
+          </button>
+          <button
+            role="tab"
+            aria-selected={mode === 'reps'}
+            className={mode === 'reps' ? 'active' : ''}
+            onClick={() => { onMode('reps'); setMobileOpen(false); }}
+          >
+            Reps
+          </button>
+        </div>
+      )}
 
       {ITEMS.map((item) => (
         <button
@@ -141,7 +244,12 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
           </div>
           <div className="who">
             <div className="who-name">{me.name}</div>
-            <div className="who-role">{me.title}</div>
+            {/* Role line only for the two accounts in ROLE_LINE_FOR, and the
+                label comes from the verified /api/me role rather than a
+                hardcoded string, so it cannot claim access the session lacks. */}
+            {me.showRole && role && (
+              <div className="who-role">{me.title || (role === 'admin' ? 'Admin' : 'Rep')}</div>
+            )}
           </div>
         </div>
 
@@ -149,7 +257,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
         <div
           className="btn ghost"
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6, cursor: 'default' }}
-          title={connected ? `Linked to Striven${identifier ? ` · ${identifier}` : ''}` : 'Striven not connected — set credentials in striven-server/.env'}
+          title={connected ? `Linked to Striven${identifier ? ` · ${identifier}` : ''}` : 'Striven not connected: set credentials in striven-server/.env'}
         >
           <span style={{ width: 8, height: 8, borderRadius: '50%', flex: 'none', background: connected ? '#22c55e' : '#ef4444' }} />
           <span>{connected ? `Striven · ${identifier ?? 'Connected'}` : 'Striven · Not connected'}</span>

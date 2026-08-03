@@ -9,3 +9,5 @@ dist/
 striven-server/.env
 striven-server/node_modules/
 .vercel/
+dist-rep/
+.claude/settings.local.json

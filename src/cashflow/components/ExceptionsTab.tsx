@@ -17,7 +17,7 @@ function cell(g: ExceptionGroup, c: string, r: Record<string, string | number>):
   if (c === g.columns[0]) return <strong>{String(r[c] ?? '')}</strong>;
   if (statusCol(c)) return <StatusPill status={String(r[c] ?? '')} />;
   if (numericCol(c)) return money(r[c]);
-  return String(r[c] ?? '—');
+  return String(r[c] ?? '-');
 }
 
 export function ExceptionsTab() {
@@ -127,7 +127,7 @@ export function ExceptionsTab() {
                               ))}
                             </tr>
                           ))}
-                          {preview.length === 0 && <tr><td colSpan={g.columns.length} className="muted-note">—</td></tr>}
+                          {preview.length === 0 && <tr><td colSpan={g.columns.length} className="muted-note">-</td></tr>}
                         </tbody>
                       </table>
                     </div>

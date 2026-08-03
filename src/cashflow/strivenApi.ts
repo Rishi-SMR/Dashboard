@@ -115,7 +115,7 @@ export type QbPosted = { invoiceId: string; docNumber: string; total?: number; c
 export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: string; action: string; name: string; id: string }[]; soNumber?: string; alreadyPosted?: QbPosted; message?: string };
 
 /** For customers, `missingInQb[].name` carries a PT-<id> REFERENCE (phi=true), not a patient name.
- *  For vendors, `missingInQb[].ref` (VN-<id>) is a display alias — `name` (the real vendor name) is still what QB stores. */
+ *  For vendors, `missingInQb[].ref` (VN-<id>) is a display alias: `name` (the real vendor name) is still what QB stores. */
 export type QbReconcile = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string; ref?: string }[]; phi?: boolean };
 export type QbCreateMissingResult = { kind: string; created: { name: string; id: string }[]; createdCount: number; failed: { name: string; error: string }[]; remaining: number; totalMissing: number };
 export type QbEntityKind = 'customers' | 'vendors' | 'items';
@@ -154,12 +154,12 @@ export const fetchQbInvoices = () => get<QbInvoicesResult>('/api/qb/invoices');
 export const qbPrepareInvoiceDoc = (invId: number) => get<QbInvoiceDocPlan>(`/api/qb/prepare-invoice-doc?inv=${invId}`);
 export const qbPostInvoiceDoc = (invId: number, force = false) => post<QbPostResult>(`/api/qb/post-invoice-doc?inv=${invId}${force ? '&force=1' : ''}`);
 
-// ── Reports (vendor purchases, patient orders) — cancelled excluded ─────────
+// ── Reports (vendor purchases, patient orders): cancelled excluded ─────────
 export type ReportVendorItem = { item: string; qty: number; cost: number; poCount: number };
 export type ReportVendor = { vendor: string; poCount: number; totalCost: number; items: ReportVendorItem[] };
 export type VendorItemsReport = { vendors: ReportVendor[]; count: number; generatedAt: string | null; note: string };
 export type ReportPatientItem = { item: string; qty: number; value: number; soCount: number };
-/** Patients are identified ONLY by a reference (PT-<Striven customer id>) — names are PHI and are never sent to the browser. */
+/** Patients are identified ONLY by a reference (PT-<Striven customer id>): names are PHI and are never sent to the browser. */
 export type ReportPatient = { ref: string; soCount: number; totalValue: number; items: ReportPatientItem[] };
 // SO-wise row (client SOW): one per sales order. `ref` = the shared patient
 // reference (273/316-style); `lastName` = minimum-necessary PHI; `incomplete` =
@@ -199,7 +199,7 @@ export const fetchAutoPoPdf = (poId: number) => get<AutoPoPdf>(`/api/auto-po?act
 /** Render the email that WOULD be sent (subject + HTML body + resolved vendor email) without sending. */
 export type AutoPoEmailPreview = { ok: boolean; poId: number; subject: string; vendor: string; vendorEmail: string; html: string };
 export const fetchAutoPoEmailPreview = (poId: number) => get<AutoPoEmailPreview>(`/api/auto-po?action=email-preview&po=${poId}`);
-/** POs already created for a sales order — so an already-processed order still shows its delivery step. */
+/** POs already created for a sales order: so an already-processed order still shows its delivery step. */
 export type AutoPoSoPos = { ok: boolean; soId: number; pos: AutoPoPoGroup[] };
 export const fetchAutoPoSoPos = (soId: number) => get<AutoPoSoPos>(`/api/auto-po?action=so-pos&so=${soId}`);
 export const autoPoSendEmail = (poId: number, to: string, subject?: string, body?: string) =>
@@ -241,25 +241,191 @@ export type CommissionRecon = {
   bookedUnder: { rep: string; count: number }[];
   lines: CommissionLine[];
 };
+/** Orders booked per vertical. Non-financial, so it survives redaction and is
+ *  visible for EVERY rep: the one part of another rep's row a rep may see. */
+export type OrderCounts = { TriCare: number; VA: number; PI: number; DOL: number };
 export type CommissionRep = {
-  rep: string; tricare: number; pi: number; va: number; total: number; count: number;
+  rep: string;
+  // Dollar fields are `null` when the row belongs to another rep: the server
+  // redacts them before serialization, so there is nothing to hide client-side.
+  tricare: number | null; pi: number | null; va: number | null; total: number | null;
+  payableTotal: number | null;   // fillable + reimbursed → payable/due
+  waitingTotal: number | null;   // waiting for reimbursement → pending
+  count: number;
   // CFO reconciliation vs Striven order attribution
-  strivenOrders: number; strivenUnits: number; strivenValue: number;
+  strivenOrders: number; strivenUnits: number; strivenValue: number | null;
   commPerOrder: number | null; pctOfValue: number | null;
-  matchRate: number | null; recon: CommissionRecon;
+  matchRate: number | null;
+  recon: CommissionRecon | null;  // financial → own row only
+  orderCounts: OrderCounts;
+  verified: boolean;              // sheet figures reconcile → authoritative
+  redacted?: boolean;
   flag: 'no-striven' | 'high-ratio' | 'attribution' | null;
 };
-export type CommissionPeriodRep = { rep: string; tricare: number; va: number; pi: number; total: number; count: number };
+export type CommissionPeriodRep = { rep: string; tricare: number | null; va: number | null; pi: number | null; total: number | null; count: number; redacted?: boolean };
 export type CommissionPeriod = { workbook: string; gid: string; label: string; key: string; lines: number; total: number; reps: CommissionPeriodRep[] };
-export type ReconcileRep = { rep: string; sheet: number; striven: number; sheetProg: { TriCare: number; VA: number; PI: number }; strivenProg: { TriCare: number; VA: number; PI: number }; lines: number; orders: number; matchRate: number | null; diff: number; onSheet: boolean; inStriven: boolean };
-export type CommissionReconcile = { reps: ReconcileRep[]; totals: { sheet: number; striven: number; diff: number } };
-// Commission computed FROM Striven (rate card) — sheet-shaped (monthly + program).
-export type StrivenOrderLine = { ref: string; item: string; prog: 'TriCare' | 'VA' | 'PI'; value: number; units: number; comm: number };
-export type StrivenCommRep = { rep: string; tricare: number; va: number; pi: number; total: number; orders: number; units: number; value: number; lines?: StrivenOrderLine[] };
-export type StrivenCommMonth = { month: string; total: number; TriCare: number; VA: number; PI: number; orders: number; units: number; value: number; reps: StrivenCommRep[] };
-export type StrivenCommission = { available: boolean; grandTotal: number; byProgram: { TriCare: number; VA: number; PI: number }; months: StrivenCommMonth[]; byRep: StrivenCommRep[]; rateCard: { program: string; note: string; exact: boolean }[] };
-export type CommissionResult = { ok: boolean; configured?: boolean; note?: string; grandTotal: number; byProgram: { TriCare: number; PI: number; VA: number }; reps: CommissionRep[]; periods: CommissionPeriod[]; periodCount: number; itemCount: number; sheetsRead: number; sheetsConfigured: number; errors: string[]; sources: { label: string; url: string }[]; striven?: StrivenCommission; reconcile?: CommissionReconcile };
-export const fetchCommission = () => get<CommissionResult>('/api/commission');
+export type ReconcileRep = { rep: string; sheet: number | null; striven: number | null; sheetProg: { TriCare: number; VA: number; PI: number } | null; strivenProg: { TriCare: number; VA: number; PI: number } | null; sheetProgLines?: { TriCare: number; VA: number; PI: number }; strivenProgOrders?: { TriCare: number; VA: number; PI: number }; lines: number; orders: number; matchRate: number | null; diff: number | null; onSheet: boolean; inStriven: boolean; redacted?: boolean };
+export type CommissionReconcile = { reps: ReconcileRep[]; totals: { sheet: number | null; striven: number | null; diff: number | null } };
+// Commission computed FROM Striven (rate card): sheet-shaped (monthly + program).
+/** Commission state for one order, from the label rules. `hold` never appears: *  held orders are excluded from the calculation and produce no line. */
+export type CommState = 'payable' | 'waiting';
+export type StrivenOrderLine = { ref: string; item: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; value: number; units: number; comm: number; state: CommState };
+/** nTricare/nVa/nPi are ORDERS per vertical; uTricare/… are units per vertical. */
+/** Volume fields (`orders`, `units`, `nTricare`/`nVa`/`nPi`) are the FULL order
+ *  book from Striven. `commOrders`/`commUnits` are the subset the commission was
+ *  actually computed on: the two differ wherever an order could not be tied to
+ *  device lines, which is why a rep can show real orders against $0. */
+export type StrivenCommRep = {
+  commOrders?: number; commUnits?: number;
+  rep: string; tricare: number | null; va: number | null; pi: number | null; total: number | null;
+  payableTotal: number | null; waitingTotal: number | null;
+  orders: number; units: number; value: number | null;
+  nTricare?: number; nVa?: number; nPi?: number; uTricare?: number; uVa?: number; uPi?: number;
+  lines?: StrivenOrderLine[]; redacted?: boolean;
+};
+export type StrivenCommMonth = { month: string; total: number | null; TriCare: number | null; VA: number | null; PI: number | null; orders: number; units: number; value: number | null; oTriCare?: number; oVA?: number; oPI?: number; payableTotal?: number | null; waitingTotal?: number | null; reps: StrivenCommRep[] };
+export type StrivenCommission = {
+  available: boolean; grandTotal: number | null;
+  payableTotal?: number | null; waitingTotal?: number | null; heldOrders?: number;
+  zeroValueOrders?: number;                              // $0 order value → earns nothing
+  byProgram: { TriCare: number | null; VA: number | null; PI: number | null };
+  byProgramOrders?: { TriCare: number; VA: number; PI: number };
+  months: StrivenCommMonth[]; byRep: StrivenCommRep[];
+  /** Orders the commission engine could price, and the full book it sits in. */
+  commissionedOrders?: number; bookOrders?: number;
+  /** Volume booked to someone off the rep roster. Rendered as its own row so
+   *  the table's columns tie to the order book instead of falling short. */
+  offRoster?: {
+    orders: number; units: number; value: number;
+    nTricare: number; nVa: number; nPi: number; reps: string[];
+  };
+  rateGaps?: string[];                                   // devices priced off the fallback
+  unmatched?: UnmatchedOrder[];                          // no sales order → not commissioned
+  unmatchedValue?: number;
+  rateCard: { program: string; note: string; exact: boolean }[];
+};
+/** An order with no usable sales order. It earns no commission, but the vertical
+ *  and volume are real, so they are reported rather than dropped. */
+export type UnmatchedOrder = {
+  soId: string; ref: string; prog: string; rep: string | null;
+  item: string; itemCount: number; units: number; value: number;
+  status: string; reason: string;
+};
+export type CommissionResult = {
+  ok: boolean; configured?: boolean; note?: string;
+  grandTotal: number | null; byProgram: { TriCare: number | null; PI: number | null; VA: number | null };
+  byProgramCount?: { TriCare: number; PI: number; VA: number };
+  payableTotal?: number | null; waitingTotal?: number | null; heldOrders?: number;
+  minMatchRate?: number;
+  scopedToRep?: string | null;      // set when the payload was scoped to one rep
+  reps: CommissionRep[]; periods: CommissionPeriod[]; periodCount: number; itemCount: number;
+  sheetsRead: number; sheetsConfigured: number; errors: string[];
+  sources: { label: string; url: string }[]; striven?: StrivenCommission; reconcile?: CommissionReconcile;
+};
+/** `as` is an ADMIN-ONLY preview of one rep's view. It can only narrow what the
+ *  server returns: a rep-role session passing it is ignored. */
+export const fetchCommission = (as?: string | null) =>
+  get<CommissionResult>(`/api/commission${as ? `?as=${encodeURIComponent(as)}` : ''}`);
+
+// ── Order analytics (revenue / accounts / devices) ──────────────────────────
+/** One PHI-safe row per order. `account` is the PAYER: Veterans Affairs,
+ *  TriCare, or the PI law firm: never the Striven customer, which is a patient. */
+export type AnalyticsDevice = { item: string; qty: number };
+export type AnalyticsOrder = {
+  ref: string; soId: string; date: string | null;
+  /** Mirrors soClass(): one bucket per Striven sales order type. */
+  vertical: 'PI' | 'VA' | 'DOL' | 'TriCare' | 'DEMO' | 'Contract' | 'Other';
+  account: string; rep: string;
+  revenue: number; units: number; devices: AnalyticsDevice[];
+  status: string; invStatus: string;
+  daysSinceUpdate: number | null;   // interim ageing proxy
+  ageDays: number | null;
+};
+export type OrderAnalytics = {
+  ok: boolean; scopedToRep: string | null; verticals: string[];
+  orders: AnalyticsOrder[]; generatedAt: string;
+  /** Cancelled orders are dropped from every figure, but reported so the
+   *  exclusion is visible rather than a silent gap against Striven's count. */
+  excludedCancelled?: number; excludedCancelledValue?: number;
+};
+export const fetchOrderAnalytics = (as?: string | null) =>
+  get<OrderAnalytics>(`/api/order-analytics${as ? `?as=${encodeURIComponent(as)}` : ''}`);
+
+// ── Saved dashboard views ────────────────────────────────────────────────────
+/** A named filter set, stored per signed-in user. */
+export type DashFilters = { preset: string; from: string; to: string; vert: string };
+export type SavedView = { id: string; name: string; filters: DashFilters; savedAt: string };
+export const fetchViews = () => get<{ ok: boolean; views: SavedView[] }>('/api/views');
+export const saveView = (name: string, filters: DashFilters) =>
+  postJson<{ ok: boolean; views: SavedView[]; error?: string }>('/api/views', { name, filters });
+export const deleteView = (id: string) =>
+  postJson<{ ok: boolean; views: SavedView[]; error?: string }>('/api/views', { delete: id });
+
+// ── Rep overview ─────────────────────────────────────────────────────────────
+/** Money fields are `null` on another rep's row: stripped server-side. Counts
+ *  always survive, so volume is shared across the team but pay is not. */
+export type RepVertical = { vertical: string; orders: number; units: number | null; revenue: number | null };
+export type RepRow = {
+  rep: string; isSelf: boolean; own: boolean;
+  /** `orders` is the one metric always shared: it drives Team Standings.
+   *  units/accounts/devices are null for other reps when STANDINGS_ORDERS_ONLY. */
+  /** Distinct payers billed: the law firm on a PI order, Veterans Affairs on a
+   *  VA order, TriCare on a Tri-Care order. Blank payers are not counted. */
+  orders: number; units: number | null; accounts: number | null; devices: number | null;
+  /** How many verticals this rep has orders in. */
+  verticals: number | null;
+  lastOrder: string | null;
+  byVertical: RepVertical[];
+  revenue: number | null; commission: number | null; payable: number | null; waiting: number | null;
+  matchRate: number | null; verified: boolean;
+};
+export type RepOverview = {
+  ok: boolean; role: 'admin' | 'rep'; me: string | null; verticals: string[];
+  reps: RepRow[];
+  /** All four figures describe the same set of orders: the rep-attributed book. */
+  teamTotals: { reps: number; orders: number; units: number | null; accounts: number | null; revenue: number | null; commission: number | null };
+  /** Orders booked in Striven to someone who is not a rep. Reported separately so
+   *  the gap against the full order book is explained rather than puzzling. */
+  /** The rest of the book: booked to someone off the rep roster. `units` is
+   *  what reconciles the Devices KPI against Orders & Revenue. */
+  unattributed: { orders: number; revenue: number; units: number } | null;
+  /** Whole-book totals, matching Orders & Revenue exactly. Admin only: a rep
+   *  must not be able to derive the company book by subtracting their own row. */
+  bookTotals: { orders: number; units: number; revenue: number; accounts: number } | null;
+  bookOrders: number | null;
+  excludedCancelled: number;
+};
+export const fetchRepOverview = (as?: string | null) =>
+  get<RepOverview>(`/api/rep-overview${as ? `?as=${encodeURIComponent(as)}` : ''}`);
+
+// ── PI stage pipeline ────────────────────────────────────────────────────────
+/** Stages are tracked in the portal: Striven has no equivalent field. */
+export type PiStageName = 'Order received' | 'Awaiting LOP' | 'Dispensed' | 'Shipped' | 'Delivered';
+export type PiStageOrder = AnalyticsOrder & {
+  stage: PiStageName;
+  stageSince: string | null;
+  daysInStage: number | null;
+  /** true when ageing falls back to the order date because the order has never
+   *  been moved: measured ageing only starts at the first transition. */
+  estimated: boolean;
+  movedBy: string | null;
+  history: { stage: string; at: string; by: string }[];
+};
+export type PiStageBucket = { stage: PiStageName; count: number; revenue: number; units: number; oldestDays: number; avgDays: number };
+export type PiStages = {
+  ok: boolean; scopedToRep: string | null; canEdit: boolean;
+  stageNames: PiStageName[]; stages: PiStageBucket[]; orders: PiStageOrder[];
+  trackedCount: number; autoFromTracking: boolean;
+};
+export const fetchPiStages = (as?: string | null) =>
+  get<PiStages>(`/api/pi-stages${as ? `?as=${encodeURIComponent(as)}` : ''}`);
+export const setPiStage = (soId: string, stage: PiStageName) =>
+  postJson<{ ok: boolean; unchanged?: boolean; error?: string }>('/api/pi-stages', { soId, stage });
+
+/** Who the signed-in caller is. Resolved server-side from the verified session
+ *: never from a cookie the browser could set. */
+export type Me = { email: string | null; repName: string | null; role: 'rep' | 'admin' };
+export const fetchMe = () => get<Me>('/api/me');
 /** Add a tracking row. Last name goes in the POST body (never the URL). */
 export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);
 export const trackingRemove = (id: string) => get<{ ok: boolean }>(`/api/tracking?action=remove&id=${encodeURIComponent(id)}`);

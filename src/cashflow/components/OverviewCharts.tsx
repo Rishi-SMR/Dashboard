@@ -9,10 +9,10 @@ import {
 } from '../strivenApi';
 import { formatCurrency, clickableProps } from '../format';
 import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
-import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, DrillModal, useSyncAgo, pctText } from '../chartKit';
+import { ChartCard, BarsLine, LegendDots, DonutList, BarList, GaugeRing, AnimatedNumber, DrillModal, useSyncAgo, pctText, KpiExec, HUE } from '../chartKit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
-const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—');
+const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '-');
 const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '•';
 const PROG_LABEL: Record<string, string> = { All: 'All programs', PI: 'PI', VA: 'VA', TriCare: 'Tri-Care' };
@@ -41,65 +41,12 @@ const momDelta = (series: { month: string; value: number }[], cutoffYm = nowYm):
 const completeVals = (series: { month: string; value: number }[], cutoffYm = nowYm): number[] =>
   series.filter((p) => p.month < cutoffYm).map((p) => p.value ?? 0);
 
-// 7 KPI hues — reused verbatim as the chart palette so strip + charts read as one system.
-type Hue = { from: string; to: string; glow: string };
-const HUE = {
-  revenue: { from: '#3B82F6', to: '#2563EB', glow: 'rgba(37,99,235,0.28)' } as Hue,
-  cash: { from: '#22C55E', to: '#16A34A', glow: 'rgba(22,163,74,0.26)' } as Hue,
-  ar: { from: '#14B8A6', to: '#0D9488', glow: 'rgba(13,148,136,0.26)' } as Hue,
-  ap: { from: '#A855F7', to: '#7C3AED', glow: 'rgba(124,58,237,0.28)' } as Hue,
-  sales: { from: '#FBBF24', to: '#D97706', glow: 'rgba(217,119,6,0.28)' } as Hue,
-  po: { from: '#EC4899', to: '#BE185D', glow: 'rgba(190,24,93,0.26)' } as Hue,
-  exc: { from: '#FB7185', to: '#E11D48', glow: 'rgba(225,29,72,0.28)' } as Hue,
-};
-
-function Spark({ values, color }: { values: number[]; color: string }) {
-  if (values.length < 2) return null;
-  const w = 72, h = 30, pad = 2;
-  const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
-  const pts = values.map((v, i) => {
-    const x = pad + (i / (values.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((v - min) / range) * (h - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-  return (
-    <svg className="ke-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
-      <polygon points={`${pad},${h - pad} ${pts} ${w - pad},${h - pad}`} fill={color} opacity={0.12} />
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function KpiExec({ label, value, format, hue, delta, sub, chip, spark, onClick }: {
-  label: string; value: number; format?: (n: number) => string; hue: Hue;
-  delta?: { pct: number; up: boolean } | null; sub?: string; chip?: string; spark?: number[]; onClick?: () => void;
-}) {
-  return (
-    <div
-      className={`kpi--exec${onClick ? ' clickable' : ''}`}
-      style={{ ['--k-from' as any]: hue.from, ['--k-to' as any]: hue.to, ['--k-glow' as any]: hue.glow }}
-      onClick={onClick} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
-    >
-      <div className="ke-label">{label}</div>
-      <div className="ke-row">
-        <div className="ke-value"><AnimatedNumber value={value} format={format} /></div>
-        {spark && spark.length > 1 && <Spark values={spark} color={hue.to} />}
-      </div>
-      <div className="ke-delta">
-        {delta
-          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {pctText(delta.pct)}</b><span>vs prior month</span></>
-          : <span>{sub}</span>}
-      </div>
-      {chip && <div className="ke-foot"><span className="ke-chip">{chip}</span></div>}
-    </div>
-  );
-}
+// 7 KPI hues: reused verbatim as the chart palette so strip + charts read as one system.
 
 const INS_TONES: Record<string, { bg: string; fg: string }> = {
   pos: { bg: 'rgba(22,163,74,0.12)', fg: '#16A34A' },
   neg: { bg: 'rgba(220,38,38,0.10)', fg: '#DC2626' },
-  brand: { bg: 'rgba(37,99,235,0.10)', fg: '#2563EB' },
+  brand: { bg: 'rgba(10,54,159,0.10)', fg: '#0A369F' },
   purple: { bg: 'rgba(124,58,237,0.10)', fg: '#7C3AED' },
   teal: { bg: 'rgba(13,148,136,0.10)', fg: '#0D9488' },
 };
@@ -208,8 +155,8 @@ export function OverviewCharts() {
   // Cap at 100 so the printed label can't exceed the gauge arc (which clamps).
   const collectionPct = fRev > 0 ? Math.min(100, Math.round((cashFY / fRev) * 100)) : 0;
   // DSO restricted to PI (client SOW): VA / TriCare pay on fixed cycles, so DSO
-  // is meaningless there. Computed by the aging method — the amount-weighted
-  // average age of OPEN PI receivables — because revenue isn't program-split, so
+  // is meaningless there. Computed by the aging method: the amount-weighted
+  // average age of OPEN PI receivables: because revenue isn't program-split, so
   // a sales-based DSO can't be scoped to PI honestly. Always PI, regardless of
   // the header program filter (DSO is inherently a PI metric here).
   const piOpenInv = (ar?.invoices ?? []).filter((i) => i.open > 0 && programOfPayer(i.payer) === 'PI');
@@ -221,7 +168,7 @@ export function OverviewCharts() {
       }, 0) / piOpenSum)
     : null;
 
-  // Action Center — items derived live from the same datasets.
+  // Action Center: items derived live from the same datasets.
   const soon = refMs + 7 * 86_400_000;
   const overdue = arInv.filter((i) => i.dueDate && new Date(i.dueDate).getTime() < refMs);
   const overdueSum = overdue.reduce((s, i) => s + i.open, 0);
@@ -253,11 +200,11 @@ export function OverviewCharts() {
     dim: prog !== 'All' && d.key !== prog,
   }))) : [];
 
-  // PO spend by vendor (top 5) — slices sum to committed spend.
+  // PO spend by vendor (top 5): slices sum to committed spend.
   const vendorBars = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5)
     .map((v, i) => ({ name: trunc(v.vendor), value: v.total, color: CAT6[i % CAT6.length] }));
 
-  // Top payers by open AR — payer (law firm / VA / insurer) is the non-PHI
+  // Top payers by open AR: payer (law firm / VA / insurer) is the non-PHI
   // counterparty; patient customer names arrive masked. Program-scoped.
   const custAgg = new Map<string, number>();
   for (const i of arInv) {
@@ -274,22 +221,22 @@ export function OverviewCharts() {
     title: `AR Aging · ${label}`, sub: `Open invoices ${label === 'Current' ? 'not yet due' : `${label} days past due`} · ${PROG_LABEL[prog]}`,
     columns: [{ key: 'n', label: 'Invoice #' }, { key: 'p', label: 'Payer' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
     rows: arInv.filter((i) => bucketKeyOf(i.dueDate, refMs) === LABEL_KEY[label]).sort((a, b) => b.open - a.open)
-      .map((i) => ({ n: `#${i.number}`, p: i.payer || '—', d: shortDate(i.dueDate), o: formatCurrency(i.open) })),
+      .map((i) => ({ n: `#${i.number}`, p: i.payer || '-', d: shortDate(i.dueDate), o: formatCurrency(i.open) })),
   });
   const drillApBucket = (label: string) => setDrill({
     title: `AP Aging · ${label}`, sub: label === 'Current' ? 'Bills not yet due' : `Bills ${label} days past due`,
     columns: [{ key: 'n', label: 'Bill #' }, { key: 'v', label: 'Vendor' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
     rows: (ap?.bills ?? []).filter((b) => b.open > 0 && bucketKeyOf(b.dueDate, refMs) === LABEL_KEY[label]).sort((a, b) => b.open - a.open)
-      .map((b) => ({ n: `#${b.number}`, v: b.vendor || '—', d: shortDate(b.dueDate), o: formatCurrency(b.open) })),
+      .map((b) => ({ n: `#${b.number}`, v: b.vendor || '-', d: shortDate(b.dueDate), o: formatCurrency(b.open) })),
   });
   const drillVendor = (name: string) => setDrill({
     title: name, sub: 'Recent purchase orders for this vendor',
     columns: [{ key: 'r', label: 'PO ref' }, { key: 'd', label: 'Date' }, { key: 'a', label: 'Amount', num: true }],
-    rows: (po?.recent ?? []).filter((r) => (r.vendor || '—') === name).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+    rows: (po?.recent ?? []).filter((r) => (r.vendor || '-') === name).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
       .map((r) => ({ r: r.ref, d: shortDate(r.date), a: formatCurrency(r.total) })),
   });
 
-  // Financial insights — every line computed from the data above.
+  // Financial insights: every line computed from the data above.
   const doneRev = (trends?.series ?? []).filter((s) => inFy(s.month) && s.month < nowYm && s.revenue > 0);
   const bestMonth = doneRev.length ? doneRev.reduce((m, s) => (s.revenue > m.revenue ? s : m)) : null;
   type Ins = { tone: keyof typeof INS_TONES; ico: string; text: ReactNode };
@@ -376,7 +323,7 @@ export function OverviewCharts() {
             </div>
           )}
 
-          <div className="kpi-strip">
+          <div className="kpi-strip kpi-strip-7">
             <KpiExec label={fyLatest ? 'Revenue YTD' : `Revenue FY${fy}`} value={fRev} format={formatCurrency} hue={HUE.revenue}
               delta={revD} sub={`invoiced · FY${fy}`} spark={completeVals(revSeries, asOfYm)}
               chip={fyLatest ? `${pl.invoiceCount} invoices` : `FY${fy}`} onClick={go('pl')} />
@@ -430,8 +377,8 @@ export function OverviewCharts() {
                 <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding</div><div className="v">{formatCurrency(arOpenF)}</div></div>
               </div>
               <div className="cfoot" style={{ marginTop: 0 }}>
-                <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${pctText(cashD.pct)}` : '—'}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">PI DSO</div><div className="v">{piDso != null ? `${piDso} days` : '—'}</div></div>
+                <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${pctText(cashD.pct)}` : '-'}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">PI DSO</div><div className="v">{piDso != null ? `${piDso} days` : '-'}</div></div>
               </div>
             </ChartCard>
 
@@ -468,7 +415,7 @@ export function OverviewCharts() {
               </div>
               <div className="cfoot">
                 <div className="cf-i"><div className="l">{prog === 'All' ? 'Total Orders' : `${PROG_LABEL[prog]} Orders`}</div><div className="v">{soCount.toLocaleString()}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Programs</div><div className="v accent">{programBars.length || '—'}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Programs</div><div className="v accent">{programBars.length || '-'}</div></div>
               </div>
             </ChartCard>
 

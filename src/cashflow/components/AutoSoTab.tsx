@@ -5,7 +5,7 @@ import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 
 // Auto-SO (recurring resupply). Shows which patients are due for a repeat order,
 // drafts it from their last order, and CREATES the sales order in Striven on a
@@ -57,7 +57,7 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
           <div>
             <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Auto-SO · Resupply</h1>
             <div className="page-sub">
-              <span className="live-dot" /> Patients due for a repeat order — draft previews from their last order{agoText ? ` · updated ${agoText}` : ''}
+              <span className="live-dot" /> Patients due for a repeat order: draft previews from their last order{agoText ? ` · updated ${agoText}` : ''}
             </div>
           </div>
           <div className="ov-headright">
@@ -79,7 +79,7 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
 
       {data && data.ready && (
         <div className="section">
-          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 14 }}>
             <KpiR ico="users" tint={C.brand} label="Patients with orders" value={data.count ?? cands.length} foot="from order history" deltaText="by reference" />
             <KpiR ico="clock" tint="#D97706" label={`Due for resupply (${data.dueDays ?? 30}d+)`} value={data.dueCount ?? 0} foot="no order in the window" deltaText="candidates" />
             <KpiR ico="clip" tint="#16A34A" label="Showing" value={rows.length} foot={dueOnly ? 'due only' : 'all patients'} deltaText="rows" />
@@ -87,8 +87,8 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
 
           <div className={`qb-flash ${data.demoOnly === false ? 'err' : 'warn'}`} style={{ marginBottom: 12 }}>
             {data.demoOnly === false
-              ? <>🔴 <b>Live for ALL patients</b> — the demo gate is OFF. Creating here makes a <b>REAL</b> sales order in Striven.</>
-              : <>🧪 <b>Pilot mode</b> — only <b>test / demo</b> patients can create a resupply SO; real patients are ignored server-side. Every create is a deliberate click.</>}
+              ? <>🔴 <b>Live for ALL patients</b>: the demo gate is OFF. Creating here makes a <b>REAL</b> sales order in Striven.</>
+              : <>🧪 <b>Pilot mode</b>: only <b>test / demo</b> patients can create a resupply SO; real patients are ignored server-side. Every create is a deliberate click.</>}
             {' '}🔒 Last name is minimum-necessary PHI; access is audit-logged.
           </div>
 
@@ -113,13 +113,13 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
                     <tr onClick={() => c.items.length && setOpen(open === c.patient ? null : c.patient)}
                       style={{ cursor: c.items.length ? 'pointer' : 'default', background: open === c.patient ? 'var(--accent-soft-2)' : undefined }}>
                       <td style={{ fontWeight: 700 }}>{c.items.length ? (open === c.patient ? '▾ ' : '▸ ') : ''}{c.patient}</td>
-                      <td>{c.lastName || '—'}</td>
-                      <td><span className="pill-tag" style={{ color: PROG_C[c.program] || PROG_C.Other, borderColor: 'currentColor' }}>{c.program || '—'}</span></td>
+                      <td>{c.lastName || '-'}</td>
+                      <td><span className="pill-tag" style={{ color: PROG_C[c.program] || PROG_C.Other, borderColor: 'currentColor' }}>{c.program || '-'}</span></td>
                       <td>{c.lastSo} · {fmtDate(c.lastDate)}</td>
                       <td className="num">
                         {c.daysSince != null
                           ? <span className={`pill-tag ${c.due ? 'tag-warn' : 'tag-ok'}`}>{c.daysSince}d</span>
-                          : '—'}
+                          : '-'}
                       </td>
                       <td className="num">{c.orderCount}</td>
                       <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(c.value)}</td>
@@ -134,7 +134,7 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
                     </tr>
                     {open === c.patient && c.items.length > 0 && (
                       <tr><td colSpan={8} style={{ padding: '0 0 8px 0', background: 'var(--accent-soft-2)' }}>
-                        <div style={{ margin: '2px 0 4px 28px', fontSize: 11.5, color: C.muted, fontWeight: 600 }}>Draft resupply — items from the last order</div>
+                        <div style={{ margin: '2px 0 4px 28px', fontSize: 11.5, color: C.muted, fontWeight: 600 }}>Draft resupply: items from the last order</div>
                         <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
                           <thead><tr><th>Item</th><th className="num">Qty</th></tr></thead>
                           <tbody>
@@ -159,7 +159,7 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
             <div className="drill-head">
               <div>
                 <div className="title">Create resupply order</div>
-                <div className="sub">{sel.patient} · {sel.lastName || '—'} · from {sel.lastSo}</div>
+                <div className="sub">{sel.patient} · {sel.lastName || '-'} · from {sel.lastSo}</div>
               </div>
               <button className="drill-close" onClick={() => !busy && setSel(null)} aria-label="Close">×</button>
             </div>
@@ -167,11 +167,11 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
               <div className={`qb-flash ${data?.demoOnly === false ? 'err' : 'warn'}`} style={{ marginBottom: 12 }}>
                 {data?.demoOnly === false
                   ? <>🔴 This creates a <b>REAL</b> sales order in Striven.</>
-                  : <>🧪 <b>Pilot</b> — creates only if this is a <b>demo/test</b> patient; real patients are skipped server-side.</>}
+                  : <>🧪 <b>Pilot</b>: creates only if this is a <b>demo/test</b> patient; real patients are skipped server-side.</>}
               </div>
               {!result ? (
                 <>
-                  <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 8 }}>Draft — a repeat of the last order's items:</div>
+                  <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 8 }}>Draft: a repeat of the last order's items:</div>
                   <div className="table-wrap"><table className="data-table">
                     <thead><tr><th>Item</th><th className="num">Qty</th></tr></thead>
                     <tbody>
@@ -200,9 +200,9 @@ function CreateResult({ result, onClose }: { result: AutoSoRunResult; onClose: (
       {e?.createdSoId ? (
         <div className="qb-flash ok">✅ Created sales order <b>#{e.createdSoId}</b> in Striven ({e.itemCount ?? 0} items).</div>
       ) : e?.skipped ? (
-        <div className="qb-flash warn">⏭️ Skipped — {e.skipped}</div>
+        <div className="qb-flash warn">⏭️ Skipped: {e.skipped}</div>
       ) : (
-        <div className="qb-flash warn">Dry run — {e?.itemCount ?? 0} item(s) planned, nothing created.</div>
+        <div className="qb-flash warn">Dry run: {e?.itemCount ?? 0} item(s) planned, nothing created.</div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
         <button className="btn" onClick={onClose}>Done</button>
@@ -211,4 +211,4 @@ function CreateResult({ result, onClose }: { result: AutoSoRunResult; onClose: (
   );
 }
 
-const PROG_C: Record<string, string> = { PI: '#2563EB', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };
+const PROG_C: Record<string, string> = { PI: '#0A369F', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };

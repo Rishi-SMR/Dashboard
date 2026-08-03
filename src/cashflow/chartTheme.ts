@@ -1,14 +1,19 @@
-// Shared chart theme for the SMR dashboard — one palette + animation config so
+// Shared chart theme for the SMR dashboard: one palette + animation config so
 // every tab's charts read as one system (premium light "board-deck" house style).
 
 // Brand + semantic colors.
-// Sports Med Recovery brand: confident royal blue primary, disciplined
-// data-viz secondaries. Tuned for a LIGHT (white) canvas — crisp, board-grade,
-// AA-legible, no neon.
+// Sports Med Recovery brand: the blue and green are sampled straight from
+// public/SMR Logo.png, with disciplined data-viz secondaries around them. Tuned
+// for a LIGHT (white) canvas: crisp, board-grade, AA-legible, no neon.
+//
+// `brandGreen` is a FILL only. At 2.4:1 on white it fails text contrast, so it
+// must not be used for labels, values or axis text; `positive` (#16A34A) stays
+// the semantic "good" green and is intentionally a different colour.
 export const C = {
-  brand: '#2563EB',        // royal blue (primary / interactive)
-  brandDark: '#1D4ED8',
-  brandLight: 'rgba(37,99,235,0.10)',
+  brand: '#0A369F',        // SMR blue: the logo letterforms (primary / interactive)
+  brandDark: '#082A7C',
+  brandLight: 'rgba(10,54,159,0.10)',
+  brandGreen: '#6EB60A',   // SMR green: the logo swoosh. Fill only, never text.
   positive: '#16A34A',     // green (money in / good)
   negative: '#DC2626',     // red
   warning: '#D97706',      // amber
@@ -21,9 +26,38 @@ export const C = {
   surface: '#FFFFFF',
 };
 
-// Categorical series palette — the 7 KPI hues reused verbatim so the strip +
+/**
+ * Vertical (sales-order-type) colours: ONE definition for the whole dashboard.
+ *
+ * Four separate copies of this map had drifted apart: three still carried the
+ * old TriCare teal #0D9488, which measured ΔE 14.8 against the Unclassified
+ * grey: below the 15 floor, i.e. two slices most people cannot tell apart.
+ *
+ * Keys mirror soClass() on the server. DEMO and Contract - With Approval are
+ * real Striven sales order types, not synthetic buckets. DEMO is amber on
+ * purpose: it carries volume and value but earns no commission, so it must not
+ * read as ordinary revenue.
+ *
+ * Validated as this exact sequence: CVD ΔE 15.3, normal-vision 16.3.
+ * Reordering changes the adjacent pairs and can fail; re-run the validator if
+ * you touch it.
+ */
+export const VERTICAL_COLORS: Record<string, string> = {
+  DEMO: '#D97706',
+  PI: '#0A369F',
+  Contract: '#DB2777',
+  DOL: '#7C3AED',
+  VA: '#16A34A',
+  TriCare: '#0F766E',
+  Other: '#94A3B8',
+};
+
+/** Display order: clinical programmes first, then the rest. */
+export const VERTICAL_ORDER = ['PI', 'VA', 'TriCare', 'DEMO', 'Contract', 'DOL', 'Other'];
+
+// Categorical series palette: the 7 KPI hues reused verbatim so the strip +
 // charts read as one system (medium-saturation, print-safe on white).
-export const SERIES = ['#2563EB', '#16A34A', '#0D9488', '#D97706', '#DC2626', '#7C3AED', '#DB2777', '#0891B2', '#CA8A04', '#4F46E5'];
+export const SERIES = ['#0A369F', '#16A34A', '#0D9488', '#D97706', '#DC2626', '#7C3AED', '#DB2777', '#0891B2', '#CA8A04', '#4F46E5'];
 
 // AR/AP aging ramp: current → 90+ (good → urgent, on white).
 export const AGING = ['#16A34A', '#65A30D', '#CA8A04', '#EA580C', '#DC2626'];
@@ -65,7 +99,7 @@ export const SEVERITY: Record<string, string> = {
   Current: '#16A34A', '1–30': '#65A30D', '31–60': '#CA8A04', '61–90': '#EA580C', '90+': '#DC2626',
 };
 // Generic 6-color categorical ramp when keys are arbitrary (mirrors the KPI hues).
-export const CAT6 = ['#2563EB', '#16A34A', '#0D9488', '#D97706', '#7C3AED', '#DB2777'];
+export const CAT6 = ['#0A369F', '#16A34A', '#0D9488', '#D97706', '#7C3AED', '#DB2777'];
 
 // Which program pays: payer text → PI (law firm) / VA / TriCare. Payers are
 // non-PHI (law firms, Veterans Affairs, TriCare) so this is safe to classify on.

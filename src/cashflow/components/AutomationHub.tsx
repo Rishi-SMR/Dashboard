@@ -10,7 +10,7 @@ import { C } from '../chartTheme';
 
 type Sub = 'overview' | 'autopo' | 'autoso' | 'tracking';
 const fmtWhen = (s: string | null | undefined) =>
-  s ? new Date(s).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+  s ? new Date(s).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-';
 
 // One "Automation" hub: an Overview control-board + the Auto-PO and Auto-SO
 // workflows as sub-tabs (each rendered embedded, so the hub owns the header).
@@ -21,7 +21,7 @@ export function AutomationHub({ initialTab = 'overview' }: { initialTab?: Sub } 
       <div className="page-head deck-head" style={{ marginBottom: 14 }}>
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Automation</h1>
-          <div className="page-sub">Every hands-off workflow in one place — what runs, in which mode, and the steps you can trigger.</div>
+          <div className="page-sub">Every hands-off workflow in one place: what runs, in which mode, and the steps you can trigger.</div>
         </div>
       </div>
 
@@ -77,7 +77,7 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
   return (
     <>
       <div className="qb-flash warn" style={{ marginBottom: 16 }}>
-        🤖 <b>These run without you clicking through every order.</b> Each one is safe by design — dry-run / preview first, and live writes to Striven stay gated until you turn them on. Open any workflow below to see and trigger its steps.
+        🤖 <b>These run without you clicking through every order.</b> Each one is safe by design: dry-run / preview first, and live writes to Striven stay gated until you turn them on. Open any workflow below to see and trigger its steps.
       </div>
 
       <div className="chart-grid" style={{ marginBottom: 16 }}>
@@ -95,9 +95,9 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
           </div>
           <div style={{ margin: '4px 0 12px' }}>
             <Step n={1}>Picks up a recent <b>sales order</b> (or the one you choose).</Step>
-            <Step n={2}>For each item, finds the <b>vendor</b> from your PO history — same terms & template.</Step>
-            <Step n={3}>Shows the exact <b>PO plan</b> (dry-run — creates nothing).</Step>
-            <Step n={4}>On your click, <b>creates the PO</b> in Striven — <b>demo/test orders only</b> in pilot.</Step>
+            <Step n={2}>For each item, finds the <b>vendor</b> from your PO history: same terms & template.</Step>
+            <Step n={3}>Shows the exact <b>PO plan</b> (dry-run: creates nothing).</Step>
+            <Step n={4}>On your click, <b>creates the PO</b> in Striven: <b>demo/test orders only</b> in pilot.</Step>
             <Step n={5}>Emails the PO <b>PDF</b> to the vendor (internal inbox in pilot).</Step>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
@@ -123,7 +123,7 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
             <Step n={2}>Works out <b>how long</b> since each patient's last order.</Step>
             <Step n={3}>Flags who is <b>due</b> for a resupply ({so?.dueDays ?? 30}+ days).</Step>
             <Step n={4}>Drafts the repeat from their <b>last order's items</b>.</Step>
-            <Step n={5}><b>Creates the sales order</b> in Striven on your click — <b>demo/test patients only</b> in pilot, and it won't double-create.</Step>
+            <Step n={5}><b>Creates the sales order</b> in Striven on your click: <b>demo/test patients only</b> in pilot, and it won't double-create.</Step>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <span style={{ fontSize: 11.5, color: C.muted }}>{loading ? 'Checking…' : (so?.ready ? `${so?.dueCount ?? 0} due now` : 'run the report build')}</span>
@@ -145,7 +145,7 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
           <div style={{ margin: '4px 0 12px' }}>
             <Step n={1}>Add the vendor <b>tracking number</b> (from the email/portal) + patient <b>last name / ship-to</b>.</Step>
             <Step n={2}>Carrier is <b>auto-detected</b> (UPS / FedEx / USPS / DHL).</Step>
-            <Step n={3}>Live <b>status</b> pulls from Shippo — Delivered / In transit / Exception + ETA.</Step>
+            <Step n={3}>Live <b>status</b> pulls from Shippo: Delivered / In transit / Exception + ETA.</Step>
             <Step n={4}>Search a <b>last name</b> → see where it is. No more email crafting.</Step>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
@@ -167,7 +167,7 @@ function AutomationOverview({ onOpen }: { onOpen: (s: Sub) => void }) {
         <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.55 }}>
           Raw Striven data (invoices, orders, POs, payments…) refreshes <b>every 6 hours</b> automatically. The
           sales-order-wise report + resupply data (patient last name, reference, items) rebuilds from the
-          <code> gen-reports</code> job — last built <b>{fmtWhen(so?.generatedAt)}</b>. Run it after new orders to
+          <code> gen-reports</code> job: last built <b>{fmtWhen(so?.generatedAt)}</b>. Run it after new orders to
           refresh Auto-SO and the Patient-orders report.
         </div>
       </div>

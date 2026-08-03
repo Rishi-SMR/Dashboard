@@ -10,7 +10,7 @@ import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 
 const fmtDate = (s: string | null) =>
-  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 
 function readQbFlash(): { kind: 'ok' | 'err'; text: string } | null {
   try {
@@ -49,7 +49,7 @@ export function QuickBooksTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>QuickBooks</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sync Striven into QuickBooks in the right order — customers, vendors, items, then invoices{agoText ? ` · checked ${agoText}` : ''}
+            <span className="live-dot" /> Sync Striven into QuickBooks in the right order: customers, vendors, items, then invoices{agoText ? ` · checked ${agoText}` : ''}
             {status?.connected && (
               <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: status.env === 'production' ? 'rgba(220,38,38,.10)' : C.brandLight, color: status.env === 'production' ? '#B91C1C' : C.brandDark }}>
                 {status.env === 'production' ? '● PRODUCTION' : '● SANDBOX (test)'}
@@ -212,7 +212,7 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
     <div className="section">
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>{title} — Striven vs QuickBooks</div>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>{title}: Striven vs QuickBooks</div>
           <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>{note}</div>
         </div>
         <button className="btn ghost" onClick={load} disabled={loading || running}>{loading ? 'Checking…' : '↻ Re-check'}</button>
@@ -223,7 +223,7 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
 
       {rec && (
         <>
-          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
+          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 12 }}>
             <KpiR ico="users" tint={C.brand} label="In Striven" value={rec.strivenCount} foot={`${title.toLowerCase()} in Striven`} deltaText={`${rec.qbCount} in QuickBooks`} />
             <KpiR ico="shield" tint="#16A34A" label="Already in QuickBooks" value={rec.matchedCount} foot="matched by name" deltaText="no action needed" />
             <KpiR ico="clock" tint="#F59E0B" label="Not in QuickBooks" value={rec.missingCount} foot="ready to create" deltaText="Striven only" />
@@ -231,7 +231,7 @@ function ReconcilePanel({ kind, title, note }: { kind: QbEntityKind; title: stri
 
           {rec.phi && (
             <div className="qb-flash warn" style={{ marginBottom: 12 }}>
-              🔒 Patient names are protected health information — they never reach this screen. Patients show as
+              🔒 Patient names are protected health information: they never reach this screen. Patients show as
               <b> PT-&lt;Striven customer id&gt;</b>; the real name is read straight from Striven on the server only when QuickBooks needs it.
             </div>
           )}
@@ -345,8 +345,8 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
     <div className="section">
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontWeight: 800, fontSize: 16 }}>Invoices — Striven → QuickBooks</div>
-          <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>Each invoice is created in QuickBooks with its <b>original Striven date</b> and number — not today's date.</div>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>Invoices: Striven → QuickBooks</div>
+          <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>Each invoice is created in QuickBooks with its <b>original Striven date</b> and number: not today's date.</div>
         </div>
         <button className="btn ghost" onClick={load} disabled={loading || running}>{loading ? 'Loading…' : '↻ Re-check'}</button>
       </div>
@@ -354,7 +354,7 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
       {err && <div className="error" style={{ marginBottom: 10 }}>{err}</div>}
 
       {data && (
-        <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
+        <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 12 }}>
           <KpiR ico="doc" tint={C.brand} label="Posted to QuickBooks" value={data.postedCount} foot="invoices already in QB" deltaText={`${data.count} Striven invoices`} />
           <KpiR ico="clock" tint="#F59E0B" label="Pending" value={pending.length} foot="not yet in QuickBooks" deltaText="ready to post" />
           <KpiR ico="cash" tint="#16A34A" label="Pending value" value={pendingValue} format={formatCurrency} foot="total not yet in QB" deltaText="across pending invoices" />
@@ -396,10 +396,10 @@ function InvoicesPanel({ prod }: { prod: boolean }) {
                 <tr key={r.id} style={{ background: !r.posted && sel.has(r.id) ? 'var(--accent-soft-2)' : undefined }}>
                   <td>{!r.posted && <input type="checkbox" checked={sel.has(r.id)} onChange={() => toggle(r.id)} />}</td>
                   <td style={{ fontWeight: 700 }}>#{r.number}</td>
-                  <td>{r.customer || '—'}</td>
+                  <td>{r.customer || '-'}</td>
                   <td>{fmtDate(r.date)}</td>
                   <td className="num">{formatCurrency(r.total)}</td>
-                  <td className="num">{r.open > 0 ? formatCurrency(r.open) : '—'}</td>
+                  <td className="num">{r.open > 0 ? formatCurrency(r.open) : '-'}</td>
                   <td>{r.posted
                     ? <span className="pill-tag tag-ok">✓ Invoice {r.posted.docNumber || r.posted.invoiceId}</span>
                     : <span className="pill-tag" style={{ background: 'rgba(245,158,11,.12)', color: '#92400E' }}>○ Not posted</span>}</td>
@@ -443,7 +443,7 @@ function InvoiceDocModal({ inv, onClose, onPosted }: { inv: QbInvoiceRow; onClos
         <div className="drill-head">
           <div>
             <div className="title">Post Invoice #{inv.number} to QuickBooks</div>
-            <div className="sub">Created with the original Striven date — nothing posts until you confirm.</div>
+            <div className="sub">Created with the original Striven date: nothing posts until you confirm.</div>
           </div>
           <button className="drill-close" onClick={onClose} aria-label="Close">×</button>
         </div>
@@ -454,7 +454,7 @@ function InvoiceDocModal({ inv, onClose, onPosted }: { inv: QbInvoiceRow; onClos
           {result && (
             <div className="section" style={{ margin: 0 }}>
               {result.ok
-                ? <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ Invoice created — <b>#{result.invoice?.docNumber || result.invoice?.invoiceId}</b> for {result.invoice?.customer} · {formatCurrency(result.invoice?.total ?? 0)}</div>
+                ? <div className="qb-flash ok" style={{ marginBottom: 12 }}>✓ Invoice created: <b>#{result.invoice?.docNumber || result.invoice?.invoiceId}</b> for {result.invoice?.customer} · {formatCurrency(result.invoice?.total ?? 0)}</div>
                 : <div className="qb-flash err" style={{ marginBottom: 12 }}>⚠ {result.message || 'Already posted.'}</div>}
               {result.steps && (
                 <ul style={{ margin: '0 0 8px', paddingLeft: 18, fontSize: 13.5, color: 'var(--muted-strong)' }}>
@@ -467,7 +467,7 @@ function InvoiceDocModal({ inv, onClose, onPosted }: { inv: QbInvoiceRow; onClos
 
           {plan && !result && (
             <div className="section" style={{ margin: 0 }}>
-              {plan.alreadyPosted && <div className="qb-flash warn" style={{ marginBottom: 12 }}>Already posted — Invoice {plan.alreadyPosted.docNumber || plan.alreadyPosted.invoiceId} on {fmtDate(plan.alreadyPosted.at)}.</div>}
+              {plan.alreadyPosted && <div className="qb-flash warn" style={{ marginBottom: 12 }}>Already posted: Invoice {plan.alreadyPosted.docNumber || plan.alreadyPosted.invoiceId} on {fmtDate(plan.alreadyPosted.at)}.</div>}
               {plan.warnings.map((w, i) => <div key={i} className="qb-flash warn" style={{ marginBottom: 10 }}>⚠ {w}</div>)}
 
               <div className="qb-plan-row"><span className="qb-plan-k">Date</span><span className="qb-plan-v"><b>{fmtDate(plan.invoice.date)}</b> <span className="page-sub" style={{ margin: 0, fontSize: 12 }}>(original Striven date · due {fmtDate(plan.invoice.dueDate)})</span></span></div>

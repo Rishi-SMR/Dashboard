@@ -1,4 +1,4 @@
-// Shared chart components for every SMR tab — guarantees one consistent look
+// Shared chart components for every SMR tab: guarantees one consistent look
 // (no clipping, integer count axes, one palette). Import these instead of
 // hand-rolling charts. Charts animate on mount (ease-out) so the dashboard
 // feels live rather than a printed image.
@@ -13,14 +13,36 @@ import { formatCurrency } from './format';
 import { C, SERIES, SEVERITY, AGING_LABELS, gridProps, axisProps, tooltipStyle, compactMoney, monthLabel, statusTone } from './chartTheme';
 
 // Skip animations for reduced-motion users AND automated (webdriver/headless)
-// sessions — Recharts mount animations are flaky under headless capture.
+// sessions: Recharts mount animations are flaky under headless capture.
 const REDUCED = typeof window !== 'undefined' &&
   (!!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || !!navigator.webdriver);
 const NOANIM = REDUCED
   ? { isAnimationActive: false as const }
   : { isAnimationActive: true as const, animationDuration: 1100, animationEasing: 'ease-out' as const };
 
-// Count-up number — animates 0 → value on mount and between value changes.
+// How many decimals the FINAL number carries. Capped at 4 so a float artefact
+// like 0.30000000000000004 does not drag 17 digits through the animation.
+function decimalsOf(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  const s = String(n);
+  if (/e/i.test(s)) return 0;              // 1e-7 etc: count in whole units
+  const dot = s.indexOf('.');
+  return dot < 0 ? 0 : Math.min(s.length - dot - 1, 4);
+}
+
+// Count-up number: animates 0 → value on mount and between value changes.
+//
+// The animating value is quantised to the TARGET's own precision before it
+// reaches `format`. Without this, a raw intermediate (1234.5678…) is handed to
+// whatever formatter the caller passed, and a formatter that does not round of
+// its own accord renders every frame with a fractional tail: `n.toLocaleString()`
+// permits 3 fraction digits, so the Sales Orders tile counted up through
+// "1,234.567" and only snapped to a clean integer on the final frame. Currency
+// tiles never showed it because formatUsd pins maximumFractionDigits to 0,
+// which is why this looked like it affected only some tiles.
+//
+// Quantising here rather than at the call sites means a future `format` that
+// forgets to round cannot reintroduce it.
 export function AnimatedNumber({ value, format, duration = 1300 }: {
   value: number; format?: (n: number) => string; duration?: number;
 }) {
@@ -42,7 +64,8 @@ export function AnimatedNumber({ value, format, duration = 1300 }: {
     return () => cancelAnimationFrame(raf);
   }, [value, duration]);
   const fmt = format ?? ((n: number) => Math.round(n).toLocaleString());
-  return <>{fmt(shown)}</>;
+  const p = 10 ** decimalsOf(value);
+  return <>{fmt(Math.round(shown * p) / p)}</>;
 }
 
 // Icon KPI tile (reference-screenshot style): tinted icon square, label,
@@ -67,14 +90,83 @@ export const KPI_ICONS = {
   shield: kIcon(<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></>),
   bank: kIcon(<><path d="m3 9 9-6 9 6" /><path d="M5 9v9" /><path d="M9.7 9v9" /><path d="M14.3 9v9" /><path d="M19 9v9" /><path d="M3 21h18" /></>),
 };
+// ── The standard KPI card ────────────────────────────────────────────────────
+// KpiExec is the house KPI card: big value, optional sparkline, delta line and
+// a chip footer, tinted by a two-stop hue. It started life private to
+// OverviewCharts (the company Overview) and lives here so the rep side renders
+// the identical component rather than a look-alike.
+//
+// KpiR below is the older icon-tile card, still used by the back-office tabs.
+// New screens should use KpiExec.
+export type Hue = { from: string; to: string; glow: string };
+
+/** The hue set the KPI cards draw from. Keyed by meaning, not by tab, so the
+ *  same metric carries the same colour wherever it appears. */
+export const HUE = {
+  revenue: { from: '#3B82F6', to: '#0A369F', glow: 'rgba(10,54,159,0.28)' } as Hue,
+  cash: { from: '#22C55E', to: '#16A34A', glow: 'rgba(22,163,74,0.26)' } as Hue,
+  ar: { from: '#14B8A6', to: '#0D9488', glow: 'rgba(13,148,136,0.26)' } as Hue,
+  ap: { from: '#A855F7', to: '#7C3AED', glow: 'rgba(124,58,237,0.28)' } as Hue,
+  sales: { from: '#FBBF24', to: '#D97706', glow: 'rgba(217,119,6,0.28)' } as Hue,
+  po: { from: '#EC4899', to: '#BE185D', glow: 'rgba(190,24,93,0.26)' } as Hue,
+  exc: { from: '#FB7185', to: '#E11D48', glow: 'rgba(225,29,72,0.28)' } as Hue,
+};
+
+/** Inline sparkline for a KPI card: 72x30, area + line, no axes. */
+export function Spark({ values, color }: { values: number[]; color: string }) {
+  if (values.length < 2) return null;
+  const w = 72, h = 30, pad = 2;
+  const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
+  const pts = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg className="ke-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
+      <polygon points={`${pad},${h - pad} ${pts} ${w - pad},${h - pad}`} fill={color} opacity={0.12} />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function KpiExec({ label, value, format, hue, delta, sub, chip, spark, onClick }: {
+  label: string; value: number; format?: (n: number) => string; hue: Hue;
+  delta?: { pct: number; up: boolean } | null; sub?: string; chip?: string; spark?: number[]; onClick?: () => void;
+}) {
+  return (
+    <div
+      className={`kpi--exec${onClick ? ' clickable' : ''}`}
+      style={{ ['--k-from' as string]: hue.from, ['--k-to' as string]: hue.to, ['--k-glow' as string]: hue.glow }}
+      onClick={onClick} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+    >
+      <div className="ke-label">{label}</div>
+      <div className="ke-row">
+        <div className="ke-value"><AnimatedNumber value={value} format={format} /></div>
+        {spark && spark.length > 1 && <Spark values={spark} color={hue.to} />}
+      </div>
+      <div className="ke-delta">
+        {delta
+          ? <><b className={delta.up ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {pctText(delta.pct)}</b><span>vs prior month</span></>
+          : <span>{sub}</span>}
+      </div>
+      {chip && <div className="ke-foot"><span className="ke-chip">{chip}</span></div>}
+    </div>
+  );
+}
+
 export function KpiR({ ico, tint, label, value, format, delta, deltaInvert = false, deltaText, foot, onClick }: {
   ico: keyof typeof KPI_ICONS; tint: string; label: string;
   value: number; format?: (n: number) => string;
-  // deltaInvert: metric where UP is bad (expenses) — flips the delta color only.
+  // deltaInvert: metric where UP is bad (expenses): flips the delta color only.
   delta?: { pct: number; up: boolean } | null; deltaInvert?: boolean; deltaText?: string; foot: string; onClick?: () => void;
 }) {
   return (
-    <div className={`kpi-r${onClick ? ' clickable' : ''}`} onClick={onClick}
+    // The tile's tint is published as a custom property so the stylesheet can
+    // use it too: the footer picks it up, which is what makes each card's
+    // footnote carry its own colour instead of a uniform grey.
+    <div className={`kpi-r${onClick ? ' clickable' : ''}`} style={{ ['--kpi-tint' as string]: tint }} onClick={onClick}
       role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}>
       <div className="kr-head">
@@ -85,14 +177,14 @@ export function KpiR({ ico, tint, label, value, format, delta, deltaInvert = fal
       <div className="kr-delta">
         {delta
           ? <><b className={(delta.up !== deltaInvert) ? 'up' : 'down'}>{delta.up ? '▲' : '▼'} {pctText(delta.pct)}</b><span> vs prior month</span></>
-          : <span>{deltaText ?? '—'}</span>}
+          : <span>{deltaText ?? '-'}</span>}
       </div>
       <div className="kr-foot">{foot}</div>
     </div>
   );
 }
 
-// Delta % for display — caps silly-looking spikes from tiny base months.
+// Delta % for display: caps silly-looking spikes from tiny base months.
 export const pctText = (p: number): string => (Math.abs(p) > 999 ? '999%+' : `${Math.abs(p)}%`);
 
 // Live-sync heartbeat: re-renders every second and returns "Xs ago" for the
@@ -109,7 +201,7 @@ export function useSyncAgo(lastSync: number | null): string {
 }
 const trunc = (v: string, n = 18) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 
-// Compact status/category cards — a small, scannable alternative to a bar chart
+// Compact status/category cards: a small, scannable alternative to a bar chart
 // for a handful of categories (e.g. patients/vendors by status). Colour-coded by
 // status tone; pass onSelect to make each card a clickable drill.
 export function StatCards({ data, total, onSelect }: {
@@ -163,7 +255,7 @@ export function LegendDots({ items }: { items: { name: string; color: string }[]
   );
 }
 
-// Monthly bars (up to 2 series) + an overlay line (e.g. net cash / profit) —
+// Monthly bars (up to 2 series) + an overlay line (e.g. net cash / profit),
 // the executive "flows + running result" combo chart.
 export function BarsLine({ data, bars, line }: {
   data: Record<string, number | string>[];
@@ -188,7 +280,7 @@ export function BarsLine({ data, bars, line }: {
   );
 }
 
-// Donut + itemised legend rows (name · $ · share) + a total footer — the
+// Donut + itemised legend rows (name · $ · share) + a total footer: the
 // "aging summary" card. Rows are the legend, so no floating legend below.
 export function DonutList({ data, totalLabel = 'Total', money = true, onSelect }: {
   data: { name: string; value: number; color: string }[];
@@ -227,7 +319,7 @@ export function DonutList({ data, totalLabel = 'Total', money = true, onSelect }
   );
 }
 
-// CSS progress-bar ranking (label · share bar · value) — for program splits and
+// CSS progress-bar ranking (label · share bar · value): for program splits and
 // top-N vendor spend, matching the exec board-deck look without an SVG chart.
 export function BarList({ data, money = true, showPct = true, onSelect }: {
   data: { name: string; value: number; color: string; meta?: string; dim?: boolean }[];
@@ -262,8 +354,8 @@ export function BarList({ data, money = true, showPct = true, onSelect }: {
   );
 }
 
-// Grouped vertical bars per month — e.g. revenue vs expenses side-by-side.
-// Horizontal ranked bar — the ONLY chart for category/status/ranking data (no pies).
+// Grouped vertical bars per month: e.g. revenue vs expenses side-by-side.
+// Horizontal ranked bar: the ONLY chart for category/status/ranking data (no pies).
 // Pass onSelect to make bars clickable (drill).
 export function RankBar({ data, money = false, colorAt, onSelect }: { data: { name: string; value: number }[]; money?: boolean; colorAt?: (i: number) => string; onSelect?: (name: string) => void }) {
   const max = Math.max(1, ...data.map((d) => d.value));
@@ -287,7 +379,7 @@ export function RankBar({ data, money = false, colorAt, onSelect }: { data: { na
   );
 }
 
-// Vertical aging bar — accepts the shared aging object; per-bucket severity
+// Vertical aging bar: accepts the shared aging object; per-bucket severity
 // color. money=false renders counts (integer axis) instead of $.
 export function AgingBar({ aging, onSelect, money = true }: { aging: Record<string, number>; onSelect?: (label: string) => void; money?: boolean }) {
   const data = AGING_LABELS.map((b) => ({ label: b.label, value: aging[b.key] || 0 }));
@@ -311,7 +403,7 @@ export function AgingBar({ aging, onSelect, money = true }: { aging: Record<stri
   );
 }
 
-// Generic drill modal — dark header + a rows table. Use for chart/row click-throughs.
+// Generic drill modal: dark header + a rows table. Use for chart/row click-throughs.
 export function DrillModal({ title, sub, columns, rows, onClose }: {
   title: string; sub?: string; columns: { key: string; label: string; num?: boolean }[];
   rows: Record<string, ReactNode>[]; onClose: () => void;
