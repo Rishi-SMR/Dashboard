@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchStrivenOrders, type OrdersResult, type OrderRow } from '../strivenApi';
-import { formatCurrency } from '../format';
+import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
@@ -11,7 +11,7 @@ type SoGroup = 'active' | 'completed' | 'cancelled';
 const GROUP_OF = (status: string): SoGroup => {
   const s = (status || '').toLowerCase();
   if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
-  if (/complete|closed|done/.test(s)) return 'completed';
+  if (isCompletedStatus(s)) return 'completed';
   return 'active';
 };
 

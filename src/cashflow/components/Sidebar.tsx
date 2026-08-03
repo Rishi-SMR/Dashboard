@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ViewKey } from '../CashflowApp';
+import { fetchMe } from '../strivenApi';
 
 // 16px stroke icons per nav item (lucide-style, currentColor).
 const svg = (children: React.ReactNode) => (
@@ -25,12 +26,50 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   quickbooks: svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 8.5c-1.7 0-2.8.9-2.8 2.2 0 2.6 4.4 1.6 4.4 3.6 0 .9-.8 1.4-1.9 1.4" /><path d="M12 7v10" /></>),
   reports: svg(<><path d="M4 4v16h16" /><rect x="7" y="11" width="3" height="6" /><rect x="12" y="7" width="3" height="10" /><rect x="17" y="13" width="3" height="4" /></>),
   commission: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7v10" /><path d="M14.5 9.3c-.5-.8-1.5-1.3-2.6-1.3-1.5 0-2.6.8-2.6 1.9 0 2.4 5.2 1.4 5.2 3.9 0 1.1-1.1 1.9-2.6 1.9-1.1 0-2.1-.5-2.6-1.3" /></>),
+  // Reps — a person with a rising bar behind them: people plus performance.
+  reps: svg(<><circle cx="8.5" cy="8" r="3.2" /><path d="M2.6 20a5.9 5.9 0 0 1 11.8 0" /><path d="M17 14v6" /><path d="M20.5 10v10" /></>),
+  repsorders: svg(<><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M3 4h2l2.4 11.4a1 1 0 0 0 1 .6h8.8a1 1 0 0 0 1-.8L20 8H6" /></>),
+  repspipeline: svg(<><rect x="3" y="5" width="5" height="14" rx="1.4" /><rect x="9.5" y="5" width="5" height="9" rx="1.4" /><rect x="16" y="5" width="5" height="5" rx="1.4" /></>),
+  repsroster: svg(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
+  // Standings — a podium.
+  standings: svg(<><rect x="9" y="4" width="6" height="16" /><rect x="3" y="10" width="6" height="10" /><rect x="15" y="13" width="6" height="7" /></>),
+  settings: svg(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7" /></>),
 };
 
 // Views that live inside another tab — highlight the parent nav item.
 const VIEW_ALIAS: Partial<Record<ViewKey, ViewKey>> = { payables: 'receivables', tracking: 'orders', catalog: 'vendors', autopo: 'automation', autoso: 'automation' };
 
-const ITEMS: Array<{ key: ViewKey; label: string }> = [
+// ── Which nav entries are shown ──────────────────────────────────────────────
+// The whole dashboard is still built and routable; this list only decides what
+// the sidebar offers. Every tab remains reachable by URL hash (e.g. #orders),
+// so nothing is deleted — it is out of the way, not gone.
+//
+// To show more, add its key back:            NAV_VISIBLE = ['commission', 'reps']
+// To restore the full dashboard, set:        NAV_VISIBLE = null
+export const NAV_VISIBLE: ViewKey[] | null = ['reps', 'commission'];
+
+// ── Role-driven navigation ───────────────────────────────────────────────────
+// A manager runs the business; a rep runs their own book. They get different
+// vocabularies for the same underlying views — "Orders & revenue" vs "My orders"
+// — because the scope genuinely differs: the server has already narrowed a rep's
+// payload to their own figures plus everyone's order counts.
+export const ADMIN_NAV: Array<{ key: ViewKey; label: string }> = [
+  { key: 'reps', label: 'Dashboard' },
+  { key: 'repsorders', label: 'Orders & Revenue' },
+  { key: 'commission', label: 'Commission' },
+  { key: 'repspipeline', label: 'PI Pipeline' },
+  { key: 'repsroster', label: 'Reps' },
+  { key: 'settings', label: 'Settings' },
+];
+export const REP_NAV: Array<{ key: ViewKey; label: string }> = [
+  { key: 'reps', label: 'My Dashboard' },
+  { key: 'repsorders', label: 'My Orders' },
+  { key: 'commission', label: 'My Commission' },
+  { key: 'repspipeline', label: 'My Pipeline' },
+  { key: 'standings', label: 'Team Standings' },
+];
+
+const ALL_ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'receivables', label: 'AR / AP' },
   { key: 'apsheet', label: 'AP Register' },
@@ -41,9 +80,19 @@ const ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'accounts', label: 'Accounts' },
   { key: 'exceptions', label: 'Exceptions' },
   { key: 'commission', label: 'Commission' },
+  { key: 'reps', label: 'Reps' },
   { key: 'reports', label: 'Reports' },
   { key: 'quickbooks', label: 'QuickBooks' },
 ];
+
+const LEGACY_ITEMS = NAV_VISIBLE
+  ? ALL_ITEMS.filter((i) => NAV_VISIBLE.includes(i.key))
+  : ALL_ITEMS;
+/** The tab the app should open on — the first one actually offered. */
+export const DEFAULT_VIEW: ViewKey = ADMIN_NAV[0]?.key ?? 'reps';
+/** Nav for a role. Falls back to the legacy list only if a role is unknown. */
+export const navFor = (role: 'admin' | 'rep' | null): Array<{ key: ViewKey; label: string }> =>
+  (role === 'admin' ? ADMIN_NAV : role === 'rep' ? REP_NAV : LEGACY_ITEMS);
 
 // Optional profile-photo + title fallbacks keyed by username. Left empty in the
 // generic template; the signed-in user's own values take precedence.
@@ -83,6 +132,17 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut }: Pr
   const [refreshing, setRefreshing] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const me = readIdentity();
+  // The nav itself is role-driven: a manager and a rep get different entries for
+  // genuinely different scopes. Until /api/me answers, render nothing rather
+  // than flashing the manager nav at a rep.
+  const [role, setRole] = useState<'admin' | 'rep' | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchMe().then((m) => { if (live) setRole(m?.role === 'admin' ? 'admin' : 'rep'); })
+      .catch(() => { if (live) setRole('rep'); });   // fail closed: least privilege
+    return () => { live = false; };
+  }, []);
+  const ITEMS = navFor(role);
 
   function handleRefreshAll() {
     if (refreshing) return;

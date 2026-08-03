@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { C } from '../chartTheme';
-import { formatCurrency } from '../format';
+import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
 import { ChartCard, RankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 import {
   fetchStrivenSO,
@@ -32,7 +32,7 @@ type SoGroup = 'active' | 'completed' | 'cancelled';
 const GROUP_OF = (status: string): SoGroup => {
   const s = (status || '').toLowerCase();
   if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
-  if (/complete|closed|done/.test(s)) return 'completed';
+  if (isCompletedStatus(s)) return 'completed';
   return 'active';
 };
 const GROUP_LABEL: Record<SoGroup | 'All', string> = { All: 'All statuses', active: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
