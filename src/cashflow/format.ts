@@ -1,18 +1,64 @@
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  maximumFractionDigits: 0,
-});
-
-const currencyDetailed = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  maximumFractionDigits: 2,
-});
+// Currency is NOT defined here. It comes from `@money`, which vite resolves to
+// the real formatter for the exec build and to a throwing stub for the rep
+// build (see vite.config.ts).
+//
+// This file is imported by shared components that both audiences render, so an
+// Intl currency formatter declared here would ship to reps regardless of which
+// build ran — which is exactly what happened before: `npm run verify:rep`
+// found `style:"currency"` and `'USD'` in the rep bundle, traced to this
+// module. Keep the definition in @money so the alias can do its job.
+import { formatUsd, formatUsdCents } from '@money';
 
 export function formatCurrency(n: number, detailed = false): string {
-  return (detailed ? currencyDetailed : currency).format(n);
+  return detailed ? formatUsdCents(n) : formatUsd(n);
 }
+
+/**
+ * Order status classification — ONE definition, because the naive version was
+ * duplicated eight times and every copy carried the same bug.
+ *
+ * `/complete|closed|done/` matches "Incomplete", since "complete" is a
+ * substring of it. That put every Incomplete order into the Delivered bucket:
+ * the Delivered drill listed orders whose own Status column read "Incomplete".
+ *
+ * Two defences, deliberately belt-and-braces:
+ *   1. an explicit incomplete check that wins outright, so intent does not
+ *      depend on regex subtlety;
+ *   2. word boundaries — `\bcomplete` cannot match "incomplete" because "n"
+ *      and "c" are both word characters, so there is no boundary between them.
+ */
+export const isIncompleteStatus = (s: string | null | undefined): boolean =>
+  /\bin[\s-]?complete\b/i.test(String(s ?? ''));
+
+export const isCompletedStatus = (s: string | null | undefined): boolean => {
+  const v = String(s ?? '');
+  if (isIncompleteStatus(v)) return false;
+  return /\b(?:complete|completed|closed|done|delivered|fulfilled)\b/i.test(v);
+};
+
+/**
+ * Is this a real billed account?
+ *
+ * Mirrors isRealAccount in api/_striven.js — the two MUST agree, and did not:
+ * the server filtered "Unassigned" out of its account count while Orders &
+ * Revenue counted every distinct value, so the same book read 78 accounts on
+ * one screen and 79 on the other.
+ *
+ * "Unassigned" is a placeholder for an order with no payer (28 orders, mostly
+ * DEMO), not a customer. Test payers are already folded into it server-side, so
+ * excluding this one value is sufficient here.
+ */
+export const isRealAccount = (account: string | null | undefined): boolean => {
+  const s = String(account ?? '').trim();
+  return Boolean(s) && !/^unassigned$/i.test(s);
+};
+
+export const isCancelledStatus = (s: string | null | undefined): boolean =>
+  /\b(?:cancel|cancelled|canceled|void|voided|denied|rejected|lost)\b/i.test(String(s ?? ''));
+
+/** Anything live: not finished, not cancelled. Incomplete belongs HERE. */
+export const isPendingStatus = (s: string | null | undefined): boolean =>
+  !isCompletedStatus(s) && !isCancelledStatus(s);
 
 // US phone: "9566275137" -> "(956) 627-5137"; 11-digit "1..." -> "+1 (…) …".
 // Leaves anything that isn't a 10/11-digit US number as-is (trimmed).

@@ -21,6 +21,35 @@ export const C = {
   surface: '#FFFFFF',
 };
 
+/**
+ * Vertical (sales-order-type) colours — ONE definition for the whole dashboard.
+ *
+ * Four separate copies of this map had drifted apart: three still carried the
+ * old TriCare teal #0D9488, which measured ΔE 14.8 against the Unclassified
+ * grey — below the 15 floor, i.e. two slices most people cannot tell apart.
+ *
+ * Keys mirror soClass() on the server. DEMO and Contract - With Approval are
+ * real Striven sales order types, not synthetic buckets. DEMO is amber on
+ * purpose: it carries volume and value but earns no commission, so it must not
+ * read as ordinary revenue.
+ *
+ * Validated as this exact sequence — CVD ΔE 15.3, normal-vision 16.3.
+ * Reordering changes the adjacent pairs and can fail; re-run the validator if
+ * you touch it.
+ */
+export const VERTICAL_COLORS: Record<string, string> = {
+  DEMO: '#D97706',
+  PI: '#2563EB',
+  Contract: '#DB2777',
+  DOL: '#7C3AED',
+  VA: '#16A34A',
+  TriCare: '#0F766E',
+  Other: '#94A3B8',
+};
+
+/** Display order — clinical programmes first, then the rest. */
+export const VERTICAL_ORDER = ['PI', 'VA', 'TriCare', 'DEMO', 'Contract', 'DOL', 'Other'];
+
 // Categorical series palette — the 7 KPI hues reused verbatim so the strip +
 // charts read as one system (medium-saturation, print-safe on white).
 export const SERIES = ['#2563EB', '#16A34A', '#0D9488', '#D97706', '#DC2626', '#7C3AED', '#DB2777', '#0891B2', '#CA8A04', '#4F46E5'];

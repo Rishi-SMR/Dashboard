@@ -1,5 +1,5 @@
 import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, DEFAULT_VIEW } from './components/Sidebar';
 import { fetchStrivenStatus, type StrivenStatus } from './strivenApi';
 
 // Lazy-loaded so recharts (heavy) only downloads when a chart tab is opened.
@@ -15,10 +15,13 @@ const QuickBooksTab = lazy(() => import('./components/QuickBooksTab').then((m) =
 const ReportsTab = lazy(() => import('./components/ReportsTab').then((m) => ({ default: m.ReportsTab })));
 const AutomationHub = lazy(() => import('./components/AutomationHub').then((m) => ({ default: m.AutomationHub })));
 const CommissionTab = lazy(() => import('./components/Commission').then((m) => ({ default: m.CommissionTab })));
+const RepsTab = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.RepsTab })));
+const TeamStandings = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.TeamStandings })));
+const SettingsTab = lazy(() => import('./components/SettingsTab').then((m) => ({ default: m.SettingsTab })));
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reports' | 'quickbooks';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'repsroster' | 'standings' | 'settings' | 'reports' | 'quickbooks';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -77,10 +80,12 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reports', 'quickbooks'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'repsroster', 'standings', 'settings', 'reports', 'quickbooks'];
+// A hash still wins, so every tab stays reachable by URL even when the sidebar
+// is trimmed; otherwise open on the first tab the sidebar actually offers.
 const initialView = (): ViewKey => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
-  return VIEW_KEYS.includes(h) ? h : 'overview';
+  return VIEW_KEYS.includes(h) ? h : DEFAULT_VIEW;
 };
 
 function Dashboard({ onSignOut }: { onSignOut: () => void }) {
@@ -115,6 +120,12 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     accounts: <AccountsTab />,
     exceptions: <ExceptionsTab />,
     commission: <CommissionTab />,
+    reps: <RepsTab initialSub="overview" />,
+    repsorders: <RepsTab initialSub="orders" />,
+    repspipeline: <RepsTab initialSub="pipeline" />,
+    repsroster: <RepsTab initialSub="team" />,
+    standings: <TeamStandings />,
+    settings: <SettingsTab />,
     reports: <ReportsTab />,
     quickbooks: <QuickBooksTab />,
   };

@@ -1439,9 +1439,34 @@ code {
 .kpi-r .kr-ico { flex:none; width:36px; height:36px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; }
 .kpi-r .kr-label { font-size:12px; font-weight:700; color:var(--muted-strong); display:flex; align-items:center; }
 .kpi-r .kr-value { margin-top:10px; font-size:24px; font-weight:800; letter-spacing:-.022em; line-height:1.05; color:var(--text); font-variant-numeric:tabular-nums; }
-.kpi-r .kr-delta { margin-top:6px; font-size:11px; font-weight:600; color:var(--muted); min-height:15px; white-space:nowrap; overflow:hidden; }
+/* The qualifier under the headline figure ("all time", "176 orders", "open").
+   Set as a formal small-caps eyebrow: uppercase with generous tracking reads as
+   a label rather than a stray lowercase phrase, and tabular figures keep the
+   numeric ones from jittering. Size is unchanged. */
+.kpi-r .kr-delta { margin-top:6px; font-size:11px; font-weight:700; color:var(--muted); min-height:15px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  text-transform:uppercase; letter-spacing:.085em; font-variant-numeric:tabular-nums; font-feature-settings:"cpsp" 1; }
+/* The arrow + percentage keeps its own tracking — glyphs, not words. */
+.kpi-r .kr-delta b { letter-spacing:.02em; }
 .kpi-r .kr-delta b.up { color:var(--positive); } .kpi-r .kr-delta b.down { color:var(--negative); }
-.kpi-r .kr-foot { margin-top:auto; padding-top:9px; border-top:1px solid var(--panel-2); font-size:11px; color:var(--muted); }
+/* The footnote is a tinted band bled to the card's edge, carrying that tile's
+   own accent (--kpi-tint, set inline by KpiR) instead of a uniform grey. */
+.kpi-r .kr-foot {
+  margin: auto -16px -12px; padding: 9px 16px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--kpi-tint, var(--muted)) 22%, transparent);
+  border-radius: 0 0 15px 15px;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 6%, transparent) 0%,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 12%, transparent) 100%);
+  font-size: 11px; font-weight: 600; letter-spacing: .01em;
+  color: color-mix(in srgb, var(--kpi-tint, var(--muted)) 82%, var(--text));
+}
+.kpi-r.clickable:hover .kr-foot {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 10%, transparent) 0%,
+    color-mix(in srgb, var(--kpi-tint, var(--muted)) 18%, transparent) 100%);
+  color: var(--kpi-tint, var(--muted));
+}
 .kpi-r.clickable { cursor:pointer; transition:transform .12s ease, box-shadow .18s ease, border-color .18s ease; }
 .kpi-r.clickable:hover { transform:translateY(-2px); border-color:var(--border-strong); box-shadow:0 14px 28px -14px rgba(37,99,235,.25), 0 2px 6px rgba(14,27,46,.06); }
 
@@ -1609,6 +1634,269 @@ code {
   .ke-spark polyline { stroke-dashoffset: 0; }
   .ke-spark polygon { opacity: .12; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   VISUAL REFINEMENT
+   A pass over the token layer rather than the components, so every panel, table
+   and control inherits it. The goal is lower glare over a long working day:
+   softer surface contrast, elevation carried by shadow instead of hard rules,
+   and ink that stops just short of black.
+
+   Everything below is presentational. Delete this block to return to the
+   original palette exactly.
+   ════════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* Surfaces. The page sits a touch deeper and slightly cooler so white panels
+     lift off it without needing a heavy border. */
+  --bg: #EDF1F7;
+  --panel: #FFFFFF;
+  --panel-2: #F4F7FB;
+
+  /* Card outlines carry the structure. Light enough not to draw the eye on its
+     own, dark enough that every panel has a definite edge rather than floating
+     on shadow alone. */
+  --border: #C6D2E2;
+  --border-strong: #A7B6CA;
+
+  /* Ink. Pure-black-adjacent text on white is the main source of glare in a
+     dense table, so the darkest value stops at a deep navy. */
+  --text: #14243A;
+  --muted: #5D6C85;
+  --muted-strong: #38465C;
+
+  /* Layered elevation, tinted with the page hue rather than neutral grey —
+     a grey shadow over a blue-grey page reads as dirt. */
+  --shadow-1: 0 1px 2px rgba(20, 36, 58, .05);
+  --shadow-2: 0 1px 2px rgba(20, 36, 58, .05), 0 6px 16px -8px rgba(20, 36, 58, .16);
+  --shadow-3: 0 2px 4px rgba(20, 36, 58, .06), 0 18px 40px -18px rgba(20, 36, 58, .28);
+}
+
+/* A very slight vertical wash gives the page depth without a visible gradient. */
+body, .shell {
+  background: linear-gradient(180deg, var(--bg) 0%, #F2F5FA 60%, var(--bg) 100%);
+  background-attachment: fixed;
+}
+
+/* Every panel gets a defined outline, with shadow lifting it off the page. */
+.section, .chart-card, .kpi-r, .kpi-e {
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+}
+.section:hover, .chart-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-2); }
+.section, .chart-card, .kpi-r { transition: box-shadow .2s ease, border-color .2s ease; }
+
+/* Tables: a quiet hover makes a long row traceable across the width, which is
+   what actually makes dense data comfortable to read. */
+.data-table tbody tr { transition: background-color .12s ease; }
+.data-table tbody tr:hover { background: var(--accent-soft-2); }
+.data-table thead th {
+  background: var(--panel-2);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.data-table td, .data-table th { border-bottom-color: var(--border); }
+/* Figures line up column-to-column wherever they are compared. */
+.data-table td.num, .data-table th.num { font-variant-numeric: tabular-nums; }
+
+/* Keyboard focus was invisible in several places; this gives one consistent
+   ring everywhere without touching each control. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Selection picks up the accent instead of the browser default blue. */
+::selection { background: rgba(37, 99, 235, .16); color: var(--text); }
+
+/* Scrollbars sized down and tinted, so a scrolling table does not gain a heavy
+   grey bar across it. */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; }
+
+/* Type: a little more air between lines, and headings that do not break awkwardly. */
+body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+.page-title, .section-title { text-wrap: balance; letter-spacing: -.01em; }
+.section-sub, .page-sub { max-width: 78ch; }
+
+@media (prefers-reduced-motion: reduce) {
+  .section, .chart-card, .kpi-r, .data-table tbody tr { transition: none !important; }
+}
+
+/* ── Affordance & current-location ──────────────────────────────────────────
+   Two jobs: anything clickable should look clickable before you hover it, and
+   wherever you are should be obvious without re-reading the labels. */
+
+/* WHERE YOU ARE — the active nav entry gets a solid accent rail plus weight, so
+   it wins against eleven similar-looking siblings. */
+.nav-item.active {
+  position: relative;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 3px; border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+.nav-item.active .nav-icon { color: var(--accent); }
+
+/* CLICKABLE TILES — a raised edge and pointer at rest, lifting on hover, so the
+   tile reads as a control rather than a readout. */
+.kpi-r.clickable, .kpi.clickable, .kpi-e.clickable { cursor: pointer; }
+.kpi-r.clickable:hover { border-color: var(--accent); }
+.kpi-r.clickable:active { transform: translateY(0); }
+.kpi-r.clickable .kpi-info-icon { opacity: .55; transition: opacity .15s ease; }
+.kpi-r.clickable:hover .kpi-info-icon { opacity: 1; }
+
+/* CLICKABLE ROWS — a left accent rail appears on hover, so a wide row makes it
+   obvious the whole row is the target, not just the link in the first column. */
+.data-table tbody tr[title]:hover, .data-table tbody tr[style*="pointer"]:hover {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* Any element the app has marked pressed reads as selected. */
+[aria-pressed="true"], [aria-current="page"] { font-weight: 700; }
+
+/* Focus must be visible on every control, not just the ones with a border. */
+.nav-item:focus-visible, .kpi-r.clickable:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kpi-r.clickable, .kpi-r.clickable .kpi-info-icon { transition: none !important; }
+}
+
+/* ── Sidebar, refined ───────────────────────────────────────────────────────
+   Subtle rather than loud: the accent appears only on the item you are on, the
+   hard rules soften into fades, and movement is a couple of pixels. */
+
+/* The panel edge fades instead of ruling — a solid 1px line down 100vh is the
+   heaviest element on the screen and it is only a boundary. */
+.sidebar {
+  border-right: 0;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.7) 0%, rgba(255,255,255,0) 220px),
+    var(--panel);
+  box-shadow: 1px 0 0 rgba(20,36,58,.05), 6px 0 24px -18px rgba(20,36,58,.30);
+}
+
+/* Brand divider tapers off rather than stopping dead at the panel edge. */
+.brand {
+  border-bottom: 0;
+  background-image: linear-gradient(90deg, var(--border) 0%, var(--border) 62%, transparent 100%);
+  background-size: 100% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+}
+.brand-logo { box-shadow: 0 2px 8px -2px rgba(37,99,235,.55); }
+
+/* Items settle rather than snap: colour, background and a 2px nudge. */
+.nav-item {
+  transition: background-color .16s ease, color .16s ease, transform .16s ease;
+  letter-spacing: .005em;
+}
+.nav-item:hover { transform: translateX(2px); }
+.nav-item .nav-icon { transition: color .16s ease, transform .16s ease; opacity: .9; }
+.nav-item:hover .nav-icon { color: var(--accent); opacity: 1; }
+
+/* Active: the accent fades out across the pill instead of filling it flat, so
+   the rail reads as the anchor and the label stays legible. */
+.nav-item.active {
+  background: linear-gradient(90deg, var(--accent-soft) 0%, rgba(37,99,235,.03) 70%, transparent 100%);
+  box-shadow: none;
+  transform: none;
+}
+.nav-item.active::before { box-shadow: 0 0 8px -1px rgba(37,99,235,.7); }
+.nav-item.active .nav-icon { opacity: 1; transform: scale(1.06); }
+
+/* The pressed state should feel like a press. */
+.nav-item:active { transform: translateX(2px) scale(.99); }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item, .nav-item .nav-icon { transition: none !important; transform: none !important; }
+}
+
+/* ── Print / Save-as-PDF ─────────────────────────────────────────────────────
+   The browser's own print pipeline produces the PDF, so the job here is to
+   strip the application shell and let the content reflow onto pages. */
+@media print {
+  /* The app chrome is navigation, not content. */
+  .sidebar, .no-print, .btn, .tbl-search, .qb-flash { display: none !important; }
+
+  html, body, #root {
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Shadows and tints cost toner and print as muddy grey; keep the borders,
+     which are what make a table readable on paper. */
+  .section, .chart-card, .kpi-r, .kpi, .kpi-e {
+    box-shadow: none !important;
+    background: #fff !important;
+    border: 1px solid #C6D2E2 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* A table split mid-row is unreadable; headers repeat on every page. */
+  table { break-inside: auto; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+
+  /* Charts must not be clipped by a page edge. */
+  .recharts-wrapper, .recharts-surface { break-inside: avoid; }
+
+  /* Wide tables scroll on screen; on paper they must shrink to fit instead. */
+  .table-wrap, [style*="overflow-x"] { overflow: visible !important; }
+
+  /* Content that exists only on paper — a statement header, since the modal's
+     own title bar and the page around it are gone. */
+  .print-only { display: block !important; }
+
+  /* Printing a SCOPED region (a modal). visibility rather than display, so the
+     scoped element keeps its layout while everything around it goes blank;
+     display:none on ancestors would take the modal with them. */
+  .printing body * { visibility: hidden; }
+  .printing [data-print-scope],
+  .printing [data-print-scope] * { visibility: visible; }
+  .printing [data-print-scope] {
+    position: absolute;
+    left: 0; top: 0; width: 100%;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  /* The dialog's own chrome — backdrop, close button, scroll cap — is not part
+     of the statement. */
+  .printing .modal-backdrop, .printing .modal-close { display: none !important; }
+
+  @page { margin: 12mm; }
+}
+
+/* Hidden on screen; the print block above reveals it. */
+.print-only { display: none; }
+
+/* When printing a scoped region, everything outside it is hidden. */
+.printing [data-print-scope] { position: static; }
+
+/* Dashboard grids sized to the item count, not to whatever auto-fit happens to
+   land on. Six donuts in an auto-fit grid gave 4 + 2 at desktop width and left
+   two dead cells on the second row; 6 divides evenly into 3 and 2, never 4. */
+.donut-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
+@media (min-width: 660px)  { .donut-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1180px) { .donut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+.pair-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
+@media (min-width: 760px) { .pair-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Ranked-list rows on the dashboard get a hover they previously lacked. */
+.toplist-row { transition: background-color .15s ease; }
+.toplist-row:hover { background: var(--panel-2); }
 
 /* QuickBooks tab — flash banners + plan rows */
 .qb-flash { border-radius: 10px; padding: 10px 14px; font-size: 13.5px; font-weight: 600; border: 1px solid transparent; }

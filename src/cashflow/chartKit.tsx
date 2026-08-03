@@ -74,7 +74,10 @@ export function KpiR({ ico, tint, label, value, format, delta, deltaInvert = fal
   delta?: { pct: number; up: boolean } | null; deltaInvert?: boolean; deltaText?: string; foot: string; onClick?: () => void;
 }) {
   return (
-    <div className={`kpi-r${onClick ? ' clickable' : ''}`} onClick={onClick}
+    // The tile's tint is published as a custom property so the stylesheet can
+    // use it too — the footer picks it up, which is what makes each card's
+    // footnote carry its own colour instead of a uniform grey.
+    <div className={`kpi-r${onClick ? ' clickable' : ''}`} style={{ ['--kpi-tint' as string]: tint }} onClick={onClick}
       role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}>
       <div className="kr-head">
