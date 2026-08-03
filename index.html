@@ -16,7 +16,20 @@
     <meta name="description" content="SMR Dashboard" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!--
+      One stylesheet request for all three families — separate <link>s would
+      cost a round trip each.
+
+      Barlow Semi Condensed is requested as DISCRETE weights (600;700), not a
+      600..700 range: Google Fonts has no variable build of this family and a
+      range request returns HTTP 400. Both weights are loaded so the leaderboard
+      600→700 change swaps real faces rather than synthesising bold.
+
+      Inter and JetBrains Mono are variable and requested as ranges.
+    -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700&family=Inter:wght@400..700&family=JetBrains+Mono:wght@500..700&display=swap"
+      rel="stylesheet" />
 
     <!-- Clean light surface while the React bundle parses. -->
     <style>

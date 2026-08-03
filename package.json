@@ -6,7 +6,18 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test api/*.test.js",
+    "build:exec": "vite build",
+    "build:rep": "node scripts/build-rep.mjs",
+    "verify:rep": "node scripts/verify-rep-build.mjs",
+    "build:rep:verified": "node scripts/build-rep.mjs && node scripts/verify-rep-build.mjs",
+    "cache:topup": "node scripts/top-up-so-detail.mjs",
+    "audit": "node scripts/audit-consistency.mjs",
+    "cache:topup-reports": "node scripts/top-up-reports.mjs",
+    "cache:topup-all": "node scripts/top-up-so-detail.mjs && node scripts/top-up-reports.mjs",
+    "audit:data": "node scripts/audit-data.mjs",
+    "audit:all": "node scripts/audit-consistency.mjs && node scripts/audit-data.mjs"
   },
   "dependencies": {
     "pg": "^8.22.0",
