@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getPiStages, setPiStage, getRepOverview, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
 import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
@@ -84,10 +84,13 @@ export default async function handler(req, res) {
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
       const r = await login(body?.username, body?.password, { ip: clientIp });
       if (r.ok) {
-        // Secure: production is HTTPS-only, so the session must never travel in clear.
+        // Secure: production is HTTPS-only, so the session must never travel in
+        // clear. SameSite=Strict: no cross-site request may carry the session.
+        // smr_user is DISPLAY ONLY and is never trusted as identity — every
+        // authorization decision reads the signed smr_session instead.
         res.setHeader('Set-Cookie', [
-          `smr_session=${r.session}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=43200`,
-          `smr_user=${encodeURIComponent(r.user)}; Secure; Path=/; SameSite=Lax; Max-Age=43200`,
+          `smr_session=${r.session}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=43200`,
+          `smr_user=${encodeURIComponent(r.user)}; Secure; Path=/; SameSite=Strict; Max-Age=43200`,
         ]);
         return res.status(200).json({ ok: true });
       }
@@ -96,8 +99,8 @@ export default async function handler(req, res) {
     }
     if (pathname === '/api/logout') {
       res.setHeader('Set-Cookie', [
-        'smr_session=; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0',
-        'smr_user=; Secure; Path=/; SameSite=Lax; Max-Age=0',
+        'smr_session=; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=0',
+        'smr_user=; Secure; Path=/; SameSite=Strict; Max-Age=0',
       ]);
       return res.status(200).json({ ok: true });
     }
@@ -108,6 +111,71 @@ export default async function handler(req, res) {
       // HIPAA audit: record every authenticated read of patient-derived data.
       logPhiAccess(currentUser, pathname, clientIp);
     }
+  }
+
+  // ---- who am I — resolved from the VERIFIED session, never from a cookie the
+  // browser could set. Drives role + own-row scoping in the UI. ----
+  if (pathname === '/api/me') {
+    const me = await getMe({ user: currentUser });
+    return res.status(200).json(me || { email: null, repName: null, role: 'rep' });
+  }
+
+  // ---- commission — identity-scoped. Handled here rather than via ROUTES
+  // because the redaction needs the caller, and ROUTES handlers take no args. ----
+  if (pathname === '/api/commission') {
+    try {
+      return res.status(200).json(await getCommissionFor(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as'))));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  // ---- saved dashboard views — per signed-in user ----
+  if (pathname === '/api/views') {
+    try {
+      if (req.method === 'POST') {
+        let body = req.body;
+        if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+        return res.status(200).json(body?.delete
+          ? await deleteDashboardView(currentUser, body.delete)
+          : await saveDashboardView(currentUser, body));
+      }
+      return res.status(200).json(await listDashboardViews(currentUser));
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+
+  // ---- cache freshness — admin only, operational plumbing ----
+  if (pathname === '/api/cache-health') {
+    try {
+      const me = await getMe({ user: currentUser });
+      if (me?.role !== 'admin') return res.status(403).json({ error: 'admin only' });
+      return res.status(200).json(await getCacheHealth());
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  // ---- rep overview — the team from the reps' side, redacted per caller ----
+  if (pathname === '/api/rep-overview') {
+    try {
+      return res.status(200).json(await getRepOverview(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as'))));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  // ---- PI stage pipeline — GET reads the buckets, POST moves one order ----
+  if (pathname === '/api/pi-stages') {
+    try {
+      const me = await getMe({ user: currentUser });
+      if (req.method === 'POST') {
+        let body = req.body;
+        if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+        return res.status(200).json(await setPiStage({ soId: body?.soId, stage: body?.stage, user: currentUser }));
+      }
+      return res.status(200).json(await getPiStages(viewerFor(me, url.searchParams.get('as'))));
+    } catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+
+  // ---- order analytics — identity-scoped like commission ----
+  if (pathname === '/api/order-analytics') {
+    try {
+      return res.status(200).json(await getOrderAnalytics(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as'))));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
   // ---- QuickBooks Online (OAuth + posting) — behind the session gate ----

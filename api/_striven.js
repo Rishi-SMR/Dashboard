@@ -12,6 +12,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { PO_STATUS } from './po-status.js';
+import {
+  COMMISSION_RATES, FALLBACK_VERTICAL_RATES, ORDER_LABEL_RULES,
+  MIN_MATCH_RATE, REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, PI_STAGES, STRIVEN_STAGE_FIELD,
+} from './_commission-config.js';
+import {
+  commissionForOrder, splitByState, isRepVerified, resolveIdentity,
+  redactCommissionPayload, isCancelledStatus,
+} from './_commission-core.js';
 import { INVOICE_STATUS } from './invoice-status.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -248,6 +256,56 @@ async function getConfig() {
 // gate is mandatory and never switches itself off.
 export async function getAuth() {
   return { gateEnabled: true };
+}
+
+// ── Commission config + caller identity ──────────────────────────────────────
+// Every commission knob is overridable from the Supabase `app_config` table, so
+// rates and the rep roster change without a redeploy; the checked-in values in
+// _commission-config.js are the fallback. See README → "Commission configuration".
+const _json = (raw, fallback) => { try { const v = JSON.parse(raw); return v && typeof v === 'object' ? v : fallback; } catch { return fallback; } };
+// app_config stores label rules as plain strings; compile them to RegExp here.
+const _rules = (raw, fallback) => {
+  const o = raw ? _json(raw, null) : null;
+  if (!o) return fallback;
+  const conv = (a) => (Array.isArray(a) ? a.map((p) => { try { return new RegExp(p, 'i'); } catch { return null; } }).filter(Boolean) : []);
+  return { hold: conv(o.hold), waiting: conv(o.waiting) };
+};
+let _commCfg = { at: 0, val: null };
+export async function getCommissionConfig() {
+  if (_commCfg.val && Date.now() - _commCfg.at < 60_000) return _commCfg.val;
+  const cfg = await readConfigTable().catch(() => ({}));
+  const val = {
+    rates: cfg.COMMISSION_RATES ? _json(cfg.COMMISSION_RATES, COMMISSION_RATES) : COMMISSION_RATES,
+    fallback: cfg.COMMISSION_FALLBACK_RATES ? _json(cfg.COMMISSION_FALLBACK_RATES, FALLBACK_VERTICAL_RATES) : FALLBACK_VERTICAL_RATES,
+    labelRules: _rules(cfg.ORDER_LABEL_RULES, ORDER_LABEL_RULES),
+    minMatchRate: Number(cfg.MIN_MATCH_RATE) || MIN_MATCH_RATE,
+    directory: cfg.REP_DIRECTORY ? _json(cfg.REP_DIRECTORY, REP_DIRECTORY) : REP_DIRECTORY,
+  };
+  _commCfg = { at: Date.now(), val };
+  return val;
+}
+/**
+ * Who is calling — resolved from the VERIFIED session username only, never from
+ * a client-supplied value. The role is looked up live from the directory rather
+ * than trusted from the token, so a revoked admin loses access immediately
+ * instead of at token expiry.
+ * @returns {Promise<{email:string, repName:string|null, role:'rep'|'admin'}|null>}
+ */
+export async function getMe(sess) {
+  if (!sess?.user) return null;
+  const { directory } = await getCommissionConfig();
+  return resolveIdentity(sess.user, directory);
+}
+/**
+ * Apply an admin's "view as <rep>" preview. This can only ever NARROW what is
+ * returned: an admin already sees everything, so stepping into a rep's shoes
+ * removes data rather than granting it. A rep-role caller passing `as` is
+ * ignored entirely — the parameter cannot widen anyone's access.
+ */
+export function viewerFor(me, as) {
+  const rep = String(as ?? '').trim();
+  if (!rep || me?.role !== 'admin') return me;
+  return { email: me.email, repName: rep, role: 'rep', previewAs: rep };
 }
 // Validate a login → { ok, session, user }. `session` is a per-user signed token.
 // Every attempt is recorded in the Supabase `login_events` audit table.
@@ -522,8 +580,117 @@ async function refreshAll() {
   }
   try { const b = await striven('POST', '/v1/gl-accounts/search', { Active: true }); const gl = b.data ?? b.Data ?? []; await sbCacheWrite('gl', gl); _cache.set('gl', { value: gl, expiresAt: Date.now() + CACHE_TTL }); out.gl = gl.length; } catch (e) { out.gl = `FAIL ${e.message}`; }
   try { const c = await striven('GET', '/v1/company/profile'); await sbCacheWrite('company', c); _cache.set('company', { value: c, expiresAt: Date.now() + CACHE_TTL }); out.company = 'ok'; } catch (e) { out.company = `FAIL ${e.message}`; }
+
+  // Base datasets are refreshed above; `so_detail` is DERIVED from them and used
+  // by every vertical, commission and analytics figure. Refreshing `so` without
+  // it is what let new orders go uncounted — so it runs here, on the same cycle,
+  // rather than waiting for someone to remember the generator.
+  try { out.so_detail = await refreshDerived(); }
+  catch (e) { out.so_detail = `FAIL ${e.message}`; }
+
   return out;
 }
+// ── Derived caches ───────────────────────────────────────────────────────────
+// `so_detail` holds the per-order fields the sales-order SEARCH endpoint omits
+// (type, rep, payer, total, invoice status, stage). Everything downstream —
+// verticals, the commission engine, order analytics — reads it.
+//
+// It was previously only ever built by `scripts/gen-so-detail.mjs`, run by hand.
+// refreshAll() did not touch it, so new orders landed in `so` with no matching
+// `so_detail` entry and silently fell out of the vertical counts: that is why
+// the dashboard showed 82 PI orders against Striven's 108, on a cache 13 days
+// stale.
+//
+// The generator cannot simply be inlined here — it re-fetches EVERY order's
+// detail and takes minutes, well past the 60s serverless limit. This does the
+// incremental part instead: only ids present in `so` but missing from
+// `so_detail`. On a 6h cycle that is a handful of orders and finishes in
+// seconds. It also honours a wall-clock deadline and reports whether it
+// finished, so a large backlog makes progress across successive runs rather
+// than timing out and writing nothing.
+//
+// A full rebuild (changed fields on EXISTING orders, not just new ones) is
+// still the generator's job. Run it after bulk edits in Striven.
+const soCustomField = (d, name) => (d?.customFields || []).find((f) => f.name === name)?.valueText;
+function soPayerOf(d) {
+  const type = d?.type?.name || '';
+  const explicit = String(soCustomField(d, 'Payer') || '').trim();
+  if (explicit) return explicit;
+  if (/tri.?care/i.test(type)) return 'TriCare';
+  if (/\bva\b|veteran/i.test(type)) return 'Veterans Affairs';
+  if (/\bpi\b|personal injury/i.test(type)) return String(soCustomField(d, 'Law Firm') || '').trim();
+  return '';
+}
+
+export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}) {
+  const started = Date.now();
+  const soRows = (await sbCacheRead('so'))?.data || [];
+  const detail = { ...((await sbCacheRead('so_detail'))?.data || {}) };
+
+  const missing = soRows.map((r) => r.id).filter((id) => !(id in detail));
+  const todo = missing.slice(0, maxOrders);
+
+  let fetched = 0, failed = 0;
+  let i = 0;
+  const worker = async () => {
+    while (i < todo.length) {
+      if (Date.now() - started > budgetMs) return;        // leave time to write
+      const id = todo[i++];
+      try {
+        const d = await striven('GET', `/v1/sales-orders/${id}`);
+        detail[id] = {
+          type: d?.type?.name ?? '', rep: d?.salesRep?.name ?? '', payer: soPayerOf(d),
+          total: Number(d?.orderTotal ?? 0), invStatus: d?.invoiceStatus?.name ?? '',
+          status: d?.status?.name ?? '', stage: String(soCustomField(d, 'Stage') || '').trim(),
+        };
+        fetched++;
+      } catch { failed++; }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+
+  if (fetched > 0) {
+    await sbCacheWrite('so_detail', detail);
+    _cache.delete('so_detail');
+    _cache.delete('derived:so');                           // getSO memo is now stale
+  }
+  return {
+    missingBefore: missing.length,
+    fetched,
+    failed,
+    remaining: Math.max(0, missing.length - fetched),
+    complete: fetched >= missing.length,
+    ms: Date.now() - started,
+  };
+}
+
+/**
+ * Age of every cache the dashboard depends on. Derived caches drift silently —
+ * the figures still render, they are just wrong — so the age has to be
+ * reportable rather than something you discover by reconciling against Striven.
+ */
+export async function getCacheHealth() {
+  const KEYS = ['so', 'so_detail', 'report_patient_items', 'invoices', 'customers'];
+  // Rebuilt by scripts/gen-reports.mjs only; nothing refreshes it automatically.
+  const MANUAL_ONLY = new Set(['report_patient_items']);
+  const now = Date.now();
+  const rows = await Promise.all(KEYS.map(async (key) => {
+    const hit = await sbCacheRead(key);
+    const updatedAt = hit?.updated_at ?? null;
+    const ageHours = updatedAt ? Math.round((now - new Date(updatedAt).getTime()) / 3_600_000) : null;
+    return {
+      key,
+      updatedAt,
+      ageHours,
+      manualOnly: MANUAL_ONLY.has(key),
+      // 48h is comfortably beyond the 6h refresh cycle, so this only fires when
+      // refreshes have genuinely stopped landing.
+      stale: ageHours == null || ageHours > 48,
+    };
+  }));
+  return { generatedAt: new Date().toISOString(), caches: rows, anyStale: rows.some((r) => r.stale) };
+}
+
 const allInvoices = () => persistentCached('invoices', () => searchAll('/v1/invoices/search', {}));
 const allBills = () => persistentCached('bills', () => searchAll('/v1/bills/search', {}));
 const allSO = () => persistentCached('so', () => searchAll('/v1/sales-orders/search', {}));
@@ -625,6 +792,55 @@ function payerOf(d) {
   if (/\bpi\b|personal injury/i.test(type)) return String(cfVal(d, 'Law Firm') ?? '').trim();
   return '';
 }
+/**
+ * 'Veterans Affairs' and 'TriCare' are PROGRAMME names, not customer accounts.
+ * Every VA order in the company bills the same payer, and every TriCare order
+ * bills TriCare — so for those two verticals the "payer" is just the vertical
+ * restated.
+ *
+ * Counting them as accounts made the metric meaningless: a rep with 161 VA
+ * orders showed 1 account, while a rep with 35 PI orders showed 28, and the
+ * chart read as though the smaller book had 28× the client base. Across the
+ * whole book there are 77 distinct PI payers against exactly 1 VA and 1 TriCare.
+ *
+ * A genuine account is therefore a PI law firm — anything that is not a
+ * programme constant and not blank.
+ */
+/**
+ * An account is any named payer billed on an order — the law firm on a PI
+ * order, Veterans Affairs on a VA order, TriCare on a Tri-Care order.
+ *
+ * Only blanks are excluded. An order with no payer (the 27 DEMO orders) has no
+ * account to count, and 'Unassigned' is a placeholder rather than a customer.
+ *
+ * Striven's own customer records cannot supply this number: the `categories`
+ * field on customer detail is null on the records sampled, and
+ * /v1/customers/search ignores a category filter (100 rows returned filtered
+ * and unfiltered alike). The 440 customer records are also overwhelmingly
+ * patients, which are PHI and must never be counted as accounts here. The
+ * payer actually billed on each order is the grounded, HIPAA-safe measure.
+ *
+ * Note: VA and TriCare are single-payer programmes, so a rep working only VA
+ * shows 1 account against 161 orders. That is accurate — it just means this
+ * figure measures payer spread, not customer count.
+ */
+// Test payers are excluded by an ANCHORED pattern, not a substring match. The
+// whole value must be "test"/"testing" with an optional trailing number, so
+// "Testing 1" goes and a real firm named "Testa Law" or "Protest Legal" stays.
+//
+// A `\btest\b` word-boundary rule would have been the obvious choice and is
+// wrong twice over: it misses "Testing" entirely (the boundary fails before
+// "ing") and would match a genuine firm with "Test" in its name.
+//
+// Today this removes exactly one value: "Testing 1" — 1 order, $0, booked by
+// Rishi Arora. Accounts go 79 -> 78.
+export const isTestPayer = (s) => /^test(ing)?\s*\d*$/i.test(String(s ?? '').trim());
+
+export const isRealAccount = (payer) => {
+  const s = String(payer ?? '').trim();
+  return Boolean(s) && !/^unassigned$/i.test(s) && !isTestPayer(s);
+};
+
 // Payer text → program bucket (mirrors the client's programOfPayer). PI = a law
 // firm / attorney's office (anything not VA or TriCare); VA = Veterans Affairs;
 // TriCare = the TriCare program. Empty payer → Unassigned.
@@ -791,7 +1007,45 @@ async function invoicePayerMap() {
 }
 // TriCare/VA checked before PI, and PI is word-bounded, so a type merely
 // containing "pi" (e.g. "Shipping") can't be misbooked as Personal Injury.
-const soClass = (t) => { const s = (t || '').toLowerCase(); if (/tri.?care/.test(s)) return 'TriCare'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/\bpi\b|personal injury/.test(s)) return 'PI'; return 'Other'; };
+/**
+ * Collapses rows sharing an id, keeping the most recently updated copy.
+ *
+ * Deliberately keyed on the Striven id ALONE. Orders that merely look alike are
+ * not duplicates: SO 112 and SO 115 share a patient, a day, a rep, a type and a
+ * $0 total, and were created three minutes apart — but carry different line
+ * items (2 devices vs 1). Matching on customer+value+date would have silently
+ * deleted a real order and its devices.
+ *
+ * If a genuine double-entry ever needs removing, that is a correction in
+ * Striven, not a filter here.
+ */
+export function dedupeById(rows) {
+  if (!Array.isArray(rows)) return [];
+  const seen = new Map();
+  for (const r of rows) {
+    const id = r?.id;
+    if (id == null) continue;
+    const prev = seen.get(id);
+    if (!prev) { seen.set(id, r); continue; }
+    const at = (x) => Date.parse(x?.lastUpdatedDate ?? x?.dateCreated ?? '') || 0;
+    if (at(r) >= at(prev)) seen.set(id, r);
+  }
+  return [...seen.values()];
+}
+
+// Striven defines exactly seven sales order types (GET /v1/sales-order-types);
+// five are active: PI Order, VA Order, Tri-Care, DEMO, Contract - With Approval.
+// The clinical three are checked first so a name like "PI Demo" would classify
+// by programme rather than falling into the DEMO bucket.
+const soClass = (t) => {
+  const s = (t || '').toLowerCase();
+  if (/tri.?care/.test(s)) return 'TriCare';
+  if (/\bva\b|veteran/.test(s)) return 'VA';
+  if (/\bpi\b|personal injury/.test(s)) return 'PI';
+  if (/demo|test|sample/.test(s)) return 'DEMO';
+  if (/contract/.test(s)) return 'Contract';
+  return 'Other';
+};
 const isDemoType = (t) => /demo|test|sample/i.test(t || '');
 // Cancelled / completed / active(open) status grouping — cancelled orders must
 // never inflate the order book (same rule the PO side already follows).
@@ -799,14 +1053,43 @@ const soStatusOf = (r) => r.status?.name ?? r.d?.status ?? 'Unknown';
 const soGroupOf = (status) => {
   const s = String(status || '').toLowerCase();
   if (/cancel|void|lost|denied|rejected/.test(s)) return 'cancelled';
-  if (/complete|closed|done/.test(s)) return 'completed';
+  // "Incomplete" is checked FIRST and explicitly. `/complete/` matches it —
+  // "complete" is a substring — which classified every Incomplete order as
+  // completed, in the server's own status groups and everything downstream.
+  // The word boundary below would now catch it anyway; the explicit test means
+  // the intent survives a future edit to the regex.
+  if (/\bin[\s-]?complete\b/.test(s)) return 'active';
+  if (/\b(?:complete|completed|closed|done|delivered|fulfilled)\b/.test(s)) return 'completed';
   return 'active';
 };
 async function getSO() {
-  const rows = await allSO();
+  // Collapse any repeated SO id before anything counts it.
+  //
+  // The book is clean today — 467 rows, 467 distinct ids — so this changes
+  // nothing now. It guards the way duplicates would actually arrive: allSO()
+  // pages through /v1/sales-orders/search with PageIndex, and if an order is
+  // created or re-sorted between two page fetches, a record can land on both
+  // pages. That would silently inflate order counts and revenue, with no error
+  // anywhere. Cheap to prevent, painful to detect after the fact.
+  //
+  // Keeps the most recently updated copy, so a row re-read after an edit wins.
+  const rows = dedupeById(await allSO());
   const det = await soDetailMap();
   const enriched = rows.map((r) => ({ ...r, d: det[r.id] || {} }));
-  const live = enriched.filter((r) => !isDemoType(r.d.type));        // exclude DEMO / test orders
+  // Every sales order type Striven defines is now carried, DEMO included, so the
+  // dashboard's book matches Striven's own list exactly (452 non-cancelled).
+  // DEMO used to be filtered out here, which hid 27 orders worth $17,369.
+  //
+  // DEMO and Contract - With Approval get their own soClass buckets rather than
+  // being folded into "Other", so they are visible and filterable instead of
+  // being quietly mixed with unclassified orders.
+  //
+  // NOTE: commission is sourced from `report_patient_items`, which applies its
+  // own demo exclusion in scripts/gen-reports.mjs. DEMO orders therefore appear
+  // in volume, revenue and vertical breakdowns but still earn no commission —
+  // which is the intended split, not an oversight.
+  const live = enriched;
+  const demoOrders = enriched.filter((r) => isDemoType(r.d.type)).length;
 
   // Explicit status groups (counts + value) — the source of truth for KPIs.
   const statusGroups = { active: { count: 0, value: 0 }, completed: { count: 0, value: 0 }, cancelled: { count: 0, value: 0 } };
@@ -817,7 +1100,7 @@ async function getSO() {
   const book = live.filter((r) => soGroupOf(soStatusOf(r)) !== 'cancelled');
   const totalValue = round2(book.reduce((s, r) => s + Number(r.d.total || 0), 0));
 
-  const piva = { PI: { count: 0, value: 0 }, VA: { count: 0, value: 0 }, TriCare: { count: 0, value: 0 }, Other: { count: 0, value: 0 } };
+  const piva = { PI: { count: 0, value: 0 }, VA: { count: 0, value: 0 }, TriCare: { count: 0, value: 0 }, DEMO: { count: 0, value: 0 }, Contract: { count: 0, value: 0 }, Other: { count: 0, value: 0 } };
   for (const r of book) { const c = soClass(r.d.type); piva[c].count++; piva[c].value = round2(piva[c].value + Number(r.d.total || 0)); }
   // raw type breakdown (PI Order / VA Order / Tri-Care …) minus demo + cancelled
   const byTypeMap = {};
@@ -848,7 +1131,7 @@ async function getSO() {
 
   // The COMPLETE live order list (each row carries its status for filtering).
   const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
-    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: soStatusOf(r), invStatus: r.d.invStatus || '', date: r.dateCreated ?? null }));
+    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: soStatusOf(r), invStatus: r.d.invStatus || '', date: r.dateCreated ?? null, updated: r.d.lastUpdatedDate ?? null, stage: r.d.stage || '' }));
 
   // Commission engine base: month × program × rep volume (orders + units + value)
   // from the same enriched book. getCommission applies the rate card → $ (mirrors
@@ -870,7 +1153,7 @@ async function getSO() {
   return {
     count: book.length, totalValue, piva, byType, byStatus, byRep, recent, statusGroups,
     commByMonth,
-    liveCount: live.length, demoCount: enriched.length - live.length,
+    liveCount: live.length, demoCount: demoOrders,
     enriched: Object.keys(det).length > 0, phiMasked: MASK_PHI,
   };
 }
@@ -1350,7 +1633,36 @@ export async function trackingRun(params = {}, body = null) {
 // config-not-code pattern as the Striven / Shippo / QB creds. Empty = not set up.
 const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
-const commRep = (r) => { const s = String(r || '').trim(); if (/cassie/i.test(s)) return 'Cassie'; if (/jillian/i.test(s)) return 'Jillian'; if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann'; if (/christ/i.test(s)) return 'Christy'; return s || 'Unknown'; };
+// Folds a raw Striven "Sales Rep" value to the roster name used everywhere else.
+//
+// The four original reps are stored with company prefixes ("Maverick Medical -
+// Alle Ann Dubberley"), so they fold to short names. The remaining values are
+// listed explicitly rather than machine-stripped: "Maylon Sanders - Denise
+// Zavala" and "House Account- Angel Santiago" both put a PERSON after the
+// hyphen, but "Santiago Family Chiropractic" has no hyphen and is a practice,
+// so a generic prefix-strip would produce wrong names for some and right names
+// for others. Explicit beats clever here.
+//
+// Order matters: the /christ/i test would also catch "Christy Tan", so the
+// specific folds run before the pass-through.
+const commRep = (r) => {
+  const s = String(r || '').trim();
+  if (/cassie/i.test(s)) return 'Cassie';
+  if (/jillian/i.test(s)) return 'Jillian';
+  if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann';
+  if (/christ/i.test(s)) return 'Christy';
+  // Added when the roster widened from the original four to every Sales Rep
+  // value in Striven except Rishi Arora.
+  if (/denise\s+zavala/i.test(s)) return 'Denise Zavala';          // "Maylon Sanders - Denise Zavala"
+  if (/angel\s+santiago/i.test(s)) return 'Angel Santiago';        // "House Account- Angel Santiago"
+  if (/maylon\s+sanders/i.test(s)) return 'Maylon Sanders';
+  if (/santiago\s+family/i.test(s)) return 'Santiago Family Chiropractic';
+  if (/kinley\s+shepherd/i.test(s)) return 'Kinley Shepherd';
+  if (/crystal\s+chambers/i.test(s)) return 'Crystal Chambers';
+  if (/zach\s+shank/i.test(s)) return 'Zach Shank';
+  if (/^house\s+account$/i.test(s)) return 'House Account';
+  return s || 'Unknown';
+};
 // Patient last name from either "Last, First" or "FIRST LAST" — normalized for join.
 const commLastName = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z]/g, '').toUpperCase(); };
 // Display last name — original case, HIPAA minimum-necessary (last name only, no
@@ -1388,21 +1700,30 @@ function commParseCsv(csv) {
   }
   return rows;
 }
-async function getCommission() {
+/**
+ * Commission for one caller. `viewer` comes from the verified session via
+ * getMe(); it decides what survives redaction. Never call this without one.
+ * @param {{repName:string|null, role:'rep'|'admin'}|null} viewer
+ */
+export async function getCommission(viewer = null) {
   const cfg = await readConfigTable().catch(() => ({}));
   let sheets = COMMISSION_DEFAULT;
   try { if (cfg.COMMISSION_SHEETS) sheets = JSON.parse(cfg.COMMISSION_SHEETS); } catch { /* keep default */ }
   if (!Array.isArray(sheets) || sheets.length === 0) {
-    return { ok: true, configured: false, note: 'No commission sheet configured — set COMMISSION_SHEETS in app_config (JSON array of {id,gid,label}).', grandTotal: 0, byProgram: { TriCare: 0, PI: 0, VA: 0 }, reps: [], itemCount: 0, sheetsRead: 0, sheetsConfigured: 0, errors: [], sources: [] };
+    return { ok: true, configured: false, note: 'No commission sheet configured — set COMMISSION_SHEETS in app_config (JSON array of {id,gid,label}).', grandTotal: 0, byProgram: { TriCare: 0, PI: 0, VA: 0 }, byProgramCount: { TriCare: 0, PI: 0, VA: 0 }, reps: [], itemCount: 0, sheetsRead: 0, sheetsConfigured: 0, errors: [], sources: [] };
+
   }
   const agg = {};
   const allLines = [];
-  const byProgram = { TriCare: 0, PI: 0, VA: 0 };
+   const byProgram = { TriCare: 0, PI: 0, VA: 0 };
+  const byProgramCount = { TriCare: 0, PI: 0, VA: 0 };   // commission LINES per vertical
   const periods = [];
   let grandTotal = 0, rowCount = 0, sheetsRead = 0;
   const errors = [];
   const progKey = (p) => (p === 'TriCare' ? 'tricare' : p === 'VA' ? 'va' : 'pi');
+  const countKey = (p) => (p === 'TriCare' ? 'nTricare' : p === 'VA' ? 'nVa' : 'nPi');
   for (const sh of sheets) {
+
     const tabs = await commissionTabs(sh.id);
     let anyTab = false;
     for (const t of tabs) {
@@ -1415,16 +1736,18 @@ async function getCommission() {
       anyTab = true;
       const ptot = rows.reduce((s, r) => s + r.comm, 0);
       const meta = commPeriodMeta(t.name, gid);
-      // per-rep within this pay period
+            // per-rep within this pay period
       const prMap = {};
       for (const r of rows) {
-        prMap[r.rep] = prMap[r.rep] || { rep: r.rep, tricare: 0, va: 0, pi: 0, total: 0, count: 0 };
+        prMap[r.rep] = prMap[r.rep] || { rep: r.rep, tricare: 0, va: 0, pi: 0, total: 0, count: 0, nTricare: 0, nVa: 0, nPi: 0 };
         prMap[r.rep][progKey(r.prog)] += r.comm; prMap[r.rep].total += r.comm; prMap[r.rep].count++;
-        agg[r.rep] = agg[r.rep] || { TriCare: 0, PI: 0, VA: 0, count: 0 };
-        agg[r.rep][r.prog] += r.comm; agg[r.rep].count++;
-        byProgram[r.prog] += r.comm; grandTotal += r.comm; rowCount++;
+        prMap[r.rep][countKey(r.prog)]++;                                  // lines in THIS vertical
+        agg[r.rep] = agg[r.rep] || { TriCare: 0, PI: 0, VA: 0, count: 0, nTriCare: 0, nPI: 0, nVA: 0 };
+        agg[r.rep][r.prog] += r.comm; agg[r.rep].count++; agg[r.rep][`n${r.prog}`]++;
+        byProgram[r.prog] += r.comm; byProgramCount[r.prog]++; grandTotal += r.comm; rowCount++;
         allLines.push({ rep: r.rep, last: r.last, lastDisp: r.lastDisp, device: r.device, prog: r.prog, comm: r.comm });
       }
+
       const preps = Object.values(prMap).map((x) => ({ ...x, tricare: round2(x.tricare), va: round2(x.va), pi: round2(x.pi), total: round2(x.total) })).sort((a, b) => b.total - a.total);
       periods.push({ workbook: sh.label || 'sheet', gid, label: meta.label, key: meta.key, lines: rows.length, total: round2(ptot), reps: preps });
     }
@@ -1432,14 +1755,23 @@ async function getCommission() {
   }
   // CFO reconciliation vs Striven order attribution.
   let byRep = [], commByMonth = [], recent = [];
-  try { const so = await getSO(); byRep = so.byRep || []; commByMonth = so.commByMonth || []; recent = so.recent || []; } catch { /* Striven optional */ }
+  try { const so = await cached('derived:so', getSO, 60_000); byRep = so.byRep || []; commByMonth = so.commByMonth || []; recent = so.recent || []; } catch { /* Striven optional */ }
   const findSr = (rep) => byRep.find((x) => commRep(x.rep) === rep);
   // Patient-level join: last name → which rep Striven books the order under.
   // Names stay backend-only; only per-rep aggregates leave this function (PHI-safe).
   // Single ref source (recent = SO book) so sheet-matched refs and Striven line
   // refs are the same "SO-XXX" format and reconcile can merge on them.
+  // Carries the order's status/date/program too: the commission engine needs the
+  // status to apply the hold / waiting-for-reimbursement label rules, and the
+  // date to bucket by month.
   const soInfo = new Map();
-  for (const o of recent) soInfo.set(String(o.id), { rep: commRep(o.rep || 'Unassigned'), ref: o.ref || `SO-${o.id}` });
+  for (const o of recent) {
+    soInfo.set(String(o.id), {
+      rep: commRep(o.rep || 'Unassigned'), ref: o.ref || `SO-${o.id}`,
+      status: o.status || '', date: o.date || '', program: o.type || 'Other', value: Number(o.value || 0),
+      stage: o.stage || '',                      // from Striven, when mirrored
+    });
+  }
   let rcOrders = [];
   try { rcOrders = (await sbCacheRead('report_patient_items'))?.data?.orders || []; } catch { /* optional */ }
   const nameIdx = new Map();
@@ -1479,102 +1811,676 @@ async function getCommission() {
     // Flag on patient-level attribution: <50% of a rep's lines match their own
     // Striven orders is a real attribution break (not just a $-ratio artifact).
     const flag = (matchRate != null && matchRate < 50) ? 'attribution' : (!sr ? 'no-striven' : (pctOfValue != null && pctOfValue > 60 ? 'high-ratio' : null));
-    return {
+       return {
       rep, tricare: round2(v.TriCare), pi: round2(v.PI), va: round2(v.VA), total: round2(total), count: v.count,
+      nTricare: v.nTriCare || 0, nVa: v.nVA || 0, nPi: v.nPI || 0,        // lines per vertical
       strivenOrders: sc, strivenUnits: su, strivenValue: round2(sv),
+
       commPerOrder: sc ? Math.round(total / sc) : null, pctOfValue, matchRate, recon, flag,
     };
   }).sort((a, b) => b.total - a.total);
   periods.sort((a, b) => String(b.key).localeCompare(String(a.key)));
 
-  // ── Commission computed FROM STRIVEN (rate card) — mirrors the sheet's monthly
-  // + TriCare/PI/VA structure, but sourced from Striven orders, so it no longer
-  // depends on the manual workbook. VA is exact; TriCare/PI are estimates from a
-  // rate card derived off the historical sheet (update RATE when the client
-  // confirms the official rates).
-  const RATE = {
-    VA: { basis: 'unit', rate: 425, exact: true, note: '$425 / unit (validated)' },
-    TriCare: { basis: 'order', rate: 369.78, exact: false, note: '$369.78 / order (est., sheet avg)' },
-    PI: { basis: 'value', rate: 0.02677, exact: false, note: '2.677% of order value (est., derived)' },
-  };
-  const commFor = (prog, o) => {
-    const R = RATE[prog]; if (!R) return 0;
-    if (R.basis === 'unit') return o.units * R.rate;
-    if (R.basis === 'order') return o.orders * R.rate;
-    return o.value * R.rate;
-  };
-  // Restrict Striven commission to the reps that appear on the sheet (the actual
-  // commission-earning reps), and normalize names to match the sheet ("Cassie
-  // Wates" → "Cassie"). House/clinic accounts and other staff are left out.
+  // ── Commission computed FROM STRIVEN ────────────────────────────────────────
+  // Commission is calculated HERE, not in Striven — Striven holds no commission
+  // logic. The rule is strictly `units × per-device rate`, summed across the
+  // devices on an order (see _commission-core.js). Order labels decide inclusion:
+  // `hold` is excluded entirely, `waiting for reimbursement` counts toward the
+  // total but is reported as pending rather than payable.
+  //
+  // Sourced per ORDER (report_patient_items → device + qty) rather than from the
+  // month/program rollup, because a per-device rate needs the device.
+  const commCfg = await getCommissionConfig();
+  // THE rep roster: the names on the commission sheet. Striven books orders under
+  // plenty of other people (house/clinic accounts, ops staff) — they are not reps
+  // and must never appear as one. An order booked under a non-rep is reported as
+  // unmatched rather than silently commissioned to somebody.
   const sheetReps = new Set(Object.keys(agg));
-  const months = {}; const sByRep = {}; const sByProgram = { TriCare: 0, VA: 0, PI: 0 }; let sGrand = 0;
-  for (const o of commByMonth) {
-    const rep = commRep(o.rep);
-    if (!sheetReps.has(rep)) continue;
-    const c = round2(commFor(o.program, o));
-    if (!c) continue;
-    const pk = o.program === 'TriCare' ? 'tricare' : o.program === 'VA' ? 'va' : 'pi';
-    const M = months[o.month] = months[o.month] || { month: o.month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, reps: {} };
-    M[o.program] += c; M.total += c; M.orders += o.orders; M.units += o.units; M.value += o.value;
-    const MR = M.reps[rep] = M.reps[rep] || { rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
-    MR[pk] += c; MR.total += c; MR.orders += o.orders; MR.units += o.units; MR.value += o.value;
-    const BR = sByRep[rep] = sByRep[rep] || { rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0 };
-    BR[pk] += c; BR.total += c; BR.orders += o.orders; BR.units += o.units; BR.value += o.value;
-    sByProgram[o.program] += c; sGrand += c;
-  }
-  const rnd = (o, ks) => { for (const k of ks) o[k] = round2(o[k]); return o; };
-  const sMonths = Object.values(months).map((M) => rnd({ ...M, reps: Object.values(M.reps).map((r) => rnd(r, ['tricare', 'va', 'pi', 'total', 'value'])).sort((a, b) => b.total - a.total) }, ['total', 'TriCare', 'VA', 'PI', 'value'])).sort((a, b) => b.month.localeCompare(a.month));
-  const striven = {
-    available: commByMonth.length > 0,
-    grandTotal: round2(sGrand),
-    byProgram: { TriCare: round2(sByProgram.TriCare), VA: round2(sByProgram.VA), PI: round2(sByProgram.PI) },
-    months: sMonths,
-    byRep: Object.values(sByRep).map((r) => rnd(r, ['tricare', 'va', 'pi', 'total', 'value'])).sort((a, b) => b.total - a.total),
-    rateCard: Object.entries(RATE).map(([program, r]) => ({ program, note: r.note, exact: r.exact })),
-  };
+  // The roster is REP_NAMES (every Striven Sales Rep value except Rishi Arora).
+  // A sheet name outside it means the sheet gained a spelling commRep() does not
+  // fold — surface it loudly rather than letting a typo become a new rep.
+  const strays = [...sheetReps].filter((r) => !REP_NAMES.includes(r));
+  if (strays.length) errors.push(`Unrecognised rep name(s) on the sheet: ${strays.join(', ')} — expected one of ${REP_NAMES.join(', ')}. Add the spelling to commRep().`);
+  const months = {}; const sByRep = {}; const sByProgram = { TriCare: 0, VA: 0, PI: 0 };
+  const sByProgramOrders = { TriCare: 0, VA: 0, PI: 0 }; let sGrand = 0;
+  let sPayable = 0, sWaiting = 0, sHeld = 0, sZeroValue = 0, sCancelled = 0;
+  const rateGaps = new Set();
+  const strivenLinesByRep = {};
+  // Empty per-vertical volume buckets, so every rep/month row has the same shape.
+  const zeroVol = () => ({ nTricare: 0, nVa: 0, nPi: 0, uTricare: 0, uVa: 0, uPi: 0 });
+  const zeroState = () => ({ payableTotal: 0, waitingTotal: 0, heldOrders: 0 });
+  const zeroRepRow = (rep) => ({ rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0, ...zeroVol(), ...zeroState() });
 
-  // Per-order Striven lines for the rep popup — mirror the sheet's line view, but
-  // sourced from Striven orders (SO ref + item + value + computed $). Same soInfo
-  // ref source as the sheet match above.
-  try {
-    const linesByRep = {};
-    for (const o of rcOrders) {
-      const info = soInfo.get(String(o.soId)); if (!info) continue;
-      const rep = info.rep; if (!sheetReps.has(rep)) continue;
-      const program = o.program; if (!RATE[program]) continue;
+  // Seed EVERY rep on the roster, so the table lists the whole team rather than
+  // only those with a commissioned order. Previously a rep row was created on
+  // first earning, so eight of the twelve never appeared at all — indistinguish-
+  // able from not being a rep. A rep at $0 is information; a missing row is not.
+  for (const rep of REP_NAMES) sByRep[rep] = zeroRepRow(rep);
+
+  // Orders we could not tie to a sales order. They still carry a vertical and
+  // real volume, so they are reported rather than dropped — an unattributable
+  // order is a data problem to surface, not a number to quietly lose.
+  const unmatched = [];
+  for (const o of rcOrders) {
+    const info = soInfo.get(String(o.soId));
+    const bookedTo = info?.rep && info.rep !== 'Unassigned' ? info.rep : null;
+    if (!info || !bookedTo || !sheetReps.has(bookedTo)) {
       const units = (o.items || []).reduce((s, i) => s + Number(i.qty || 0), 0);
-      const value = Number(o.value || 0);
-      const comm = round2(commFor(program, { units, orders: 1, value }));
-      (linesByRep[rep] = linesByRep[rep] || []).push({ ref: info.ref, item: (o.items || [])[0]?.item || '', prog: program, value: round2(value), units, comm });
+      unmatched.push({
+        soId: String(o.soId ?? ''),
+        ref: info?.ref || '',
+        prog: o.program || info?.program || 'Unclassified',
+        rep: bookedTo,
+        item: (o.items || [])[0]?.item || '',
+        itemCount: (o.items || []).length,
+        units,
+        value: round2(Number(o.value || info?.value || 0)),
+        status: info?.status || '',
+        reason: !info ? 'no matching sales order'
+          : !bookedTo ? 'no rep on the sales order'
+            : 'booked to someone who is not a rep on the commission sheet',
+      });
+      continue;
     }
-    for (const r of striven.byRep) r.lines = (linesByRep[r.rep] || []).sort((a, b) => b.comm - a.comm);
-  } catch { /* report cache optional */ }
+    const rep = bookedTo;
+    const program = o.program || info.program;
+    if (!['TriCare', 'VA', 'PI', 'DOL'].includes(program)) continue;
+
+    const value = Number(o.value || info.value || 0);
+    const res = commissionForOrder({ status: info.status, program, items: o.items, value }, commCfg);
+    for (const g of res.rateGaps) rateGaps.add(g);
+    if (res.state === 'cancelled') { sCancelled++; continue; }    // cancelled → never earned
+    if (res.state === 'hold') { sHeld++; continue; }        // excluded entirely
+    if (res.state === 'zero-value') { sZeroValue++; continue; }   // $0 order earns nothing
+    if (!res.commission && !res.units) continue;
+
+    const month = (info.date || '').slice(0, 7) || 'unknown';
+    const c = res.commission;
+    const pk = program === 'TriCare' ? 'tricare' : program === 'VA' ? 'va' : 'pi';
+    const nk = program === 'TriCare' ? 'nTricare' : program === 'VA' ? 'nVa' : 'nPi';   // orders in this vertical
+    const uk = program === 'TriCare' ? 'uTricare' : program === 'VA' ? 'uVa' : 'uPi';   // units in this vertical
+    const bump = (t) => {
+      t[pk] += c; t.total += c; t.orders += 1; t.units += res.units; t.value += value;
+      t[nk] += 1; t[uk] += res.units;
+      if (res.state === 'waiting') t.waitingTotal += c; else t.payableTotal += c;
+    };
+    const M = months[month] = months[month] || { month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, ...zeroState(), reps: {} };
+    M[program] += c; M.total += c; M.orders += 1; M.units += res.units; M.value += value;
+    if (program !== 'DOL') M[`o${program}`] += 1;
+    if (res.state === 'waiting') M.waitingTotal += c; else M.payableTotal += c;
+    bump(M.reps[rep] = M.reps[rep] || { rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0, ...zeroVol(), ...zeroState() });
+    bump(sByRep[rep] = sByRep[rep] || zeroRepRow(rep));
+
+    if (sByProgram[program] != null) { sByProgram[program] += c; sByProgramOrders[program] += 1; }
+    sGrand += c;
+    if (res.state === 'waiting') sWaiting += c; else sPayable += c;
+
+    // Per-order line for the rep popup — SO ref + device + computed $, no names.
+    (strivenLinesByRep[rep] = strivenLinesByRep[rep] || []).push({
+      ref: info.ref, item: (o.items || [])[0]?.item || '', prog: program,
+      value: round2(value), units: res.units, comm: c, state: res.state,
+    });
+  }
+
+  const MONEY = ['tricare', 'va', 'pi', 'total', 'value', 'payableTotal', 'waitingTotal'];
+  const rnd = (o, ks) => { for (const k of ks) o[k] = round2(o[k]); return o; };
+  const sMonths = Object.values(months).map((M) => rnd({ ...M, reps: Object.values(M.reps).map((r) => rnd(r, MONEY)).sort((a, b) => b.total - a.total) }, ['total', 'TriCare', 'VA', 'PI', 'value', 'payableTotal', 'waitingTotal'])).sort((a, b) => b.month.localeCompare(a.month));
+  const striven = {
+    available: rcOrders.length > 0,
+    grandTotal: round2(sGrand),
+    payableTotal: round2(sPayable),
+    waitingTotal: round2(sWaiting),
+    heldOrders: sHeld,
+    zeroValueOrders: sZeroValue,          // $0 order value → no commission earned
+    cancelledOrders: sCancelled,          // cancelled → never earned, never counted
+    byProgram: { TriCare: round2(sByProgram.TriCare), VA: round2(sByProgram.VA), PI: round2(sByProgram.PI) },
+    byProgramOrders: { ...sByProgramOrders },              // orders per vertical, all months
+    months: sMonths,
+    // Earners first, then anyone at zero by name — without the tiebreakers the
+    // eight zero rows would reorder arbitrarily between refreshes.
+    byRep: Object.values(sByRep).map((r) => rnd(r, MONEY))
+      .sort((a, b) => b.total - a.total || b.orders - a.orders || a.rep.localeCompare(b.rep)),
+    // Devices priced off the legacy per-vertical fallback because they are not
+    // yet in COMMISSION_RATES — surfaced so an unpriced device is never silent.
+    rateGaps: [...rateGaps].sort(),
+    // Orders with no usable sales order — vertical + whatever else we have.
+    unmatched: unmatched.sort((a, b) => b.value - a.value),
+    unmatchedValue: round2(unmatched.reduce((s, u) => s + u.value, 0)),
+    rateCard: [
+      { program: 'All', note: 'commission = units × per-device rate (COMMISSION_RATES)', exact: true },
+    ],
+  };
+  for (const r of striven.byRep) r.lines = (strivenLinesByRep[r.rep] || []).sort((a, b) => b.comm - a.comm);
+
+  // ── Volume columns come from the ORDER BOOK, not the commission engine ──────
+  //
+  // The engine only sees orders in report_patient_items that tie to a sales
+  // order, so its counts cover 296 of 452 orders. Rendering those as "Orders"
+  // made eight reps read 0 — Maylon Sanders showed no orders against a real
+  // book of 35 worth $341,053.
+  //
+  // So the volume columns now report what Striven actually holds, and the money
+  // columns keep reporting what was actually computed. `commOrders`/`commUnits`
+  // carry the engine's own basis so the gap between the two is inspectable
+  // rather than looking like a calculation fault.
+  //
+  // Order counts are non-financial and already shared across the team (see
+  // orderCounts below), so sourcing them at admin scope leaks nothing new —
+  // redaction still strips every dollar field per caller.
+  try {
+    // Admin scope, spelled out here: getRepOverview's ADMIN is local to that
+    // function. Same cache key, so the two share one derivation.
+    const an = await cached('derived:analytics:admin', () => getOrderAnalytics({ repName: null, role: 'admin' }), 60_000);
+    const book = new Map();
+    for (const o of an.orders || []) {
+      const e = book.get(o.rep) || { orders: 0, units: 0, TriCare: 0, VA: 0, PI: 0, DOL: 0 };
+      e.orders += 1;
+      e.units += Number(o.units || 0);
+      if (e[o.vertical] != null) e[o.vertical] += 1;
+      book.set(o.rep, e);
+    }
+    for (const r of striven.byRep) {
+      const b = book.get(r.rep);
+      r.commOrders = r.orders;              // what the money was computed on
+      r.commUnits = r.units;
+      r.orders = b?.orders ?? 0;            // what Striven actually holds
+      r.units = b?.units ?? 0;
+      r.nTricare = b?.TriCare ?? 0;
+      r.nVa = b?.VA ?? 0;
+      r.nPi = b?.PI ?? 0;
+    }
+    striven.commissionedOrders = striven.byRep.reduce((s, r) => s + (r.commOrders || 0), 0);
+    striven.bookOrders = (an.orders || []).length;
+
+    // Volume booked to someone off the roster. Without this the commission
+    // table's columns sum to 450 orders / 643 units against a book of
+    // 452 / 644 — the table quietly disagreeing with every other screen.
+    //
+    // It is NOT a byRep entry: those rows carry identity and drive redaction,
+    // and a synthetic rep in that list would be one more thing to special-case
+    // everywhere. Reported alongside instead, for the table to render as a row.
+    const rosterNames = new Set(REP_NAMES);
+    const offRows = (an.orders || []).filter((o) => !rosterNames.has(o.rep));
+    striven.offRoster = {
+      orders: offRows.length,
+      units: offRows.reduce((s, o) => s + Number(o.units || 0), 0),
+      value: round2(offRows.reduce((s, o) => s + Number(o.revenue || 0), 0)),
+      nTricare: offRows.filter((o) => o.vertical === 'TriCare').length,
+      nVa: offRows.filter((o) => o.vertical === 'VA').length,
+      nPi: offRows.filter((o) => o.vertical === 'PI').length,
+      reps: [...new Set(offRows.map((o) => o.rep))].sort(),
+    };
+  } catch { /* analytics optional — volume columns stay on the engine's counts */ }
+
+  // ── Per-rep operational fields ──────────────────────────────────────────────
+  // orderCounts is deliberately non-financial: it is the one part of another
+  // rep's row every rep is allowed to see, so it survives redaction.
+  // DOL is carried as a zero column — it is a future vertical with no orders
+  // yet, and soClass() will need a DOL branch (plus the piva map in getSO) the
+  // day the first one lands.
+  const svByRep = new Map(striven.byRep.map((r) => [r.rep, r]));
+  const countsOf = (sv) => ({ TriCare: sv?.nTricare || 0, VA: sv?.nVa || 0, PI: sv?.nPi || 0, DOL: 0 });
+  for (const rp of reps) {
+    const sv = svByRep.get(rp.rep);
+    rp.orderCounts = countsOf(sv);
+    rp.payableTotal = sv ? round2(sv.payableTotal) : 0;
+    rp.waitingTotal = sv ? round2(sv.waitingTotal) : 0;
+    // The sheet is frozen and historical: its dollars are authoritative only
+    // once they reconcile against Striven (Business Rule 5).
+    rp.verified = isRepVerified(rp, commCfg);
+  }
+  // No rows are synthesised from Striven: the rep roster is exactly the names on
+  // the commission sheet, so a Striven-only name never becomes a rep.
+  reps.sort((a, b) => b.total - a.total || b.strivenOrders - a.strivenOrders);
 
   // ── Reconcile: sheet (what was paid) vs Striven-computed (what orders support),
   // per rep, side by side, so the gap is visible per person. Both keyed by the
   // normalized rep name so "Cassie Wates" (Striven) ties to "Cassie" (sheet).
-  const recMap = {};
-  const ensureRec = (rep) => (recMap[rep] = recMap[rep] || { rep, sheet: 0, striven: 0, sheetProg: { TriCare: 0, VA: 0, PI: 0 }, strivenProg: { TriCare: 0, VA: 0, PI: 0 }, lines: 0, orders: 0, matchRate: null });
-  for (const rp of reps) { const R = ensureRec(rp.rep); R.sheet = rp.total; R.sheetProg = { TriCare: rp.tricare, VA: rp.va, PI: rp.pi }; R.lines = rp.count; R.matchRate = rp.matchRate; }
+    const recMap = {};
+  const ensureRec = (rep) => (recMap[rep] = recMap[rep] || { rep, sheet: 0, striven: 0, sheetProg: { TriCare: 0, VA: 0, PI: 0 }, strivenProg: { TriCare: 0, VA: 0, PI: 0 }, sheetProgLines: { TriCare: 0, VA: 0, PI: 0 }, strivenProgOrders: { TriCare: 0, VA: 0, PI: 0 }, lines: 0, orders: 0, matchRate: null });
+  for (const rp of reps) {
+    const R = ensureRec(rp.rep); R.sheet = rp.total; R.sheetProg = { TriCare: rp.tricare, VA: rp.va, PI: rp.pi };
+    R.sheetProgLines = { TriCare: rp.nTricare, VA: rp.nVa, PI: rp.nPi };
+    R.lines = rp.count; R.matchRate = rp.matchRate;
+  }
   for (const b of striven.byRep) {
     const rep = commRep(b.rep); const R = ensureRec(rep);
     R.striven = round2(R.striven + b.total); R.orders += b.orders;
     R.strivenProg.TriCare = round2(R.strivenProg.TriCare + b.tricare);
     R.strivenProg.VA = round2(R.strivenProg.VA + b.va);
     R.strivenProg.PI = round2(R.strivenProg.PI + b.pi);
+    R.strivenProgOrders.TriCare += b.nTricare || 0;
+    R.strivenProgOrders.VA += b.nVa || 0;
+    R.strivenProgOrders.PI += b.nPi || 0;
   }
+
   const reconcile = {
     reps: Object.values(recMap).map((R) => ({ ...R, diff: round2(R.sheet - R.striven), onSheet: R.sheet > 0, inStriven: R.striven > 0 }))
       .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)),
     totals: { sheet: round2(grandTotal), striven: striven.grandTotal, diff: round2(grandTotal - striven.grandTotal) },
   };
 
-  return {
+  const payload = {
     ok: true, configured: true, grandTotal: round2(grandTotal),
     byProgram: { TriCare: round2(byProgram.TriCare), PI: round2(byProgram.PI), VA: round2(byProgram.VA) },
+    byProgramCount: { ...byProgramCount },                 // lines per vertical, all periods
+    payableTotal: striven.payableTotal, waitingTotal: striven.waitingTotal, heldOrders: striven.heldOrders,
+    minMatchRate: commCfg.minMatchRate,
     reps, periods, periodCount: periods.length, itemCount: rowCount, sheetsRead, sheetsConfigured: sheets.length, errors,
     striven, reconcile,
     sources: sheets.map((s) => ({ label: s.label || 'sheet', url: `https://docs.google.com/spreadsheets/d/${s.id}/edit` })),
+  };
+  // Redaction happens HERE, before serialization — another rep's dollars must
+  // never reach the browser, whether or not the UI would have hidden them.
+  // A missing viewer fails closed (a rep with no own row unlocks nothing).
+  return redactCommissionPayload(payload, viewer || { repName: null, role: 'rep' });
+}
+
+// ── ORDER ANALYTICS ──────────────────────────────────────────────────────────
+// One flat, PHI-safe row per order: date, vertical, account, rep, revenue, the
+// devices on it, and status. Small enough (a few hundred rows) to send whole and
+// let the UI slice it by week / month / custom range without a round trip.
+//
+// "Account" is the PAYER — Veterans Affairs, TriCare, or the PI law firm. It is
+// deliberately NOT the Striven customer, because that is the patient (PHI).
+//
+// Scoped like commission: a rep-role caller gets only orders booked to them; an
+// admin gets the whole book. Revenue is company data, so the same boundary that
+// protects commission protects it here.
+export async function getOrderAnalytics(viewer = null) {
+  const isAdmin = viewer?.role === 'admin';
+  const mine = viewer?.repName ? String(viewer.repName).trim().toLowerCase() : null;
+
+  let recent = [];
+  // getSO() is the expensive derivation, and a single page load can reach it
+  // three times (analytics + commission + rep overview). One short-lived memo
+  // with in-flight de-duplication collapses those into one.
+  try { recent = (await cached('derived:so', getSO, 60_000)).recent || []; } catch { /* Striven optional */ }
+  let rcOrders = [];
+  try { rcOrders = (await sbCacheRead('report_patient_items'))?.data?.orders || []; } catch { /* optional */ }
+
+  // soId → devices on that order (item + qty). No names, no patient fields.
+  const devBySo = new Map();
+  for (const o of rcOrders) {
+    const items = (o.items || [])
+      .map((i) => ({ item: String(i.item || '').trim(), qty: Number(i.qty || 0) }))
+      .filter((i) => i.item && i.qty > 0);
+    if (items.length) devBySo.set(String(o.soId), items);
+  }
+
+  const now = Date.now();
+  const days = (d) => { const t = d ? new Date(d).getTime() : NaN; return Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 86_400_000)) : null; };
+
+  const orders = [];
+  let excludedCancelled = 0, excludedCancelledValue = 0;
+  for (const r of recent) {
+    // `recent` is the live book INCLUDING cancellations, so they are dropped
+    // here. A cancelled order contributes no revenue, no devices and no count —
+    // the same rule the commission engine applies.
+    if (isCancelledStatus(r.status)) {
+      excludedCancelled++;
+      excludedCancelledValue = round2(excludedCancelledValue + Number(r.value || 0));
+      continue;
+    }
+    const rep = commRep(r.rep || 'Unassigned');
+    if (!isAdmin && (!mine || rep.toLowerCase() !== mine)) continue;
+    const devices = devBySo.get(String(r.id)) || [];
+    orders.push({
+      ref: r.ref, soId: String(r.id),
+      date: r.date || null,
+      vertical: r.type || 'Other',                 // TriCare | VA | PI | Other
+      // Payer — never the patient. Test payers ("Testing 1") fold into
+      // Unassigned at the source, so they cannot appear as a row in ANY account
+      // list: the dashboard donut, the account table and the totals drill all
+      // read this field. The order itself still counts in orders and revenue —
+      // only its fake account is dropped.
+      account: (r.payer && !isTestPayer(String(r.payer).trim())) ? r.payer : 'Unassigned',
+      rep,
+      revenue: round2(Number(r.value || 0)),
+      units: devices.reduce((s, i) => s + i.qty, 0),
+      devices,
+      status: r.status || '',
+      invStatus: r.invStatus || '',
+      strivenStage: r.stage || '',            // '' until the tag is mirrored
+      // Interim ageing proxy until portal stage history accrues: an edit to the
+      // order resets this, so it understates genuinely stale orders.
+      daysSinceUpdate: days(r.updated || r.date),
+      ageDays: days(r.date),
+    });
+  }
+
+  return {
+    ok: true,
+    scopedToRep: isAdmin ? null : (viewer?.repName ?? null),
+    verticals: ['PI', 'VA', 'DOL', 'TriCare'],    // DOL is live-but-empty until the first order
+    orders,
+    // Dropped, not hidden: surfaced so the exclusion is visible rather than a
+    // silent gap between this and Striven's own order count.
+    excludedCancelled, excludedCancelledValue,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Commission for one caller, computed ONCE and redacted per viewer.
+ *
+ * getCommission() reads nine sheet tabs plus the Striven derivations — ~11s. The
+ * result is identical for everyone before redaction, so it is cached unredacted
+ * and narrowed per caller here. Redaction always runs, so a cache hit can never
+ * hand one rep another rep's figures.
+ */
+export async function getCommissionFor(viewer = null) {
+  const raw = await cached('derived:commission:raw', () => getCommission({ repName: null, role: 'admin' }), 60_000);
+  return redactCommissionPayload(raw, viewer || { repName: null, role: 'rep' });
+}
+
+// ── SAVED DASHBOARD VIEWS ────────────────────────────────────────────────────
+// A named filter set (period, vertical, date range) per user. Stored in the same
+// generic striven_cache table as the PI stages, so no schema change was needed.
+// Keyed by the VERIFIED session user, so one person's views are never another's.
+const VIEWS_KEY = 'dashboard_views';
+const readViewStore = async () => {
+  const hit = await sbCacheRead(VIEWS_KEY).catch(() => null);
+  return hit?.data && typeof hit.data === 'object' ? hit.data : {};
+};
+
+// Both the saved views and the PI stages live in one JSON document per key, so a
+// naive read-modify-write loses an update when two people save at once. Every
+// mutation is funnelled through here: it serializes writes to a key within this
+// process AND re-reads immediately before applying, so the read→write window is
+// as small as it can be.
+//
+// Residual limitation, stated plainly: on Vercel each serverless instance has its
+// own queue, so simultaneous writes from two instances can still collide. Moving
+// each record to its own row is the real fix and needs a table.
+const _writeQueue = new Map();
+function withKeyLock(key, work) {
+  const prev = _writeQueue.get(key) ?? Promise.resolve();
+  const next = prev.then(work, work);            // run regardless of prior outcome
+  _writeQueue.set(key, next.catch(() => {}));    // never let a rejection poison the chain
+  return next;
+}
+export async function listDashboardViews(user) {
+  const store = await readViewStore();
+  return { ok: true, views: Array.isArray(store[user]) ? store[user] : [] };
+}
+export async function saveDashboardView(user, view) {
+  const name = String(view?.name ?? '').trim().slice(0, 60);
+  if (!name) throw new Error('a view needs a name');
+  if (!user) throw new Error('not signed in');
+  return withKeyLock(VIEWS_KEY, async () => {
+  const store = await readViewStore();          // re-read inside the lock
+  const mine = Array.isArray(store[user]) ? store[user] : [];
+  const entry = {
+    id: `v${Date.now().toString(36)}`,
+    name,
+    filters: {
+      preset: String(view?.filters?.preset ?? 'all'),
+      from: String(view?.filters?.from ?? ''),
+      to: String(view?.filters?.to ?? ''),
+      vert: String(view?.filters?.vert ?? 'all'),
+    },
+    savedAt: new Date().toISOString(),
+  };
+  // Saving the same name twice replaces it rather than piling up duplicates.
+  store[user] = [...mine.filter((v) => v.name.toLowerCase() !== name.toLowerCase()), entry].slice(-30);
+  await sbCacheWrite(VIEWS_KEY, store);
+  return { ok: true, view: entry, views: store[user] };
+  });
+}
+export async function deleteDashboardView(user, id) {
+  return withKeyLock(VIEWS_KEY, async () => {
+  const store = await readViewStore();          // re-read inside the lock
+  const mine = Array.isArray(store[user]) ? store[user] : [];
+  store[user] = mine.filter((v) => v.id !== String(id));
+  await sbCacheWrite(VIEWS_KEY, store);
+  return { ok: true, views: store[user] };
+  });
+}
+
+// ── REP OVERVIEW ─────────────────────────────────────────────────────────────
+// The team seen from the reps' side: one row per rep with volume, revenue and
+// commission, split by vertical.
+//
+// A manager sees every rep in full. A rep sees their OWN row in full and, for
+// everyone else, order and unit COUNTS only — no revenue, no commission. The
+// redaction happens here, before serialization, so another rep's money never
+// reaches the browser.
+export async function getRepOverview(viewer = null) {
+  const isAdmin = viewer?.role === 'admin';
+  const mine = viewer?.repName ? String(viewer.repName).trim().toLowerCase() : null;
+  const isOwn = (rep) => Boolean(mine) && String(rep).trim().toLowerCase() === mine;
+
+  // Computed unredacted, then narrowed per row below.
+  const ADMIN = { repName: null, role: 'admin' };
+  const [analytics, comm] = await Promise.all([
+    cached('derived:analytics:admin', () => getOrderAnalytics(ADMIN), 60_000),
+    getCommissionFor(ADMIN),
+  ]);
+  const commByRep = new Map((comm.striven?.byRep || []).map((r) => [r.rep, r]));
+  const sheetByRep = new Map((comm.reps || []).map((r) => [r.rep, r]));
+  const VERTS = ['PI', 'VA', 'DOL', 'TriCare', 'DEMO', 'Contract'];
+
+  const rows = REP_NAMES.map((rep) => {
+    const own = isAdmin || isOwn(rep);
+    const orders = analytics.orders.filter((o) => o.rep === rep);
+    const cm = commByRep.get(rep) || null;
+    const sh = sheetByRep.get(rep) || null;
+
+    // Order counts are the one thing shared across the team. With
+    // STANDINGS_ORDERS_ONLY on, everything else about another rep goes too, so
+    // Team Standings can only ever be a ranking by volume.
+    const lean = !own && STANDINGS_ORDERS_ONLY;
+    const byVertical = VERTS.map((v) => {
+      const set = orders.filter((o) => o.vertical === v);
+      return {
+        vertical: v,
+        orders: set.length,
+        units: lean ? null : set.reduce((s, o) => s + o.units, 0),
+        // Revenue is financial — counts stay, money goes.
+        revenue: own ? round2(set.reduce((s, o) => s + o.revenue, 0)) : null,
+      };
+    });
+
+    return {
+      rep,
+      isSelf: isOwn(rep),
+      own,                                    // did this row survive unredacted?
+      orders: orders.length,                  // always visible — the standings metric
+      units: lean ? null : orders.reduce((s, o) => s + o.units, 0),
+      // PI law firms only — see isRealAccount. VA/TriCare are verticals, and
+      // counting them here is what made this figure unreadable.
+      accounts: lean ? null : new Set(orders.map((o) => o.account).filter(isRealAccount)).size,
+      // How many verticals this rep actually works in — the thing the old
+      // "accounts" number was accidentally measuring for VA and TriCare reps.
+      verticals: lean ? null : byVertical.filter((v) => v.orders > 0).length,
+      devices: lean ? null : new Set(orders.flatMap((o) => o.devices.map((d) => d.item))).size,
+      lastOrder: lean ? null : (orders.map((o) => o.date).filter(Boolean).sort().slice(-1)[0] || null),
+      byVertical,
+      revenue: own ? round2(orders.reduce((s, o) => s + o.revenue, 0)) : null,
+      commission: own ? (cm?.total ?? 0) : null,
+      payable: own ? (cm?.payableTotal ?? 0) : null,
+      waiting: own ? (cm?.waitingTotal ?? 0) : null,
+      matchRate: sh?.matchRate ?? null,       // operational, shared
+      verified: sh?.verified ?? false,
+    };
+  });
+
+  // ONE scope for the whole tile row. These figures describe the
+  // REP-ATTRIBUTED book, so orders, units, accounts and revenue all count the
+  // same set of orders. Previously `orders` summed the rep rows while revenue and
+  // units summed the entire company book, which made the row contradict itself
+  // and disagree with the Orders & Revenue page.
+  const self = rows.find((r) => r.isSelf) ?? null;
+  const repOrders = analytics.orders.filter((o) => REP_NAMES.includes(o.rep));
+  const teamTotals = {
+    reps: rows.length,
+    orders: rows.reduce((s, r) => s + r.orders, 0),
+    // Team-wide unit and account counts are only meaningful — and only shown —
+    // to a manager; a rep would otherwise infer peers' volume by subtraction.
+    units: isAdmin ? repOrders.reduce((s, o) => s + o.units, 0) : null,
+    accounts: isAdmin ? new Set(repOrders.map((o) => o.account).filter(isRealAccount)).size : null,
+    // Company money only for a manager; a rep sees their own line instead.
+    revenue: isAdmin ? round2(repOrders.reduce((s, o) => s + o.revenue, 0)) : (self?.revenue ?? null),
+    commission: isAdmin ? round2(rows.reduce((s, r) => s + (r.commission ?? 0), 0)) : (self?.commission ?? null),
+  };
+  // The rest of the order book: booked in Striven to someone who is not a rep
+  // (house/clinic accounts, ops staff, unassigned). Reported rather than folded
+  // in, so the gap against Orders & Revenue is explained instead of puzzling.
+  const unattributed = isAdmin ? {
+    orders: analytics.orders.length - teamTotals.orders,
+    revenue: round2(analytics.orders.reduce((s, o) => s + o.revenue, 0) - teamTotals.revenue),
+    // Units were missing here, which is what made the Devices KPI read 643
+    // against Orders & Revenue's 644 with nothing on screen to explain it.
+    // The gap is Rishi Arora's SO 294 — one device on an order deliberately
+    // kept off the rep roster. Reporting it turns a contradiction into a
+    // reconciliation.
+    units: (analytics.orders.reduce((s, o) => s + o.units, 0)) - (teamTotals.units ?? 0),
+  } : null;
+
+  // The WHOLE order book — the same set Orders & Revenue reports, so the two
+  // screens show identical headline figures instead of differing by whatever
+  // sits outside the rep roster.
+  //
+  // teamTotals stays rep-scoped because the per-rep table and commission math
+  // need it that way; this is the reconciled view for the KPI strip. Admin only:
+  // a rep must not learn the company book by subtracting their own row.
+  const bookTotals = isAdmin ? {
+    orders: analytics.orders.length,
+    units: analytics.orders.reduce((s, o) => s + o.units, 0),
+    revenue: round2(analytics.orders.reduce((s, o) => s + o.revenue, 0)),
+    // Distinct payers billed across the whole book, so the Accounts KPI reads
+    // the same set as Orders, Devices and Revenue beside it.
+    accounts: new Set(analytics.orders.map((o) => o.account).filter(isRealAccount)).size,
+  } : null;
+
+  return {
+    ok: true,
+    role: isAdmin ? 'admin' : 'rep',
+    bookTotals,
+    me: viewer?.repName ?? null,
+    verticals: VERTS,
+    reps: rows.sort((a, b) => (b.revenue ?? -1) - (a.revenue ?? -1) || b.orders - a.orders),
+    teamTotals,
+    unattributed,
+    bookOrders: isAdmin ? analytics.orders.length : null,
+    excludedCancelled: analytics.excludedCancelled ?? 0,
+  };
+}
+
+// ── PI ORDER STAGES ──────────────────────────────────────────────────────────
+// Striven carries only In Progress / Completed / Canceled / Incomplete, so the
+// operational pipeline is tracked HERE. State lives in the existing generic
+// striven_cache table under one key — no schema change was needed.
+//
+// Every change appends to that order's history, so "how long has this been
+// sitting" becomes a real measurement from the moment the feature goes live.
+// Until an order has been moved once, ageing falls back to its order date and is
+// flagged `estimated` so the two are never confused.
+export { PI_STAGES };
+const STAGE_KEY = 'pi_stages';
+const isPiStage = (s) => PI_STAGES.includes(String(s));
+
+async function readStageStore() {
+  const hit = await sbCacheRead(STAGE_KEY).catch(() => null);
+  const d = hit?.data;
+  return d && typeof d === 'object' ? d : {};
+}
+
+/**
+ * Move one order to a stage and record the transition.
+ * @param {{soId:string, stage:string, user:string}} p
+ */
+export async function setPiStage({ soId, stage, user }) {
+  const id = String(soId ?? '').trim();
+  if (!id) throw new Error('soId is required');
+  if (!isPiStage(stage)) throw new Error(`unknown stage "${stage}" — expected one of: ${PI_STAGES.join(', ')}`);
+  return withKeyLock(STAGE_KEY, async () => {
+  const store = await readStageStore();          // re-read inside the lock
+  const prev = store[id];
+  if (prev?.stage === stage) return { ok: true, unchanged: true, entry: prev };
+  const at = new Date().toISOString();
+  const entry = {
+    stage,
+    since: at,
+    by: String(user ?? '').slice(0, 200),
+    history: [...(Array.isArray(prev?.history) ? prev.history : []), { stage, at, by: String(user ?? '').slice(0, 200) }].slice(-40),
+  };
+  store[id] = entry;
+  await sbCacheWrite(STAGE_KEY, store);
+  return { ok: true, entry };
+  });
+}
+
+/**
+ * The PI pipeline: one bucket per stage with its orders, plus how long each has
+ * been sitting. Scoped like commission — a rep sees only their own orders.
+ */
+export async function getPiStages(viewer = null) {
+  const isAdmin = viewer?.role === 'admin';
+  const mine = viewer?.repName ? String(viewer.repName).trim().toLowerCase() : null;
+
+  const [analytics, store] = await Promise.all([getOrderAnalytics(viewer), readStageStore()]);
+  const now = Date.now();
+  const daysSince = (d) => { const t = d ? new Date(d).getTime() : NaN; return Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 86_400_000)) : null; };
+
+  const orders = analytics.orders
+    .filter((o) => o.vertical === 'PI')
+    .map((o) => {
+      const rec = store[o.soId];
+      // Striven wins when it has an answer — it is the system of record, and a
+      // mirrored tag is maintained by the people doing the work. The portal's
+      // own store is the fallback for as long as the API exposes no tag.
+      const fromStriven = isPiStage(o.strivenStage) ? o.strivenStage : '';
+      const stage = fromStriven || (isPiStage(rec?.stage) ? rec.stage : PI_STAGES[0]);
+      // Real ageing once the order has been moved; otherwise the order date.
+      const tracked = !fromStriven && Boolean(rec?.since);
+      const since = tracked ? rec.since : o.date;
+      return {
+        ...o,
+        stage,
+        stageSince: since,
+        daysInStage: daysSince(since),
+        estimated: !tracked,                    // ageing is a fallback, not measured
+        source: fromStriven ? 'striven' : (rec?.stage ? 'portal' : 'default'),
+        movedBy: rec?.by || null,
+        history: Array.isArray(rec?.history) ? rec.history : [],
+      };
+    })
+    // Ascending by time in stage: the newest arrivals lead, and the hierarchy
+    // continues from there. Ties break on order date (most recent first), then
+    // on SO reference, so the order is stable across reloads.
+    .sort((a, b) => (a.daysInStage ?? 0) - (b.daysInStage ?? 0)
+      || String(b.date || '').localeCompare(String(a.date || ''))
+      || String(b.ref || '').localeCompare(String(a.ref || '')));
+
+  const stages = PI_STAGES.map((stage) => {
+    const set = orders.filter((o) => o.stage === stage);
+    const aged = set.map((o) => o.daysInStage ?? 0);
+    return {
+      stage,
+      count: set.length,
+      revenue: round2(set.reduce((s, o) => s + o.revenue, 0)),
+      units: set.reduce((s, o) => s + o.units, 0),
+      oldestDays: aged.length ? Math.max(...aged) : 0,
+      avgDays: aged.length ? Math.round(aged.reduce((s, n) => s + n, 0) / aged.length) : 0,
+    };
+  });
+
+  return {
+    ok: true,
+    scopedToRep: isAdmin ? null : (viewer?.repName ?? null),
+    canEdit: isAdmin || Boolean(mine),
+    stageNames: PI_STAGES,
+    stages,
+    orders,
+    trackedCount: orders.filter((o) => !o.estimated).length,
+    // Shipped/Delivered are manual for now: the tracking module keys rows by
+    // patient last name, not by sales order, so there is no reliable join to
+    // auto-advance a stage from carrier status yet.
+    autoFromTracking: false,
+    strivenStageField: STRIVEN_STAGE_FIELD,
+    fromStriven: orders.filter((o) => o.source === 'striven').length,
   };
 }
 
@@ -1629,6 +2535,11 @@ async function autoPoState() {
   };
 }
 
+// A PO that no longer counts: cancelled/voided/rejected in Striven. Such a PO
+// must not be used as a template, must not show as "already created", and must
+// not block a re-run — otherwise one bad run keeps an order stuck forever.
+const poIsDead = (status) => /cancel|void|reject|denied/i.test(String(status ?? ''));
+
 // Latest active PO that actually CONTAINS this item → vendor + a template line.
 // The containment check means we stay correct even if the search filter is
 // ignored by the API — we just scan the most recent POs.
@@ -1640,7 +2551,7 @@ async function previousPoForItem(itemId) {
   for (const r of rows.slice(0, 25)) {
     try {
       const po = await striven('GET', `/v1/purchase-orders/${r.id}`);
-      if (/cancel|void|reject|denied/i.test(po.status?.name ?? '')) continue;
+      if (poIsDead(po.status?.name)) continue;
       const lines = po.lineItems ?? [];
       const line = lines.find((l) => Number(l.item?.id ?? l.itemId ?? 0) === Number(itemId));
       if (line && po.vendor?.id) return { po, line };
@@ -1703,7 +2614,8 @@ async function autoPoProcessSo(soId, mode) {
   if (autoPoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test order (pilot gate)'; return entry; }
   const chainSb = await sbCacheRead('order_chain');
   const chain = (chainSb && chainSb.data) || {};
-  if ((chain[String(soId)]?.pos ?? []).length) { entry.skipped = 'SO already has a linked PO'; return entry; }
+  // Cancelled POs don't count as "linked" — the order still needs a real PO.
+  if ((chain[String(soId)]?.pos ?? []).some((p) => !poIsDead(p.status))) { entry.skipped = 'SO already has a linked PO'; return entry; }
   const lines = so.lineItems ?? [];
   if (!lines.length) { entry.skipped = 'no line items on SO'; return entry; }
 
@@ -1921,21 +2833,31 @@ async function autoPoEmail({ poId, to, subject, body }) {
 // already-processed SO can still show its PDF/email delivery step in the UI.
 async function autoPoSoPos(soId) {
   const state = await autoPoState();
-  const seen = new Set(); const pos = [];
+  const seen = new Set(); const logged = [];
   for (const e of (state.log || [])) {
     if (Number(e.soId) !== Number(soId)) continue;
     for (const p of (e.pos || [])) {           // new grouped structure
       if (p.poId && !seen.has(p.poId)) {
         seen.add(p.poId);
-        pos.push({ poId: p.poId, vendor: p.vendor || '', vendorEmail: p.vendorEmail || '', items: p.items || [] });
+        logged.push({ poId: p.poId, vendor: p.vendor || '', vendorEmail: p.vendorEmail || '', items: p.items || [] });
       }
     }
     for (const l of (e.lines || [])) {          // backward-compat with old per-line logs
       if (l.poId && !seen.has(l.poId)) {
         seen.add(l.poId);
-        pos.push({ poId: l.poId, vendor: l.vendor || '', vendorEmail: l.vendorEmail || '', items: [{ itemName: l.itemName || '', qty: l.qty ?? null }] });
+        logged.push({ poId: l.poId, vendor: l.vendor || '', vendorEmail: l.vendorEmail || '', items: [{ itemName: l.itemName || '', qty: l.qty ?? null }] });
       }
     }
+  }
+  // Drop the ones cancelled/voided in Striven since. Without this, a PO from an
+  // OLD run (e.g. the pre-grouping one-PO-per-item code) keeps showing up as if
+  // it were today's output, and the order can never be re-run cleanly.
+  const pos = [];
+  for (const p of logged) {
+    let dead = false;
+    try { dead = poIsDead((await striven('GET', `/v1/purchase-orders/${p.poId}`)).status?.name); }
+    catch { /* unreadable → keep it rather than hide a real PO */ }
+    if (!dead) pos.push(p);
   }
   return { ok: true, soId: Number(soId), pos };
 }
@@ -1973,7 +2895,13 @@ export async function autoPoRun(params = {}) {
     // Debug/demo: push ONE specific SO through the pipeline.
     const soId = Number(params.so);
     if (mode === 'live' && state.processed.includes(soId)) {
-      return { ok: true, mode, note: `SO ${soId} already processed — idempotency guard`, checkpoint: state.lastSoId };
+      // Guard on LIVE POs only. If every PO the earlier run created was later
+      // cancelled in Striven, the order genuinely has no PO — let it run again.
+      const prior = await autoPoSoPos(soId);
+      if (prior.pos.length) {
+        return { ok: true, mode, note: `SO ${soId} already processed — idempotency guard`, checkpoint: state.lastSoId };
+      }
+      state.processed = state.processed.filter((n) => Number(n) !== soId);
     }
     const entry = await autoPoProcessSo(soId, mode);
     results.push(entry);
