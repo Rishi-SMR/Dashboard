@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { PO_STATUS } from './po-status.js';
 import {
   COMMISSION_RATES, FALLBACK_VERTICAL_RATES, ORDER_LABEL_RULES,
-  MIN_MATCH_RATE, REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, PI_STAGES, STRIVEN_STAGE_FIELD,
+  MIN_MATCH_RATE, REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, STANDINGS_EXCLUDE, PI_STAGES, STRIVEN_STAGE_FIELD,
 } from './_commission-config.js';
 import {
   commissionForOrder, splitByState, isRepVerified, resolveIdentity,
@@ -1037,10 +1037,28 @@ export function dedupeById(rows) {
 // five are active: PI Order, VA Order, Tri-Care, DEMO, Contract - With Approval.
 // The clinical three are checked first so a name like "PI Demo" would classify
 // by programme rather than falling into the DEMO bucket.
+/**
+ * PIP = Personal Injury Protection: the patient's own auto policy pays, so the
+ * insurer is billed at full value with no LeanStar funding and no case
+ * settlement to wait for. It is still PI to a rep, so it DISPLAYS inside the PI
+ * vertical; only the back-office routing differs.
+ *
+ * Detected separately because `soClass` cannot express it: `/\bpi\b/` does not
+ * match "PIP" (no word boundary between the i and the p), so before this a PIP
+ * order fell through every branch and landed in 'Other'.
+ *
+ * The PIP order type does not exist in Striven yet. This is here so the day it
+ * is created the orders classify correctly instead of silently going to 'Other'.
+ */
+export const isPipType = (t) => /\bpip\b|personal injury protection/i.test(String(t || ''));
+
 const soClass = (t) => {
   const s = (t || '').toLowerCase();
   if (/tri.?care/.test(s)) return 'TriCare';
   if (/\bva\b|veteran/.test(s)) return 'VA';
+  // PIP before PI: it reports as PI, but it must be caught explicitly rather
+  // than by accident, and it must never reach the 'Other' fallback.
+  if (isPipType(s)) return 'PI';
   if (/\bpi\b|personal injury/.test(s)) return 'PI';
   if (/demo|test|sample/.test(s)) return 'DEMO';
   if (/contract/.test(s)) return 'Contract';
@@ -1653,7 +1671,15 @@ const commRep = (r) => {
   if (/christ/i.test(s)) return 'Christy';
   // Added when the roster widened from the original four to every Sales Rep
   // value in Striven except Rishi Arora.
-  if (/denise\s+zavala/i.test(s)) return 'Denise Zavala';          // "Maylon Sanders - Denise Zavala"
+  //
+  // SUB-REPS fold into the rep who is PAID on the order. Striven's Sales Rep
+  // field carries "Maylon Sanders - Denise Zavala" so the business can report on
+  // who took the order, but Denise is Maylon's sub-rep: the order is Maylon's
+  // and Maylon is paid on it. Treating Denise as her own rep put those orders
+  // and their commission on the wrong person. This test must run BEFORE the
+  // plain /maylon/ one only in the sense that both now return the same name;
+  // it is kept explicit so the intent survives the next edit.
+  if (/denise\s+zavala/i.test(s)) return 'Maylon Sanders';         // "Maylon Sanders - Denise Zavala"
   if (/angel\s+santiago/i.test(s)) return 'Angel Santiago';        // "House Account- Angel Santiago"
   if (/maylon\s+sanders/i.test(s)) return 'Maylon Sanders';
   if (/santiago\s+family/i.test(s)) return 'Santiago Family Chiropractic';
@@ -2149,14 +2175,26 @@ export async function getOrderAnalytics(viewer = null) {
     });
   }
 
+  // BUSINESS RULE: a rep may see exactly one dollar figure, their own
+  // commission. Revenue is company data even on the rep's own orders, so it is
+  // nulled here, at the serialization boundary, rather than hidden in the UI.
+  // Computed first and stripped after, so the counts and unit totals above are
+  // still derived from real values.
+  //
+  // The ONE exception lives in getPiStages, not here: PI commission is a
+  // percentage of billed, so a PI rep must see billed revenue to understand
+  // their own pay. Every other surface is counts only.
+  const orderRows = isAdmin ? orders : orders.map((o) => ({ ...o, revenue: null }));
+
   return {
     ok: true,
     scopedToRep: isAdmin ? null : (viewer?.repName ?? null),
     verticals: ['PI', 'VA', 'DOL', 'TriCare'],    // DOL is live-but-empty until the first order
-    orders,
+    orders: orderRows,
     // Dropped, not hidden: surfaced so the exclusion is visible rather than a
     // silent gap between this and Striven's own order count.
-    excludedCancelled, excludedCancelledValue,
+    excludedCancelled,
+    excludedCancelledValue: isAdmin ? excludedCancelledValue : null,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -2261,6 +2299,10 @@ export async function getRepOverview(viewer = null) {
   const sheetByRep = new Map((comm.reps || []).map((r) => [r.rep, r]));
   const VERTS = ['PI', 'VA', 'DOL', 'TriCare', 'DEMO', 'Contract'];
 
+  // Non-producers are FLAGGED, not dropped. Their commission rows are still
+  // needed (a demo order still has to reconcile), so the exclusion is a display
+  // fact the standings view honours rather than a hole in the data.
+  const excluded = new Set((STANDINGS_EXCLUDE || []).map((s) => String(s).trim().toLowerCase()));
   const rows = REP_NAMES.map((rep) => {
     const own = isAdmin || isOwn(rep);
     const orders = analytics.orders.filter((o) => o.rep === rep);
@@ -2277,14 +2319,19 @@ export async function getRepOverview(viewer = null) {
         vertical: v,
         orders: set.length,
         units: lean ? null : set.reduce((s, o) => s + o.units, 0),
-        // Revenue is financial — counts stay, money goes.
-        revenue: own ? round2(set.reduce((s, o) => s + o.revenue, 0)) : null,
+        // Revenue is financial: counts stay, money goes. ADMIN ONLY, not
+        // `own`. A rep must not see revenue even on their own verticals, since
+        // the only dollar figure they may see is their own commission.
+        revenue: isAdmin ? round2(set.reduce((s, o) => s + o.revenue, 0)) : null,
       };
     });
 
     return {
       rep,
       isSelf: isOwn(rep),
+      // True for house/ops/departed names: they carry orders but are not
+      // producers, so Team Standings filters them out of the ranking.
+      standingsExcluded: excluded.has(String(rep).trim().toLowerCase()),
       own,                                    // did this row survive unredacted?
       orders: orders.length,                  // always visible — the standings metric
       units: lean ? null : orders.reduce((s, o) => s + o.units, 0),
@@ -2297,7 +2344,9 @@ export async function getRepOverview(viewer = null) {
       devices: lean ? null : new Set(orders.flatMap((o) => o.devices.map((d) => d.item))).size,
       lastOrder: lean ? null : (orders.map((o) => o.date).filter(Boolean).sort().slice(-1)[0] || null),
       byVertical,
-      revenue: own ? round2(orders.reduce((s, o) => s + o.revenue, 0)) : null,
+      // Admin only, for the same reason as byVertical above: own revenue is
+      // still revenue. Commission below IS the rep's to see.
+      revenue: isAdmin ? round2(orders.reduce((s, o) => s + o.revenue, 0)) : null,
       commission: own ? (cm?.total ?? 0) : null,
       payable: own ? (cm?.payableTotal ?? 0) : null,
       waiting: own ? (cm?.waitingTotal ?? 0) : null,
@@ -2320,8 +2369,11 @@ export async function getRepOverview(viewer = null) {
     // to a manager; a rep would otherwise infer peers' volume by subtraction.
     units: isAdmin ? repOrders.reduce((s, o) => s + o.units, 0) : null,
     accounts: isAdmin ? new Set(repOrders.map((o) => o.account).filter(isRealAccount)).size : null,
-    // Company money only for a manager; a rep sees their own line instead.
-    revenue: isAdmin ? round2(repOrders.reduce((s, o) => s + o.revenue, 0)) : (self?.revenue ?? null),
+    // Money is manager-only. This used to fall back to the rep's OWN revenue,
+    // which is exactly the figure the business does not want a rep to see:
+    // knowing what their orders billed drives "you made X, why am I paid Y".
+    // Commission still falls back to their own, because that is their pay.
+    revenue: isAdmin ? round2(repOrders.reduce((s, o) => s + o.revenue, 0)) : null,
     commission: isAdmin ? round2(rows.reduce((s, r) => s + (r.commission ?? 0), 0)) : (self?.commission ?? null),
   };
   // The rest of the order book: booked in Striven to someone who is not a rep

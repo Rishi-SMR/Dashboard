@@ -83,14 +83,23 @@ export const ORDER_LABEL_RULES = {
 //   2. the portal's own stage store, set by hand
 // Add that custom field in Striven and mirror the tag into it, and this file
 // needs no further change — the reader already prefers it.
+// Six stages, corrected against how the work actually flows.
+//
+// The previous seven were miscounted and partly redundant:
+//   '1st LOP Request'   a 2nd and 3rd request stay in the SAME stage, so
+//                       numbering the first one was wrong. Now 'LOP requested'.
+//   'Waiting for LOP'   the same state as 'LOP requested'. Merged.
+//   'Shipped'           dispensing IS shipping here. Merged into one stage.
+//   'Waiting for settlement'  was missing entirely, and it is where PI orders
+//                       actually sit longest: after the first payment lands,
+//                       the case waits to settle.
 export const PI_STAGES = [
   'Order received',
-  '1st LOP Request',
-  'Waiting for LOP',
-  'Dispensed',
-  'Waiting for first payment',
-  'Shipped',
+  'LOP requested',
+  'Dispensed & shipped',
   'Delivered',
+  'Waiting for first payment',
+  'Waiting for settlement',
 ];
 /** Custom field on the sales order that mirrors the Striven tag. */
 export const STRIVEN_STAGE_FIELD = 'Stage';
@@ -101,6 +110,28 @@ export const STRIVEN_STAGE_FIELD = 'Stage';
 // Set false to let reps compare volume more richly (units and accounts return).
 // Money is never affected by this flag; it is withheld from non-self rows always.
 export const STANDINGS_ORDERS_ONLY = true;
+
+// Names that carry orders in Striven but must NOT appear on the leaderboard.
+//
+// They are real Sales Rep values, so they stay in REP_NAMES and keep earning
+// their commission rows; they are simply not producers being ranked against
+// each other. Crystal's own orders are demos, Cassie and Zach have left, and
+// Angel and Kinley are ops rather than sales.
+//
+// Denise Zavala is deliberately NOT here: she folds into Maylon Sanders in
+// commRep(), so her orders rank under Maylon rather than disappearing.
+//
+// NOTE: 'House Account' and 'Santiago Family Chiropractic' are left ON the
+// board. The meeting covered both ways ("Santiago doesn't need any reporting"
+// then "you can leave the house account on there") and the written punch list
+// names neither, so they stay visible until someone says otherwise.
+export const STANDINGS_EXCLUDE = [
+  'Crystal Chambers',
+  'Angel Santiago',
+  'Cassie',
+  'Kinley Shepherd',
+  'Zach Shank',
+];
 
 // ── Sheet verification gate ──────────────────────────────────────────────────
 // A rep's sheet figures count as authoritative only at or above this patient
@@ -156,7 +187,8 @@ export const REP_NAMES = [
   'Cassie',                         //  10 orders — Maverick Medical- Cassie Wates
   'Kinley Shepherd',                //   3 orders
   'Crystal Chambers',               //   2 orders
-  'Denise Zavala',                  //   2 orders — Maylon Sanders - Denise Zavala
+  // 'Denise Zavala' removed: she is Maylon's sub-rep and commRep() folds her
+  // orders into 'Maylon Sanders', who is the one actually paid on them.
   'Zach Shank',                     //   1 order
 ];
 

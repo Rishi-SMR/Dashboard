@@ -74,7 +74,30 @@ test('rep-overview: peers give order counts and nothing else', opts, async () =>
     assert.ok(typeof r.orders === 'number', 'order count survives — standings need it');
     assert.ok(r.byVertical.every((v) => v.revenue === null && v.units === null), 'byVertical money+units null');
   }
-  assert.ok(scoped.reps.find((r) => r.isSelf)?.revenue != null, 'own row intact');
+  // The only dollar figure a rep may see is their own COMMISSION. Revenue is
+  // company data even on their own orders, so the own row keeps commission and
+  // loses revenue. This previously asserted own revenue survived.
+  const self = scoped.reps.find((r) => r.isSelf);
+  assert.ok(self, 'own row present');
+  assert.equal(self.revenue, null, 'own revenue is withheld from a rep');
+  assert.ok(self.commission != null, 'own commission survives — it is their pay');
+  assert.ok(self.byVertical.every((v) => v.revenue === null), 'own revenue-by-vertical withheld too');
+  assert.equal(scoped.teamTotals.revenue, null, 'the revenue tile carries no figure for a rep');
+  assert.ok(scoped.teamTotals.commission != null, 'the commission tile still does');
+});
+
+test('order-analytics: a rep sees no revenue on any order, including their own', opts, async () => {
+  const { reps: admin } = await load();
+  const target = admin.reps[0].rep;
+  const scoped = await getOrderAnalytics(viewerFor(ADMIN, target));
+  assert.ok(scoped.orders.length > 0, 'there are orders to check');
+  assert.ok(scoped.orders.every((o) => o.revenue === null), 'every order revenue is null for a rep');
+  assert.ok(scoped.orders.every((o) => typeof o.units === 'number'), 'unit counts survive');
+  assert.equal(scoped.excludedCancelledValue, null, 'the cancelled-value total is money too');
+
+  // An admin still gets the figures, or the tiles would be empty for everyone.
+  const full = await getOrderAnalytics(ADMIN);
+  assert.ok(full.orders.some((o) => typeof o.revenue === 'number'), 'admin keeps revenue');
 });
 
 test('commission: a rep sees only their own money', opts, async () => {

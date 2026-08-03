@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { downloadXlsx, printToPdf, stamped, type Sheet } from '../export';
 import { fetchOrderAnalytics, fetchViews, saveView, deleteView, type AnalyticsOrder, type OrderAnalytics, type SavedView } from '../strivenApi';
+
+// Is the signed-in caller a rep? Sourced from the SERVER's `scopedToRep`, which
+// is non-null only when the API narrowed the payload to one person, so it cannot
+// be spoofed from the client. A rep may see counts and units, never dollars, and
+// this screen renders money in a dozen places across four sub-components, so the
+// flag travels by context rather than through four prop chains.
+const RepScope = createContext(false);
+const useIsRep = () => useContext(RepScope);
 import { formatCurrency, isCompletedStatus, isCancelledStatus, isRealAccount } from '../format';
 import { C, VERTICAL_COLORS as V_C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
@@ -98,6 +106,11 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
   }, [all, preset, from, to, vert]);
 
   // ── the six headline totals ──
+  // Server-scoped role signal: non-null only when the API narrowed this payload
+  // to one rep. A rep may see counts and units, never dollars, so the money
+  // surfaces below are withheld rather than rendered as $0 (getOrderAnalytics
+  // already nulls every revenue field for them).
+  const isRep = Boolean(data?.scopedToRep);
   const totals = useMemo(() => {
     const accounts = new Set<string>();
     let devices = 0, revenue = 0, pending = 0, delivered = 0;
@@ -325,6 +338,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
   const maxDev = Math.max(1, ...byDevice.list.map((d) => d.revenue));
 
   return (
+    <RepScope.Provider value={isRep}>
     <div ref={printRef}>
       {/* filters */}
       <div className="section chart-card no-print" style={{ marginBottom: 14 }}>
@@ -421,7 +435,9 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
       {/* the six totals */}
       <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 14 }}>
         <KpiR ico="clip" tint={C.brand} label="Total orders" value={totals.orders} format={(n: number) => String(n)} foot="in the selected period · tap" deltaText={preset === 'all' ? 'all time' : 'filtered'} onClick={() => setTotalDrill('orders')} />
-        <KpiR ico="cash" tint={C.positive} label="Total revenue" value={totals.revenue} format={formatCurrency} foot="order value · tap" deltaText={`${totals.orders} orders`} onClick={() => setTotalDrill('revenue')} />
+        {!isRep && (
+          <KpiR ico="cash" tint={C.positive} label="Total revenue" value={totals.revenue} format={formatCurrency} foot="order value · tap" deltaText={`${totals.orders} orders`} onClick={() => setTotalDrill('revenue')} />
+        )}
         <KpiR ico="trend" tint={V_C.PI} label="Total devices" value={totals.devices} format={(n: number) => String(n)} foot="units shipped on these orders · tap" deltaText="units" onClick={() => setTotalDrill('devices')} />
         <KpiR ico="shield" tint={V_C.DOL} label="Total accounts" value={totals.accounts} format={(n: number) => String(n)} foot="vendors with an order · tap" deltaText="accounts" onClick={() => setTotalDrill('accounts')} />
         <KpiR ico="clip" tint={C.warning} label="Pending orders" value={totals.pending} format={(n: number) => String(n)} foot="not yet completed · tap" deltaText="open" onClick={() => setTotalDrill('pending')} />
@@ -452,7 +468,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
               <th style={{ width: REV_COL_W[0] }}>Vertical</th>
               <th className="num" style={{ width: REV_COL_W[1] }}>Orders</th>
               <th className="num" style={{ width: REV_COL_W[2] }}>Devices</th>
-              <th className="num" style={{ width: REV_COL_W[3] }}>Revenue</th>
+              {!isRep && <th className="num" style={{ width: REV_COL_W[3] }}>Revenue</th>}
               <th className="num" style={{ width: REV_COL_W[4] }}>Share</th>
               <th style={{ width: REV_COL_W[5] }} />
             </tr></thead>
@@ -466,7 +482,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                   </td>
                   <td className="num">{v.orders || '-'}</td>
                   <td className="num">{v.units || '-'}</td>
-                  <td className="num" style={{ fontWeight: 800 }}>{v.revenue ? formatCurrency(v.revenue) : '-'}</td>
+                  {!isRep && <td className="num" style={{ fontWeight: 800 }}>{v.revenue ? formatCurrency(v.revenue) : '-'}</td>}
                   <td className="num">{totals.revenue > 0 && v.revenue ? `${Math.round((v.revenue / totals.revenue) * 100)}%` : '-'}</td>
                   <td>
                     <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
@@ -478,18 +494,20 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
             </tbody>
             <tfoot><tr className="total-row">
               <td>All verticals</td><td className="num">{totals.orders}</td><td className="num">{totals.devices}</td>
-              <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(totals.revenue)}</td><td /><td />
+              {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(totals.revenue)}</td>}<td /><td />
             </tr></tfoot>
           </table>
         </div>
       </div>
 
       {/* revenue by status: the summary that pairs with the detailed lists */}
-      <StatusBreakdown
-        orders={rows}
-        title="Revenue by status"
-        sub="Revenue at each order status, for the current filter. Cancelled orders are excluded from every figure on this page."
-      />
+      {!isRep && (
+        <StatusBreakdown
+          orders={rows}
+          title="Revenue by status"
+          sub="Revenue at each order status, for the current filter. Cancelled orders are excluded from every figure on this page."
+        />
+      )}
 
       </div>
 
@@ -548,7 +566,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
               <SortHead label="Orders" col="orders" sort={acctSort} onSort={sortBy} num />
               <SortHead label="Devices" col="units" sort={acctSort} onSort={sortBy} num />
               <SortHead label="Device types" col="types" sort={acctSort} onSort={sortBy} num />
-              <SortHead label="Revenue" col="revenue" sort={acctSort} onSort={sortBy} num />
+              {!isRep && <SortHead label="Revenue" col="revenue" sort={acctSort} onSort={sortBy} num />}
               <th style={{ width: '20%' }} />
             </tr></thead>
             <tbody>
@@ -571,7 +589,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                   <td className="num">{a.orders}</td>
                   <td className="num">{a.units || '-'}</td>
                   <td className="num">{a.devices.size || '-'}</td>
-                  <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(a.revenue)}</td>
+                  {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(a.revenue)}</td>}
                   <td>
                     <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${(a.revenue / maxAcct) * 100}%`, background: C.brand, borderRadius: 999 }} />
@@ -599,7 +617,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
         </div></div>
         <div className="table-wrap">
           <table className="data-table">
-            <thead><tr><th style={{ width: 34 }}>#</th><th>Device</th><th className="num">Units</th><th className="num">Orders</th><th className="num">Revenue</th><th style={{ width: '24%' }} /></tr></thead>
+            <thead><tr><th style={{ width: 34 }}>#</th><th>Device</th><th className="num">Units</th><th className="num">Orders</th>{!isRep && <th className="num">Revenue</th>}<th style={{ width: '24%' }} /></tr></thead>
             <tbody>
               {byDevice.list.length === 0 && <tr><td colSpan={6} style={{ color: C.muted }}>No revenue-earning devices on these orders.</td></tr>}
               {byDevice.list.map((d, i) => (
@@ -609,7 +627,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                   <td style={{ fontWeight: 600 }}>{d.item}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{d.qty}</td>
                   <td className="num">{d.orders}</td>
-                  <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(d.revenue)}</td>
+                  {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(d.revenue)}</td>}
                   <td>
                     <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${(d.revenue / maxDev) * 100}%`, background: V_C.PI, borderRadius: 999 }} />
@@ -638,6 +656,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
         />
       )}
     </div>
+    </RepScope.Provider>
   );
 }
 
@@ -737,6 +756,7 @@ function statusTint(s: string): string {
 function StatusBreakdown({ orders, title, sub, compact = false }: {
   orders: AnalyticsOrder[]; title: string; sub?: string; compact?: boolean;
 }) {
+  const isRep = useIsRep();
   const rows = (() => {
     const m = new Map<string, { status: string; orders: number; units: number; revenue: number }>();
     for (const o of orders) {
@@ -767,7 +787,7 @@ function StatusBreakdown({ orders, title, sub, compact = false }: {
             <th style={{ width: REV_COL_W[0] }}>Status</th>
             <th className="num" style={{ width: REV_COL_W[1] }}>Orders</th>
             <th className="num" style={{ width: REV_COL_W[2] }}>Devices</th>
-            <th className="num" style={{ width: REV_COL_W[3] }}>Revenue</th>
+            {!isRep && <th className="num" style={{ width: REV_COL_W[3] }}>Revenue</th>}
             <th className="num" style={{ width: REV_COL_W[4] }}>Share</th>
             {!compact && <th style={{ width: REV_COL_W[5] }} />}
           </tr></thead>
@@ -780,7 +800,7 @@ function StatusBreakdown({ orders, title, sub, compact = false }: {
                 </td>
                 <td className="num" style={{ fontWeight: 700 }}>{r.orders}</td>
                 <td className="num">{r.units || '-'}</td>
-                <td className="num" style={{ fontWeight: 800 }}>{r.revenue ? formatCurrency(r.revenue) : '-'}</td>
+                {!isRep && <td className="num" style={{ fontWeight: 800 }}>{r.revenue ? formatCurrency(r.revenue) : '-'}</td>}
                 <td className="num">{totRev > 0 && r.revenue ? `${Math.round((r.revenue / totRev) * 100)}%` : '-'}</td>
                 {!compact && (
                   <td>
@@ -796,7 +816,7 @@ function StatusBreakdown({ orders, title, sub, compact = false }: {
             <td>All statuses</td>
             <td className="num">{totOrd}</td>
             <td className="num">{totUnits || '-'}</td>
-            <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(totRev)}</td>
+            {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(totRev)}</td>}
             <td /><td />{compact ? null : null}
           </tr></tfoot>
         </table>
@@ -949,6 +969,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
   metric: TotalKey; orders: AnalyticsOrder[]; onClose: () => void;
   onPickAccount: (name: string) => void; onPickDevice: (item: string) => void;
 }) {
+  const isRep = useIsRep();
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1008,7 +1029,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
     const max = Math.max(1, ...rows.map((r) => (unit === 'revenue' ? r.revenue : r.units)));
     return (
       <table className="data-table">
-        <thead><tr><th style={{ width: 34 }}>#</th><th>Name</th><th className="num">Orders</th><th className="num">Units</th><th className="num">Revenue</th><th style={{ width: '26%' }} /></tr></thead>
+        <thead><tr><th style={{ width: 34 }}>#</th><th>Name</th><th className="num">Orders</th><th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th style={{ width: '26%' }} /></tr></thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={r.name} onClick={() => onPick?.(r.name)} style={{ cursor: onPick ? 'pointer' : 'default' }} title={onPick ? `Open ${r.name}` : undefined}>
@@ -1016,7 +1037,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
               <td style={{ fontWeight: 600, color: onPick ? C.brand : C.ink }}>{r.name}</td>
               <td className="num">{r.orders}</td>
               <td className="num">{r.units || '-'}</td>
-              <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(r.revenue)}</td>
+              {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(r.revenue)}</td>}
               <td>
                 <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${((unit === 'revenue' ? r.revenue : r.units) / max) * 100}%`, background: cfg.tint, borderRadius: 999 }} />
@@ -1045,7 +1066,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
             <Stat label="Orders" value={String(set.length)} tint={cfg.tint} />
             <Stat label="Devices" value={String(units)} />
             <Stat label="Accounts" value={String(byAcct.length)} />
-            <Stat label="Revenue" value={formatCurrency(revenue)} />
+            {!isRep && <Stat label="Revenue" value={formatCurrency(revenue)} />}
           </div>
 
           {showList ? (
@@ -1056,7 +1077,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
               <table className="data-table">
                 <thead><tr>
                   <th>Order</th><th>Date</th><th>Account</th><th>Vertical</th><th>Devices</th>
-                  <th className="num">Units</th><th className="num">Revenue</th><th>Status</th>
+                  <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th>
                 </tr></thead>
                 <tbody>
                   {set.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No orders here.</td></tr>}
@@ -1068,7 +1089,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
                       <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
                       <td><DeviceChips devices={o.devices} showVertical /></td>
                       <td className="num">{o.units || '-'}</td>
-                      <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>
+                      {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>}
                       <td style={{ fontSize: 12.5, color: statusTint(o.status), fontWeight: 600 }}>{o.status || '-'}</td>
                     </tr>
                   ))}
@@ -1117,6 +1138,7 @@ function Stat({ label, value, tint }: { label: string; value: string; tint?: str
  * keeps the modal's total equal to the row you clicked.
  */
 function DeviceModal({ device, orders, onClose }: { device: string; orders: AnalyticsOrder[]; onClose: () => void }) {
+  const isRep = useIsRep();
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1172,7 +1194,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
             <Stat label="Units" value={String(units)} tint={tint} />
             <Stat label="Orders" value={String(orders.length)} />
             <Stat label="Accounts" value={String(byAccount.length)} />
-            <Stat label="Revenue" value={formatCurrency(revenue)} />
+            {!isRep && <Stat label="Revenue" value={formatCurrency(revenue)} />}
             <Stat label="Per unit" value={formatCurrency(perUnit)} />
           </div>
 
@@ -1194,14 +1216,14 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
             Which accounts ordered it <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {byAccount.length}</span>
           </div>
           <table className="data-table">
-            <thead><tr><th>Account</th><th className="num">Units</th><th className="num">Orders</th><th className="num">Revenue</th><th style={{ width: '28%' }} /></tr></thead>
+            <thead><tr><th>Account</th><th className="num">Units</th><th className="num">Orders</th>{!isRep && <th className="num">Revenue</th>}<th style={{ width: '28%' }} /></tr></thead>
             <tbody>
               {byAccount.map((a) => (
                 <tr key={a.account}>
                   <td style={{ fontWeight: 600 }}>{a.account}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{a.units}</td>
                   <td className="num">{a.orders}</td>
-                  <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(a.revenue)}</td>
+                  {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(a.revenue)}</td>}
                   <td>
                     <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
                       <div style={{ height: '100%', width: `${(a.revenue / maxAcct) * 100}%`, background: tint, borderRadius: 999 }} />
@@ -1218,7 +1240,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
           <table className="data-table">
             <thead><tr>
               <th>Order</th><th>Date</th><th>Account</th><th>Vertical</th>
-              <th className="num">Units</th><th className="num">Revenue</th><th>Status</th><th className="num">Age</th>
+              <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th><th className="num">Age</th>
             </tr></thead>
             <tbody>
               {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
@@ -1228,7 +1250,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
                   <td style={{ fontSize: 12.5 }}>{o.account}</td>
                   <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{qtyOn(o)}</td>
-                  <td className="num">{formatCurrency(shareOf(o))}</td>
+                  {!isRep && <td className="num">{formatCurrency(shareOf(o))}</td>}
                   <td style={{ fontSize: 12.5, color: statusTint(o.status), fontWeight: 600 }}>{o.status || '-'}</td>
                   <td className="num" style={{ color: (o.ageDays ?? 0) > 60 ? C.negative : C.sub }}>{o.ageDays == null ? '-' : `${o.ageDays}d`}</td>
                 </tr>
@@ -1247,6 +1269,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
 // Everything the client asked to see inside an account: total orders, the device
 // types and counts, order status, revenue and order date.
 function AccountModal({ account, orders, onClose }: { account: string; orders: AnalyticsOrder[]; onClose: () => void }) {
+  const isRep = useIsRep();
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1289,7 +1312,7 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
           <table className="data-table">
             <thead><tr>
               <th>Order</th><th>Date</th><th>Vertical</th><th>Devices</th>
-              <th className="num">Units</th><th className="num">Revenue</th><th>Status</th><th className="num">Age</th>
+              <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th><th className="num">Age</th>
             </tr></thead>
             <tbody>
               {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
@@ -1299,7 +1322,7 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
                   <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
                   <td><DeviceChips devices={o.devices} showVertical /></td>
                   <td className="num">{o.units || '-'}</td>
-                  <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>
+                  {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>}
                   <td style={{ fontSize: 12.5 }}>{o.status || '-'}</td>
                   <td className="num" style={{ color: (o.ageDays ?? 0) > 60 ? C.negative : C.sub }}>
                     {o.ageDays == null ? '-' : `${o.ageDays}d`}

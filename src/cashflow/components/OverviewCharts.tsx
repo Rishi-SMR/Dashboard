@@ -2,10 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import {
   fetchStrivenAR, fetchStrivenAP, fetchStrivenPL, fetchStrivenSO, fetchStrivenPO,
   fetchStrivenTrends, fetchStrivenPayments, fetchStrivenBillPayments,
-  fetchStrivenOrders, fetchStrivenExceptions,
+  fetchStrivenOrders, fetchStrivenExceptions, fetchCommission,
   type ArResult, type ApResult, type PlResult, type SoResult, type PoResult,
   type TrendsResult, type PaymentsResult, type BillPaymentsResult,
-  type OrdersResult, type ExceptionsResult, type Aging,
+  type OrdersResult, type ExceptionsResult, type Aging, type CommissionResult,
 } from '../strivenApi';
 import { formatCurrency, clickableProps } from '../format';
 import { C, SERIES, CAT6, AGING, AGING_LABELS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
@@ -62,6 +62,7 @@ export function OverviewCharts() {
   const [billpay, setBillpay] = useState<BillPaymentsResult | null>(null);
   const [orders, setOrders] = useState<OrdersResult | null>(null);
   const [exc, setExc] = useState<ExceptionsResult | null>(null);
+  const [comm, setComm] = useState<CommissionResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
@@ -77,6 +78,9 @@ export function OverviewCharts() {
         fetchStrivenTrends(), fetchStrivenPayments(), fetchStrivenBillPayments().catch(() => null),
         fetchStrivenOrders().catch(() => null), fetchStrivenExceptions().catch(() => null),
       ]);
+      // Commission is its own derivation and can be slow, so it loads beside the
+      // rest and simply leaves its tile blank if Striven is unavailable.
+      fetchCommission().then(setComm).catch(() => setComm(null));
       setAr(a); setAp(b); setPl(p); setSo(s); setPo(o); setTrends(t); setPayments(pay);
       setBillpay(bp); setOrders(ord); setExc(ex);
       setLastSync(Date.now());
@@ -95,6 +99,10 @@ export function OverviewCharts() {
 
   // ---- FY + Program + As-of scope (the header filters actually re-slice the data) ----
   const [fyPick, setFyPick] = useState<string | null>(null);
+  // Period defaults to the single As-of MONTH, not the fiscal year. This board is
+  // read like a rep reads theirs ("how are we doing right now"), and a YTD figure
+  // answers a different question. Switch to FY for the year-to-date view.
+  const [scope, setScope] = useState<'month' | 'fy'>('month');
   const [prog, setProg] = useState<'All' | Program>('All');
   const [asOfPick, setAsOfPick] = useState<string | null>(null); // YYYY-MM-DD
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -111,7 +119,9 @@ export function OverviewCharts() {
   const fy = (fyPick && years.includes(fyPick)) ? fyPick
     : (years.includes(asOfYear) ? asOfYear : (years[years.length - 1] ?? String(new Date().getFullYear())));
   const fyLatest = fy === (years[years.length - 1] ?? fy);
-  const inFy = (m: string) => m.startsWith(fy) && m <= asOfYm;
+  // One predicate for every series on the page, so the KPIs, the charts and the
+  // trend lines can never disagree about which period they are describing.
+  const inFy = (m: string) => (scope === 'month' ? m === asOfYm : (m.startsWith(fy) && m <= asOfYm));
 
   // ---- derived views (real data only, FY-scoped where the data is monthly) ----
   const revSeries = (trends?.series ?? []).filter((s) => inFy(s.month)).map((s) => ({ month: s.month, value: s.revenue }));
@@ -148,6 +158,12 @@ export function OverviewCharts() {
   const arAging: Aging = arInv.reduce((acc, i) => { acc[bucketKeyOf(i.dueDate, refMs)] += i.open; return acc; }, emptyAging());
   const apAging: Aging = (ap?.bills ?? []).filter((b) => b.open > 0)
     .reduce((acc, b) => { acc[bucketKeyOf(b.dueDate, refMs)] += b.open; return acc; }, emptyAging());
+
+  // Units on the order book. Striven's SO summary carries value but not units,
+  // so this comes from the commission engine, which already counts devices per
+  // order: rep-attributed units plus the off-roster remainder is the whole book.
+  const soUnits = ((comm?.striven?.byRep ?? []).reduce((s, r) => s + (r.units ?? 0), 0))
+    + (comm?.striven?.offRoster?.units ?? 0);
 
   // Program-scoped sales orders.
   const soCount = so ? (prog === 'All' ? so.count : so.piva[prog === 'Unassigned' ? 'Other' : prog].count) : 0;
@@ -270,8 +286,14 @@ export function OverviewCharts() {
       </div>
 
       <div className="ov-filters">
+        <label className="ov-filter"><span className="fl">Period</span>
+          <select value={scope} onChange={(e) => setScope(e.target.value as 'month' | 'fy')}>
+            <option value="month">This month</option>
+            <option value="fy">Fiscal year</option>
+          </select>
+        </label>
         <label className="ov-filter"><span className="fl">Fiscal Year</span>
-          <select value={fy} onChange={(e) => setFyPick(e.target.value)}>
+          <select value={fy} onChange={(e) => setFyPick(e.target.value)} disabled={scope === 'month'}>
             {(years.length ? years : [fy]).map((y) => <option key={y} value={y}>FY{y}</option>)}
           </select>
         </label>
@@ -295,51 +317,32 @@ export function OverviewCharts() {
 
       {ready && (
         <>
-          {acItems.length > 0 && (
-            <div className="action-center">
-              <div className="ac-head">
-                <span className="ac-flag">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" />
-                  </svg>
-                </span>
-                <div>
-                  <div className="t">Action Center</div>
-                  <div className="s">Items that need your attention</div>
-                </div>
-              </div>
-              <div className="ac-items">
-                {acItems.map((it) => (
-                  <button key={it.l1 + it.l2} className="ac-item" onClick={go(it.view)}>
-                    <span className="ico">{it.ico}</span>
-                    <span>
-                      <span className="n">{it.n}</span>
-                      <span className="l" style={{ display: 'block' }}>{it.l1}<br />{it.l2}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <button className="ac-review" onClick={go('exceptions')}>Review All</button>
-            </div>
-          )}
+          {/* The Action Center red alert bar was removed at the client's request: it
+              led with problems on a board that is read for position, not triage. The
+              exceptions it summarised are still one click away in their own tab. */}
 
           <div className="kpi-strip kpi-strip-7">
-            <KpiExec label={fyLatest ? 'Revenue YTD' : `Revenue FY${fy}`} value={fRev} format={formatCurrency} hue={HUE.revenue}
-              delta={revD} sub={`invoiced · FY${fy}`} spark={completeVals(revSeries, asOfYm)}
-              chip={fyLatest ? `${pl.invoiceCount} invoices` : `FY${fy}`} onClick={go('pl')} />
-            <KpiExec label="Cash Received" value={cashFY} format={formatCurrency} hue={HUE.cash}
-              delta={cashD} sub={`customer payments · FY${fy}`} spark={completeVals(cashSeries, asOfYm)}
-              chip={fyLatest ? `${payments.count} payments` : `FY${fy}`} onClick={go('accounts')} />
-            <KpiExec label="AR Open" value={arOpenF} format={formatCurrency} hue={HUE.ar}
-              sub={`${arInv.length} unpaid · ${PROG_LABEL[prog]}`} chip={piDso != null ? `PI DSO: ${piDso}d` : undefined} onClick={go('receivables')} />
-            <KpiExec label="AP Open" value={ap.totalOpen} format={formatCurrency} hue={HUE.ap}
+            {/* Kevin's order, not finance's. Commission Due, AP Due and AR
+                Expected lead because they are the three numbers he asks for;
+                Revenue and Cash Received are demoted below them rather than
+                removed. PO Spend and Open Exceptions came off the board
+                entirely (both still have their own tabs). */}
+            <KpiExec label="Commission Due" value={comm?.striven?.payableTotal ?? comm?.payableTotal ?? 0} format={formatCurrency} hue={HUE.po}
+              sub="payable to reps" chip={comm?.striven?.waitingTotal ? `${formatCurrency(comm.striven.waitingTotal)} waiting` : 'payable now'} onClick={go('commission')} />
+            <KpiExec label="AP Due" value={ap.totalOpen} format={formatCurrency} hue={HUE.ap}
               sub="unpaid bills · snapshot" chip={`${ap.count} bills`} onClick={go('payables')} />
+            <KpiExec label="AR Expected" value={arOpenF} format={formatCurrency} hue={HUE.ar}
+              sub={`${arInv.length} unpaid · ${PROG_LABEL[prog]}`} chip={piDso != null ? `PI DSO: ${piDso}d` : undefined} onClick={go('receivables')} />
             <KpiExec label="Sales Orders" value={soCount} format={(n) => n.toLocaleString()} hue={HUE.sales}
               sub={`open order book · ${PROG_LABEL[prog]}`} chip="count only" onClick={go('orders')} />
-            <KpiExec label="PO Spend" value={po.totalValue} format={formatCurrency} hue={HUE.po}
-              sub="committed · active only" chip={`${po.count} POs`} onClick={go('tracking')} />
-            <KpiExec label="Open Exceptions" value={exc?.totalOpen ?? 0} hue={HUE.exc}
-              sub="data-quality items" chip="Needs review" onClick={go('exceptions')} />
+            <KpiExec label="Devices" value={soUnits} format={(n) => n.toLocaleString()} hue={HUE.exc}
+              sub="units on those orders" chip="by device below" onClick={go('orders')} />
+            <KpiExec label={scope === 'month' ? 'Revenue' : (fyLatest ? 'Revenue YTD' : `Revenue FY${fy}`)} value={fRev} format={formatCurrency} hue={HUE.revenue}
+              delta={revD} sub={scope === 'month' ? 'invoiced this month' : `invoiced · FY${fy}`} spark={completeVals(revSeries, asOfYm)}
+              chip={`${pl.invoiceCount} invoices`} onClick={go('pl')} />
+            <KpiExec label="Cash Received" value={cashFY} format={formatCurrency} hue={HUE.cash}
+              delta={cashD} sub={scope === 'month' ? 'customer payments this month' : `customer payments · FY${fy}`} spark={completeVals(cashSeries, asOfYm)}
+              chip={`${payments.count} payments`} onClick={go('accounts')} />
           </div>
 
           <div className="exec-grid12">

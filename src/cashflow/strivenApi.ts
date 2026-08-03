@@ -367,6 +367,8 @@ export const deleteView = (id: string) =>
 export type RepVertical = { vertical: string; orders: number; units: number | null; revenue: number | null };
 export type RepRow = {
   rep: string; isSelf: boolean; own: boolean;
+  /** House/ops/departed names: they carry orders but are not ranked. */
+  standingsExcluded?: boolean;
   /** `orders` is the one metric always shared: it drives Team Standings.
    *  units/accounts/devices are null for other reps when STANDINGS_ORDERS_ONLY. */
   /** Distinct payers billed: the law firm on a PI order, Veterans Affairs on a

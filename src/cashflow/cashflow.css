@@ -1315,6 +1315,7 @@ code {
    overflow is structurally impossible. */
 .kpi-strip { display: grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap: 14px; margin-bottom: 20px; }
 .kpi-strip > * { grid-column: span 4; }                              /* default: 3 per row */
+.kpi-strip-4 > * { grid-column: span 3; }                            /* 4 per row, 1 full row */
 .kpi-strip-7 > * { grid-column: span 3; }                            /* cards 1-4 */
 .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 4; }             /* cards 5-7 */
 /* The desktop layout holds down to ~1000px (a span-3 track is still ~200px
@@ -1323,19 +1324,20 @@ code {
 @media (max-width:1000px){
   .kpi-strip{ grid-template-columns: repeat(6, minmax(0,1fr)); }
   .kpi-strip > * { grid-column: span 3; }                            /* 2 per row */
+  .kpi-strip-4 > * { grid-column: span 3; }                          /* 2 x 2 */
   .kpi-strip-7 > * { grid-column: span 3; }
   .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 2; }           /* last 3 = 1 row */
 }
 @media (max-width:900px){
   .kpi-strip{ grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .kpi-strip > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 1; }
+  .kpi-strip > *, .kpi-strip-4 > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 1; }
   /* 6 cards land 3x2 here and need no special case; 7 leaves one over, so the
      last card spans the full width rather than sitting beside a hole. */
   .kpi-strip-7 > *:last-child { grid-column: span 2; }
 }
 @media (max-width:560px){
   .kpi-strip{ grid-template-columns: minmax(0,1fr); }
-  .kpi-strip > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5), .kpi-strip-7 > *:last-child { grid-column: span 1; }
+  .kpi-strip > *, .kpi-strip-4 > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5), .kpi-strip-7 > *:last-child { grid-column: span 1; }
 }
 .kpi--grad { position:relative; isolation:isolate; overflow:hidden; display:flex; flex-direction:column; min-height:118px;
   border-radius:16px; padding:16px; color:#0E1B2E; background:#FFFFFF; border:1px solid #E7EBF1;
@@ -1961,6 +1963,9 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 .donut-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
 @media (min-width: 660px)  { .donut-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 1180px) { .donut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* A rep sees 4 donuts, not 6 (the two revenue ones are withheld). 4 into 3
+   columns leaves a hole, so the 4-card case gets its own full row. */
+@media (min-width: 1180px) { .donut-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
 .pair-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
 @media (min-width: 760px) { .pair-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

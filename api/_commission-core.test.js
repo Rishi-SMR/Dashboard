@@ -103,25 +103,42 @@ test('vi. an unpriced device falls back to the vertical rate and is reported', (
   assert.deepEqual(out.rateGaps, ['Unknown Widget']);
 });
 
-// ── vii. hold excluded ───────────────────────────────────────────────────────
-test('vii. `hold` orders are excluded from commission entirely', () => {
+// ── vii. hold: costed, but never payable ─────────────────────────────────────
+// A held order is taken but not dispensed, so it is not on this cheque. It is
+// still costed, because the rep needs to see what is pending: when the whole
+// month is held (the Genesys backorder) a $0 answer tells them nothing.
+test('vii. a `hold` order is costed like any other', () => {
   const out = commissionForOrder(
     { status: 'On Hold', program: 'VA', value: 5000, items: [{ item: 'Genesis Lumbar', qty: 3 }] },
     CFG,
   );
   assert.equal(out.state, 'hold');
-  assert.equal(out.commission, 0);
-  assert.equal(out.units, 0);
-  assert.deepEqual(out.lines, [], 'a held order must add no commission line');
+  assert.equal(out.commission, 1950, '3 x $650 is earned, it is simply not yet payable');
+  assert.equal(out.units, 3);
+  assert.equal(out.lines.length, 1);
 });
 
-test('vii. held orders drop out of the rep total', () => {
+test('vii. held commission is reported as Waiting, never as payable', () => {
   const split = splitByState([
     { state: 'payable', commission: 1950 },
-    { state: 'hold', commission: 0 },
+    { state: 'hold', commission: 1300 },
   ]);
-  assert.equal(split.total, 1950);
+  assert.equal(split.payableTotal, 1950, 'the cheque must not include held orders');
+  assert.equal(split.waitingTotal, 1300, 'held money surfaces in the Waiting column');
+  assert.equal(split.heldTotal, 1300, 'and is attributable to hold specifically');
+  assert.equal(split.total, 3250);
   assert.equal(split.heldOrders, 1);
+});
+
+test('vii. hold and waiting both stay out of payable', () => {
+  const split = splitByState([
+    { state: 'payable', commission: 1000 },
+    { state: 'waiting', commission: 200 },
+    { state: 'hold', commission: 300 },
+  ]);
+  assert.equal(split.payableTotal, 1000);
+  assert.equal(split.waitingTotal, 500, 'waiting + held');
+  assert.equal(split.heldTotal, 300, 'the held share of waiting');
 });
 
 // ── ix. zero-value orders earn nothing ───────────────────────────────────────
@@ -150,7 +167,7 @@ test('ix. zero-value orders drop out of the total and are counted separately', (
     { state: 'zero-value', commission: 0 },
     { state: 'hold', commission: 0 },
   ]);
-  assert.equal(split.total, 1950);
+  assert.equal(split.total, 1950, 'a $0 held order adds nothing to waiting either');
   assert.equal(split.zeroValueOrders, 1);
   assert.equal(split.heldOrders, 1);
 });

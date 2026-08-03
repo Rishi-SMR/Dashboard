@@ -123,12 +123,20 @@ alone, and a missing viewer **fails closed**.
 
 | Label | Effect |
 | --- | --- |
-| `hold` | Excluded from the calculation entirely — $0, no commission line |
-| `waiting for reimbursement` | Included in the total, reported as **pending**, not payable |
+| `hold` | Costed, but **never payable**. Reported as Waiting |
+| `waiting for reimbursement` | Costed, reported as **Waiting**, not payable |
 | anything else | **Payable / Due** |
 
-`hold` is tested first, so a status mentioning both is excluded. Every rep exposes
-`payableTotal` and `waitingTotal` for the Payable/Due vs Waiting split.
+`hold` is tested first, so a status mentioning both is treated as held.
+
+Both non-payable labels land in `waitingTotal`, and `heldTotal` breaks out the
+held share so the UI can say *why* something is waiting. `payableTotal` is the
+cheque: what the rep is actually paid on the 15th for dispensed orders.
+
+> **This changed.** `hold` used to return $0 with no commission line. That kept
+> the cheque right but erased the amount, so a rep whose month was entirely held
+> (the Genesys backorder) saw nothing at all instead of a pending figure. The
+> business needs both: out of the cheque, visible as Waiting.
 
 Orders that cannot be tied to a sales order earn no commission, but are reported
 in `striven.unmatched` with their vertical, device, units, value and status —

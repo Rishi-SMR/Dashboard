@@ -75,17 +75,24 @@ export function commissionForOrder(order, cfg = {}) {
   }
 
   const state = classifyOrderLabel(order?.status, cfg.labelRules);
-  if (state === 'hold') {
-    // Excluded entirely — no dollars and no line. It may still appear in the
-    // order views elsewhere; it simply does not exist to the commission engine.
-    return { state, units: 0, commission: 0, lines: [], rateGaps: [] };
-  }
 
   // Nothing was billed, so nothing is earned. A $0 order is excluded outright
-  // rather than paying a device rate against revenue that never existed.
+  // rather than paying a device rate against revenue that never existed. This
+  // is checked before the held case so a held $0 order is still worth nothing.
   if (Number(order?.value ?? 0) <= 0) {
-    return { state: 'zero-value', units: 0, commission: 0, lines: [], rateGaps: [] };
+    // A held order that is also $0 stays reported as held: hold is the more
+    // useful label operationally, and the amount is zero either way.
+    return { state: state === 'hold' ? 'hold' : 'zero-value', units: 0, commission: 0, lines: [], rateGaps: [] };
   }
+
+  // A `hold` order deliberately FALLS THROUGH and is costed like any other.
+  //
+  // It used to return $0 with no lines. That kept it out of payable correctly,
+  // but it also erased the amount, so a rep whose orders were all held (the
+  // Genesys backorder: Ali's whole month) saw nothing at all rather than a
+  // pending figure. The business needs both: excluded from the cheque, visible
+  // as Waiting. splitByState is what routes it, so the money is computed here
+  // and withheld there.
 
   const lines = [];
   const rateGaps = [];
@@ -104,17 +111,41 @@ export function commissionForOrder(order, cfg = {}) {
   return { state, units, commission, lines, rateGaps };
 }
 
-/** Roll per-order results into payable / waiting buckets for one rep. */
+/**
+ * Roll per-order results into payable / waiting buckets for one rep.
+ *
+ * `payableTotal` is the cheque: what the rep is actually paid on the 15th for
+ * dispensed orders. `waitingTotal` is earned-but-not-yet-payable, and it holds
+ * BOTH label states that block payment:
+ *
+ *   waiting  reimbursement not yet received
+ *   hold     order taken but not dispensed (e.g. the Genesys backorder)
+ *
+ * Held orders are therefore excluded from payable but reported as Waiting,
+ * which is the split the business asked for: "her payable due would look
+ * different than her commission due". `heldTotal` is broken out separately so
+ * the UI can say WHY something is waiting without re-deriving it.
+ */
 export function splitByState(orders) {
-  let payableTotal = 0, waitingTotal = 0, heldOrders = 0, zeroValueOrders = 0, cancelledOrders = 0;
+  let payableTotal = 0, waitingTotal = 0, heldTotal = 0;
+  let heldOrders = 0, zeroValueOrders = 0, cancelledOrders = 0;
   for (const o of orders) {
     if (o.state === 'cancelled') { cancelledOrders++; continue; }
-    if (o.state === 'hold') { heldOrders++; continue; }
     if (o.state === 'zero-value') { zeroValueOrders++; continue; }
+    if (o.state === 'hold') {
+      heldOrders++;
+      heldTotal = round2(heldTotal + (o.commission || 0));
+      waitingTotal = round2(waitingTotal + (o.commission || 0));
+      continue;
+    }
     if (o.state === 'waiting') waitingTotal = round2(waitingTotal + o.commission);
     else payableTotal = round2(payableTotal + o.commission);
   }
-  return { payableTotal, waitingTotal, total: round2(payableTotal + waitingTotal), heldOrders, zeroValueOrders, cancelledOrders };
+  return {
+    payableTotal, waitingTotal, heldTotal,
+    total: round2(payableTotal + waitingTotal),
+    heldOrders, zeroValueOrders, cancelledOrders,
+  };
 }
 
 // ── Sheet verification gate ──────────────────────────────────────────────────

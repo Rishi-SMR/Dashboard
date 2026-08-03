@@ -447,6 +447,13 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
     return () => { live = false; };
   }, [viewAs]);
 
+  // `scopedToRep` is non-null only when the SERVER narrowed this payload to one
+  // rep, so it is a trustworthy role signal: an admin cannot be mistaken for a
+  // rep and a rep cannot claim to be an admin by editing client state.
+  // A rep may see counts and units, never dollars. getOrderAnalytics already
+  // nulls every revenue field for them, so these panels would otherwise render
+  // a page of $0 rather than simply not existing.
+  const isRep = Boolean(a?.scopedToRep);
   const allOrders = a?.orders ?? [];
   const repNames = new Set(reps.map((r) => r.rep));
 
@@ -532,7 +539,9 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
     ...(unattributed > 0 ? [{ name: 'Not a rep', value: unattributed, color: OTHER_C, key: '__none' }] : []),
   ];
 
-  const topAccounts = [...tally(orders, (o) => o.account, (o) => o.revenue).entries()]
+  // Ranked by revenue for a manager, by ORDER COUNT for a rep. Same panel, same
+  // ranking question ("who are my biggest accounts"), answered without money.
+  const topAccounts = [...tally(orders, (o) => o.account, (o) => (isRep ? 1 : o.revenue)).entries()]
     .sort((x, y) => y[1] - x[1]).slice(0, 5)
     .map(([label, value]) => ({ label, value, note: `${orders.filter((o) => o.account === label).length} ord` }));
 
@@ -541,6 +550,12 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
     for (const d of filteredDevices) {
       const e = m.get(d.item) ?? { revenue: 0, units: 0 };
       e.revenue += d.revenue; e.units += d.qty; m.set(d.item, e);
+    }
+    // Rep: rank and label by UNITS. Crystal's line was "you can give her a
+    // number of top devices, but not the revenue".
+    if (isRep) {
+      return [...m.entries()].filter(([, v]) => v.units > 0).sort((x, y) => y[1].units - x[1].units).slice(0, 5)
+        .map(([label, v]) => ({ label, value: v.units, note: `${v.units} unit${v.units === 1 ? '' : 's'}` }));
     }
     return [...m.entries()].filter(([, v]) => v.revenue >= 0.01).sort((x, y) => y[1].revenue - x[1].revenue).slice(0, 5)
       .map(([label, v]) => ({ label, value: v.revenue, note: `${v.units}u` }));
@@ -647,22 +662,26 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
 
       {/* Six donuts: each a part-to-whole of the same filtered set, so they
           belong together and stretch to a common height. */}
-      <div className="donut-grid">
+      <div className={`donut-grid${isRep ? ' donut-grid-4' : ''}`}>
         <Donut title="Orders by vertical" sub="Click a slice to filter · matches Striven's order types"
           slices={ordersByVertical} total={orders.length} empty="No orders in range."
           activeKey={vert === 'all' ? null : vert} onPick={(k) => setVert(vert === k ? 'all' : k)} />
-        <Donut title="Revenue by vertical" sub="Order value by vertical"
-          slices={byVertical} total={revenue} fmt={formatCurrency} empty="No revenue in range."
-          activeKey={vert === 'all' ? null : vert} onPick={(k) => setVert(vert === k ? 'all' : k)} />
+        {!isRep && (
+          <Donut title="Revenue by vertical" sub="Order value by vertical"
+            slices={byVertical} total={revenue} fmt={formatCurrency} empty="No revenue in range."
+            activeKey={vert === 'all' ? null : vert} onPick={(k) => setVert(vert === k ? 'all' : k)} />
+        )}
         <Donut title="Orders by status" sub={`Where the book stands · top ${MAX_SLICES} shown`}
           slices={byStatus} total={orders.length} empty="No orders in range."
           activeKey={status} onPick={toggle(status, setStatus)} />
         <Donut title="Orders by rep" sub="The same book, by who it is booked to"
           slices={byRep} total={byRep.reduce((s, x) => s + x.value, 0)} empty="No rep orders yet."
           activeKey={rep === 'all' ? null : rep} onPick={(k) => setRep(rep === k ? 'all' : k)} />
-        <Donut title="Revenue by vendor" sub={`The account billed: never a patient · top ${MAX_SLICES}`}
-          slices={byAccount} total={revenue} fmt={formatCurrency} empty="No revenue in range."
-          activeKey={account} onPick={toggle(account, setAccount)} />
+        {!isRep && (
+          <Donut title="Revenue by vendor" sub={`The account billed: never a patient · top ${MAX_SLICES}`}
+            slices={byAccount} total={revenue} fmt={formatCurrency} empty="No revenue in range."
+            activeKey={account} onPick={toggle(account, setAccount)} />
+        )}
         <Donut title="Units by device" sub={`Devices dispensed · top ${MAX_SLICES} by volume`}
           slices={byDevice} total={byDevice.reduce((s, x) => s + x.value, 0)} empty="No devices in range."
           activeKey={device} onPick={toggle(device, setDevice)} />
@@ -674,8 +693,17 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
       {showStages && <StageStrip slices={byStage} unfiltered={filtered} />}
 
       <div className="pair-grid">
-        <TopList title="Top accounts" sub="By revenue: the vendor billed on the order, never a patient" rows={topAccounts} fmt={formatCurrency} />
-        <TopList title="Top devices" sub="By revenue, apportioned across an order by unit share" rows={topDevices} fmt={formatCurrency} />
+        <TopList
+          title="Top accounts"
+          sub={isRep ? 'By order count: the vendor billed on the order, never a patient'
+                     : 'By revenue: the vendor billed on the order, never a patient'}
+          rows={topAccounts}
+          fmt={isRep ? (v: number) => `${v} order${v === 1 ? '' : 's'}` : formatCurrency} />
+        <TopList
+          title="Top devices"
+          sub={isRep ? 'By units dispensed' : 'By revenue, apportioned across an order by unit share'}
+          rows={topDevices}
+          fmt={isRep ? (v: number) => `${v} unit${v === 1 ? '' : 's'}` : formatCurrency} />
       </div>
     </>
   );

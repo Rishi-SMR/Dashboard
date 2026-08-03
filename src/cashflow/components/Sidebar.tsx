@@ -70,12 +70,16 @@ export const REPS_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'repsroster', label: 'Reps' },
 ];
 /** What a REP sees. Same views, narrowed to their own book by the server. */
+// Standings FIRST, and it is the rep's landing view (defaultViewFor takes the
+// first entry). Seeing their rank the moment they log in is the point: "when
+// they log in and they see that they're number 3, they're going to be like,
+// what?" It sat last, below four screens they had to scroll past.
 export const REP_NAV: Array<{ key: ViewKey; label: string }> = [
+  { key: 'standings', label: 'Team Standings' },
   { key: 'reps', label: 'My Dashboard' },
   { key: 'repsorders', label: 'My Orders' },
   { key: 'commission', label: 'My Commission' },
   { key: 'repspipeline', label: 'My Pipeline' },
-  { key: 'standings', label: 'Team Standings' },
 ];
 
 /** Nav for a role. Until /api/me answers (role null) we show the rep nav: the

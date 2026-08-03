@@ -58,7 +58,12 @@
       "Bash(grep -oE \"'[^']{25,110}'|\\\\\"[^\\\\\"]{25,110}\\\\\"\")",
       "Bash(grep -rhoE \"\\(sub|label|title|foot|note\\)=\\\\{?\\\\\"[^\\\\\"]{30,100}\\\\\"\" src/cashflow/components/RepsTab.tsx src/cashflow/components/OverviewCharts.tsx src/cashflow/components/DashboardOverview.tsx)",
       "Bash(pkill -f \"grep -rhoE\")",
-      "Bash(git rebase *)"
+      "Bash(git rebase *)",
+      "Bash(grep -n \"useState.*fyPick\\\\|useState.*asOfPick\\\\|fyLatest\\\\|Revenue YTD\\\\|FY\\\\${fy}\" src/cashflow/components/OverviewCharts.tsx)",
+      "Bash(awk -v L=1194 'NR<=L && /^\\(export \\)?function [A-Za-z]/ {f=NR\": \"$0} NR==L {print f}' src/cashflow/components/OrderDashboard.tsx)",
+      "Bash(awk -v L=1311 'NR<=L && /^\\(export \\)?function [A-Za-z]/ {f=NR\": \"$0} NR==L {print f}' src/cashflow/components/OrderDashboard.tsx)",
+      "Bash(awk 'NR>=340 && NR<=700 && /^  \\\\\\);$/ {print NR\": \"$0; exit}' src/cashflow/components/OrderDashboard.tsx)",
+      "Bash(grep -n \"lines.push\\\\|ref, comm\\\\|{ ref\" api/_striven.js)"
     ]
   }
 }

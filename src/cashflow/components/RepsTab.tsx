@@ -51,6 +51,14 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   useEffect(() => { fetchMe().then(setMe).catch(() => setMe(null)); }, []);
 
   const isManager = data?.role === 'admin';
+  // Which sub-view actually renders. A rep may only ever be on their own
+  // overview, their own orders, or their own pipeline; every other value falls
+  // back to 'overview'. Derived on each render rather than stored, so no state
+  // path (a stale setSub, the initialSub prop, a future nav entry) can drop a
+  // rep onto Roster / By vertical / Rep detail. Hiding the buttons is cosmetic;
+  // this is the check that holds.
+  const REP_VIEWS: RepSub[] = ['overview', 'orders', 'pipeline'];
+  const view: RepSub = isManager || REP_VIEWS.includes(sub) ? sub : 'overview';
   const reps = data?.reps ?? [];
   const t = data?.teamTotals;
   const own = reps.find((r) => r.isSelf) ?? null;
@@ -106,22 +114,31 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
           was visibly smaller than every other tab row in the app: 12px uppercase
           on 6px padding, hugging its content, against the house 14px on 12px
           padding stretched full width. */}
-      <div className="ov-tabs">
-        <button className={`ov-tab${sub === 'overview' ? ' active' : ''}`} onClick={() => setSub('overview')}>Overview</button>
-        <button className={`ov-tab${sub === 'team' ? ' active' : ''}`} onClick={() => setSub('team')}>Roster</button>
-        <button className={`ov-tab${sub === 'verticals' ? ' active' : ''}`} onClick={() => setSub('verticals')}>By vertical</button>
-        <button className={`ov-tab${sub === 'mine' ? ' active' : ''}`} onClick={() => setSub('mine')}>{isManager ? 'Rep detail' : 'My commission'}</button>
-      </div>
+      {/* MANAGER ONLY. Roster, By vertical and Rep detail are all team-wide
+          views, so the whole strip is withheld from a rep and their dashboard is
+          the Overview alone. Their own commission is a top-level nav entry
+          ("My Commission"), so nothing they need is lost.
+          `view` below re-derives the active sub-view rather than trusting `sub`:
+          hiding the buttons is not access control, and a rep must not land on a
+          team view via a stale state value or an initialSub prop. */}
+      {isManager && (
+        <div className="ov-tabs">
+          <button className={`ov-tab${sub === 'overview' ? ' active' : ''}`} onClick={() => setSub('overview')}>Overview</button>
+          <button className={`ov-tab${sub === 'team' ? ' active' : ''}`} onClick={() => setSub('team')}>Roster</button>
+          <button className={`ov-tab${sub === 'verticals' ? ' active' : ''}`} onClick={() => setSub('verticals')}>By vertical</button>
+          <button className={`ov-tab${sub === 'mine' ? ' active' : ''}`} onClick={() => setSub('mine')}>Rep detail</button>
+        </div>
+      )}
 
       {error && <div className="error" style={{ marginBottom: 14 }}>{error}</div>}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
 
       {/* Filters, verticals, accounts, device types, saved views: the same
           dashboard, reached from the rep side and scoped to the caller. */}
-      {sub === 'orders' && <OrderDashboard viewAs={viewAs} />}
-      {sub === 'pipeline' && <div className="section chart-card"><PiPipeline viewAs={viewAs} /></div>}
+      {view === 'orders' && <OrderDashboard viewAs={viewAs} />}
+      {view === 'pipeline' && <div className="section chart-card"><PiPipeline viewAs={viewAs} /></div>}
 
-      {data && sub !== 'orders' && sub !== 'pipeline' && (
+      {data && view !== 'orders' && view !== 'pipeline' && (
         <>
           {/* The house KPI card (KpiExec, shared from chartKit): the same
               component the company Overview renders, so the two dashboards read
@@ -129,17 +146,26 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               `chip` carries the qualifier. Hues come from the shared HUE map, so
               a metric keeps its colour across tabs: revenue is always the brand
               blue, commission always amber. */}
-          <div className="kpi-strip kpi-strip-6" style={{ marginBottom: 14 }}>
-            <KpiExec label="Reps" value={t?.reps ?? 0} format={(x: number) => String(x)} hue={HUE.revenue}
-              sub="on the commission sheet" chip="team" onClick={() => setDrill('reps')} />
+          {/* A rep gets FOUR tiles: orders, devices, accounts, commission.
+              Revenue is gone (the only dollar figure a rep may see is their own
+              commission) and so is the rep count, which is team information they
+              have no use for. A manager keeps all six. The grid modifier tracks
+              the count so each row still fills exactly. */}
+          <div className={`kpi-strip ${isManager ? 'kpi-strip-6' : 'kpi-strip-4'}`} style={{ marginBottom: 14 }}>
+            {isManager && (
+              <KpiExec label="Reps" value={t?.reps ?? 0} format={(x: number) => String(x)} hue={HUE.revenue}
+                sub="on the commission sheet" chip="team" onClick={() => setDrill('reps')} />
+            )}
             <KpiExec label="Orders" value={kt?.orders ?? 0} format={(x: number) => String(x)} hue={HUE.ar}
               sub="cancelled excluded" chip="order book" onClick={() => setDrill('orders')} />
             <KpiExec label="Devices" value={num(kt?.units)} format={() => n(kt?.units)} hue={HUE.ap}
               sub="units on those orders" chip="order book" onClick={() => setDrill('units')} />
             <KpiExec label="Accounts" value={num(kt?.accounts)} format={() => n(kt?.accounts)} hue={HUE.sales}
               sub="vendors billed" chip="order book" onClick={() => setDrill('accounts')} />
-            <KpiExec label={isManager ? 'Revenue' : 'Your revenue'} value={num(kt?.revenue)} format={money} hue={HUE.cash}
-              sub="order value" chip={isManager ? 'SMR' : 'yours'} onClick={() => setDrill('revenue')} />
+            {isManager && (
+              <KpiExec label="Revenue" value={num(kt?.revenue)} format={money} hue={HUE.cash}
+                sub="order value" chip="SMR" onClick={() => setDrill('revenue')} />
+            )}
             <KpiExec label={isManager ? 'Commission' : 'Your commission'} value={num(t?.commission)} format={money} hue={HUE.po}
               sub="units × device rate" chip={isManager ? 'SMR' : 'yours'} onClick={() => setDrill('commission')} />
           </div>
@@ -148,14 +174,14 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               it renders identically for a manager and for a rep: counts are
               shared even where revenue is not. */}
           {/* The gist of every other tab, on one screen. */}
-          {sub === 'overview' && <DashboardOverview reps={reps} viewAs={viewAs} />}
+          {view === 'overview' && <DashboardOverview reps={reps} viewAs={viewAs} />}
 
-          {sub === 'overview' && <TeamShape reps={reps} />}
+          {view === 'overview' && <TeamShape reps={reps} />}
 
           {/* Overview stops here: the shape of the book and, for a rep, their own
               standing. The full roster lives one click away rather than being
               repeated on the landing page. */}
-          {sub === 'overview' && (
+          {view === 'overview' && (
             <OverviewPanel reps={reps} isManager={isManager} onPickRep={setSel} onSeeRoster={() => setSub('team')} />
           )}
 
@@ -168,7 +194,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
             </div>
           )}
 
-          {sub === 'team' && (
+          {view === 'team' && (
             <div className="section chart-card">
               <div className="section-head"><div>
                 <h2 className="section-title">The team</h2>
@@ -227,7 +253,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
             </div>
           )}
 
-          {sub === 'verticals' && (
+          {view === 'verticals' && (
             // Plain house card, like the other three sub-tabs. It used to carry
             // a 3px accent rule and a deeper one-off shadow to "read as the
             // subject of the page": but it is the only card in the app dressed
@@ -307,7 +333,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
             </div>
           )}
 
-          {sub === 'mine' && (
+          {view === 'mine' && (
             isManager
               ? <ManagerRepPicker reps={reps} onPick={setSel} />
               : own
@@ -515,7 +541,13 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
     return () => { live = false; };   // a slow earlier response must not land late
   }, [viewAs]);
 
-  const ranked = [...(data?.reps ?? [])].sort((a, b) => b.orders - a.orders);
+  // Only producers are ranked. House/ops/departed names (Crystal's demos, Angel,
+  // Cassie, Kinley, Zach) carry orders in Striven but are not competing, and a
+  // leaderboard that lists them reads as noise. Their own row still survives if
+  // one of them is somehow the viewer, so nobody ever loses sight of their own.
+  const ranked = [...(data?.reps ?? [])]
+    .filter((r) => !r.standingsExcluded || r.isSelf)
+    .sort((a, b) => b.orders - a.orders);
   const leader = ranked[0]?.orders ?? 0;
   const mine = ranked.find((r) => r.isSelf) ?? null;
   const myRank = mine ? ranked.findIndex((r) => r.isSelf) + 1 : null;
