@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-rep/
 .env
 .env.local
 .credentials.local
