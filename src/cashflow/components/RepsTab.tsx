@@ -734,7 +734,6 @@ function TeamShape({ reps }: { reps: RepRow[] }) {
 
   const topVolume = [...reps].sort((a, b) => b.orders - a.orders)[0];
   const topPay = [...reps].filter((r) => r.commission != null).sort((a, b) => (b.commission ?? 0) - (a.commission ?? 0))[0];
-  const unverified = reps.filter((r) => !r.verified).length;
 
   // The vertical split used to be drawn here too, from rep-attributed orders
   // only (328). The donut above draws it from the whole book (413), so PI read
@@ -754,11 +753,9 @@ function TeamShape({ reps }: { reps: RepRow[] }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, padding: '2px 2px 0', fontSize: 13, color: C.sub }}>
         {topVolume && <span>Most orders <b style={{ color: C.ink }}>{topVolume.rep}</b> <span style={{ color: C.muted }}>({topVolume.orders})</span></span>}
         {topPay && <span>Highest commission <b style={{ color: C.ink }}>{topPay.rep}</b> <span style={{ color: C.muted }}>({money(topPay.commission)})</span></span>}
-        <span style={{ color: unverified ? C.warning : C.positive }}>
-          {unverified === 0
-            ? 'All reps reconcile against the sheet'
-            : `${unverified} of ${reps.length} rep${reps.length === 1 ? '' : 's'} not yet reconciled against the sheet`}
-        </span>
+        {/* The "reconciled against the sheet" badge is gone with the sheet feed:
+            Striven is the only source, so there is nothing to reconcile against
+            and every figure here IS the computation. */}
       </div>
     </div>
   );
@@ -850,7 +847,7 @@ function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
       </table>
       <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
         🔒 No patient names. Commission = units × per-device rate; cancelled and $0-value orders earn nothing.
-        {rep.matchRate != null && <> Sheet reconciliation: {rep.matchRate}% {rep.verified ? '· verified' : '· unverified'}.</>}
+
       </div>
     </>
   );

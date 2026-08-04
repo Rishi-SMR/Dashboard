@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   rateForDevice, classifyOrderLabel, commissionForOrder, splitByState,
-  isRepVerified, resolveIdentity, redactCommissionPayload, isCancelledStatus,
+  resolveIdentity, redactCommissionPayload, isCancelledStatus,
 } from './_commission-core.js';
 
 // A self-contained rate card, so these tests never depend on the placeholder
@@ -377,22 +377,5 @@ test('iii. admin "view as" narrows to that rep and never widens', async () => {
   assert.deepEqual(viewerFor(ADMIN, null), ADMIN);
 });
 
-// ── v. Sheet verification gate ───────────────────────────────────────────────
-test('v. unverified sheet rows are flagged', () => {
-  const cfg = { minMatchRate: 90 };
-  const good = { matchRate: 95, recon: { bookedUnder: [] } };
-  const lowMatch = { matchRate: 40, recon: { bookedUnder: [] } };
-  const exceptions = { matchRate: 99, recon: { bookedUnder: [{ rep: 'Cassie', count: 4 }] } };
-  const missing = { matchRate: null, recon: { bookedUnder: [] } };
-
-  assert.equal(isRepVerified(good, cfg), true);
-  assert.equal(isRepVerified(lowMatch, cfg), false, 'below MIN_MATCH_RATE');
-  assert.equal(isRepVerified(exceptions, cfg), false, 'unresolved bookedUnder exceptions');
-  assert.equal(isRepVerified(missing, cfg), false, 'no reconciliation at all');
-});
-
-test('v. the gate threshold is configurable', () => {
-  const rep = { matchRate: 80, recon: { bookedUnder: [] } };
-  assert.equal(isRepVerified(rep, { minMatchRate: 90 }), false);
-  assert.equal(isRepVerified(rep, { minMatchRate: 75 }), true);
-});
+// The sheet verification gate's tests went with the gate: Striven is the only
+// source now, so there is no second figure to reconcile a rep against.

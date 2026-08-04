@@ -133,10 +133,8 @@ export const STANDINGS_EXCLUDE = [
   'Zach Shank',
 ];
 
-// ── Sheet verification gate ──────────────────────────────────────────────────
-// A rep's sheet figures count as authoritative only at or above this patient
-// match rate AND with no unresolved bookedUnder exceptions.
-export const MIN_MATCH_RATE = 90;
+// The sheet verification gate is gone with the sheet feed: MIN_MATCH_RATE had
+// no meaning once Striven became the single source.
 
 // ── Rep roster ───────────────────────────────────────────────────────────────
 // THE reps are the names on the commission sheet — nothing else. Read live from

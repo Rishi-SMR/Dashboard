@@ -21,7 +21,6 @@ checked-in values are the fallback. Overrides are cached for 60 seconds.
 | `COMMISSION_RATES` | `{"device name": rate}` | Per-device commission rate |
 | `COMMISSION_FALLBACK_RATES` | `{"VA": 425, …}` | Used only when a device has no rate |
 | `ORDER_LABEL_RULES` | `{"hold": ["..."], "waiting": ["..."]}` | Regex strings matched against order status |
-| `MIN_MATCH_RATE` | number | Sheet verification threshold (default 90) |
 | `REP_DIRECTORY` | `[{email, repName, role}]` | Account provisioning |
 
 ### `COMMISSION_RATES` — the rate table
@@ -42,33 +41,41 @@ and the **longest matching key wins** — so `"genesis lumbar": 650` beats a gen
 > pre-refactor numbers) and is reported in the response's `rateGaps` array and as
 > a banner in the UI, so an unpriced device is never silently mispriced.
 
-### `MIN_MATCH_RATE` — the sheet verification gate
+### The commission sheet is gone
 
-The linked Google Sheet is historical and frozen (no longer updated since Striven
-adoption), so its figures are treated as unverified until reconciled. A rep is
-`verified` only when their patient match rate is **at or above `MIN_MATCH_RATE`**
-(default `90`) **and** they have no unresolved `bookedUnder` exceptions.
+Commission used to be reconciled against Crystal's Google Sheet workbooks. That
+sheet stopped being maintained the day Striven went live, so everything it
+contributed was historical, and reconciling live pay against a frozen document
+produced permanent variances that meant nothing.
+
+Removed with it: the Sheets fetch and CSV parsing, the per-period rollup, the
+sheet-vs-Striven `reconcile` block, and the `MIN_MATCH_RATE` verification gate.
+`COMMISSION_SHEETS` in `app_config` is no longer read.
+
+**Commission is now computed from Striven only**, and `grandTotal` / `byProgram`
+in the response ARE the computation. There is no second source to disagree with,
+so there is nothing to mark verified or unverified.
+
 
 ### The rep roster
 
-**The reps are the names on the commission sheet — nothing else.** Read live from
-both configured workbooks (Team + Christy, 9 tabs) and normalised by `commRep()`:
+**The reps are `REP_NAMES`, a checked-in list.** It used to be whichever names
+appeared on a sheet tab, which meant a typo there could invent a rep.
 
-| Rep | Lines | Verticals |
-| --- | --- | --- |
-| Alle Ann | 106 | VA |
-| Jillian | 86 | TriCare, PI |
-| Cassie | 58 | TriCare |
-| Christy | 30 | VA |
+Striven spells the same person several ways (`Maverick Medical- Jillian Colin`,
+`CVT Medical - Christy Tan`), so `commRep()` folds every variant onto one
+canonical name and covers 100% of live rows with no `Unknown` bucket.
 
-The sheet spells several of these inconsistently — `Alle Anne`, `Christy Tan`,
-`Jillian Colin` — and `commRep()` folds every variant onto the four canonical
-names, covering 100% of live rows with no `Unknown` bucket.
+**Sub-reps fold into the rep who is paid.** `Maylon Sanders - Denise Zavala` is
+Maylon's order: Denise is her sub-rep and Maylon is paid on it, so `commRep()`
+returns `Maylon Sanders`. Denise is not a roster entry of her own.
 
 Striven books orders under other people too (house/clinic accounts, ops staff).
-They are **not** reps: an order booked to one earns no commission and is reported
-in `striven.unmatched` with the reason *"booked to someone who is not a rep on the
-commission sheet"*.
+They are **not** reps: such an order earns no commission and is reported in
+`striven.unmatched`.
+
+`STANDINGS_EXCLUDE` removes non-producers (Crystal's demos, Angel, Cassie,
+Kinley, Zach) from the **leaderboard only**. They keep their commission rows.
 
 ### `REP_DIRECTORY` — rep → email → role
 
@@ -111,7 +118,7 @@ rather than trusted from the token, so a revoked admin loses access immediately.
 | Viewer | Sees |
 | --- | --- |
 | Own row | Every financial field, plus order-by-order detail |
-| Another rep's row | `rep`, `count`, `strivenOrders`, `strivenUnits`, `matchRate`, `orderCounts`, `verified`. All dollar fields `null`; `recon` withheld |
+| Another rep's row | `rep`, `count`, `strivenOrders`, `strivenUnits`, `orderCounts`. All dollar fields `null` |
 | Admin | Everything, unredacted |
 
 Company-wide dollar aggregates (`grandTotal`, `byProgram`) are scoped to the
@@ -152,5 +159,5 @@ data, not required going forward.
 ## Tests
 
 `npm test` runs [`api/_commission-core.test.js`](api/_commission-core.test.js) —
-18 cases covering the rate math, `hold` exclusion, `waiting` pending state,
-per-rep redaction, admin access, and the verification gate.
+cases covering the rate math, the `hold` / `waiting` split, per-rep redaction
+and admin access.

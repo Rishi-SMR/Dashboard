@@ -4,7 +4,7 @@
 // what it is worth and who is allowed to see it.
 import {
   COMMISSION_RATES, FALLBACK_VERTICAL_RATES, ORDER_LABEL_RULES,
-  MIN_MATCH_RATE, REP_DIRECTORY,
+  REP_DIRECTORY,
 } from './_commission-config.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -148,21 +148,9 @@ export function splitByState(orders) {
   };
 }
 
-// ── Sheet verification gate ──────────────────────────────────────────────────
-/**
- * The linked sheet is historical and frozen, so its figures are only
- * authoritative once they reconcile against Striven: at or above the minimum
- * patient match rate AND with no unresolved bookedUnder exceptions.
- */
-export function isRepVerified(rep, cfg = {}) {
-  const min = Number.isFinite(cfg.minMatchRate) ? cfg.minMatchRate : MIN_MATCH_RATE;
-  const rate = rep?.matchRate;
-  if (rate == null) return false;
-  if (Number(rate) < min) return false;
-  const exceptions = rep?.recon?.bookedUnder;
-  if (Array.isArray(exceptions) && exceptions.length > 0) return false;
-  return true;
-}
+// The sheet verification gate (isRepVerified / MIN_MATCH_RATE) was removed with
+// the sheet feed itself: with Striven as the only source there is no second set
+// of figures to reconcile against, so nothing to mark verified or unverified.
 
 // ── Identity ─────────────────────────────────────────────────────────────────
 const normEmail = (s) => String(s ?? '').trim().toLowerCase();

@@ -63,7 +63,15 @@
       "Bash(awk -v L=1194 'NR<=L && /^\\(export \\)?function [A-Za-z]/ {f=NR\": \"$0} NR==L {print f}' src/cashflow/components/OrderDashboard.tsx)",
       "Bash(awk -v L=1311 'NR<=L && /^\\(export \\)?function [A-Za-z]/ {f=NR\": \"$0} NR==L {print f}' src/cashflow/components/OrderDashboard.tsx)",
       "Bash(awk 'NR>=340 && NR<=700 && /^  \\\\\\);$/ {print NR\": \"$0; exit}' src/cashflow/components/OrderDashboard.tsx)",
-      "Bash(grep -n \"lines.push\\\\|ref, comm\\\\|{ ref\" api/_striven.js)"
+      "Bash(grep -n \"lines.push\\\\|ref, comm\\\\|{ ref\" api/_striven.js)",
+      "Bash(awk 'NR>=1650 && NR<=2240 && /^\\(export \\)?\\(async \\)?function |^const [a-zA-Z]+ = async|^\\\\/\\\\/ ──/ {print NR\": \"substr\\($0,1,90\\)}' api/_striven.js)",
+      "Bash(awk 'NR>1856 && NR<2128' api/_striven.js)",
+      "Bash(node -e \"import\\('./api/_striven.js'\\).catch\\(e=>{console.log\\('LOAD ERROR:', e.message\\)}\\)\")",
+      "Bash(node -e \"import\\('./api/_striven.js'\\).then\\(\\(\\)=>console.log\\('module loads OK'\\)\\).catch\\(e=>console.log\\('LOAD ERROR:', e.message\\)\\)\")",
+      "Bash(node -e \"import\\('./api/_striven.js'\\).then\\(\\(\\)=>console.log\\('loads OK'\\)\\).catch\\(e=>console.log\\('ERR:',e.message\\)\\)\")",
+      "Bash(node -e \"import\\('./api/_striven.js'\\).then\\(m=>console.log\\('restored OK, getCommission:', typeof m.getCommission\\)\\).catch\\(e=>console.log\\('ERR:',e.message\\)\\)\")",
+      "Bash(node -e \"import\\('./api/_striven.js'\\).then\\(m=>console.log\\('loads OK, getCommission:', typeof m.getCommission\\)\\).catch\\(e=>console.log\\('ERR:',e.message\\)\\)\")",
+      "Bash(awk 'NR>1755 && NR<1900' api/_striven.js)"
     ]
   }
 }
