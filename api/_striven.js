@@ -1800,6 +1800,14 @@ export async function getCommission(viewer = null) {
   }
   let rcOrders = [];
   try { rcOrders = (await sbCacheRead('report_patient_items'))?.data?.orders || []; } catch { /* optional */ }
+  // soId -> patient surname, for the commission drill (see the line push below).
+  // Built from the same report cache the reconciliation already reads, so no new
+  // PHI source is introduced.
+  const lastNameBySo = new Map();
+  for (const o of rcOrders) {
+    const ln = commLastName(o.lastName);
+    if (ln && o.soId != null) lastNameBySo.set(String(o.soId), ln);
+  }
   const nameIdx = new Map();
   for (const o of rcOrders) {
     const ln = commLastName(o.lastName); if (!ln) continue;
@@ -1916,8 +1924,12 @@ export async function getCommission(viewer = null) {
     const res = commissionForOrder({ status: info.status, program, items: o.items, value }, commCfg);
     for (const g of res.rateGaps) rateGaps.add(g);
     if (res.state === 'cancelled') { sCancelled++; continue; }    // cancelled → never earned
-    if (res.state === 'hold') { sHeld++; continue; }        // excluded entirely
     if (res.state === 'zero-value') { sZeroValue++; continue; }   // $0 order earns nothing
+    // A held order is COUNTED and costed, then routed to Waiting below. It used
+    // to `continue` here, which silently undid the split the engine computes:
+    // the order never reached waitingTotal, so a rep whose month was held saw
+    // an empty Waiting column instead of what is pending.
+    if (res.state === 'hold') sHeld++;
     if (!res.commission && !res.units) continue;
 
     const month = (info.date || '').slice(0, 7) || 'unknown';
@@ -1928,22 +1940,34 @@ export async function getCommission(viewer = null) {
     const bump = (t) => {
       t[pk] += c; t.total += c; t.orders += 1; t.units += res.units; t.value += value;
       t[nk] += 1; t[uk] += res.units;
-      if (res.state === 'waiting') t.waitingTotal += c; else t.payableTotal += c;
+      // `hold` and `waiting` are both earned-but-not-payable.
+      if (res.state === 'waiting' || res.state === 'hold') t.waitingTotal += c; else t.payableTotal += c;
     };
     const M = months[month] = months[month] || { month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, ...zeroState(), reps: {} };
     M[program] += c; M.total += c; M.orders += 1; M.units += res.units; M.value += value;
     if (program !== 'DOL') M[`o${program}`] += 1;
-    if (res.state === 'waiting') M.waitingTotal += c; else M.payableTotal += c;
+    if (res.state === 'waiting' || res.state === 'hold') M.waitingTotal += c; else M.payableTotal += c;
     bump(M.reps[rep] = M.reps[rep] || { rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0, ...zeroVol(), ...zeroState() });
     bump(sByRep[rep] = sByRep[rep] || zeroRepRow(rep));
 
     if (sByProgram[program] != null) { sByProgram[program] += c; sByProgramOrders[program] += 1; }
     sGrand += c;
-    if (res.state === 'waiting') sWaiting += c; else sPayable += c;
+    if (res.state === 'waiting' || res.state === 'hold') sWaiting += c; else sPayable += c;
 
-    // Per-order line for the rep popup — SO ref + device + computed $, no names.
+    // Per-order line for the rep popup.
+    //
+    // Carries the patient's LAST NAME, because a rep cannot reconcile a Striven
+    // sales order number against their own records: "that sales order won't let
+    // them do their own checks and balances". Surname only, never the given
+    // name, and only on the rep's own orders, which is the minimum that makes
+    // the line identifiable to the person who took it.
+    //
+    // This is the one place PHI is deliberately surfaced. maskName() still
+    // blanks patient names everywhere else, and `patient` falls back to '' when
+    // the report cache has no row, so the drill degrades to the SO ref.
     (strivenLinesByRep[rep] = strivenLinesByRep[rep] || []).push({
-      ref: info.ref, item: (o.items || [])[0]?.item || '', prog: program,
+      ref: info.ref, patient: lastNameBySo.get(String(o.soId ?? info.soId ?? '')) || '',
+      item: (o.items || [])[0]?.item || '', prog: program,
       value: round2(value), units: res.units, comm: c, state: res.state,
     });
   }

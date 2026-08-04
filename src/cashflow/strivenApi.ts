@@ -269,7 +269,10 @@ export type CommissionReconcile = { reps: ReconcileRep[]; totals: { sheet: numbe
 // Commission computed FROM Striven (rate card): sheet-shaped (monthly + program).
 /** Commission state for one order, from the label rules. `hold` never appears: *  held orders are excluded from the calculation and produce no line. */
 export type CommState = 'payable' | 'waiting';
-export type StrivenOrderLine = { ref: string; item: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; value: number; units: number; comm: number; state: CommState };
+/** `patient` is the SURNAME only, and only on the rep's own orders: the one
+ *  place PHI is deliberately surfaced, so a rep can reconcile a line against
+ *  their own records. Empty when the report cache has no row for the order. */
+export type StrivenOrderLine = { ref: string; patient?: string; item: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; value: number; units: number; comm: number; state: CommState };
 /** nTricare/nVa/nPi are ORDERS per vertical; uTricare/… are units per vertical. */
 /** Volume fields (`orders`, `units`, `nTricare`/`nVa`/`nPi`) are the FULL order
  *  book from Striven. `commOrders`/`commUnits` are the subset the commission was

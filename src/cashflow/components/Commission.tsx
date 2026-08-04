@@ -577,18 +577,25 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
             Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {lines.length} orders</span>
           </div>
           <table className="data-table">
+            {/* Patient surname, not the sales order number: reps keep their own
+                record of orders and cannot reconcile an SO ref against it.
+                Order value is gone too, per the same review: it is company
+                money and not the rep's to see. */}
             <thead><tr>
-              <th>Order</th><th>Device</th><th>Vertical</th><th className="num">Units</th>
-              <th className="num">Order value</th><th className="num">Commission</th><th>State</th>
+              <th>Patient</th><th>Device</th><th>Vertical</th><th className="num">Units</th>
+              <th className="num">Commission</th><th>State</th>
             </tr></thead>
             <tbody>
               {lines.map((ln, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600, color: ln.ref ? C.brand : C.muted }}>{ln.ref || 'no SO'}</td>
+                  {/* Falls back to the SO ref when the report cache has no
+                      patient row, so the line is never unidentifiable. */}
+                  <td style={{ fontWeight: 600, color: ln.patient ? C.ink : C.muted }}>
+                    {ln.patient || ln.ref || 'no SO'}
+                  </td>
                   <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.item || '-'}</td>
                   <td>{ln.prog}</td>
                   <td className="num">{ln.units}</td>
-                  <td className="num">{formatCurrency(ln.value)}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
                   <td>
                     {ln.state === 'waiting'
