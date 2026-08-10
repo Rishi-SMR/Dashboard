@@ -231,11 +231,11 @@ export function PayablesTab() {
           </div>
 
           <div className="exec-grid12">
-            <ChartCard className="g12-7" title="Top Vendors by PO Spend" sub={`Active POs only${po?.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar`}>
+            <ChartCard className="g12-4" title="Top Vendors by PO Spend" sub={`Active POs only${po?.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar`}>
               <RankBar data={vendorData} money colorAt={() => C.brand} onSelect={openVendorDrill} />
             </ChartCard>
 
-            <ChartCard className="g12-5" title="AP Aging" sub="Open payables by days past due"
+            <ChartCard className="g12-4" title="AP Aging" sub="Open payables by days past due"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={agingMode === 'amount' ? 'active' : ''} onClick={() => setAgingMode('amount')}>By Amount</button>
@@ -245,7 +245,56 @@ export function PayablesTab() {
               <AgingBar aging={agingMode === 'amount' ? agingEff : agingCount} money={agingMode === 'amount'} onSelect={drillApBucket} />
             </ChartCard>
 
-            <div className="section chart-card g12-12">
+            {/* Bills Paid sits here, so the row runs committed spend → what is
+                overdue → what has actually been settled. Moved up from beneath
+                the open-bills table, where it read as an appendix rather than
+                the other half of the payables picture. */}
+            <div className="section chart-card g12-4">
+              <div className="section-head">
+                <div><h2 className="section-title">Bills Paid</h2><div className="section-sub">Vendor bills settled through Striven · {formatCurrency(bp?.total ?? 0)} paid</div></div>
+              </div>
+              {payments.length > 0 && (
+                <div className="paid-banner">
+                  <span className="paid-banner-check">{paidCount === payments.length ? '✓' : '•'}</span>
+                  <span><strong>{paidCount === payments.length ? 'All settled.' : `${paidCount} of ${payments.length} settled.`}</strong> {paidCount === payments.length ? 'Every' : `${paidCount} of ${payments.length}`} recorded bill payment{payments.length === 1 ? ' has' : 's have'} been paid to the vendor.</span>
+                </div>
+              )}
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Reference</th>
+                      <th>Vendor</th>
+                      <th>Paid from</th>
+                      <th>Paid on</th>
+                      <th className="num">Amount</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((p) => (
+                      <tr key={p.id}>
+                        <td><strong>{p.ref || '-'}</strong></td>
+                        <td>{p.vendor || '-'}</td>
+                        <td>{p.account || '-'}</td>
+                        <td>{fmtDate(p.date)}</td>
+                        <td className="num cell-pos">{formatCurrency(p.amount)}</td>
+                        <td><PaidBadge status={p.status} /></td>
+                      </tr>
+                    ))}
+                    {payments.length === 0 && (
+                      <tr><td colSpan={6} style={{ color: C.muted }}>No bills paid yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Total Paid</div><div className="v pos">{formatCurrency(bp?.total ?? 0)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Payments</div><div className="v">{(bp?.count ?? 0).toLocaleString()}</div></div>
+              </div>
+            </div>
+
+            <div className="section chart-card g12-6">
               <div className="section-head">
                 <div><h2 className="section-title">Open Bills</h2><div className="section-sub">Unpaid vendor bills with a remaining balance</div></div>
                 <div className="tbl-controls">
@@ -319,52 +368,8 @@ export function PayablesTab() {
               </div>
             </div>
 
-            <div className="section chart-card g12-7">
-              <div className="section-head">
-                <div><h2 className="section-title">Bills Paid</h2><div className="section-sub">Vendor bills settled through Striven · {formatCurrency(bp?.total ?? 0)} paid</div></div>
-              </div>
-              {payments.length > 0 && (
-                <div className="paid-banner">
-                  <span className="paid-banner-check">{paidCount === payments.length ? '✓' : '•'}</span>
-                  <span><strong>{paidCount === payments.length ? 'All settled.' : `${paidCount} of ${payments.length} settled.`}</strong> {paidCount === payments.length ? 'Every' : `${paidCount} of ${payments.length}`} recorded bill payment{payments.length === 1 ? ' has' : 's have'} been paid to the vendor.</span>
-                </div>
-              )}
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Reference</th>
-                      <th>Vendor</th>
-                      <th>Paid from</th>
-                      <th>Paid on</th>
-                      <th className="num">Amount</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {payments.map((p) => (
-                      <tr key={p.id}>
-                        <td><strong>{p.ref || '-'}</strong></td>
-                        <td>{p.vendor || '-'}</td>
-                        <td>{p.account || '-'}</td>
-                        <td>{fmtDate(p.date)}</td>
-                        <td className="num cell-pos">{formatCurrency(p.amount)}</td>
-                        <td><PaidBadge status={p.status} /></td>
-                      </tr>
-                    ))}
-                    {payments.length === 0 && (
-                      <tr><td colSpan={6} style={{ color: C.muted }}>No bills paid yet.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <div className="cfoot">
-                <div className="cf-i"><div className="l">Total Paid</div><div className="v pos">{formatCurrency(bp?.total ?? 0)}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Payments</div><div className="v">{(bp?.count ?? 0).toLocaleString()}</div></div>
-              </div>
-            </div>
-
-            <div className="section chart-card g12-5">
+            {/* Vendors takes the full row now that Bills Paid has moved up. */}
+            <div className="section chart-card g12-6">
               <div className="section-head"><div><h2 className="section-title">Vendors</h2><div className="section-sub">{vendors?.count ?? 0} suppliers on record · scroll for more</div></div></div>
               <div className="table-wrap" style={{ maxHeight: 430, overflowY: 'auto' }}>
                 <table className="data-table">

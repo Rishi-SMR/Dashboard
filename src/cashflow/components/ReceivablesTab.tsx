@@ -454,6 +454,7 @@ export function ReceivablesTab() {
                 <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Payments</div><div className="v">{(payments.count).toLocaleString()}</div></div>
               </div>
             </div>
+
           </div>
         </>
       )}

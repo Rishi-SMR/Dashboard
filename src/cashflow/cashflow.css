@@ -636,11 +636,13 @@ code {
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12.5px;
 }
+/* Tightened from 10px/12px. Row height is the padding twice over, so this is
+   what makes a long table readable in one screen rather than two. */
 .data-table th, .data-table td {
   text-align: left;
-  padding: 10px 12px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
@@ -655,7 +657,12 @@ code {
   top: 0;
 }
 .data-table tbody tr:last-child td { border-bottom: 0; }
-.data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* `width: 1%` collapses a numeric column to its own content. A table is
+   width:100%, so the slack has to go somewhere: without this it was shared out
+   between every column, which is why four columns in a wide modal sat with
+   large gaps between them. The slack now goes to the text column instead, and
+   the figures group together where they can be compared. */
+.data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; width: 1%; }
 .data-table tbody tr:hover { background: var(--panel-2); }
 .data-table tr.group-row td {
   background: var(--accent-soft-2);
@@ -792,7 +799,7 @@ code {
   .section { padding: 16px; border-radius: 10px; }
   .section-head { flex-wrap: wrap; }
   .page-head { flex-wrap: wrap; }
-  .data-table th, .data-table td { padding: 8px 8px; font-size: 12px; }
+  .data-table th, .data-table td { padding: 6px 7px; font-size: 12px; }
 }
 
 /* --- Narrower phones --- */
@@ -869,7 +876,7 @@ code {
   /* Tables - horizontal scroll, smaller font */
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -14px; }
   .data-table { font-size: 12px; }
-  .data-table th, .data-table td { padding: 8px 10px; }
+  .data-table th, .data-table td { padding: 6px 8px; }
   .data-table th { font-size: 10.5px; letter-spacing: 0.03em; }
 
   /* Expenses sub-tab strip - horizontal scroll */
@@ -1302,8 +1309,12 @@ code {
    and no row is left with a hole. 12 divides by 2, 3, 4 and 6, so pick the
    modifier that matches the card count:
 
+     (no modifier)  3 cards  → span 4  → one full row             (~389px each)
      .kpi-strip-6   6 cards  → span 4  → 3 per row, 2 full rows   (~389px each)
      .kpi-strip-7   7 cards  → span 3 then span 4 → 4 + 3         (~288 / ~389)
+
+   3 and 6 both ride the base span-4 rule, so a rep's three-tile strip needs no
+   modifier and its cards are the same size as a manager's.
 
    7 is prime, so it is the one count that cannot be uniform: 4 + 3 is the only
    split that fills both rows. Every other strip should use an even count.
@@ -1316,6 +1327,17 @@ code {
 .kpi-strip { display: grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap: 14px; margin-bottom: 20px; }
 .kpi-strip > * { grid-column: span 4; }                              /* default: 3 per row */
 .kpi-strip-4 > * { grid-column: span 3; }                            /* 4 per row, 1 full row */
+/* 6 on ONE line, not 3 + 3. Two rows of tall cards pushed the actual content
+   below the fold; a span-2 track is ~200px at 1440px, which the compact card
+   below fits comfortably. Only the rep dashboard uses this modifier. */
+.kpi-strip-6 > * { grid-column: span 2; }                            /* 6 per row, 1 full row */
+/* 5 is the one count that CANNOT ride the 12-column track — 12/5 is not whole,
+   so any uniform span leaves a hole (span 2 fills 10 of 12, span 3 overflows).
+   This modifier swaps the track to 10 columns for itself and spans 2, which is
+   a full row of five and the same card width the six-tile strip had.
+   Used by the rep dashboard's manager view since the Revenue tile was removed. */
+.kpi-strip-5 { grid-template-columns: repeat(10, minmax(0,1fr)); }
+.kpi-strip-5 > * { grid-column: span 2; }                            /* 5 per row, 1 full row */
 .kpi-strip-7 > * { grid-column: span 3; }                            /* cards 1-4 */
 .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 4; }             /* cards 5-7 */
 /* The desktop layout holds down to ~1000px (a span-3 track is still ~200px
@@ -1325,20 +1347,54 @@ code {
   .kpi-strip{ grid-template-columns: repeat(6, minmax(0,1fr)); }
   .kpi-strip > * { grid-column: span 3; }                            /* 2 per row */
   .kpi-strip-4 > * { grid-column: span 3; }                          /* 2 x 2 */
+  .kpi-strip-6 > * { grid-column: span 2; }                          /* 3 x 2 */
+  /* Re-asserted: the `.kpi-strip` rule above resets the track to 6 columns and
+     has the same specificity, so without this the five-tile strip would inherit
+     a 6-column grid and its span-2 cards would land 3 + 2, leaving a hole.
+     A 10-column track is ~190px per card at 1000px — still above the ~162px
+     min-content — so five across holds all the way down to the 900px break. */
+  .kpi-strip-5 { grid-template-columns: repeat(10, minmax(0,1fr)); }
+  .kpi-strip-5 > * { grid-column: span 2; }                          /* 5 per row */
   .kpi-strip-7 > * { grid-column: span 3; }
   .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 2; }           /* last 3 = 1 row */
 }
 @media (max-width:900px){
   .kpi-strip{ grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .kpi-strip > *, .kpi-strip-4 > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 1; }
-  /* 6 cards land 3x2 here and need no special case; 7 leaves one over, so the
-     last card spans the full width rather than sitting beside a hole. */
+  /* .kpi-strip-6 is listed EXPLICITLY. Its span-2 rule above has the same
+     specificity as `.kpi-strip > *`, so it was only being overridden here by
+     source order — one reordered block away from six cards going one-per-row. */
+  /* .kpi-strip-5 needs BOTH resets: its own 10-column track and its span, for
+     exactly the same reason .kpi-strip-6 is listed — equal specificity. */
+  .kpi-strip-5 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .kpi-strip > *, .kpi-strip-4 > *, .kpi-strip-5 > *, .kpi-strip-6 > *,
+  .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5) { grid-column: span 1; }
+  /* 6 cards land 2x3 here; 5 and 7 each leave one over, so the last card spans
+     the full width rather than sitting beside a hole. */
+  .kpi-strip-5 > *:last-child,
   .kpi-strip-7 > *:last-child { grid-column: span 2; }
 }
 @media (max-width:560px){
-  .kpi-strip{ grid-template-columns: minmax(0,1fr); }
-  .kpi-strip > *, .kpi-strip-4 > *, .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5), .kpi-strip-7 > *:last-child { grid-column: span 1; }
+  .kpi-strip, .kpi-strip-5 { grid-template-columns: minmax(0,1fr); }
+  .kpi-strip > *, .kpi-strip-4 > *, .kpi-strip-5 > *, .kpi-strip-5 > *:last-child,
+  .kpi-strip-7 > *, .kpi-strip-7 > *:nth-child(n+5), .kpi-strip-7 > *:last-child { grid-column: span 1; }
 }
+/* Brief outline on a card a KPI tile has just scrolled you to. On a tall page a
+   smooth jump leaves you unsure which card you were sent to; this says so
+   without moving anything. Fades out on its own, and honours reduced-motion
+   below by resolving to a plain steady outline. */
+@keyframes smrScrollFlash {
+  0%   { box-shadow: 0 0 0 0 rgba(10,54,159,.34), 0 0 0 0 rgba(10,54,159,.14); }
+  35%  { box-shadow: 0 0 0 3px rgba(10,54,159,.34), 0 0 22px 2px rgba(10,54,159,.14); }
+  100% { box-shadow: 0 0 0 0 rgba(10,54,159,0), 0 0 0 0 rgba(10,54,159,0); }
+}
+.scroll-flash { animation: smrScrollFlash 1.4s cubic-bezier(.16,.84,.44,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .scroll-flash { animation: none; box-shadow: 0 0 0 2px rgba(10,54,159,.34); }
+}
+/* Anchor the scroll below any sticky page furniture rather than flush to the
+   viewport edge, so the card's own heading is not the first thing clipped. */
+.ar-register .chart-card { scroll-margin-top: 14px; }
+
 .kpi--grad { position:relative; isolation:isolate; overflow:hidden; display:flex; flex-direction:column; min-height:118px;
   border-radius:16px; padding:16px; color:#0E1B2E; background:#FFFFFF; border:1px solid #E7EBF1;
   box-shadow:0 1px 2px rgba(14,27,46,.04), 0 8px 22px -14px rgba(14,27,46,.10); }
@@ -1461,6 +1517,22 @@ code {
   box-shadow:0 14px 28px -14px var(--k-glow,rgba(10,54,159,.28)), 0 2px 6px rgba(14,27,46,.06); }
 .kpi--exec.clickable:focus-visible { outline:2px solid var(--k-to); outline-offset:2px; }
 
+/* COMPACT variant — opt-in, so the company Overview's cards are untouched.
+   The full-size card is built around a sparkline and a month-on-month delta;
+   the rep dashboard's cards carry neither, so the height reserved for them
+   (min-height 118px, a 30px value row, a 15px delta line) was empty space on
+   every one of six tiles. This keeps the same anatomy at roughly two thirds the
+   height, which is what lets six sit on one line without dominating the page. */
+.kpi-compact .kpi--exec { min-height:0; border-radius:12px; padding:10px 12px 9px; }
+.kpi-compact .kpi--exec .ke-label { font-size:10.5px; }
+.kpi-compact .kpi--exec .ke-row { margin-top:4px; min-height:0; }
+.kpi-compact .kpi--exec .ke-value { font-size:19px; letter-spacing:-.018em; }
+.kpi-compact .kpi--exec .ke-delta { margin-top:3px; font-size:10.5px; min-height:0; }
+.kpi-compact .kpi--exec .ke-foot { padding-top:7px; }
+.kpi-compact .kpi--exec .ke-chip { padding:1px 7px; font-size:9.5px; }
+/* The lift on hover is proportionally large on a short card. */
+.kpi-compact .kpi--exec.clickable:hover { transform:translateY(-1px); }
+
 /* 12-col analytics grid: every row sums to exactly 12, no row spans, so each
    row's cards stretch to ONE shared height and every edge lines up. */
 .exec-grid12 { display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:18px; align-items:stretch; }
@@ -1546,10 +1618,13 @@ code {
 
 /* Big segmented sub-tabs (Sales Orders | Purchase Orders | Tracking): full
    width, solid-accent active pill, unmissable. */
-.ov-tabs { display:flex; gap:6px; background:var(--panel); border:1px solid var(--border); border-radius:12px;
-  padding:6px; margin:4px 0 18px; box-shadow:0 1px 2px rgba(14,27,46,.04); }
-.ov-tab { flex:1; text-align:center; background:transparent; border:0; padding:12px 16px; border-radius:9px;
-  font-size:14px; font-weight:700; color:var(--muted-strong); cursor:pointer; white-space:nowrap;
+/* Tightened: this was a 12px-padded 14px row inside a 6px-padded bar, ~62px of
+   chrome for four words, stretched edge to edge above the content it switches
+   between. Same control, ~40px. */
+.ov-tabs { display:flex; gap:4px; background:var(--panel); border:1px solid var(--border); border-radius:10px;
+  padding:4px; margin:4px 0 12px; box-shadow:0 1px 2px rgba(14,27,46,.04); }
+.ov-tab { flex:1; text-align:center; background:transparent; border:0; padding:7px 12px; border-radius:7px;
+  font-size:13px; font-weight:700; color:var(--muted-strong); cursor:pointer; white-space:nowrap;
   transition:background .15s ease, color .15s ease; }
 .ov-tab:hover { background:var(--panel-2); color:var(--text); }
 .ov-tab.active { background:var(--accent); color:#fff; box-shadow:0 4px 12px -4px rgba(10,54,159,.45); }
@@ -1585,13 +1660,23 @@ code {
 .cfoot .cf-i .v.pos { color:var(--positive); } .cfoot .cf-i .v.neg { color:var(--negative); } .cfoot .cf-i .v.accent { color:var(--accent); }
 
 /* Donut + itemised legend (aging summaries). */
-.donut-list { display:flex; align-items:center; gap:14px; flex:1 1 auto; }
+/* Chart and legend side by side, but the legend WRAPS below the chart rather
+   than being squeezed. In a 3-of-12 card the 124px chart plus a value and a
+   percentage left the label about 30px, so "31–60" rendered as "31–…" — the
+   one part of the row a reader cannot infer from the others.
+   `flex: 1 1 165px` is the rule doing the work: given less than 165px the
+   legend takes its own line at full card width instead of ellipsising. */
+.donut-list { display:flex; align-items:center; gap:14px; flex:1 1 auto; flex-wrap:wrap; }
 .donut-list .dl-chart { flex:none; width:124px; height:124px; }
-.donut-list .dl-legend { flex:1; min-width:0; }
-.dl-item { display:flex; align-items:center; gap:7px; padding:3.5px 0; font-size:11.5px; }
-.dl-item .dl-name { color:var(--muted-strong); font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.dl-item .dl-val { font-weight:700; color:var(--text); font-variant-numeric:tabular-nums; }
-.dl-item .dl-pct { color:var(--muted); font-variant-numeric:tabular-nums; width:32px; text-align:right; }
+.donut-list .dl-legend { flex:1 1 165px; min-width:0; }
+.dl-item { display:flex; align-items:baseline; gap:7px; padding:3.5px 0; font-size:11.5px; }
+/* No ellipsis: these labels are short and fixed ("Current", "1–30", "90+"), so
+   the row should give them their width rather than trim them. */
+.dl-item .dl-name { color:var(--muted-strong); font-weight:600; flex:1 1 auto; min-width:0; white-space:nowrap; }
+/* `margin-left:auto` pins the money to the right edge whatever the label is,
+   so the figures still form a column down the legend. */
+.dl-item .dl-val { margin-left:auto; flex:none; font-weight:700; color:var(--text); font-variant-numeric:tabular-nums; }
+.dl-item .dl-pct { flex:none; color:var(--muted); font-variant-numeric:tabular-nums; width:32px; text-align:right; }
 .dl-total { display:flex; align-items:center; justify-content:space-between; margin-top:7px; padding-top:8px; border-top:1px solid var(--border);
   font-size:11.5px; font-weight:700; color:var(--muted-strong); }
 .dl-total b { font-size:13px; color:var(--text); font-variant-numeric:tabular-nums; }
@@ -1948,6 +2033,22 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
      of the statement. */
   .printing .modal-backdrop, .printing .modal-close { display: none !important; }
 
+  /* AP Register: every row prints, not just the page on screen. */
+  .pg-off { display: table-row; }
+
+  /* PI/PIP stage table. "Move to" is a control — a dropdown on paper is both
+     unusable and misleading, and its value is the stage named in the heading
+     directly above, so the column says nothing the page has not already said. */
+  .pi-stage-table th:last-child,
+  .pi-stage-table td:last-child { display: none; }
+
+  /* The Striven label chips are the evidence for the stage, so their tint has
+     to survive the print. Browsers drop backgrounds unless told otherwise. */
+  .pi-label {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
   @page { margin: 12mm; }
 }
 
@@ -1957,22 +2058,546 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 /* When printing a scoped region, everything outside it is hidden. */
 .printing [data-print-scope] { position: static; }
 
-/* Dashboard grids sized to the item count, not to whatever auto-fit happens to
-   land on. Six donuts in an auto-fit grid gave 4 + 2 at desktop width and left
-   two dead cells on the second row; 6 divides evenly into 3 and 2, never 4. */
-.donut-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
-@media (min-width: 660px)  { .donut-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (min-width: 1180px) { .donut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-/* A rep sees 4 donuts, not 6 (the two revenue ones are withheld). 4 into 3
-   columns leaves a hole, so the 4-card case gets its own full row. */
-@media (min-width: 1180px) { .donut-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+/* One chart is left on the overview (Units by device). A single card stretched
+   to the full page width reads as a broken grid, so it is capped — but wider
+   than the 420px the donut needed: this is now a bar chart whose rows carry a
+   device name, a bar, a count and a percentage on ONE line, and at 420px the
+   names truncated to nothing. Full width while the viewport is narrow.
+   This replaces .donut-grid / .donut-grid-4, which sized a row of 3-6 cards. */
+.chart-solo { display: grid; grid-template-columns: minmax(0, 640px); margin-bottom: 14px; }
 
-.pair-grid { display: grid; gap: 14px; margin-bottom: 14px; align-items: stretch; grid-template-columns: 1fr; }
-@media (min-width: 760px) { .pair-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Units by device WITH the Leaderboard beside it. Both cards carry a column of
+   ranked rows, so they read as a pair rather than two unrelated panels — and
+   pairing them uses the row the 640px cap would otherwise leave half empty.
+   `align-items: start` so the shorter card keeps its own height instead of
+   stretching to match; they rarely hold the same number of rows.
+   Stacks below 1100px, where two columns of name+bar+figures cannot both fit. */
+.chart-pair { display: grid; gap: 14px; margin-bottom: 14px; grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 1100px) { .chart-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 
-/* Ranked-list rows on the dashboard get a hover they previously lacked. */
-.toplist-row { transition: background-color .15s ease; }
-.toplist-row:hover { background: var(--panel-2); }
+/* ── Orders dashboard card grid ───────────────────────────────────────────────
+   `align-items: start` is the whole point: a grid item defaults to `stretch`,
+   which is what made a 3-row vertical summary as tall as the Accounts list
+   beside it and left the difference as blank space inside the shorter card.
+   Every card now takes its own content height and sits at the TOP of its row.
+
+   One column below 900px, so the explicit placement below never applies at a
+   width that cannot hold two columns. */
+.dash-grid { display: grid; gap: 1rem; margin-top: 1rem; align-items: start; grid-template-columns: 1fr; }
+@media (min-width: 900px) {
+  .dash-grid { grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); }
+  /* Manager: the two long tables each get a full-width row of their own. */
+  .dash-grid > .dg-accounts, .dash-grid > .dg-devices { grid-column: 1 / -1; }
+}
+/* Rep: a fixed two-column frame, because the cards have to be PLACED — the
+   accounts card is written between the other two in the DOM and still has to
+   hold the right-hand column across both rows, which auto-flow cannot express.
+   Declared after the block above so these win on a .dash-grid.dash-grid-rep. */
+@media (min-width: 900px) {
+  /* NOT an even split. The left column holds a 3-column summary and a 4-column
+     device list; the right holds a 6-column account table whose names run long
+     ("Cesar Ornelas Injury Law Firm"). An even split truncated those names
+     while the left column sat half empty, so the row is dealt 5:7. */
+  .dash-grid-rep { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+  .dash-grid-rep > .dg-vertical { grid-column: 1; grid-row: 1; }
+  .dash-grid-rep > .dg-devices  { grid-column: 1; grid-row: 2; }
+  /* The ONE card that opts back into stretching. It spans both rows, so
+     `align-self: stretch` makes it end exactly level with the device table
+     below it instead of stopping short and leaving the column ragged. The
+     grid's `align-items: start` still governs every other card. */
+  .dash-grid-rep > .dg-accounts {
+    grid-column: 2; grid-row: 1 / span 2;
+    align-self: stretch;
+    display: flex; flex-direction: column;
+  }
+  /* Its list then takes whatever height is left after the heading and filters,
+     rather than a fixed cap. `min-height: 0` is required — a flex item will not
+     shrink below its content without it, and the scroll would never engage. */
+  .dash-grid-rep > .dg-accounts .dg-scroll { max-height: none; flex: 1; min-height: 0; }
+}
+/* Long lists scroll INSIDE their card rather than setting the row's height.
+   The table head is already sticky, so it stays put while the body scrolls. */
+.dg-scroll { max-height: 420px; overflow-y: auto; }
+
+/* ── Rep leaderboard (Leaderboard.tsx) ───────────────────────────────────────
+   Built mobile-first: every rule below is the ~380px layout, and the only
+   breakpoint widens the podium to three across. Colours come from the token
+   set; the medal tints are passed in per card as --ring / --soft.            */
+.lbx-gap { display: flex; align-items: flex-start; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--text); background: var(--accent-soft, var(--panel-2));
+  border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px;
+  padding: 9px 12px; margin-bottom: 10px; line-height: 1.45; }
+/* The icon keeps its own column so a wrapping sentence stays aligned under
+   itself rather than running back under the glyph. */
+.lbx-gap-i { flex: none; font-size: 15px; line-height: 1.3; }
+.lbx-gap b { color: var(--accent); font-weight: 800; }
+.lbx-gap.is-first { border-left-color: #D4A017; }
+.lbx-gap.is-first b { color: #B8860B; }
+
+/* PODIUM. One column on a phone — three tall cards would each be ~110px wide
+   and the names would be unreadable. */
+.lbx-podium { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px; }
+@media (min-width: 560px) { .lbx-podium { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; } }
+
+.lbx-pod { position: relative; display: grid; gap: 2px; text-align: left; width: 100%;
+  background: var(--soft); border: 1px solid var(--border); border-top: 3px solid var(--ring);
+  border-radius: 12px; padding: 10px 12px; cursor: default; color: inherit;
+  transition: transform .14s ease, box-shadow .18s ease; }
+/* The 1st-place card stands taller than 2nd and 3rd — the podium shape. */
+@media (min-width: 560px) {
+  .lbx-pod-1 { padding-top: 18px; }
+  .lbx-pod-2 { padding-top: 13px; }
+}
+.lbx-pod:not(:disabled) { cursor: pointer; }
+.lbx-pod:not(:disabled):hover { transform: translateY(-2px); box-shadow: 0 10px 22px -14px rgba(14,27,46,.5); }
+.lbx-pod:not(:disabled):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lbx-pod.is-self { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.lbx-pod-medal { position: absolute; top: 8px; right: 10px; font-size: 21px; line-height: 1; }
+/* The rank is the point of a leaderboard, so it is sized like one: 9.5px
+   uppercase read as a caption on the card rather than as the placing. */
+.lbx-pod-rank { font-size: 17px; font-weight: 800; letter-spacing: .02em; line-height: 1;
+  text-transform: uppercase; color: var(--ring); }
+.lbx-pod-name { font-size: 13.5px; font-weight: 800; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lbx-pod-n { font-size: 25px; font-weight: 800; line-height: 1.05; color: var(--text); font-variant-numeric: tabular-nums; }
+.lbx-pod-u { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin-top: -2px; }
+
+/* RANKS 4+. Compact rows on the same grid as the podium's figures. */
+.lbx-rows { display: grid; gap: 2px; }
+/* 28px, not 20px: the rank numeral grew and needs the room to stay centred
+   under the podium's placings rather than clipping. */
+.lbx-row { display: grid; grid-template-columns: 28px minmax(70px, 1fr) minmax(0, 1.1fr) auto;
+  gap: 9px; align-items: center; width: 100%; text-align: left; color: inherit;
+  background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 6px 8px;
+  cursor: default; transition: background-color .15s ease, transform .12s ease; }
+.lbx-row:not(:disabled) { cursor: pointer; }
+.lbx-row:not(:disabled):hover { background: var(--panel-2); transform: translateX(2px); }
+.lbx-row:not(:disabled):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lbx-row.is-self, .lbx-pod.is-self { background: var(--panel-2); }
+.lbx-row.is-self { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+/* Matched to the podium's placing size, so 4th reads as the next rank down
+   rather than as a different kind of label. */
+.lbx-rank { font-size: 17px; font-weight: 800; color: var(--muted-strong);
+  font-variant-numeric: tabular-nums; text-align: center; line-height: 1; }
+.lbx-name { min-width: 0; display: flex; align-items: center; gap: 5px; }
+.lbx-name-t { font-size: 12.5px; font-weight: 700; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lbx-orders { font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lbx-orders b { font-size: 13px; color: var(--text); font-weight: 800; }
+.lbx-you { font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--positive); }
+
+/* MILESTONE badge: the order threshold the rep has passed. */
+.lbx-badge { flex: none; font-size: 9.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+  color: #B8860B; background: rgba(212,160,23,.15); border: 1px solid rgba(212,160,23,.4);
+  border-radius: 999px; padding: 1px 6px; }
+.lbx-pod .lbx-badge { justify-self: start; margin-top: 3px; }
+
+/* Segmented vertical pill. Track = the leader's length, fill = this rep's. */
+.lbx-track { display: block; height: 8px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+.lbx-fill { display: flex; height: 100%; border-radius: 999px; overflow: hidden;
+  transition: width .45s cubic-bezier(.22,.75,.3,1); }
+.lbx-fill > span { display: block; }
+.lbx-pod .lbx-track { margin-top: 7px; }
+
+/* LEGEND, doubling as a vertical filter. */
+.lbx-legend { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.lbx-leg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700;
+  color: var(--muted-strong); background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 9px; cursor: pointer; }
+.lbx-leg.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+.lbx-leg.on .lbx-dot { box-shadow: 0 0 0 1.5px #fff; }
+.lbx-dot { display: inline-block; width: 8px; height: 8px; border-radius: 3px; }
+
+/* SLIDE-UP DRAWER. Bottom sheet on a phone, centred panel on a desktop. */
+.lbx-drawer-back { position: fixed; inset: 0; background: rgba(15,27,46,.45); z-index: 1000;
+  display: flex; align-items: flex-end; justify-content: center; }
+.lbx-drawer { width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto;
+  background: var(--panel); border-radius: 16px 16px 0 0; box-shadow: 0 -18px 48px rgba(0,0,0,.3);
+  animation: lbxUp .28s cubic-bezier(.22,.75,.3,1); }
+@keyframes lbxUp { from { transform: translateY(14%); opacity: .6; } to { transform: none; opacity: 1; } }
+@media (min-width: 560px) {
+  .lbx-drawer-back { align-items: center; }
+  .lbx-drawer { border-radius: 16px; max-height: 84vh; }
+}
+.lbx-drawer-grip { width: 36px; height: 4px; border-radius: 999px; background: var(--border-strong, var(--border));
+  margin: 8px auto 0; }
+.lbx-drawer-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  padding: 10px 16px 12px; border-bottom: 1px solid var(--border); }
+.lbx-drawer-title { font-size: 17px; font-weight: 800; color: var(--text); }
+.lbx-drawer-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.lbx-drawer-body { padding: 12px 16px 18px; }
+.lbx-drawer-h { font-size: 12px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted-strong); margin-bottom: 6px; }
+.lbx-count { font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.lbx-drawer-foot { font-size: 11px; color: var(--muted); margin-top: 12px; }
+
+/* CONFETTI. Pure CSS, ~22 nodes, removed from the DOM after ~2.6s. */
+.lbx-confetti { position: absolute; inset: 0; overflow: hidden; pointer-events: none; border-radius: inherit; }
+.lbx-confetti > span { position: absolute; top: -12px; width: 7px; height: 11px; border-radius: 2px;
+  opacity: 0; animation: lbxFall 2.1s cubic-bezier(.3,.6,.4,1) forwards; }
+@keyframes lbxFall {
+  0%   { opacity: 0; transform: translate3d(0,-10px,0) rotate(0deg); }
+  10%  { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(var(--drift,0), 320px, 0) rotate(540deg); }
+}
+
+/* prefers-reduced-motion: no travel, no celebration. The board still works —
+   the count-ups fall back to their final value inside AnimatedNumber. */
+@media (prefers-reduced-motion: reduce) {
+  .lbx-confetti { display: none; }
+  .lbx-fill, .lbx-row, .lbx-pod { transition: none !important; }
+  .lbx-drawer { animation: none; }
+  .lbx-row:not(:disabled):hover, .lbx-pod:not(:disabled):hover { transform: none; }
+}
+
+/* Leaderboard rows. Hover and focus need a stylesheet — inline styles cannot
+   express either — so the row's feedback lives here.
+   `:not(:disabled)` matters: a rep's peer rows are disabled (their breakdown is
+   not theirs to open), and offering hover feedback on a row that does nothing
+   when clicked is a worse lie than offering none. */
+.lb-row { transition: background-color .15s ease, box-shadow .15s ease, transform .12s ease; }
+.lb-row:not(:disabled):hover { background: var(--panel-2) !important; transform: translateX(2px); }
+.lb-row:not(:disabled):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The bar brightens with the row, so the eye lands on the thing being compared. */
+.lb-row:not(:disabled):hover .mix-fill { filter: saturate(1.15) brightness(1.04); }
+
+/* Striven LABEL chips on a pipeline row. Shape and size are fixed here; the
+   colour comes from --lc, set per chip to the stage the label maps to.
+   NOTE: this is NOT Striven's own palette — the report returns label names with
+   no colour or gradient, so there is nothing to mirror yet. Supply the real
+   colours and only --lc has to change. */
+.pi-labels { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.pi-label { display: inline-flex; align-items: center; max-width: 190px;
+  font-size: 10.5px; font-weight: 700; line-height: 1.5; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  padding: 2px 8px; border-radius: 999px;
+  color: var(--lc, var(--muted-strong));
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--lc, #64748B) 14%, transparent),
+    color-mix(in srgb, var(--lc, #64748B) 7%, transparent));
+  border: 1px solid color-mix(in srgb, var(--lc, #64748B) 34%, transparent); }
+
+/* Quarter picker inside the Financial Insights card. */
+.ins-qtabs { display: inline-flex; gap: 3px; flex: none; }
+.ins-qtab { font-size: 11px; font-weight: 700; color: var(--muted-strong);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 9px; cursor: pointer; transition: background-color .14s ease, color .14s ease; }
+.ins-qtab:hover { color: var(--text); }
+.ins-qtab.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+.ins-qtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* "View as" picker in the Financial Overview header. Two audiences only —
+   Crystal Chambers and Kevin; the Company side is not reachable by a rep. */
+.ov-viewas { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+  font-weight: 600; color: var(--muted-strong); white-space: nowrap; }
+.ov-viewas select { padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border-strong, var(--border));
+  background: var(--panel); color: var(--text); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.ov-viewas select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── UNITS BY DEVICE ────────────────────────────────────────────────────────
+   Vertical hatched bars in the primary tint, the leader solid. Every colour is
+   a :root token: --accent for the primary, --warn for the hold dot, --border
+   for the dashed gridlines. Counts only — this component never renders money. */
+.ubd { display: flex; flex-direction: column; min-width: 0; }
+.ubd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.ubd-sub { font-size: 12px; color: var(--muted); }
+.ubd-sortr { margin-left: auto; }
+
+/* Plot area. The gridlines are positioned against this box, so they sit at the
+   true 0 / 50% / 100% of the bar heights rather than of the whole card. */
+.ubd-plot { position: relative; height: 178px; margin-bottom: 46px; }
+.ubd-grid { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border-strong); opacity: .75; pointer-events: none; }
+.ubd-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 12px; }
+@media (max-width: 640px) {
+  /* Mobile: scroll sideways rather than crushing bars below their labels. */
+  .ubd-bars { overflow-x: auto; overflow-y: visible; padding-bottom: 2px; }
+  .ubd-b { min-width: 62px; }
+}
+
+.ubd-b { flex: 1 1 0; min-width: 0; height: 100%; position: relative;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  cursor: pointer; transition: opacity .18s ease; }
+.ubd-b:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+.ubd-b.dim { opacity: .30; }
+
+.ubd-b .ct { font-size: 13px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums;
+  margin-bottom: 5px; transition: color .15s ease, transform .15s ease; }
+.ubd-b .ct.up { color: var(--accent); transform: translateY(-1px); }
+
+/* Hatch: the primary at a tint, striped. The leader overrides to solid. */
+.ubd-b .col, .ubd-hrow .track i {
+  background: var(--accent-soft);
+  background-image: repeating-linear-gradient(45deg, rgba(10, 54, 159, .22) 0 3px, transparent 3px 7px);
+  border: 1px solid var(--accent-soft);
+}
+.ubd-b .col { width: 100%; max-width: 54px; border-radius: 8px 8px 0 0; position: relative;
+  transform-origin: bottom center; animation: ubdRise .6s cubic-bezier(.16,.84,.44,1) both; }
+.ubd-b .col.solid, .ubd-hrow .track i.solid { background: var(--accent); border-color: var(--accent); background-image: none; }
+.ubd-b:hover .col { border-color: var(--accent); }
+
+/* Hold marker: --warn, ringed in the card colour so it reads on both fills. */
+.ubd-b .col .hold, .ubd-hrow .track .hold {
+  position: absolute; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--warn); border: 2px solid var(--panel); box-sizing: content-box;
+}
+.ubd-b .col .hold { top: -5px; right: -5px; }
+.ubd-hrow .track .hold { top: 50%; right: -5px; transform: translateY(-50%); }
+
+/* Two-line device label, pinned below the plot so bars keep a common baseline. */
+.ubd-b .lb { position: absolute; top: calc(100% + 7px); left: -4px; right: -4px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px; text-align: center; }
+.ubd-b .lb b, .ubd-b .lb em {
+  font-size: 10.5px; line-height: 1.25; font-style: normal; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ubd-b .lb b { color: var(--muted-strong); font-weight: 700; }
+.ubd-b .lb em { color: var(--muted); font-weight: 500; }
+.ubd-b.pinned .lb b { color: var(--accent); }
+
+/* ── Horizontal mode: >10 devices, or >6 on a narrow screen ──────────────── */
+.ubd-hlist { display: flex; flex-direction: column; gap: 2px; max-height: 268px; overflow-y: auto; padding-right: 4px; }
+.ubd-hrow { display: flex; align-items: center; gap: 10px; padding: 5px 4px; border-radius: 7px;
+  cursor: pointer; transition: background-color .15s ease, opacity .18s ease; min-width: 0; }
+.ubd-hrow:hover { background: var(--panel-2); }
+.ubd-hrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ubd-hrow.dim { opacity: .32; }
+.ubd-hrow.pinned { background: var(--accent-soft-2); }
+.ubd-hrow .nm { flex: 0 0 40%; max-width: 40%; font-size: 12.5px; font-weight: 600; color: var(--muted-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ubd-hrow.pinned .nm { color: var(--accent); }
+.ubd-hrow .track { flex: 1 1 auto; position: relative; height: 15px; min-width: 30px; }
+.ubd-hrow .track i { display: block; height: 100%; border-radius: 0 5px 5px 0;
+  transform-origin: left center; animation: ubdGrow .6s cubic-bezier(.16,.84,.44,1) both; }
+.ubd-hrow .ct { flex: none; min-width: 34px; text-align: right; font-size: 12.5px; font-weight: 800;
+  color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ── Pinned detail line ──────────────────────────────────────────────────── */
+.ubd-detail { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 16px; padding: 10px 12px; border-radius: 9px;
+  background: var(--accent-soft-2); border: 1px solid var(--border);
+  font-size: 12.5px; color: var(--muted-strong); }
+.ubd-detail b { color: var(--text); font-weight: 800; }
+.ubd-detail .pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); }
+.ubd-detail .held { color: var(--warn); font-weight: 700; }
+
+.ubd-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; padding: 26px 12px; text-align: center; color: var(--muted); font-size: 12.5px; }
+.ubd-empty .ic { font-size: 22px; opacity: .5; }
+.ubd-empty b { color: var(--muted-strong); }
+
+/* ── Company board: tile headings in caps ───────────────────────────────────
+   Scoped to .ov-board, NOT to .exec-deck — a dozen tabs share that class and
+   would all be restyled.
+
+   Caps at the inherited 15px/700 read as shouting and set too tight, so the
+   size steps down and letter-spacing opens up: that pairing is what makes
+   uppercase legible rather than merely loud. Card SUBTITLES stay sentence case;
+   putting both in caps removes the hierarchy the heading is there to create. */
+.ov-board .section-title {
+  text-transform: uppercase;
+  font-size: 12.5px;
+  letter-spacing: 0.07em;
+  font-weight: 800;
+}
+/* The page's own H1 keeps its size — it is a page title, not a tile heading. */
+.ov-board .page-head .section-title { font-size: inherit; letter-spacing: normal; }
+
+/* ── AP Register: KPI footnotes in caps ─────────────────────────────────────
+   Scoped to .ap-register, NOT to .kpi-r — a dozen tabs share that card.
+
+   Caps at the inherited 11px/600 set too tight to read, so the spacing opens
+   up and the weight goes with it. Same treatment the Company board's tile
+   headings got, for the same reason. */
+.ap-register .kpi-r .kr-foot {
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 800;
+  font-size: 10px;
+}
+
+/* AP Register: rows outside the current page are rendered but hidden on screen,
+   so a PDF export carries the WHOLE register rather than page 1 of 7. The print
+   block below reveals them. */
+.pg-off { display: none; }
+
+/* ── ORDER STATUS BY STRIVEN LABEL (Company board) ──────────────────────────
+   A category grid, not a chart: the question is "which tags are in use and how
+   many orders sit under each", which a count answers directly. Each tile is a
+   filter — clicking one lists its orders. */
+.lbl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(186px, 1fr)); gap: 8px; }
+.lbl-cat {
+  display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left;
+  padding: 9px 11px; border-radius: 10px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--border); font: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .1s ease;
+}
+.lbl-cat:hover { border-color: var(--border-strong); box-shadow: 0 4px 14px rgba(15,23,42,.07); transform: translateY(-1px); }
+.lbl-cat:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The tile stacks: label row, then the vertical split rail beneath it. */
+.lbl-cat { flex-direction: column; align-items: stretch; gap: 7px; }
+.lbl-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lbl-cat .pi-label { flex: 1 1 auto; min-width: 0; }
+.lbl-cat .n { flex: none; font-size: 15px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.lbl-cat .v { flex: none; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 54px; text-align: right; }
+/* Which verticals a label spans, at a glance. Uses VERTICAL_COLORS, so PI/VA/
+   TriCare read the same here as on every other surface. */
+.lbl-vert { display: flex; height: 4px; border-radius: 999px; overflow: hidden; background: var(--panel-2); }
+.lbl-vert > span { display: block; height: 100%; }
+.lbl-note { margin-top: 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.lbl-note b { color: var(--muted-strong); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .lbl-cat { transition: none; } .lbl-cat:hover { transform: none; } }
+
+/* ── AR DETAIL ──────────────────────────────────────────────────────────────
+   Urgency rail + concentration, in the portal's own tokens. */
+.ard { display: flex; flex-direction: column; min-width: 0; }
+.ard-top { font-size: 30px; font-weight: 800; letter-spacing: -.03em; color: var(--text);
+  font-variant-numeric: tabular-nums; line-height: 1.1; }
+.ard-sub { font-size: 12px; color: var(--muted); margin: 3px 0 14px; }
+.ard-rail { display: flex; height: 18px; border-radius: 999px; overflow: hidden; background: var(--panel-2); }
+.ard-rail .seg { transform-origin: left center; animation: ubdGrow .6s cubic-bezier(.16,.84,.44,1) both; }
+.ard-key { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 9px; font-size: 11.5px; color: var(--muted); }
+.ard-key .k { display: inline-flex; align-items: center; gap: 6px; }
+.ard-key .d { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.ard-key b { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+.ard-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; margin-top: 16px; }
+.ard-f { padding: 9px 11px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--border); min-width: 0; }
+.ard-f .l { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.ard-f .v { font-size: 16px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ard-f .v.warn { color: var(--warn); }
+.ard-f .n { font-size: 10.5px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ard-note { margin-top: 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+@media (prefers-reduced-motion: reduce) { .ard-rail .seg { animation: none !important; } }
+
+/* ── ORDER FUNNEL ───────────────────────────────────────────────────────────
+   Stacked narrowing bars: each stage is a SUBSET of the one above, so the
+   widths are directly comparable against a single scale (the top stage). */
+.fnl { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.fnl-s { min-width: 0; }
+.fnl-top { display: flex; align-items: baseline; gap: 8px; font-size: 12px; margin-bottom: 5px; }
+.fnl-top .t { font-weight: 700; color: var(--muted-strong); }
+.fnl-top .v { margin-left: auto; font-size: 15px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.fnl-top .p { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+.fnl-track { height: 22px; border-radius: 6px; background: var(--panel-2); overflow: hidden; }
+.fnl-track i { display: block; height: 100%; border-radius: 6px; transform-origin: left center;
+  animation: ubdGrow .6s cubic-bezier(.16,.84,.44,1) both; }
+.fnl-drop { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); margin-top: 5px; }
+.fnl-drop .x { color: var(--warn); font-weight: 700; }
+.fnl-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+.fnl-s.clickable { cursor: pointer; }
+.fnl-s.clickable:hover .fnl-track { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .fnl-track i { animation: none !important; } }
+
+/* ── POSITION SUMMARY ───────────────────────────────────────────────────────
+   The doughnut splits open balances; this states the DIRECTION they run in,
+   which a ring cannot show. Same card family, different question. */
+.pos { display: flex; flex-direction: column; min-width: 0; }
+.pos-net { font-size: 32px; font-weight: 800; letter-spacing: -.03em; line-height: 1.1;
+  font-variant-numeric: tabular-nums; color: var(--text); }
+.pos-net.neg { color: var(--danger); }
+.pos-net.pos { color: var(--positive); }
+.pos-cap { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.pos-sub { font-size: 12px; color: var(--muted); margin: 4px 0 16px; }
+
+.pos-side { margin-bottom: 14px; }
+.pos-lab { display: flex; align-items: baseline; gap: 8px; font-size: 12px; margin-bottom: 5px; }
+.pos-lab .t { font-weight: 700; color: var(--muted-strong); }
+.pos-lab .v { margin-left: auto; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.pos-track { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--panel-2); }
+.pos-track .seg { transform-origin: left center; animation: ubdGrow .6s cubic-bezier(.16,.84,.44,1) both; }
+.pos-key { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 7px; font-size: 11.5px; color: var(--muted); }
+.pos-key .k { display: inline-flex; align-items: center; gap: 6px; }
+.pos-key .d { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.pos-key b { color: var(--muted-strong); font-weight: 700; }
+
+.pos-note { margin-top: auto; padding-top: 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+@media (prefers-reduced-motion: reduce) { .pos-track .seg { animation: none !important; } }
+
+/* ── COMMISSION BREAKDOWN ───────────────────────────────────────────────────
+   Ranked rows with a drill-down, in the portal's own tokens. */
+.cmb { display: flex; flex-direction: column; min-width: 0; }
+.cmb-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.cmb-total { font-size: 30px; font-weight: 800; letter-spacing: -.03em; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.cmb-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.cmb-sub .off { color: var(--warn); font-weight: 700; }
+.cmb-tabs { margin-left: auto; }
+
+.cmb-bars { display: flex; flex-direction: column; gap: 3px; }
+.cmb-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px; border-radius: 8px;
+  min-width: 0; transition: background-color .15s ease, opacity .18s ease; }
+.cmb-row.clickable { cursor: pointer; }
+.cmb-row.clickable:hover { background: var(--panel-2); }
+.cmb-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cmb-row.dim { opacity: .32; }
+.cmb-row.pinned { background: var(--accent-soft-2); }
+.cmb-row .nm { flex: 0 0 30%; max-width: 30%; font-size: 12.5px; font-weight: 700; color: var(--muted-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmb-row.pinned .nm { color: var(--accent); }
+.cmb-row .track { flex: 1 1 auto; height: 16px; min-width: 26px; }
+.cmb-row .track i { display: block; height: 100%; border-radius: 0 5px 5px 0;
+  transform-origin: left center; animation: ubdGrow .6s cubic-bezier(.16,.84,.44,1) both; }
+.cmb-row .amt { flex: none; min-width: 86px; text-align: right; font-size: 12.5px; font-weight: 800;
+  color: var(--text); font-variant-numeric: tabular-nums; }
+.cmb-row .pc { flex: none; min-width: 34px; text-align: right; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) {
+  .cmb-row .nm { flex-basis: 42%; max-width: 42%; }
+  .cmb-row .pc { display: none; }
+}
+
+.cmb-detail { margin-top: 14px; padding: 12px; border-radius: 10px;
+  background: var(--accent-soft-2); border: 1px solid var(--border); }
+.cmb-dh { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted-strong); }
+.cmb-dh b { color: var(--text); font-weight: 800; }
+.cmb-split { display: flex; height: 16px; border-radius: 999px; overflow: hidden; margin-top: 10px; background: var(--panel-2); }
+.cmb-split .seg { display: grid; place-items: center; min-width: 0; }
+.cmb-split .seg em { font-style: normal; font-size: 9.5px; font-weight: 800; color: #fff; letter-spacing: .03em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; }
+
+.cmb-lines { margin-top: 12px; }
+.cmb-lines .lh { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+.cmb-lines .ln { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12px; border-top: 1px solid var(--border); min-width: 0; }
+.cmb-lines .ln:first-of-type { border-top: 0; }
+.cmb-lines .r { flex: none; font-weight: 700; color: var(--accent); min-width: 58px; }
+.cmb-lines .p { flex: none; font-weight: 600; color: var(--text); min-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmb-lines .i { flex: 1 1 auto; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmb-lines .c { flex: none; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cmb-row .track i { animation: none !important; }
+  .cmb-row { transition: none; }
+}
+
+@keyframes ubdRise { from { transform: scaleY(0); opacity: .4; } to { transform: scaleY(1); opacity: 1; } }
+@keyframes ubdGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .ubd-b .col, .ubd-hrow .track i { animation: none !important; }
+  .ubd-b, .ubd-hrow, .ubd-b .ct { transition: none; }
+}
+
+/* Commission tab: the state card and the headline tiles on ONE row.
+   `stretch`, not `start`: the tile strip is the shorter side and is meant to
+   FILL its column — its rows are `1fr` each, so they divide whatever height the
+   state card sets and the two columns end level. One column below 1100px,
+   where two would crush the tiles. */
+.comm-head-pair { display: grid; gap: 14px; margin-bottom: 14px; grid-template-columns: 1fr; align-items: stretch; }
+@media (min-width: 1100px) { .comm-head-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+/* The tiles carry their own inner spacing, so let them grow with the row. */
+.comm-head-pair .kpi-r-strip > * { height: 100%; }
+
+/* Narrow cards: share the width EVENLY and centre the figures.
+   The app-wide rule collapses a `.num` column to its content (`width: 1%`) and
+   right-aligns it, which is right for a wide table — it groups the numbers by
+   the label they belong to. In a half-width card the same rule crushes every
+   figure against the row's right edge and lets the last header run past the
+   card, which is what was being clipped. Here each numeric column takes an
+   equal share instead, and its value sits in the middle of it.
+   `table-layout: fixed` is what makes the shares equal AND stops the table
+   widening to fit its content — nothing can overflow horizontally now. */
+.tbl-fit { table-layout: fixed; width: 100%; }
+.tbl-fit .num { width: auto; text-align: center; }
+/* Tighter side padding than the app default (10px). Under `table-layout: fixed`
+   a declared column width INCLUDES its padding, so 20px of it left a 26px "#"
+   column with 6px for the digits — enough to render "2" then ellipsise it. */
+.tbl-fit th, .tbl-fit td { overflow: hidden; text-overflow: ellipsis; padding-left: 6px; padding-right: 6px; }
 
 /* QuickBooks tab: flash banners + plan rows */
 .qb-flash { border-radius: 10px; padding: 10px 14px; font-size: 13.5px; font-weight: 600; border: 1px solid transparent; }

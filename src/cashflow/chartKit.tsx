@@ -280,6 +280,46 @@ export function BarsLine({ data, bars, line }: {
   );
 }
 
+/**
+ * Monthly totals as BARS. Same axes, grid and tooltip as BarsLine, without the
+ * line that component requires.
+ *
+ * Bars, not an area, because a month's total is a DISCRETE quantity: an area
+ * chart draws a slope between April and May, and that slope is not a rate of
+ * anything — nothing was billed "between" two months. A smoothed one is worse
+ * still, since `type="monotone"` bulges past the highest month and reads as a
+ * peak that was never invoiced.
+ *
+ * `data` must key its category as `month` (YYYY-MM) — the axis formatter is
+ * shared with TrendArea and BarsLine, so a differently-named key silently
+ * renders an unlabelled axis.
+ */
+export function MonthBars({ data, bars, onSelect }: {
+  data: Record<string, number | string>[];
+  bars: { key: string; name: string; color: string }[];
+  onSelect?: (month: string) => void;
+}) {
+  return (
+    <div className="chart-box">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 12, right: 16, left: 4, bottom: 2 }} barCategoryGap="26%">
+          <CartesianGrid {...gridProps} />
+          <XAxis dataKey="month" {...axisProps} tickFormatter={(m: string) => monthLabel(String(m))} />
+          <YAxis {...axisProps} width={54} tickFormatter={compactMoney} />
+          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.08)' }}
+            labelFormatter={(m) => monthLabel(String(m))}
+            formatter={(v: number | string, n: string) => [formatCurrency(Number(v)), n]} />
+          {bars.map((b) => (
+            <Bar key={b.key} {...NOANIM} dataKey={b.key} name={b.name} fill={b.color} radius={[4, 4, 0, 0]}
+              maxBarSize={46} cursor={onSelect ? 'pointer' : undefined}
+              onClick={onSelect ? (d: { payload?: Record<string, unknown> }) => onSelect(String(d?.payload?.month ?? '')) : undefined} />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 // Donut + itemised legend rows (name · $ · share) + a total footer: the
 // "aging summary" card. Rows are the legend, so no floating legend below.
 export function DonutList({ data, totalLabel = 'Total', money = true, onSelect }: {

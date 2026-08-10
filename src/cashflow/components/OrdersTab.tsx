@@ -19,6 +19,23 @@ import { OrderTrackingTab } from './OrderTrackingTab';
 
 type Mode = 'sales' | 'purchase' | 'tracking';
 
+/**
+ * Chip colour for a Striven label, by what the label MEANS rather than by which
+ * stage it happens to map to — this table spans every programme, and the PI and
+ * PIP boards send the same label to different stages.
+ *
+ * Four tones only: stopped, settled, waiting, moving. More would be decoration.
+ * Striven's report returns no colour of its own, so its palette cannot be
+ * mirrored until it is supplied.
+ */
+const labelTone = (label: string): string => {
+  const s = String(label || '').trim().toLowerCase();
+  if (/hold|denied|dropped|cancel/.test(s)) return C.warning;              // stopped
+  if (/^paid$|tricare paid|settled/.test(s)) return C.positive;            // money in
+  if (/waiting|negotiat|lop|lienstar|reimburse/.test(s)) return C.purple;  // in a queue
+  return C.brand;                                                          // moving
+};
+
 // Fixed category colors: PI/VA/Tri-Care read the same on every SMR surface.
 const TYPE_COLOR = (name: string): string => {
   const s = (name || '').toLowerCase();
@@ -36,6 +53,10 @@ const GROUP_OF = (status: string): SoGroup => {
   return 'active';
 };
 const GROUP_LABEL: Record<SoGroup | 'All', string> = { All: 'All statuses', active: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
+
+// Sentinel for "Striven has tagged nothing on this order". Parenthesised so it
+// cannot collide with a real label, which never has them.
+const SO_NO_LABEL = '(no label)';
 const SO_PAGE = 10;
 // Windowed page list: 1 2 3 … N.
 function pageList(cur: number, total: number): (number | '…')[] {
@@ -159,6 +180,14 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
   const [repMetric, setRepMetric] = useState<'orders' | 'units' | 'value'>('orders');
 
   // Recent-orders table filters (KPI cards click into these).
+  // FILTER BY STRIVEN LABEL, not by Striven's own status. The table's column is
+  // the label set — filtering by In Progress / Completed answered a different
+  // question from the one the column asks. '' is "all"; NO_LABEL picks out the
+  // orders Striven has tagged with nothing, which no real label can select.
+  const [soLabelF, setSoLabelF] = useState('');
+  // Status survives as a SEPARATE filter because the four KPI tiles above the
+  // table drive it. It has no dropdown any more — the tiles are its control —
+  // so the table header names it whenever it is on, with a way to clear it.
   const [soStatusF, setSoStatusF] = useState<'All' | SoGroup>('All');
   const [soProgF, setSoProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'Other'>('All');
   const [soQuery, setSoQuery] = useState('');
@@ -239,14 +268,42 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
     rows: rows.map((r) => ({ k: r.k, v: r.v })),
   });
 
-  // Recent-orders list after search + status-group + program filters.
+  // Labels actually in use, commonest first, counted by ORDER. Built from the
+  // rows the OTHER filters leave, so the list can never offer a label that
+  // would return nothing under the current programme or search.
+  const soLabelOpts = useMemo(() => {
+    const q = soQuery.trim().toLowerCase();
+    const base = (so?.recent ?? []).filter((o) =>
+      (soProgF === 'All' || o.type === soProgF)
+      && (!q || o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q)));
+    const m = new Map<string, number>();
+    let bare = 0;
+    for (const o of base) {
+      const ls = o.labels ?? [];
+      if (!ls.length) { bare += 1; continue; }
+      for (const l of ls) m.set(l, (m.get(l) ?? 0) + 1);
+    }
+    const opts = [...m.entries()].map(([value, count]) => ({ value, count }))
+      .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+    return bare > 0 ? [...opts, { value: SO_NO_LABEL, count: bare }] : opts;
+  }, [so, soProgF, soQuery]);
+
+  // Recent-orders list after search + LABEL + program filters.
   const soRecentFiltered = useMemo(() => {
     const q = soQuery.trim().toLowerCase();
-    return (so?.recent ?? []).filter((o) =>
-      (soStatusF === 'All' || GROUP_OF(o.status) === soStatusF) &&
-      (soProgF === 'All' || o.type === soProgF) &&
-      (!q || o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q)));
-  }, [so, soStatusF, soProgF, soQuery]);
+    return (so?.recent ?? []).filter((o) => {
+      const ls = o.labels ?? [];
+      // ANY-OF, like every other label filter in the portal: an order carries
+      // several labels at once, and picking "Shipped" should keep an order
+      // tagged "Shipped, Waiting for first payment".
+      const labelOk = !soLabelF
+        || (soLabelF === SO_NO_LABEL ? ls.length === 0 : ls.includes(soLabelF));
+      return labelOk
+        && (soStatusF === 'All' || GROUP_OF(o.status) === soStatusF)
+        && (soProgF === 'All' || o.type === soProgF)
+        && (!q || o.ref.toLowerCase().includes(q) || (o.rep || '').toLowerCase().includes(q) || (o.payer || '').toLowerCase().includes(q));
+    });
+  }, [so, soLabelF, soProgF, soQuery]);
   const poStatuses = useMemo(() => [...new Set((po?.recent ?? []).map((r) => r.status || 'Active'))].sort(), [po]);
   const poRecentFiltered = useMemo(() => {
     const q = poQuery.trim().toLowerCase();
@@ -437,14 +494,32 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
 
           <div className="section chart-card" style={{ marginTop: 16 }} ref={soTableRef}>
             <div className="section-head">
-              <div><h2 className="section-title">All Sales Orders</h2><div className="section-sub">{soRecentFiltered.length} of {so.recent.length} orders · {GROUP_LABEL[soStatusF]}{soProgF !== 'All' ? ` · ${soProgF === 'TriCare' ? 'Tri-Care' : soProgF}` : ''}</div></div>
+              <div><h2 className="section-title">All Sales Orders</h2>
+                <div className="section-sub">
+                  {soRecentFiltered.length} of {so.recent.length} orders
+                  {soLabelF ? ` · label: ${soLabelF}` : ''}
+                  {soProgF !== 'All' ? ` · ${soProgF === 'TriCare' ? 'Tri-Care' : soProgF}` : ''}
+                  {/* Status has no dropdown any more — the KPI tiles set it — so
+                      it is named here with its own way out, or it would filter
+                      the table with nothing on screen to explain why. */}
+                  {soStatusF !== 'All' && (
+                    <> · status: {GROUP_LABEL[soStatusF]}{' '}
+                      <button className="card-link" style={{ marginTop: 0, display: 'inline' }}
+                        onClick={() => { setSoStatusF('All'); setSoPage(1); }}>clear</button>
+                    </>
+                  )}
+                </div>
+              </div>
               <div className="tbl-controls">
                 <input className="tbl-search" style={{ width: 190 }} value={soQuery} onChange={(e) => { setSoQuery(e.target.value); setSoPage(1); }} placeholder="Search order / rep / payer" />
-                <select className="tbl-select" value={soStatusF} onChange={(e) => { setSoStatusF(e.target.value as 'All' | SoGroup); setSoPage(1); }}>
-                  <option value="All">All statuses</option>
-                  <option value="active">In Progress</option>
-                  <option value="completed">Completed</option>
-                  <option value="cancelled">Cancelled</option>
+                {/* BY STRIVEN LABEL, not by Striven's status: the column beside
+                    it is the label set, so this is the filter that matches what
+                    the table shows. Counts are per order. */}
+                <select className="tbl-select" value={soLabelF} onChange={(e) => { setSoLabelF(e.target.value); setSoPage(1); }}>
+                  <option value="">All labels</option>
+                  {soLabelOpts.map((l) => (
+                    <option key={l.value} value={l.value}>{l.value} ({l.count})</option>
+                  ))}
                 </select>
                 <select className="tbl-select" value={soProgF} onChange={(e) => { setSoProgF(e.target.value as typeof soProgF); setSoPage(1); }}>
                   <option value="All">All programs</option>
@@ -458,7 +533,12 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
             <div className="table-wrap">
               <table className="data-table">
                 <thead>
-                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th>Payer</th><th className="num">Value</th><th>Status</th><th>Invoiced</th></tr>
+                  {/* "Striven labels", not "Status". Striven's own status is only
+                      In Progress / Completed and says nothing about where an
+                      order sits; the LABELS are what decide its stage, so they
+                      are what belongs here. Status still drives the filter above
+                      and is shown in the row's drill-down. */}
+                  <tr><th>Order #</th><th>PI/VA</th><th>Sales Rep</th><th>Payer</th><th className="num">Value</th><th>Striven labels</th><th>Invoiced</th></tr>
                 </thead>
                 <tbody>
                   {soShown.map((o) => (
@@ -468,7 +548,19 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                       <td>{o.rep || '-'}</td>
                       <td>{o.payer || '-'}</td>
                       <td className="num">{formatCurrency(o.value)}</td>
-                      <td><StatusPill status={o.status} /></td>
+                      {/* Empty is a real answer: Striven has tagged nothing on
+                          this order, so it has no stage of its own. Showing the
+                          status here instead would dress a gap up as data. */}
+                      <td>
+                        {(o.labels ?? []).length === 0
+                          ? <span className="muted-note" title="Striven carries no label on this order">—</span>
+                          : <span className="pi-labels">
+                              {(o.labels ?? []).map((l) => (
+                                <span key={l} className="pi-label" title={l}
+                                  style={{ ['--lc' as string]: labelTone(l) }}>{l}</span>
+                              ))}
+                            </span>}
+                      </td>
                       <td>{o.invStatus || '-'}</td>
                     </tr>
                   ))}
@@ -518,8 +610,10 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                   { k: 'Active total', v: formatCurrency(po.totalValue) },
                 ]),
               })} />
-            <KpiR ico="trend" tint="#DC2626" label="Cancelled Excluded" value={po.cancelledCount ?? 0}
-              deltaText={po.cancelledValue ? formatCurrency(po.cancelledValue) : '-'} foot="removed from every figure" />
+            {/* The "Cancelled Excluded" tile is gone at the client's request.
+                The exclusion itself still applies — cancelled POs are kept out
+                of every figure on this tab; only the tile reporting it has been
+                removed. `po.cancelledCount` / `cancelledValue` are still sent. */}
             <KpiR ico="users" tint="#7C3AED" label="Vendors on POs" value={(po.byVendor ?? []).filter((v) => v.total > 0).length}
               deltaText="with active spend" foot="see Top Vendors below" />
           </div>

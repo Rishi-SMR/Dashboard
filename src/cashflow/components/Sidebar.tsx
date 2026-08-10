@@ -11,6 +11,10 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   overview: svg(<><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></>),
   receivables: svg(<><path d="M12 3v11" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></>),
   payables: svg(<><rect x="2.5" y="5" width="19" height="14" rx="2" /><line x1="2.5" y1="10" x2="21.5" y2="10" /></>),
+  // The two registers share a clipboard, distinguished by the arrow: AR points
+  // IN (money owed to us), AP points out — the same in/out convention the
+  // receivables and payables icons above already use.
+  arsheet: svg(<><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 3.5V6h8V3.5" /><path d="M12 10v5" /><path d="m9.6 12.6 2.4 2.4 2.4-2.4" /><line x1="8" y1="18" x2="16" y2="18" /></>),
   apsheet: svg(<><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 3.5V6h8V3.5" /><line x1="8" y1="10" x2="16" y2="10" /><line x1="8" y1="14" x2="16" y2="14" /><line x1="8" y1="18" x2="13" y2="18" /></>),
   pl: svg(<><line x1="6" y1="20" x2="6" y2="12" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="18" y1="20" x2="18" y2="9" /></>),
   orders: svg(<><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M3 4h2l2.4 11.4a1 1 0 0 0 1 .6h8.8a1 1 0 0 0 1-.8L20 8H6" /></>),
@@ -51,6 +55,10 @@ export type Mode = 'company' | 'reps';
 export const COMPANY_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'receivables', label: 'AR / AP' },
+  // The two registers sit together, AR before AP: both are invoice books read
+  // one counterparty at a time, and both source their detail from a sheet the
+  // accountant keeps. The AR / AP tab above answers "what is the balance now".
+  { key: 'arsheet', label: 'AR Register' },
   { key: 'apsheet', label: 'AP Register' },
   { key: 'pl', label: 'P&L' },
   { key: 'orders', label: 'Orders' },
@@ -66,20 +74,28 @@ export const REPS_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'reps', label: 'Dashboard' },
   { key: 'repsorders', label: 'Orders & Revenue' },
   { key: 'commission', label: 'Commission' },
-  { key: 'repspipeline', label: 'PI Pipeline' },
-  { key: 'repsroster', label: 'Reps' },
+  { key: 'repspipeline', label: 'PI & PIP' },
+  // 'repsroster' ("Reps") is gone: it opened the Roster sub-view, which is now
+  // a section of the Dashboard above. Two nav entries onto one page is exactly
+  // the duplication the sub-tab strip already had.
 ];
 /** What a REP sees. Same views, narrowed to their own book by the server. */
-// Standings FIRST, and it is the rep's landing view (defaultViewFor takes the
-// first entry). Seeing their rank the moment they log in is the point: "when
-// they log in and they see that they're number 3, they're going to be like,
-// what?" It sat last, below four screens they had to scroll past.
+// TEAM STANDINGS IS GONE from this nav, and 'standings' is therefore outside
+// allowedViews for a rep — typing the hash lands them back on My Dashboard.
+//
+// It used to be first, and deliberately so: seeing their rank on login was the
+// point ("when they log in and they see that they're number 3, they're going to
+// be like, what?"). That is incompatible with restricting a rep to their own
+// data — a ranking is peer data by construction, and the server no longer sends
+// another rep's row to build one from. The removal is the policy, not a tidy-up.
 export const REP_NAV: Array<{ key: ViewKey; label: string }> = [
-  { key: 'standings', label: 'Team Standings' },
   { key: 'reps', label: 'My Dashboard' },
   { key: 'repsorders', label: 'My Orders' },
   { key: 'commission', label: 'My Commission' },
-  { key: 'repspipeline', label: 'My Pipeline' },
+  // "PI Pipeline", not "My Pipeline": it breaks the My-prefix the rest of this
+  // nav uses, but the page IS the PI pipeline and naming the programme is what
+  // was asked for. The manager's entry is labelled "PI & PIP".
+  { key: 'repspipeline', label: 'PI Pipeline' },
 ];
 
 /** Nav for a role. Until /api/me answers (role null) we show the rep nav: the

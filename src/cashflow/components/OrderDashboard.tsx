@@ -38,9 +38,25 @@ const seg = (active: boolean): React.CSSProperties => ({
 // Two cards sitting side by side must match in height and column rhythm, or the
 // pair reads as a mistake. `height: 100%` lets the grid stretch them equally, and
 // the column flex is shared so both tables line up like a matched set.
-const CARD_EQUAL: React.CSSProperties = { marginTop: 0, height: '100%', display: 'flex', flexDirection: 'column' };
+// No `height: 100%`: that is what made a short card stretch to its tallest
+// sibling and hold the difference as blank space. A card is its own content
+// now; spacing comes from padding. `marginTop: 0` stays — the grid owns the gap.
+const CARD_EQUAL: React.CSSProperties = { marginTop: 0, display: 'flex', flexDirection: 'column' };
+
+// Keeps a long label on ONE line in the flexible column of a table.
+// `maxWidth: 0` is the part that makes it work: a table cell sizes to its
+// content, so it will not clip until it is told it has no intrinsic width — the
+// column then takes what the fixed columns leave and ellipsises the overflow.
+// Without this, "SMR T/N 10 - PI TENS/NMES" wrapped to three lines in a
+// half-width card and every row ended up a different height.
+const ELLIPSIS: React.CSSProperties = {
+  maxWidth: 0, width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
 // label | orders | devices | revenue | share | bar
-const REV_COL_W = ['auto', '13%', '13%', '19%', '11%', '20%'];
+// Shared by the "Figures by vertical" and "Data by Status" tables so the pair
+// lines up. Share and the per-row bar were dropped from both; the two trailing
+// widths went with them, and the freed width goes to the label column.
+const REV_COL_W = ['auto', '13%', '13%', '19%'];
 
 // Group label: small caps with generous tracking, the one place the bar needs
 // hierarchy so "Period" and "Vertical" read as headings, not options.
@@ -185,7 +201,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
 
     // Every table drawn on the page gets a sheet. The workbook is meant to be
     // the view, so anything visible on screen has to be in the file: a reader
-    // should not have to rebuild "Revenue by vertical" from the Orders tab.
+    // should not have to rebuild "Figures by vertical" from the Orders tab.
     const verticalSheet: Sheet = {
       name: 'By vertical',
       rows: [
@@ -266,10 +282,17 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
   }
 
   // ── revenue by vertical (together and separate) ──
+  // Only verticals that ACTUALLY have orders in the current filter.
+  //
+  // Every vertical used to be listed whether or not it had anything, so a rep
+  // working VA alone read three rows of dashes and a "no orders yet" note about
+  // programmes they do not touch. The empty rows said nothing the totals did not
+  // already say. `VERTICALS` still sets the ORDER, so the survivors keep their
+  // familiar sequence rather than re-sorting by volume.
   const byVertical = useMemo(() => VERTICALS.map((v) => {
     const set = rows.filter((o) => o.vertical === v);
     return { vertical: v, orders: set.length, units: set.reduce((s, o) => s + o.units, 0), revenue: set.reduce((s, o) => s + o.revenue, 0) };
-  }), [rows]);
+  }).filter((v) => v.orders > 0), [rows]);
 
   // ── revenue by account ──
   const byAccount = useMemo(() => {
@@ -296,12 +319,17 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
         m.set(d.item, e);
       }
     }
-    // Devices that carry no revenue are dropped: they sat at the bottom of the
-    // ranking as a run of $0 rows with nothing to compare. The count is kept so
-    // the omission is stated rather than silent.
-    const all = [...m.values()].sort((a, b) => b.revenue - a.revenue);
-    const earning = all.filter((d) => d.revenue >= 0.01);
-    return { list: earning, hidden: all.length - earning.length, hiddenUnits: all.filter((d) => d.revenue < 0.01).reduce((s, d) => s + d.qty, 0) };
+    // Ranked by UNITS, and nothing is hidden.
+    //
+    // This used to rank by revenue and drop devices earning under a cent — they
+    // sat at the bottom as a run of $0 rows with nothing to compare. With the
+    // revenue column gone that filter had no visible basis left: it would have
+    // silently omitted 4 device types (5 real units) from a table of unit
+    // counts, for a reason the table no longer showed. `revenue` is still
+    // computed because DeviceModal and the export use it.
+    // `hidden` / `hiddenUnits` went with the filter — they existed only to state
+    // how much the revenue cut-off had removed, and nothing is removed now.
+    return { list: [...m.values()].sort((a, b) => b.qty - a.qty || a.item.localeCompare(b.item)) };
   }, [rows]);
 
   // ── account table: search, sort, minimum-orders ──
@@ -335,7 +363,8 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
     setAcctSort((s) => ({ key, dir: s.key === key ? (s.dir === 'asc' ? 'desc' : 'asc') : (key === 'account' ? 'asc' : 'desc') }));
 
   const maxAcct = Math.max(1, ...byAccount.map((a) => a.revenue));
-  const maxDev = Math.max(1, ...byDevice.list.map((d) => d.revenue));
+  // Scales the row bar. Units now, matching the column it sits beside.
+  const maxDev = Math.max(1, ...byDevice.list.map((d) => d.qty));
 
   return (
     <RepScope.Provider value={isRep}>
@@ -444,22 +473,28 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
         <KpiR ico="shield" tint={V_C.VA} label="Delivered orders" value={totals.delivered} format={(n: number) => String(n)} foot="completed in Striven · tap" deltaText="closed" onClick={() => setTotalDrill('delivered')} />
       </div>
 
-      {/* The two revenue roll-ups answer adjacent questions, so they sit side by
-          side and drop to one column when there isn't room for both. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))', gap: 14, marginTop: 14, alignItems: 'stretch' }}>
+      {/* Layout lives in .dash-grid (cashflow.css), not inline, because it needs
+          media queries: the rep's explicit card placement must not apply at a
+          width too narrow for two columns. Cards size to their own content —
+          see the `align-items: start` note there. */}
+      <div className={`dash-grid${isRep ? ' dash-grid-rep' : ''}`}>
 
       {/* revenue by vertical: together and separate */}
-      <div className="section chart-card" style={CARD_EQUAL}>
+      <div className="section chart-card dg-vertical" style={CARD_EQUAL}>
         <div className="section-head"><div>
-          <h2 className="section-title">Revenue by vertical</h2>
-          <div className="section-sub">All verticals together, and each one separately. DOL is live but has no orders yet.</div>
+          <h2 className="section-title">Figures by vertical</h2>
+          {/* The old copy named DOL specifically as "live but has no orders yet".
+              Verticals without orders are no longer listed, so that sentence
+              described a row the reader could not see. */}
+          <div className="section-sub">Each vertical with orders in the current filter, and the total.</div>
         </div></div>
-        {/* Mirrors the bar on the status card, so the pair starts at the same
-            height and the two splits can be compared at a glance. */}
+        {/* Split by ORDERS, not revenue. On revenue this strip rendered as an
+            empty grey bar for a rep — the server nulls their revenue, so every
+            segment computed to zero width. Orders are a figure both roles have. */}
         <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)', marginBottom: 10 }}>
-          {byVertical.filter((v) => v.revenue > 0).map((v) => (
-            <div key={v.vertical} title={`${v.vertical}: ${formatCurrency(v.revenue)} across ${v.orders} order${v.orders === 1 ? '' : 's'}`}
-              style={{ width: `${(v.revenue / (totals.revenue || 1)) * 100}%`, background: V_C[v.vertical] }} />
+          {byVertical.filter((v) => v.orders > 0).map((v) => (
+            <div key={v.vertical} title={`${v.vertical}: ${v.orders} order${v.orders === 1 ? '' : 's'}`}
+              style={{ width: `${(v.orders / (totals.orders || 1)) * 100}%`, background: V_C[v.vertical] }} />
           ))}
         </div>
         <div className="table-wrap">
@@ -469,8 +504,6 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
               <th className="num" style={{ width: REV_COL_W[1] }}>Orders</th>
               <th className="num" style={{ width: REV_COL_W[2] }}>Devices</th>
               {!isRep && <th className="num" style={{ width: REV_COL_W[3] }}>Revenue</th>}
-              <th className="num" style={{ width: REV_COL_W[4] }}>Share</th>
-              <th style={{ width: REV_COL_W[5] }} />
             </tr></thead>
             <tbody>
               {byVertical.map((v) => (
@@ -478,45 +511,41 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                   title={`Filter to ${v.vertical}`}>
                   <td style={{ fontWeight: 700, color: V_C[v.vertical] }}>
                     <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, background: V_C[v.vertical], marginRight: 8 }} />{v.vertical}
-                    {v.orders === 0 && <span style={{ marginLeft: 6, fontSize: 11, color: C.muted, fontWeight: 600 }}>no orders yet</span>}
+                    {/* The "no orders yet" tag went with the empty rows — every
+                        row here has orders now, so it could never render. */}
                   </td>
-                  <td className="num">{v.orders || '-'}</td>
+                  <td className="num">{v.orders}</td>
                   <td className="num">{v.units || '-'}</td>
                   {!isRep && <td className="num" style={{ fontWeight: 800 }}>{v.revenue ? formatCurrency(v.revenue) : '-'}</td>}
-                  <td className="num">{totals.revenue > 0 && v.revenue ? `${Math.round((v.revenue / totals.revenue) * 100)}%` : '-'}</td>
-                  <td>
-                    <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${totals.revenue ? (v.revenue / totals.revenue) * 100 : 0}%`, background: V_C[v.vertical], borderRadius: 999 }} />
-                    </div>
-                  </td>
                 </tr>
               ))}
             </tbody>
             <tfoot><tr className="total-row">
               <td>All verticals</td><td className="num">{totals.orders}</td><td className="num">{totals.devices}</td>
-              {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(totals.revenue)}</td>}<td /><td />
+              {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(totals.revenue)}</td>}
             </tr></tfoot>
           </table>
         </div>
       </div>
 
-      {/* revenue by status: the summary that pairs with the detailed lists */}
+      {/* data by status: the summary that pairs with the detailed lists */}
       {!isRep && (
         <StatusBreakdown
           orders={rows}
-          title="Revenue by status"
+          title="Data by Status"
           sub="Revenue at each order status, for the current filter. Cancelled orders are excluded from every figure on this page."
         />
       )}
-
-      </div>
 
       {/* The PI pipeline used to render inline here as well as being its own nav
           entry and Reps subsection: three copies of one view. It now lives only
           under "PI Pipeline". */}
 
-      {/* accounts */}
-      <div className="section chart-card" style={{ marginTop: 14 }}>
+      {/* accounts — INSIDE the grid above, so a rep (who gets no status card)
+          sees it beside "Figures by vertical" instead of stranded under a
+          half-empty row. A manager already has two cards on that row, so this
+          one spans the full width and their layout is unchanged. */}
+      <div className="section chart-card dg-accounts" style={{ marginTop: 0 }}>
         <div className="section-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h2 className="section-title">
@@ -549,8 +578,8 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
             )}
           </div>
         </div>
-        <div className="table-wrap">
-          <table className="data-table">
+        <div className="table-wrap dg-scroll">
+          <table className={`data-table${isRep ? ' tbl-fit' : ''}`}>
             <thead><tr>
               <th style={{ width: 34 }}>#</th>
               <th style={{ whiteSpace: 'nowrap' }} aria-sort={acctSort.key === 'account' ? (acctSort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
@@ -565,14 +594,20 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
               <th>Verticals</th>
               <SortHead label="Orders" col="orders" sort={acctSort} onSort={sortBy} num />
               <SortHead label="Devices" col="units" sort={acctSort} onSort={sortBy} num />
-              <SortHead label="Device types" col="types" sort={acctSort} onSort={sortBy} num />
+              {/* "Device types" was the widest cell in the table — the header,
+                  not any value — and with its sort arrow it is what pushed the
+                  column off the right edge of a half-width card. */}
+              <SortHead label={isRep ? 'Types' : 'Device types'} col="types" sort={acctSort} onSort={sortBy} num />
               {!isRep && <SortHead label="Revenue" col="revenue" sort={acctSort} onSort={sortBy} num />}
-              <th style={{ width: '20%' }} />
+              {/* The bar is scaled to REVENUE, which the server nulls for a rep:
+                  it rendered as an empty 20% column, and that 20% is what forced
+                  this table to scroll sideways in its half-width card. */}
+              {!isRep && <th style={{ width: '20%' }} />}
             </tr></thead>
             <tbody>
-              {byAccount.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+              {byAccount.length === 0 && <tr><td colSpan={isRep ? 6 : 8} style={{ color: C.muted }}>No orders in this period.</td></tr>}
               {byAccount.length > 0 && accountRows.length === 0 && (
-                <tr><td colSpan={8} style={{ color: C.muted }}>
+                <tr><td colSpan={isRep ? 6 : 8} style={{ color: C.muted }}>
                   No account matches {acctQ && <>“<b>{acctQ}</b>”</>}{acctQ && acctMin > 0 ? ' with ' : ''}{acctMin > 0 && <>{acctMin}+ orders</>}.
                   {' '}<button className="btn ghost" style={{ fontSize: 12.5 }} onClick={() => { setAcctQ(''); setAcctMin(0); setAcctPick(new Set()); }}>Reset filters</button>
                 </td></tr>
@@ -580,8 +615,11 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
               {accountRows.map((a, i) => (
                 <tr key={a.account} onClick={() => setAcct(a.account)} style={{ cursor: 'pointer' }} title="Click for this account's orders">
                   <td style={{ color: C.muted }}>{i + 1}</td>
-                  <td style={{ fontWeight: 700, color: C.brand }}>{a.account}</td>
-                  <td>
+                  {/* Same one-line rule as the device column: "Deon S
+                      Goldschmidt Attorneys, PLLC" wrapped and dragged its row
+                      to twice the height of the ones around it. */}
+                  <td style={{ fontWeight: 700, color: C.brand, ...ELLIPSIS }} title={a.account}>{a.account}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     {[...a.verticals].map((v) => (
                       <span key={v} style={{ fontSize: 10.5, fontWeight: 700, color: V_C[v] || C.sub, background: 'var(--panel-2)', borderRadius: 999, padding: '2px 7px', marginRight: 4 }}>{v}</span>
                     ))}
@@ -590,11 +628,13 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                   <td className="num">{a.units || '-'}</td>
                   <td className="num">{a.devices.size || '-'}</td>
                   {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(a.revenue)}</td>}
-                  <td>
-                    <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${(a.revenue / maxAcct) * 100}%`, background: C.brand, borderRadius: 999 }} />
-                    </div>
-                  </td>
+                  {!isRep && (
+                    <td>
+                      <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${(a.revenue / maxAcct) * 100}%`, background: C.brand, borderRadius: 999 }} />
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -602,43 +642,51 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
         </div>
       </div>
 
-      {/* devices across all accounts */}
-      <div className="section chart-card" style={{ marginTop: 14 }}>
+      {/* devices across all accounts — LEFT column, under "Figures by vertical",
+          with "By account" alongside it. Explicit placement rather than DOM
+          order: the accounts card is written before this one and has to sit to
+          its right, which auto-flow cannot express. A manager keeps the
+          full-width row they had. */}
+      <div className="section chart-card dg-devices" style={{ marginTop: 0 }}>
         <div className="section-head"><div>
           <h2 className="section-title">By device type <span style={{ fontWeight: 500, color: C.muted, fontSize: 13 }}>· {byDevice.list.length}</span></h2>
           <div className="section-sub">
-            Across every account, revenue-earning devices only. Revenue is apportioned across an order's devices by unit share, so it sums back to the order total.
-            {byDevice.hidden > 0 && (
-              <> <span style={{ color: C.muted }}>
-                {byDevice.hidden} device type{byDevice.hidden === 1 ? '' : 's'} ({byDevice.hiddenUnits} unit{byDevice.hiddenUnits === 1 ? '' : 's'}) earned no revenue and {byDevice.hidden === 1 ? 'is' : 'are'} hidden.
-              </span></>
-            )}
+            Across every account, ranked by units dispensed. Every device type on these orders is listed.
           </div>
         </div></div>
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead><tr><th style={{ width: 34 }}>#</th><th>Device</th><th className="num">Units</th><th className="num">Orders</th>{!isRep && <th className="num">Revenue</th>}<th style={{ width: '24%' }} /></tr></thead>
+        <div className="table-wrap dg-scroll">
+          <table className={`data-table${isRep ? ' tbl-fit' : ''}`}>
+            {/* The bar column is dropped in the REP layout: this card is half
+                width there, and a 24% bar left the device name so little room
+                that "SMR T/N 10 - PI TENS/NMES" wrapped over three lines while
+                short names took one — rows of three different heights down the
+                column. Units are already the second column, so the bar is the
+                least of what is lost. */}
+            <thead><tr><th style={{ width: 34 }}>#</th><th>Device</th><th className="num">Units</th><th className="num">Orders</th>{!isRep && <th style={{ width: '24%' }} />}</tr></thead>
             <tbody>
-              {byDevice.list.length === 0 && <tr><td colSpan={6} style={{ color: C.muted }}>No revenue-earning devices on these orders.</td></tr>}
+              {byDevice.list.length === 0 && <tr><td colSpan={isRep ? 4 : 5} style={{ color: C.muted }}>No devices on these orders.</td></tr>}
               {byDevice.list.map((d, i) => (
                 <tr key={d.item} onClick={() => setDevSel(d.item)} style={{ cursor: 'pointer' }}
                   title={`Where ${d.item} went: accounts, verticals and orders`}>
                   <td style={{ color: C.muted }}>{i + 1}</td>
-                  <td style={{ fontWeight: 600 }}>{d.item}</td>
+                  <td style={{ fontWeight: 600, ...ELLIPSIS }}>{d.item}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{d.qty}</td>
                   <td className="num">{d.orders}</td>
-                  {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(d.revenue)}</td>}
-                  <td>
-                    <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${(d.revenue / maxDev) * 100}%`, background: V_C.PI, borderRadius: 999 }} />
-                    </div>
-                  </td>
+                  {!isRep && (
+                    <td>
+                      <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${(d.qty / maxDev) * 100}%`, background: V_C.PI, borderRadius: 999 }} />
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      </div>{/* end of the side-by-side grid opened above the vertical card */}
 
       {totalDrill && (
         <TotalsDrill
@@ -788,8 +836,6 @@ function StatusBreakdown({ orders, title, sub, compact = false }: {
             <th className="num" style={{ width: REV_COL_W[1] }}>Orders</th>
             <th className="num" style={{ width: REV_COL_W[2] }}>Devices</th>
             {!isRep && <th className="num" style={{ width: REV_COL_W[3] }}>Revenue</th>}
-            <th className="num" style={{ width: REV_COL_W[4] }}>Share</th>
-            {!compact && <th style={{ width: REV_COL_W[5] }} />}
           </tr></thead>
           <tbody>
             {rows.map((r) => (
@@ -801,14 +847,6 @@ function StatusBreakdown({ orders, title, sub, compact = false }: {
                 <td className="num" style={{ fontWeight: 700 }}>{r.orders}</td>
                 <td className="num">{r.units || '-'}</td>
                 {!isRep && <td className="num" style={{ fontWeight: 800 }}>{r.revenue ? formatCurrency(r.revenue) : '-'}</td>}
-                <td className="num">{totRev > 0 && r.revenue ? `${Math.round((r.revenue / totRev) * 100)}%` : '-'}</td>
-                {!compact && (
-                  <td>
-                    <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${totRev ? (r.revenue / totRev) * 100 : 0}%`, background: statusTint(r.status), borderRadius: 999 }} />
-                    </div>
-                  </td>
-                )}
               </tr>
             ))}
           </tbody>
@@ -817,7 +855,6 @@ function StatusBreakdown({ orders, title, sub, compact = false }: {
             <td className="num">{totOrd}</td>
             <td className="num">{totUnits || '-'}</td>
             {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(totRev)}</td>}
-            <td /><td />{compact ? null : null}
           </tr></tfoot>
         </table>
       </div>
@@ -1025,11 +1062,18 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
   const units = set.reduce((s, o) => s + o.units, 0);
   const showList = metric === 'orders' || metric === 'pending' || metric === 'delivered';
 
-  const Ranked = ({ rows, unit, onPick }: { rows: { name: string; orders: number; units: number; revenue: number }[]; unit: 'revenue' | 'units'; onPick?: (n: string) => void }) => {
+  // `money` is opt-OUT rather than global: this same table renders the Revenue
+  // drill, where the revenue column and its bar are the entire point. Only the
+  // device views turn them off.
+  const Ranked = ({ rows, unit, onPick, money = true }: {
+    rows: { name: string; orders: number; units: number; revenue: number }[];
+    unit: 'revenue' | 'units'; onPick?: (n: string) => void; money?: boolean;
+  }) => {
     const max = Math.max(1, ...rows.map((r) => (unit === 'revenue' ? r.revenue : r.units)));
+    const showMoney = money && !isRep;
     return (
       <table className="data-table">
-        <thead><tr><th style={{ width: 34 }}>#</th><th>Name</th><th className="num">Orders</th><th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th style={{ width: '26%' }} /></tr></thead>
+        <thead><tr><th style={{ width: 34 }}>#</th><th>Name</th><th className="num">Orders</th><th className="num">Units</th>{showMoney && <th className="num">Revenue</th>}{money && <th style={{ width: '26%' }} />}</tr></thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={r.name} onClick={() => onPick?.(r.name)} style={{ cursor: onPick ? 'pointer' : 'default' }} title={onPick ? `Open ${r.name}` : undefined}>
@@ -1037,12 +1081,14 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
               <td style={{ fontWeight: 600, color: onPick ? C.brand : C.ink }}>{r.name}</td>
               <td className="num">{r.orders}</td>
               <td className="num">{r.units || '-'}</td>
-              {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(r.revenue)}</td>}
-              <td>
-                <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${((unit === 'revenue' ? r.revenue : r.units) / max) * 100}%`, background: cfg.tint, borderRadius: 999 }} />
-                </div>
-              </td>
+              {showMoney && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(r.revenue)}</td>}
+              {money && (
+                <td>
+                  <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${((unit === 'revenue' ? r.revenue : r.units) / max) * 100}%`, background: cfg.tint, borderRadius: 999 }} />
+                  </div>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -1050,23 +1096,32 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
     );
   };
 
+  // Width follows the CONTENT, not one figure for every drill. The order list
+  // carries eight columns and needs the room; the ranked views carry four, and
+  // at 940px the name column swallowed ~600px of slack — which is the gap. A
+  // table is width:100%, so the only real fix is to stop the card being wider
+  // than the table has anything to put in it.
+  const wide = showList || metric === 'revenue';
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(940px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: `min(${wide ? 940 : 560}px, 100%)`, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '14px 16px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>{cfg.title}</div>
-            <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>{cfg.sub}</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.ink }}>{cfg.title}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{cfg.sub}</div>
           </div>
           <button className="btn ghost" onClick={onClose} aria-label="Close" style={{ flex: 'none' }}>✕</button>
         </div>
 
-        <div style={{ padding: '16px 18px', overflowX: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 18 }}>
+        <div style={{ padding: '12px 16px', overflowX: 'auto' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginBottom: 12 }}>
             <Stat label="Orders" value={String(set.length)} tint={cfg.tint} />
             <Stat label="Devices" value={String(units)} />
             <Stat label="Accounts" value={String(byAcct.length)} />
-            {!isRep && <Stat label="Revenue" value={formatCurrency(revenue)} />}
+            {/* Withheld on the DEVICES drill, where the table below carries no
+                money either — a lone revenue tile above a units-only table
+                invites the reader to tie the two together, and they don't. */}
+            {!isRep && metric !== 'devices' && <Stat label="Revenue" value={formatCurrency(revenue)} />}
           </div>
 
           {showList ? (
@@ -1076,14 +1131,15 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
               </div>
               <table className="data-table">
                 <thead><tr>
-                  <th>Order</th><th>Date</th><th>Account</th><th>Vertical</th><th>Devices</th>
+                  <th>Order</th><th>Patient</th><th>Date</th><th>Account</th><th>Vertical</th><th>Devices</th>
                   <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th>
                 </tr></thead>
                 <tbody>
-                  {set.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No orders here.</td></tr>}
+                  {set.length === 0 && <tr><td colSpan={9} style={{ color: C.muted }}>No orders here.</td></tr>}
                   {set.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                     <tr key={o.soId}>
                       <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                      <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                       <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
                       <td style={{ fontSize: 12.5 }}>{o.account}</td>
                       <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
@@ -1098,7 +1154,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
             </>
           ) : metric === 'devices' ? (
             <><div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By device type <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· click for detail</span></div>
-              <Ranked rows={byDev} unit="units" onPick={onPickDevice} /></>
+              <Ranked rows={byDev} unit="units" onPick={onPickDevice} money={false} /></>
           ) : metric === 'accounts' ? (
             <><div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By account <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· click for detail</span></div>
               <Ranked rows={byAcct} unit="revenue" onPick={onPickAccount} /></>
@@ -1111,7 +1167,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
             </>
           )}
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
-            🔒 No patient names: orders by SO reference. Cancelled orders are excluded from every figure.
+            🔒 Patient SURNAME only — never a first name, date of birth or address. Cancelled orders are excluded from every figure.
           </div>
         </div>
       </div>
@@ -1138,7 +1194,8 @@ function Stat({ label, value, tint }: { label: string; value: string; tint?: str
  * keeps the modal's total equal to the row you clicked.
  */
 function DeviceModal({ device, orders, onClose }: { device: string; orders: AnalyticsOrder[]; onClose: () => void }) {
-  const isRep = useIsRep();
+  // No `useIsRep()` here any more: it gated the revenue columns, and there are
+  // none left on this modal for either role.
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1146,33 +1203,35 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
   }, [onClose]);
 
   const qtyOn = (o: AnalyticsOrder) => o.devices.filter((d) => d.item === device).reduce((s, d) => s + d.qty, 0);
-  const shareOf = (o: AnalyticsOrder) => o.revenue * (qtyOn(o) / (o.units || 1));
 
+  // No revenue on this modal: not the summary line, not a tile, not a column,
+  // and not the bar. Both tables rank and scale by UNITS instead, which is what
+  // they now show. `shareOf` — this device's apportioned share of an order's
+  // revenue — went with them; the same rule still lives in the page's byDevice
+  // memo, which the Excel export reads.
   const units = orders.reduce((s, o) => s + qtyOn(o), 0);
-  const revenue = orders.reduce((s, o) => s + shareOf(o), 0);
-  const perUnit = units ? revenue / units : 0;
 
   const byAccount = (() => {
-    const m = new Map<string, { account: string; units: number; orders: number; revenue: number }>();
+    const m = new Map<string, { account: string; units: number; orders: number }>();
     for (const o of orders) {
-      const e = m.get(o.account) || { account: o.account, units: 0, orders: 0, revenue: 0 };
-      e.units += qtyOn(o); e.orders++; e.revenue += shareOf(o);
+      const e = m.get(o.account) || { account: o.account, units: 0, orders: 0 };
+      e.units += qtyOn(o); e.orders++;
       m.set(o.account, e);
     }
-    return [...m.values()].sort((a, b) => b.revenue - a.revenue);
+    return [...m.values()].sort((a, b) => b.units - a.units || a.account.localeCompare(b.account));
   })();
 
   const byVertical = (() => {
-    const m = new Map<string, { vertical: string; units: number; orders: number; revenue: number }>();
+    const m = new Map<string, { vertical: string; units: number; orders: number }>();
     for (const o of orders) {
-      const e = m.get(o.vertical) || { vertical: o.vertical, units: 0, orders: 0, revenue: 0 };
-      e.units += qtyOn(o); e.orders++; e.revenue += shareOf(o);
+      const e = m.get(o.vertical) || { vertical: o.vertical, units: 0, orders: 0 };
+      e.units += qtyOn(o); e.orders++;
       m.set(o.vertical, e);
     }
     return [...m.values()].sort((a, b) => b.units - a.units);
   })();
 
-  const maxAcct = Math.max(1, ...byAccount.map((a) => a.revenue));
+  const maxAcct = Math.max(1, ...byAccount.map((a) => a.units));
   const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '-');
   const tint = V_C[deviceVertical(device)] || C.brand;
 
@@ -1183,7 +1242,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: C.ink, wordBreak: 'break-word' }}>{device}</div>
             <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>
-              {units} unit{units === 1 ? '' : 's'} · {orders.length} order{orders.length === 1 ? '' : 's'} · {byAccount.length} account{byAccount.length === 1 ? '' : 's'} · {formatCurrency(revenue)}
+              {units} unit{units === 1 ? '' : 's'} · {orders.length} order{orders.length === 1 ? '' : 's'} · {byAccount.length} account{byAccount.length === 1 ? '' : 's'}
             </div>
           </div>
           <button className="btn ghost" onClick={onClose} aria-label="Close" style={{ flex: 'none' }}>✕</button>
@@ -1194,8 +1253,9 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
             <Stat label="Units" value={String(units)} tint={tint} />
             <Stat label="Orders" value={String(orders.length)} />
             <Stat label="Accounts" value={String(byAccount.length)} />
-            {!isRep && <Stat label="Revenue" value={formatCurrency(revenue)} />}
-            <Stat label="Per unit" value={formatCurrency(perUnit)} />
+            {/* Revenue and Per unit are gone. Per unit went WITH revenue: it was
+                revenue ÷ units, so on its own it would have been a dollar figure
+                with nothing on the modal to derive it from. */}
           </div>
 
           {byVertical.length > 1 && (
@@ -1205,7 +1265,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
                 {byVertical.map((v) => (
                   <span key={v.vertical} style={{ fontSize: 12.5, background: 'var(--panel-2)', borderRadius: 8, padding: '6px 11px', borderLeft: `3px solid ${V_C[v.vertical] || C.muted}` }}>
                     <b style={{ color: V_C[v.vertical] || C.ink }}>{v.vertical}</b>
-                    <span style={{ color: C.sub, marginLeft: 6 }}>{v.units}u · {v.orders} ord · {formatCurrency(v.revenue)}</span>
+                    <span style={{ color: C.sub, marginLeft: 6 }}>{v.units}u · {v.orders} ord</span>
                   </span>
                 ))}
               </div>
@@ -1216,17 +1276,16 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
             Which accounts ordered it <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {byAccount.length}</span>
           </div>
           <table className="data-table">
-            <thead><tr><th>Account</th><th className="num">Units</th><th className="num">Orders</th>{!isRep && <th className="num">Revenue</th>}<th style={{ width: '28%' }} /></tr></thead>
+            <thead><tr><th>Account</th><th className="num">Units</th><th className="num">Orders</th><th style={{ width: '28%' }} /></tr></thead>
             <tbody>
               {byAccount.map((a) => (
                 <tr key={a.account}>
                   <td style={{ fontWeight: 600 }}>{a.account}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{a.units}</td>
                   <td className="num">{a.orders}</td>
-                  {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(a.revenue)}</td>}
                   <td>
                     <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${(a.revenue / maxAcct) * 100}%`, background: tint, borderRadius: 999 }} />
+                      <div style={{ height: '100%', width: `${(a.units / maxAcct) * 100}%`, background: tint, borderRadius: 999 }} />
                     </div>
                   </td>
                 </tr>
@@ -1239,18 +1298,18 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
           </div>
           <table className="data-table">
             <thead><tr>
-              <th>Order</th><th>Date</th><th>Account</th><th>Vertical</th>
-              <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th><th className="num">Age</th>
+              <th>Order</th><th>Patient</th><th>Date</th><th>Account</th><th>Vertical</th>
+              <th className="num">Units</th><th>Status</th><th className="num">Age</th>
             </tr></thead>
             <tbody>
               {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                 <tr key={o.soId}>
                   <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                  <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                   <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
                   <td style={{ fontSize: 12.5 }}>{o.account}</td>
                   <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{qtyOn(o)}</td>
-                  {!isRep && <td className="num">{formatCurrency(shareOf(o))}</td>}
                   <td style={{ fontSize: 12.5, color: statusTint(o.status), fontWeight: 600 }}>{o.status || '-'}</td>
                   <td className="num" style={{ color: (o.ageDays ?? 0) > 60 ? C.negative : C.sub }}>{o.ageDays == null ? '-' : `${o.ageDays}d`}</td>
                 </tr>
@@ -1258,7 +1317,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
             </tbody>
           </table>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            🔒 No patient names: orders by SO reference. Revenue is this device's share of each order, apportioned by unit, so it sums to the figure in the summary table.
+            🔒 Patient SURNAME only — never a first name, date of birth or address. Units are this device's own count on each order, not the order's total.
           </div>
         </div>
       </div>
@@ -1303,7 +1362,7 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
             <StatusBreakdown
               orders={orders}
               compact
-              title="Revenue by status"
+              title="Data by Status"
               sub={`${orders.length} order${orders.length === 1 ? '' : 's'} · ${formatCurrency(revenue)}`}
             />
           </div>
@@ -1311,13 +1370,14 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>Orders</div>
           <table className="data-table">
             <thead><tr>
-              <th>Order</th><th>Date</th><th>Vertical</th><th>Devices</th>
+              <th>Order</th><th>Patient</th><th>Date</th><th>Vertical</th><th>Devices</th>
               <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th><th className="num">Age</th>
             </tr></thead>
             <tbody>
               {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                 <tr key={o.soId}>
                   <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                  <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                   <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
                   <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
                   <td><DeviceChips devices={o.devices} showVertical /></td>
@@ -1332,7 +1392,7 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
             </tbody>
           </table>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            🔒 No patient names: orders are shown by SO reference. "Account" is the vendor billed on the order.
+            🔒 Patient SURNAME only — never a first name, date of birth or address. "Account" is the vendor billed on the order.
           </div>
         </div>
       </div>

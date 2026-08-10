@@ -6,6 +6,7 @@ import {
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
+import { DeviceChips } from './DeviceChips';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-';
@@ -237,7 +238,10 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
   function exportCsv() {
     const rows = all.flatMap((o) => (o.items.length ? o.items : [{ item: '-', qty: 0, value: 0 }])
       .map((i) => [o.so, o.ref || '', o.lastName || '', o.program || '', i.item, i.qty, i.value]));
-    downloadCsv('patient-orders.csv', ['Sales order', 'Reference', 'Last name', 'Program', 'Item', 'Qty', 'Value'], rows);
+    // "Patient (initial + surname)", matching what the column actually carries —
+    // a file that leaves the portal labelled "Last name" while holding an
+    // initial misstates the PHI in it.
+    downloadCsv('patient-orders.csv', ['Sales order', 'Reference', 'Patient (initial + surname)', 'Program', 'Item', 'Qty', 'Value'], rows);
   }
 
   if (!all.length) return <NotReady note={data.note} />;
@@ -266,8 +270,10 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
       <div className="table-wrap">
         <table className="data-table">
           <thead><tr>
-            <th style={{ width: 40 }}>#</th><th>Sales order</th><th>Reference</th><th>Last name</th><th>Program</th>
-            <th className="num">Items</th><th className="num">Value</th>
+            {/* "Patient", not "Last name": the column now carries an initial
+                too, and a header that says otherwise is a claim about PHI. */}
+            <th style={{ width: 40 }}>#</th><th>Sales order</th><th>Reference</th><th>Patient</th><th>Program</th>
+            <th>Items</th><th className="num">Value</th>
           </tr></thead>
           <tbody>
             {orders.length === 0 && <tr><td colSpan={7} style={{ color: C.muted }}>No orders match.</td></tr>}
@@ -280,7 +286,15 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
                   <td style={{ fontWeight: 600 }}>{o.ref || '-'}</td>
                   <td>{o.lastName || '-'}{o.incomplete && <span className="pill-tag tag-warn" style={{ marginLeft: 6, fontSize: 10 }}>incomplete</span>}</td>
                   <td><span className="pill-tag" style={{ color: PROG_C[o.program] || PROG_C.Other, borderColor: 'currentColor' }}>{o.program || '-'}</span></td>
-                  <td className="num">{o.items.length}</td>
+                  {/* DEVICE NAMES, not a count. The names were already in the
+                      payload — the row expanded to show them, so the top level
+                      made you click to learn what "5" meant. The count stays as
+                      a trailing chip when there is more than one. */}
+                  <td>
+                    {o.items.length === 0
+                      ? <span style={{ color: C.muted }}>-</span>
+                      : <DeviceChips devices={o.items.map((it) => ({ item: it.item, qty: it.qty }))} />}
+                  </td>
                   <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.value)}</td>
                 </tr>
                 {open === o.soId && o.items.length > 0 && (

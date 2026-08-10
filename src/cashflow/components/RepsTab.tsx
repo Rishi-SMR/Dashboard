@@ -6,6 +6,8 @@ import { KpiExec, HUE, useSyncAgo } from '../chartKit';
 import { OrderDashboard } from './OrderDashboard';
 import { PiPipeline } from './PiPipeline';
 import { DashboardOverview } from './DashboardOverview';
+import { Leaderboard } from './Leaderboard';
+import { isKevinLogin } from '../viewProfile';
 
 const money = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v));
 const n = (v: number | null | undefined) => (v == null ? '-' : String(v));
@@ -22,14 +24,24 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0
 // 'overview' is the landing view: headline figures and the shape of the book.
 // 'team' is the roster: every rep, every column. They were the same screen until
 // the sidebar offered both, which made two nav entries render one page.
-type RepSub = 'overview' | 'team' | 'verticals' | 'orders' | 'pipeline' | 'mine';
+// 'team', 'verticals' and 'mine' are GONE. They were three sub-tabs above one
+// dashboard; the roster table and the rep × vertical matrix now render on the
+// Overview itself, and "rep detail" was never a page — clicking any rep, on the
+// leaderboard or in either table, has always opened the same modal.
+//
+// What is left is not a tab set: 'orders' and 'pipeline' are separate SIDEBAR
+// entries that happen to mount this component, so the in-page tab bar is gone
+// with them.
+type RepSub = 'overview' | 'orders' | 'pipeline';
 export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   const [data, setData] = useState<RepOverview | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
-  const [sub, setSub] = useState<RepSub>(initialSub);
+  // No setter: nothing in the page switches sub-views any more. `sub` is fixed
+  // by which sidebar entry mounted this component.
+  const [sub] = useState<RepSub>(initialSub);
   const [viewAs, setViewAs] = useState<string | null>(null);
   const [sel, setSel] = useState<RepRow | null>(null);
   const [drill, setDrill] = useState<DrillKey | null>(null);
@@ -49,26 +61,48 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   // from the previous identity can render while the new one is in flight.
   useEffect(() => { setData(null); setSel(null); load(); }, [viewAs]);
   useEffect(() => { fetchMe().then(setMe).catch(() => setMe(null)); }, []);
+  // THE LOGIN DECIDES, NOT THE PROFILE.
+  //
+  // This gate was keyed on the view profile, which is a localStorage value and
+  // therefore BROWSER-wide, not per-user. Anyone who previewed Kevin's board
+  // left `smr.viewProfile=kevin` behind, so Crystal and Rishi signing in on the
+  // same machine afterwards lost their "View as" picker with nothing on screen
+  // explaining why — the profile of a previous session silently removing a
+  // control from a different person's login.
+  //
+  // Kevin's own login still has no picker, which is what was asked for. An
+  // admin PREVIEWING his layout keeps theirs: previewing a board is not the
+  // same as being the person whose board it is, and they need the control to
+  // get back out.
+  const isKevin = isKevinLogin(me?.email);
+  // KEVIN'S BOARD IS KEVIN'S BOARD. The rep-preview picker is a finance/ops
+  // tool, and on the owner view it only muddies whose figures are on screen —
+  // so it is not offered, and any preview left running from Crystal's view is
+  // dropped on the way in rather than persisting into a board that no longer
+  // shows a way out of it. Switching back to Crystal restores the picker.
+  useEffect(() => { if (isKevin && viewAs) setViewAs(null); }, [isKevin, viewAs]);
 
   const isManager = data?.role === 'admin';
-  // Which sub-view actually renders. A rep may only ever be on their own
-  // overview, their own orders, or their own pipeline; every other value falls
-  // back to 'overview'. Derived on each render rather than stored, so no state
-  // path (a stale setSub, the initialSub prop, a future nav entry) can drop a
-  // rep onto Roster / By vertical / Rep detail. Hiding the buttons is cosmetic;
-  // this is the check that holds.
+  // Which sub-view renders. Every remaining value is legal for both roles — the
+  // team-only views are gone — but this still normalises anything unexpected
+  // (a stale `sub`, an old `initialSub` from a bookmarked hash) back to the
+  // overview rather than rendering nothing.
   const REP_VIEWS: RepSub[] = ['overview', 'orders', 'pipeline'];
-  const view: RepSub = isManager || REP_VIEWS.includes(sub) ? sub : 'overview';
+  const view: RepSub = REP_VIEWS.includes(sub) ? sub : 'overview';
   const reps = data?.reps ?? [];
   const t = data?.teamTotals;
-  const own = reps.find((r) => r.isSelf) ?? null;
-  // Headline figures come from the WHOLE book so the Team dashboard and Orders &
-  // Revenue agree on sight. `teamTotals` remains rep-scoped for the per-rep
-  // table below; only the KPI strip is reconciled. Reps get no bookTotals, so
-  // they fall back to their own row.
-  const kt = data?.bookTotals ?? t;
-  const maxRev = Math.max(1, ...reps.map((r) => num(r.revenue)));
-  const maxOrd = Math.max(1, ...reps.map((r) => r.orders));
+  // ONE scope for this whole page: the PRODUCING REPS, and nothing else.
+  //
+  // The KPI strip used to read `bookTotals` — the whole order book — so that the
+  // headline figures matched Orders & Revenue on sight. That reconciliation cost
+  // more than it bought once the non-producers left the roster: the strip said
+  // 459 orders while the Commission tile beside it paid on 374, and every drill
+  // needed an "Off roster" row to make its rows sum to its own Total.
+  //
+  // Orders & Revenue still reports the whole book (459). The two pages now
+  // answer different questions, which is the honest reading: this one is about
+  // the reps. `bookTotals` is still sent and still reconciles server-side.
+  const kt = t;
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -87,12 +121,19 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {me?.role === 'admin' && (
+          {/* NOT on Kevin's board — see the effect above. */}
+          {me?.role === 'admin' && !isKevin && (
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: C.sub, fontWeight: 600 }}>
               View as
               <select value={viewAs ?? ''} onChange={(e) => setViewAs(e.target.value || null)}
                 style={{ padding: '5px 9px', borderRadius: 7, border: `1px solid ${C.muted}55`, background: 'var(--panel-2)', color: C.ink, fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
-                <option value="">Manager (everything)</option>
+                {/* The unrestricted view, named for the person who owns it.
+                    NOTE: this is Crystal Chambers the finance/ops ADMIN — not
+                    the rep row of the same name (her demo orders), which is
+                    excluded from the roster. And not the rep "Christy", who is
+                    a different person with a similar name. Selecting a name
+                    below previews that rep's view; the empty value is this. */}
+                <option value="">Crystal Chambers (everything)</option>
                 {reps.map((r) => <option key={r.rep} value={r.rep}>{r.rep}</option>)}
               </select>
             </label>
@@ -108,27 +149,11 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
         </div>
       )}
 
-      {/* subsections: the whole rep-side dashboard lives under this one tab.
-          Uses .ov-tabs, the same control the company side renders (Orders,
-          Automation, AR/AP). It replaces a one-off inline segmented control that
-          was visibly smaller than every other tab row in the app: 12px uppercase
-          on 6px padding, hugging its content, against the house 14px on 12px
-          padding stretched full width. */}
-      {/* MANAGER ONLY. Roster, By vertical and Rep detail are all team-wide
-          views, so the whole strip is withheld from a rep and their dashboard is
-          the Overview alone. Their own commission is a top-level nav entry
-          ("My Commission"), so nothing they need is lost.
-          `view` below re-derives the active sub-view rather than trusting `sub`:
-          hiding the buttons is not access control, and a rep must not land on a
-          team view via a stale state value or an initialSub prop. */}
-      {isManager && (
-        <div className="ov-tabs">
-          <button className={`ov-tab${sub === 'overview' ? ' active' : ''}`} onClick={() => setSub('overview')}>Overview</button>
-          <button className={`ov-tab${sub === 'team' ? ' active' : ''}`} onClick={() => setSub('team')}>Roster</button>
-          <button className={`ov-tab${sub === 'verticals' ? ' active' : ''}`} onClick={() => setSub('verticals')}>By vertical</button>
-          <button className={`ov-tab${sub === 'mine' ? ' active' : ''}`} onClick={() => setSub('mine')}>Rep detail</button>
-        </div>
-      )}
+      {/* The .ov-tabs strip (Overview / Roster / By vertical / Rep detail) is
+          gone. It switched between four views of ONE dataset, so reading the
+          roster meant leaving the figures that framed it; the roster and the
+          rep × vertical matrix are now sections of the dashboard, in the order
+          you would read them. Nothing was dropped except the switching. */}
 
       {error && <div className="error" style={{ marginBottom: 14 }}>{error}</div>}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
@@ -140,62 +165,99 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
 
       {data && view !== 'orders' && view !== 'pipeline' && (
         <>
+          {/* A REP LEADS WITH THE LEADERBOARD: their rank is the thing they
+              open this page for, and the server sends peer rows (name and order
+              count only) so there is a field to rank against.
+              This is the purpose-built `Leaderboard`, not the manager's
+              `OverviewPanel` — podium, milestones, gap-to-next and a drawer,
+              designed against ~380px. A manager keeps OverviewPanel beside
+              Units by device; they come here for the book, not for a rank. */}
+          {view === 'overview' && !isManager && (
+            <Leaderboard reps={reps} viewAs={viewAs} />
+          )}
+
           {/* The house KPI card (KpiExec, shared from chartKit): the same
               component the company Overview renders, so the two dashboards read
               as one product. `sub` carries what the old card's foot strip said;
               `chip` carries the qualifier. Hues come from the shared HUE map, so
               a metric keeps its colour across tabs: revenue is always the brand
               blue, commission always amber. */}
-          {/* A rep gets FOUR tiles: orders, devices, accounts, commission.
-              Revenue is gone (the only dollar figure a rep may see is their own
-              commission) and so is the rep count, which is team information they
-              have no use for. A manager keeps all six. The grid modifier tracks
-              the count so each row still fills exactly. */}
-          <div className={`kpi-strip ${isManager ? 'kpi-strip-6' : 'kpi-strip-4'}`} style={{ marginBottom: 14 }}>
+          {/* A rep gets THREE tiles: orders, devices (units), and their own
+              commission — the whole of what they are permitted to see. Accounts
+              went with Revenue and the rep count: the server nulls it for a
+              non-admin now, so the tile would have read "-" regardless.
+              A manager keeps FIVE. The grid modifier tracks the count so each
+              row still fills exactly. */}
+          {/* `kpi-compact` on both: these cards carry no sparkline and no
+              month-on-month delta, so the full-size card reserved height for
+              things that are never drawn. A manager's five fit ONE line
+              (kpi-strip-5 → a 10-column track, span 2); a rep's three ride the
+              base span-4 rule, which is already one line. */}
+          <div className={`kpi-strip kpi-compact ${isManager ? 'kpi-strip-5' : ''}`}
+            style={{ marginBottom: 12, marginTop: isManager ? 0 : 12 }}>
             {isManager && (
               <KpiExec label="Reps" value={t?.reps ?? 0} format={(x: number) => String(x)} hue={HUE.revenue}
                 sub="on the commission sheet" chip="team" onClick={() => setDrill('reps')} />
             )}
-            <KpiExec label="Orders" value={kt?.orders ?? 0} format={(x: number) => String(x)} hue={HUE.ar}
-              sub="cancelled excluded" chip="order book" onClick={() => setDrill('orders')} />
-            <KpiExec label="Devices" value={num(kt?.units)} format={() => n(kt?.units)} hue={HUE.ap}
-              sub="units on those orders" chip="order book" onClick={() => setDrill('units')} />
-            <KpiExec label="Accounts" value={num(kt?.accounts)} format={() => n(kt?.accounts)} hue={HUE.sales}
-              sub="vendors billed" chip="order book" onClick={() => setDrill('accounts')} />
+            <KpiExec label={isManager ? 'Orders' : 'Your orders'} value={kt?.orders ?? 0} format={(x: number) => String(x)} hue={HUE.ar}
+              sub="cancelled excluded" chip={isManager ? 'order book' : 'yours'} onClick={() => setDrill('orders')} />
+            <KpiExec label={isManager ? 'Devices' : 'Your devices'} value={num(kt?.units)} format={() => n(kt?.units)} hue={HUE.ap}
+              sub="units on those orders" chip={isManager ? 'order book' : 'yours'} onClick={() => setDrill('units')} />
             {isManager && (
-              <KpiExec label="Revenue" value={num(kt?.revenue)} format={money} hue={HUE.cash}
-                sub="order value" chip="SMR" onClick={() => setDrill('revenue')} />
+              <KpiExec label="Accounts" value={num(kt?.accounts)} format={() => n(kt?.accounts)} hue={HUE.sales}
+                sub="vendors billed" chip="order book" onClick={() => setDrill('accounts')} />
             )}
+            {/* The "Revenue / order value / SMR" tile was removed on request.
+                The strip modifier moved 6 → 5 with it: leaving kpi-strip-6 in
+                place would have spanned 2 of 12 columns five times and left a
+                third of the row empty. */}
             <KpiExec label={isManager ? 'Commission' : 'Your commission'} value={num(t?.commission)} format={money} hue={HUE.po}
               sub="units × device rate" chip={isManager ? 'SMR' : 'yours'} onClick={() => setDrill('commission')} />
           </div>
 
-          {/* Where the team's volume actually sits. Built from order counts, so
-              it renders identically for a manager and for a rep: counts are
-              shared even where revenue is not. */}
-          {/* The gist of every other tab, on one screen. */}
-          {view === 'overview' && <DashboardOverview reps={reps} viewAs={viewAs} />}
-
-          {view === 'overview' && <TeamShape reps={reps} />}
-
-          {/* Overview stops here: the shape of the book and, for a rep, their own
-              standing. The full roster lives one click away rather than being
-              repeated on the landing page. */}
-          {view === 'overview' && (
-            <OverviewPanel reps={reps} isManager={isManager} onPickRep={setSel} onSeeRoster={() => setSub('team')} />
+          {/* MANAGER ONLY — the "minimal dashboard" for a rep is the tiles plus
+              the leaderboard, and this deck is neither. It also carried a live
+              bug for them: its readout sums `o.revenue`, which the server nulls
+              for a rep, so it printed a confident "$0" next to real order and
+              unit counts. Its filter bar, device donut and PI funnel are all
+              reachable from My Orders and My Pipeline. */}
+          {view === 'overview' && isManager && (
+            <DashboardOverview reps={reps} viewAs={viewAs}
+              aside={<OverviewPanel reps={reps} onPickRep={setSel} />} />
           )}
 
-          {/* Why this page's order count is lower than Orders & Revenue. */}
+          {/* MANAGER ONLY. It ranks "top volume" and "top pay" across the
+              roster; a rep now holds the only row in that roster, so it would
+              crown them leader of a field of one. */}
+          {view === 'overview' && isManager && <TeamShape reps={reps} />}
+
+          {/* The Leaderboard used to render here, at the foot. It is now passed
+              into DashboardOverview as `aside` so it sits BESIDE Units by
+              device. Rendering it in both places would have shown it twice. */}
+
+          {/* Why every figure on this page is lower than Orders & Revenue.
+              This used to be a footnote about a tail the KPI strip already
+              counted. Now the strip is rep-scoped, it is the ONLY thing that
+              explains the difference between the two pages — so it states the
+              other page's number rather than leaving the reader to find it. */}
           {data.unattributed && data.unattributed.orders > 0 && (
             <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 14, background: 'var(--panel-2)', borderRadius: 10, padding: '9px 13px' }}>
-              These totals cover the <b style={{ color: C.sub }}>rep-attributed</b> book. A further{' '}
+              Every figure on this page covers the <b style={{ color: C.sub }}>producing reps</b> only. A further{' '}
               <b style={{ color: C.sub }}>{data.unattributed.orders} orders</b> ({formatCurrency(data.unattributed.revenue)}) are
-              booked in Striven to house/clinic accounts, ops staff or nobody at all: they earn no commission and are excluded here.
+              booked in Striven to house/clinic accounts, ops staff, departed names or nobody at all — so{' '}
+              <b style={{ color: C.sub }}>Orders &amp; Revenue reports {data.bookTotals?.orders ?? '—'}</b> against this page's{' '}
+              <b style={{ color: C.sub }}>{t?.orders}</b>. Where any excluded name does earn commission it is still paid: see My
+              Commission, which reports the full book.
             </div>
           )}
 
-          {view === 'team' && (
-            <div className="section chart-card">
+          {/* THE ROSTER — was the "Roster" tab. Manager-only: a rep's payload
+              carries peer rows for the leaderboard's ranking, but reduced to a
+              name and an order count, so every money column here would be a
+              dash for them. Clicking a row still opens that rep's detail, which
+              is what the "Rep detail" tab did. */}
+          {view === 'overview' && isManager && (
+            <div className="section chart-card" style={{ marginBottom: 14 }}>
               <div className="section-head"><div>
                 <h2 className="section-title">The team</h2>
                 <div className="section-sub">
@@ -245,20 +307,18 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                   </tr></tfoot>
                 </table>
               </div>
-              {!isManager && (
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>
-                  🔒 Revenue and commission for other reps are removed on the server before this page loads: they are not hidden in the browser.
-                </div>
-              )}
             </div>
           )}
 
-          {view === 'verticals' && (
-            // Plain house card, like the other three sub-tabs. It used to carry
-            // a 3px accent rule and a deeper one-off shadow to "read as the
-            // subject of the page": but it is the only card in the app dressed
-            // that way, so side by side with Overview / Roster / Rep detail it
-            // read as a different design rather than an emphasised one.
+          {/* REP × VERTICAL — was the "By vertical" tab. Manager-only for the
+              same reason as the roster above. */}
+          {view === 'overview' && isManager && (
+            // Plain house card, like every other section on this page. It used
+            // to carry a 3px accent rule and a deeper one-off shadow to "read as
+            // the subject of the page": but it is the only card in the app
+            // dressed that way, and now that it sits among the other sections
+            // rather than alone under a tab, it read as a different design
+            // rather than an emphasised one.
             <div className="section chart-card">
               <div className="section-head"><div>
                 <h2 className="section-title">Rep × vertical</h2>
@@ -333,16 +393,14 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
             </div>
           )}
 
-          {view === 'mine' && (
-            isManager
-              ? <ManagerRepPicker reps={reps} onPick={setSel} />
-              : own
-                ? <RepDetail rep={own} inline />
-                : <div className="section"><div className="page-sub" style={{ padding: 16 }}>
-                    Your account isn't mapped to a rep on the commission sheet yet, so there is no personal view to show.
-                    Ask an admin to add you to the rep directory.
-                  </div></div>
-          )}
+          {/* "Rep detail" was never a page of its own — it rendered a grid of
+              rep cards whose only job was to open the modal below. Every rep on
+              this dashboard is already clickable (the leaderboard, and every
+              roster row), and they open that same modal, so the picker was a
+              third way to do what two other lists already did.
+              Its rep-side branch was unreachable: 'mine' was not in REP_VIEWS,
+              so a rep could never land on it. Their own breakdown opens from
+              their leaderboard row. */}
         </>
       )}
 
@@ -354,14 +412,18 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   );
 }
 
-type DrillKey = 'reps' | 'orders' | 'units' | 'accounts' | 'verticals' | 'revenue' | 'commission';
+// 'revenue' is GONE from this union, not merely unused: the Revenue tile was
+// the only thing that could set it, so leaving the branch would have been a
+// drill nothing on the page could open.
+type DrillKey = 'reps' | 'orders' | 'units' | 'accounts' | 'verticals' | 'commission';
 
 /**
  * Per-rep breakdown of a tapped headline figure.
  *
- * Money metrics show a Confidential pill wherever the server withheld the value,
- * so a rep can open Revenue or Commission and still see the shape of the team by
- * volume without anyone else's pay appearing. Counts are shared, money is not.
+ * Money metrics are left BLANK wherever the server withheld the value, so a rep
+ * can open Commission and still see the shape of the team by volume without
+ * anyone else's pay appearing. Counts are shared, money is not. The footnote
+ * below the table says how many rows are withheld.
  */
 function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
   metric: DrillKey; reps: RepRow[]; data: RepOverview;
@@ -373,7 +435,7 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
-  const MONEY = metric === 'revenue' || metric === 'commission';
+  const MONEY = metric === 'commission';
   const CFG: Record<DrillKey, { title: string; sub: string; col: string; tint: string }> = {
     reps: { title: 'Reps', sub: 'The four names on the commission sheet, by order volume.', col: 'Orders', tint: C.brand },
     orders: { title: 'Orders by rep', sub: 'Cancelled and $0-value orders are excluded from every figure.', col: 'Orders', tint: V_C.PI },
@@ -384,39 +446,32 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
     // touches the PO book.
     accounts: { title: 'Accounts by rep', sub: 'Distinct vendors billed: the law firm on a PI order, Veterans Affairs on a VA order, TriCare on a Tri-Care order. VA and TriCare are single-vendor, so a rep working one programme shows one account however many orders they book.', col: 'Accounts', tint: C.info },
     verticals: { title: 'Verticals by rep', sub: 'How many of PI / VA / TriCare / DOL each rep has orders in.', col: 'Verticals', tint: V_C.VA },
-    revenue: { title: 'Revenue by rep', sub: 'Order value. Visible only where you are permitted to see it.', col: 'Revenue', tint: C.positive },
     commission: { title: 'Commission by rep', sub: 'units × per-device rate. Visible only where you are permitted to see it.', col: 'Commission', tint: C.warning },
   };
   const cfg = CFG[metric];
   const valOf = (r: RepRow): number | null =>
-    metric === 'revenue' ? r.revenue
-      : metric === 'commission' ? r.commission
-        : metric === 'units' ? r.units
-          : metric === 'accounts' ? r.accounts
-            : metric === 'verticals' ? r.verticals
-              : r.orders;
+    metric === 'commission' ? r.commission
+      : metric === 'units' ? r.units
+        : metric === 'accounts' ? r.accounts
+          : metric === 'verticals' ? r.verticals
+            : r.orders;
 
   const rowsSorted = [...reps].sort((a, b) => (valOf(b) ?? -1) - (valOf(a) ?? -1) || b.orders - a.orders);
   const known = rowsSorted.map(valOf).filter((v): v is number => v != null);
 
-  // Orders, units and revenue exist for the whole book; commission and the two
-  // count metrics do not. Only the first three get an off-roster row, so the
-  // Total matches the KPI above for exactly the metrics that KPI reports.
   // Accounts and verticals are DISTINCT counts, not additive quantities. Two
   // reps billing the same law firm are two rows of 1, but one account: so the
   // column sums to more than the book's true total. Say "Sum of rep counts"
   // rather than "Total", and print the real figure underneath.
+  //
+  // There is no longer an "off roster" row. It existed to carry the gap between
+  // the rep rows and a KPI strip that reported the WHOLE book; the strip is
+  // rep-scoped now, so the rows already sum to their own Total and the extra
+  // line would have double-counted orders this page no longer claims.
   const DISTINCT = metric === 'accounts' || metric === 'verticals';
-  const u = data.unattributed;
-  const offRoster: number | null =
-    !u ? null
-      : metric === 'orders' ? u.orders
-        : metric === 'units' ? u.units
-          : metric === 'revenue' ? u.revenue
-            : null;
 
-  const sum = known.reduce((s, v) => s + v, 0) + (offRoster ?? 0);
-  const max = Math.max(1, ...known, offRoster ?? 0);
+  const sum = known.reduce((s, v) => s + v, 0);
+  const max = Math.max(1, ...known);
   const withheld = rowsSorted.filter((r) => valOf(r) == null).length;
   const fmt = (v: number | null) => (v == null ? null : MONEY ? formatCurrency(v) : String(v));
 
@@ -461,27 +516,6 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
                   </tr>
                 );
               })}
-              {/* The book's tail, as a row rather than a footnote: without it
-                  the Total reads 643 while the KPI above it reads 644, and the
-                  table looks like it disagrees with its own headline. */}
-              {offRoster != null && offRoster > 0 && (
-                <tr style={{ background: 'var(--panel-2)' }} title="Booked in Striven to house/clinic accounts, ops staff or nobody at all. Earns no commission.">
-                  <td style={{ color: C.muted }}>-</td>
-                  <td style={{ fontWeight: 600, color: C.sub, fontStyle: 'italic' }}>
-                    Off roster
-                    <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, color: C.muted }}>
-                      ({data.unattributed?.orders} order{data.unattributed?.orders === 1 ? '' : 's'})
-                    </span>
-                  </td>
-                  <td className="num" style={{ fontWeight: 700, color: C.sub, fontVariantNumeric: 'tabular-nums' }}>{fmt(offRoster)}</td>
-                  <td className="num" style={{ color: C.sub }}>{sum > 0 ? `${Math.round((offRoster / sum) * 100)}%` : '-'}</td>
-                  <td>
-                    <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${(offRoster / max) * 100}%`, background: `${C.muted}88`, borderRadius: 999 }} />
-                    </div>
-                  </td>
-                </tr>
-              )}
             </tbody>
             <tfoot><tr className="total-row">
               <td /><td>
@@ -493,18 +527,13 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
             </tr></tfoot>
           </table>
 
-          {/* The order book has a tail that belongs to nobody on the sheet. */}
-          {DISTINCT && metric === 'accounts' && data.bookTotals && (
+          {/* Distinct counts still need their explanation: the column sums to
+              more than the real figure because reps share payers. This reads
+              the REP-SCOPED accounts count now, the same number the KPI shows. */}
+          {DISTINCT && metric === 'accounts' && data.teamTotals?.accounts != null && (
             <div style={{ fontSize: 12.5, color: C.sub, background: 'var(--panel-2)', borderRadius: 10, padding: '10px 13px', marginTop: 12 }}>
-              The order book bills <b>{data.bookTotals.accounts} distinct accounts</b>. The column above sums to more because reps share
+              The reps bill <b>{data.teamTotals.accounts} distinct accounts</b>. The column above sums to more because reps share
               payers: Veterans Affairs and TriCare are single-payer programmes billed by several reps, so each rep counts them once.
-            </div>
-          )}
-          {offRoster != null && offRoster > 0 && (
-            <div style={{ fontSize: 12.5, color: C.sub, background: 'var(--panel-2)', borderRadius: 10, padding: '10px 13px', marginTop: 12 }}>
-              <b>Off roster</b> is {data.unattributed?.orders} order{data.unattributed?.orders === 1 ? '' : 's'} booked in Striven to
-              house/clinic accounts, ops staff or nobody at all. They are part of the order book: so this Total ties to Orders &amp;
-              Revenue: but they earn no commission.
             </div>
           )}
           {withheld > 0 && (
@@ -634,64 +663,91 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
  * Deliberately NOT the roster table: Dashboard and Reps were rendering the same
  * screen, so this keeps only what belongs on a landing page: who is ahead, and a
  * way through to everything else.
+ *
+ * Rendered for BOTH roles. A rep sees the same ranking a manager does, built
+ * from the same peer rows — name, order count and the per-vertical split that
+ * draws the bar. No money is on this panel for anybody, so nothing about it
+ * needs to differ by role.
+ *
+ * The "Full roster →" button is gone with the Roster tab it pointed at: on a
+ * manager's dashboard the roster table now sits further down the same page, and
+ * a rep has no roster to go to.
  */
-function OverviewPanel({ reps, isManager, onPickRep, onSeeRoster }: {
-  reps: RepRow[]; isManager: boolean; onPickRep: (r: RepRow) => void; onSeeRoster: () => void;
+function OverviewPanel({ reps, onPickRep }: {
+  reps: RepRow[]; onPickRep: (r: RepRow) => void;
 }) {
-  const ranked = [...reps].sort((a, b) => b.orders - a.orders);
-  const leader = ranked[0]?.orders ?? 0;
-  const self = reps.find((r) => r.isSelf) ?? null;
+  // Only producers are ranked — the same rule (and the same server flag) that
+  // getRepOverview applies. This panel used to rank the raw roster, so house,
+  // ops and departed names sat on the landing page's leaderboard while the
+  // server had already dropped them: two boards, one roster, different answers.
+  const ranked = [...reps]
+    .filter((r) => !r.standingsExcluded || r.isSelf)
+    .sort((a, b) => b.orders - a.orders);
   if (!ranked.length) return null;
+
+  // `own` is the server's word for "this row arrived unredacted" — true on every
+  // row for a manager, true only on their own for a rep. Opening a peer's
+  // breakdown as a rep would have shown a modal of dashes: name, order count,
+  // and a column of nulls where the figures they may not see used to be.
+  const canOpen = (r: RepRow) => Boolean(r.own);
+  const openableCount = ranked.filter(canOpen).length;
+  // The bar scale's denominator: every bar is read against the leader's.
+  const leader = ranked[0]?.orders ?? 0;
 
   return (
     <>
-      {self && !isManager && (
-        <div className="section chart-card" style={{ marginBottom: 14 }}>
-          <div className="section-head"><div>
-            <h2 className="section-title">Your standing</h2>
-            <div className="section-sub">Your figures in full. Everyone else's pay stays with them.</div>
-          </div></div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, padding: '2px 2px 0' }}>
-            <Stat label="Rank by orders" value={`#${ranked.findIndex((r) => r.isSelf) + 1} of ${ranked.length}`} tint={C.brand} />
-            <Stat label="Your orders" value={String(self.orders)} />
-            <Stat label="Payable / due" value={money(self.payable)} tint={C.positive} />
-            <Stat label="Waiting" value={money(self.waiting)} tint={C.warning} />
-          </div>
-        </div>
-      )}
-
-      <div className="section chart-card">
-        <div className="section-head">
+      {/* marginBottom 0: the KPI strip below carries its own top gap, so the
+          default card margin was stacking two gaps into one seam. */}
+      <div className="section chart-card" style={{ marginBottom: 0 }}>
+        <div className="section-head" style={{ minHeight: 0, marginBottom: 6 }}>
           <div>
-            <h2 className="section-title">Leaderboard</h2>
-            <div className="section-sub">By orders booked. Click a rep for their full breakdown.</div>
+            <h2 className="section-title" style={{ fontSize: 15 }}>Leaderboard</h2>
+            <div className="section-sub">
+              {openableCount > 1
+                ? 'By orders booked. Click a rep for their full breakdown.'
+                : 'By orders booked. Click your own row for your full breakdown.'}
+            </div>
           </div>
-          <button className="btn ghost" onClick={onSeeRoster}>Full roster →</button>
         </div>
-        <div style={{ display: 'grid', gap: 8, padding: '2px 2px 0' }}>
+        {/* THE BAR takes the slack, not the name.
+            The name column was `minmax(0, 1fr)`, so on a full-width card it
+            swallowed every spare pixel and shoved a 132px bar and the order
+            count to the far right — the void in the middle of each row. The
+            name is now bounded and the mix bar is the flexible column, so a row
+            fills its width instead of spanning it. MixBar is normalised to each
+            rep's own total, so stretching it changes nothing it means. */}
+        <div style={{ display: 'grid', gap: 2, padding: '2px 2px 0' }}>
           {ranked.map((r, i) => (
-            <button key={r.rep} onClick={() => onPickRep(r)}
+            <button key={r.rep} className="lb-row" onClick={canOpen(r) ? () => onPickRep(r) : undefined}
+              disabled={!canOpen(r)}
+              title={canOpen(r) ? `${r.rep}'s full breakdown` : `${r.rep}'s figures are confidential to them`}
               style={{
-                display: 'grid', gridTemplateColumns: '26px 1fr 130px 76px', gap: 12, alignItems: 'center',
-                textAlign: 'left', cursor: 'pointer', width: '100%',
+                display: 'grid', gridTemplateColumns: '18px minmax(80px, 170px) minmax(0, 1fr) 84px',
+                gap: 10, alignItems: 'center',
+                textAlign: 'left', cursor: canOpen(r) ? 'pointer' : 'default', width: '100%',
                 background: r.isSelf ? 'var(--panel-2)' : 'transparent',
                 border: `1px solid ${r.isSelf ? `${C.brand}44` : 'transparent'}`,
-                borderRadius: 10, padding: '9px 11px',
+                borderRadius: 8, padding: '4px 8px',
+                // A disabled button greys its text by default; these rows are
+                // not unavailable, only unopenable, and must stay fully legible.
+                opacity: 1, color: 'inherit',
               }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: i === 0 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
+              <span style={{ fontSize: 11.5, fontWeight: 800, color: i === 0 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
                 {i === 0 ? '🥇' : i + 1}
               </span>
-              <span style={{ minWidth: 0 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: C.brand }}>{r.rep}</span>
-                {r.isSelf && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: C.positive }}>You</span>}
-                <span style={{ display: 'block', marginTop: 4 }}><MixBar parts={r.byVertical} total={r.orders} /></span>
+              <span style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: C.brand, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rep}</span>
+                {r.isSelf && <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: C.positive }}>You</span>}
               </span>
-              <span style={{ fontSize: 12.5, color: C.sub, fontVariantNumeric: 'tabular-nums' }}>
-                <b style={{ color: C.ink, fontSize: 15 }}>{r.orders}</b> orders
-                <span style={{ color: C.muted }}> · {leader ? Math.round((r.orders / leader) * 100) : 0}%</span>
-              </span>
-              <span style={{ fontSize: 14, fontWeight: 800, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {r.own ? money(r.commission) : <Confidential />}
+              <MixBar parts={r.byVertical} total={r.orders} height={8} scale={leader ? r.orders / leader : 0} />
+              {/* Orders only. The money column that sat here is gone: this
+                  board ranks by volume, and the figure was each rep's own
+                  commission — available in full on My Commission and on the
+                  rep's own drill-down, so nothing is lost by dropping it. The
+                  share-of-leader percentage went too; the bar already carries
+                  the comparison, and rank says who is ahead. */}
+              <span style={{ fontSize: 11.5, color: C.sub, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                <b style={{ color: C.ink, fontSize: 13 }}>{r.orders}</b> orders
               </span>
             </button>
           ))}
@@ -701,16 +757,35 @@ function OverviewPanel({ reps, isManager, onPickRep, onSeeRoster }: {
   );
 }
 
-/** One rep's split across verticals, by order count. */
-function MixBar({ parts, total }: { parts: RepVertical[]; total: number }) {
+/**
+ * One rep's split across verticals, by order count.
+ *
+ * `height` defaults to the 9px the roster and rep-detail tables use; the
+ * leaderboard passes a thinner bar so its rows stay on one line.
+ *
+ * `scale` (0-1) is how much of the TRACK this rep's bar fills. It defaults to 1,
+ * which is the right answer inside a table row where the bar only has to show a
+ * mix. On the leaderboard it is the rep's share of the leader's orders — without
+ * it every bar ran the full width, because the segments are normalised to each
+ * rep's OWN total, and four reps on 166 / 99 / 72 / 39 orders drew four
+ * identical bars. The rank number was doing all the work.
+ */
+function MixBar({ parts, total, height = 9, scale = 1 }: {
+  parts: RepVertical[]; total: number; height?: number; scale?: number;
+}) {
   const shown = parts.filter((p) => p.orders > 0);
-  if (!shown.length || !total) return <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)' }} />;
+  if (!shown.length || !total) return <div style={{ height, borderRadius: 999, background: 'var(--panel-2)' }} />;
+  const pct = Math.max(0, Math.min(1, scale)) * 100;
   return (
-    <div title={shown.map((p) => `${p.vertical}: ${p.orders}`).join(' · ')}
-      style={{ display: 'flex', height: 9, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)' }}>
-      {shown.map((p) => (
-        <div key={p.vertical} style={{ width: `${(p.orders / total) * 100}%`, background: V_C[p.vertical] || C.muted }} />
-      ))}
+    <div title={`${total} order${total === 1 ? '' : 's'} · ${shown.map((p) => `${p.vertical}: ${p.orders}`).join(' · ')}`}
+      style={{ height, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)' }}>
+      {/* Outer track is the leader's length; this fill is this rep's share of
+          it, and the segments inside divide THAT by vertical. */}
+      <div className="mix-fill" style={{ display: 'flex', height: '100%', width: `${pct}%`, borderRadius: 999, overflow: 'hidden', transition: 'width .35s cubic-bezier(.22,.75,.3,1), filter .15s ease' }}>
+        {shown.map((p) => (
+          <div key={p.vertical} style={{ width: `${(p.orders / total) * 100}%`, background: V_C[p.vertical] || C.muted }} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -761,15 +836,18 @@ function TeamShape({ reps }: { reps: RepRow[] }) {
   );
 }
 
-// Another rep's money. Named rather than blanked, so the absence reads as a
-// policy rather than as missing data.
+// Another rep's money: left BLANK.
+//
+// This used to render a "CONFIDENTIAL" pill — the absence was named so it read
+// as a policy rather than as missing data. It is a blank cell now, on request.
+// The footnote under each table still says whose figures are withheld and why,
+// so the reason survives even though the marker does not.
+//
+// Kept as a component rather than deleted: it marks every place the server
+// withheld a value, so the rule stays greppable and there is one thing to
+// change if the pill is ever wanted back.
 function Confidential() {
-  return (
-    <span title="Commission and revenue are confidential to that rep"
-      style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: C.sub, background: 'var(--panel-2)', border: `1px solid ${C.muted}33`, borderRadius: 999, padding: '2px 8px' }}>
-      Confidential
-    </span>
-  );
+  return null;
 }
 
 function Stat({ label, value, tint }: { label: string; value: string; tint?: string }) {
@@ -781,50 +859,42 @@ function Stat({ label, value, tint }: { label: string; value: string; tint?: str
   );
 }
 
-function ManagerRepPicker({ reps, onPick }: { reps: RepRow[]; onPick: (r: RepRow) => void }) {
-  return (
-    <div className="section chart-card">
-      <div className="section-head"><div>
-        <h2 className="section-title">Rep detail</h2>
-        <div className="section-sub">Pick a rep for their full breakdown.</div>
-      </div></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, padding: '4px 2px' }}>
-        {reps.map((r) => (
-          <button key={r.rep} onClick={() => onPick(r)}
-            style={{ textAlign: 'left', cursor: 'pointer', background: 'var(--panel-2)', border: `1px solid ${C.muted}22`, borderRadius: 12, padding: '14px 16px' }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: C.brand }}>{r.rep}</div>
-            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{money(r.commission)}</div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.orders} orders · {r.units} devices · {r.accounts} accounts</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+// ManagerRepPicker lived here: the body of the "Rep detail" tab, a grid of rep
+// cards whose only action was to open RepModal. The leaderboard and the roster
+// table already do that, so it went with the tab.
 
 // One rep in full. Used inline for a rep's own view, and in a modal from the
 // team table.
 function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
   const totalOrders = rep.byVertical.reduce((s, v) => s + v.orders, 0) || 1;
+  // Revenue and Accounts are DROPPED, not shown empty. The server withholds
+  // both from a rep, so these rendered as a "-" tile and a column of
+  // CONFIDENTIAL chips — furniture announcing a figure the reader will never be
+  // given. Driven off the payload rather than a role flag, so a manager (who is
+  // sent the figures) still gets both.
+  const showRevenue = rep.revenue != null;
+  const showAccounts = rep.accounts != null;
+  const showVertRevenue = rep.byVertical.some((v) => v.revenue != null);
+  const cols = (n: number) => ({ display: 'grid', gridTemplateColumns: `repeat(${n}, 1fr)`, gap: 10 } as const);
   const body = (
     <>
-      <div className="cm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+      <div className="cm-stat-grid" style={{ ...cols(showRevenue ? 4 : 3), marginBottom: 16 }}>
         <Stat label="Commission" value={money(rep.commission)} tint={C.brand} />
         <Stat label="Payable / due" value={money(rep.payable)} tint={C.positive} />
         <Stat label="Waiting" value={money(rep.waiting)} tint={C.warning} />
-        <Stat label="Revenue" value={money(rep.revenue)} />
+        {showRevenue && <Stat label="Revenue" value={money(rep.revenue)} />}
       </div>
 
-      <div className="cm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 18 }}>
+      <div className="cm-stat-grid" style={{ ...cols(showAccounts ? 4 : 3), marginBottom: 18 }}>
         <Stat label="Orders" value={String(rep.orders)} />
         <Stat label="Devices" value={n(rep.units)} />
-        <Stat label="Accounts" value={n(rep.accounts)} />
+        {showAccounts && <Stat label="Accounts" value={n(rep.accounts)} />}
         <Stat label="Device types" value={n(rep.devices)} />
       </div>
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By vertical</div>
       <table className="data-table">
-        <thead><tr><th>Vertical</th><th className="num">Orders</th><th className="num">Devices</th><th className="num">Revenue</th><th className="num">Share of orders</th><th style={{ width: '24%' }} /></tr></thead>
+        <thead><tr><th>Vertical</th><th className="num">Orders</th><th className="num">Devices</th>{showVertRevenue && <th className="num">Revenue</th>}<th className="num">Share of orders</th><th style={{ width: '24%' }} /></tr></thead>
         <tbody>
           {rep.byVertical.map((v) => (
             <tr key={v.vertical}>
@@ -834,7 +904,9 @@ function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
               </td>
               <td className="num" style={{ fontWeight: 700 }}>{v.orders || '-'}</td>
               <td className="num">{n(v.units)}</td>
-              <td className="num" style={{ fontWeight: 800 }}>{v.revenue != null ? (v.revenue ? formatCurrency(v.revenue) : '-') : <Confidential />}</td>
+              {showVertRevenue && (
+                <td className="num" style={{ fontWeight: 800 }}>{v.revenue != null ? (v.revenue ? formatCurrency(v.revenue) : '-') : <Confidential />}</td>
+              )}
               <td className="num">{v.orders ? `${Math.round((v.orders / totalOrders) * 100)}%` : '-'}</td>
               <td>
                 <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
@@ -875,8 +947,12 @@ function RepModal({ rep, onClose }: { rep: RepRow; onClose: () => void }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>{rep.rep}</div>
+            {/* The accounts clause is dropped when there is no figure. It read
+                "98 orders · 206 devices · accounts" for a rep, because a null
+                renders as nothing and left its own label stranded. */}
             <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>
-              {rep.orders} orders · {rep.units} devices · {rep.accounts} accounts
+              {rep.orders} orders · {rep.units} devices
+              {rep.accounts != null && ` · ${rep.accounts} accounts`}
               {!rep.own && ' · pay is confidential'}
             </div>
           </div>

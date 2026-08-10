@@ -259,32 +259,37 @@ test('i. a rep sees their own dollars in full', () => {
   assert.equal(out.reconcile.reps.find((r) => r.rep === 'Cassie').sheet, 3000);
 });
 
-test('ii. a rep sees only order counts for other reps', () => {
+// POLICY CHANGE. This used to assert that a peer row SURVIVED, carrying order
+// counts, unit counts and matchRate with only the money nulled — the "volume is
+// shared, pay is not" model. A rep is now restricted to their own data, so the
+// row must not be there at all.
+test('ii. a rep sees no row for another rep, not even a redacted one', () => {
   const out = redactCommissionPayload(payload(), CASSIE);
-  const other = out.reps.find((r) => r.rep === 'Dana');
-  assert.deepEqual(other.orderCounts, { TriCare: 1, VA: 3, PI: 2, DOL: 0 });
-  assert.equal(other.strivenOrders, 6);
-  assert.equal(other.strivenUnits, 8);
-  assert.equal(other.matchRate, 40, 'matchRate stays visible for badging');
-  assert.equal(other.count, 6);
-  for (const k of ['tricare', 'pi', 'va', 'total', 'payableTotal', 'waitingTotal', 'strivenValue', 'commPerOrder', 'pctOfValue']) {
-    assert.equal(other[k], null, `${k} must be null for another rep`);
+  assert.equal(out.reps.find((r) => r.rep === 'Dana'), undefined, 'no peer sheet row');
+  assert.equal(out.reps.length, 1, 'the caller and nobody else');
+  assert.equal(out.reps[0].rep, 'Cassie');
+  // Every other collection of rep rows in the payload obeys the same rule. A
+  // single missed collection would hand back the whole roster.
+  assert.equal(out.striven.byRep.length, 1, 'striven.byRep: own only');
+  assert.equal(out.striven.months[0].reps.length, 1, 'inside a month too');
+  assert.equal(out.periods[0].reps.length, 1, 'and on a pay-period tab');
+  assert.equal(out.reconcile.reps.length, 1, 'and in reconcile');
+  for (const list of [out.reps, out.striven.byRep, out.striven.months[0].reps, out.periods[0].reps, out.reconcile.reps]) {
+    assert.ok(list.every((r) => r.rep === 'Cassie'), 'every surviving row is the caller\'s own');
   }
-  assert.equal(other.recon, null, 'recon (incl. lines) is withheld');
 });
 
-test('iii. no dollar figure for another rep survives anywhere in the payload', () => {
+test('iii. no figure for another rep survives anywhere in the payload', () => {
   const out = redactCommissionPayload(payload(), CASSIE);
-  // Dana's figures, and the company-wide aggregates that would reveal them.
+  // Dana's dollars, the company-wide aggregates that would reveal them, AND
+  // Dana's volume — the counts used to be permitted and are not any more.
   const forbidden = [2000, 2100, 800, 900, 5000, 5200, 25000];
   const seen = JSON.stringify(out);
   for (const n of forbidden) {
     assert.ok(!new RegExp(`(^|[^\\d.])${n}([^\\d]|$)`).test(seen), `value ${n} leaked: ${seen.slice(0, 200)}`);
   }
-  assert.equal(out.striven.byRep.find((r) => r.rep === 'Dana').lines, undefined);
-  assert.equal(out.striven.months[0].reps.find((r) => r.rep === 'Dana').total, null);
-  assert.equal(out.periods[0].reps.find((r) => r.rep === 'Dana').total, null);
-  assert.equal(out.reconcile.reps.find((r) => r.rep === 'Dana').sheet, null);
+  // The NAME is disclosure too: it tells a rep who else is on the book.
+  assert.ok(!seen.includes('Dana'), 'a peer\'s name must not appear anywhere in the payload');
   assert.equal(out.reconcile.totals.sheet, null);
 });
 
@@ -294,12 +299,14 @@ test('iii. redaction is identity-driven, so no query param can widen it', () => 
   const spoofed = resolveIdentity('dana@smr.example', DIRECTORY);
   assert.equal(spoofed.repName, 'Dana');
   const out = redactCommissionPayload(payload(), { ...CASSIE });
-  assert.equal(out.reps.find((r) => r.rep === 'Dana').total, null);
-  // An unknown account gets least privilege: a rep with no own row at all.
+  assert.equal(out.reps.find((r) => r.rep === 'Dana'), undefined, 'Dana is absent from Cassie\'s payload');
+  // An unknown account gets least privilege: a rep with no own row at all. That
+  // now means an EMPTY list rather than a list of locked rows — matching no
+  // name can only ever return nothing.
   const stranger = resolveIdentity('nobody@example.com', DIRECTORY);
   assert.deepEqual(stranger, { email: 'nobody@example.com', repName: null, role: 'rep' });
   const strangerOut = redactCommissionPayload(payload(), stranger);
-  assert.ok(strangerOut.reps.every((r) => r.total === null), 'no rep row is unlocked');
+  assert.equal(strangerOut.reps.length, 0, 'no rep row is unlocked, and none is even listed');
   assert.equal(strangerOut.grandTotal, null);
 });
 
@@ -311,7 +318,7 @@ test('i. a rep can still see their own figures after picking a month', () => {
   assert.equal(m.total, 3100, "month total is the caller's own, not the company's");
   assert.equal(m.VA, 1900);
   assert.equal(m.reps.find((r) => r.rep === 'Cassie').total, 3100);
-  assert.equal(m.reps.find((r) => r.rep === 'Dana').total, null, 'peers stay hidden inside the month');
+  assert.equal(m.reps.find((r) => r.rep === 'Dana'), undefined, 'peers are absent inside the month too');
   assert.notEqual(m.total, 5200, 'the company month total must never appear');
 });
 
@@ -356,20 +363,21 @@ test('iii. admin "view as" narrows to that rep and never widens', async () => {
   assert.equal(preview.repName, 'Cassie');
   const out = redactCommissionPayload(payload(), preview);
   assert.equal(out.reps.find((r) => r.rep === 'Cassie').total, 3000, 'previewed rep sees their own row');
-  assert.equal(out.reps.find((r) => r.rep === 'Dana').total, null, 'preview still hides every other rep');
+  assert.equal(out.reps.find((r) => r.rep === 'Dana'), undefined, 'preview drops every other rep, as a rep login does');
   assert.equal(out.grandTotal, 3000, "aggregates scope to the previewed rep, not the company");
   assert.equal(out.reconcile.totals.sheet, null, 'company totals stay hidden in preview');
 
   // Previewing a name with no row unlocks nothing at all.
   const ghost = redactCommissionPayload(payload(), viewerFor(ADMIN, 'Nobody'));
-  assert.ok(ghost.reps.every((r) => r.total === null));
+  assert.equal(ghost.reps.length, 0);
   assert.equal(ghost.grandTotal, null);
 
   // A REP passing ?as= is ignored outright — this is the escalation path that
   // must not exist.
   assert.deepEqual(viewerFor(CASSIE, 'Dana'), CASSIE);
   const escalated = redactCommissionPayload(payload(), viewerFor(CASSIE, 'Dana'));
-  assert.equal(escalated.reps.find((r) => r.rep === 'Dana').total, null);
+  assert.equal(escalated.reps.find((r) => r.rep === 'Dana'), undefined, 'naming Dana does not summon her row');
+  assert.equal(escalated.reps.length, 1, 'the attempt yields exactly the caller\'s own row');
   assert.equal(escalated.reps.find((r) => r.rep === 'Cassie').total, 3000, 'still sees only their own');
 
   // Empty / missing `as` leaves the caller untouched.

@@ -104,11 +104,215 @@ export const PI_STAGES = [
 /** Custom field on the sales order that mirrors the Striven tag. */
 export const STRIVEN_STAGE_FIELD = 'Stage';
 
+// ── PIP: its own pipeline ────────────────────────────────────────────────────
+// A PIP order NEVER goes to Lienstar. It is billed through the customer to the
+// auto insurer at the full billed amount and paid in full — no advance, no
+// lien, no settlement. So the PI stages do not describe it: 'LOP requested'
+// and 'Waiting for settlement' are steps a PIP order can never reach, and
+// leaving them on the board would show a pipeline with two permanently empty
+// stages and imply a wait that does not exist.
+//
+// The routing decision is the ORDER TYPE — the new PIP type Crystal is creating
+// in Striven. isPipType() in _striven.js already recognises it.
+//
+// Until that type exists the LABEL is the only signal an order is PIP, so an
+// order carrying any label below is treated as PIP regardless of its type. A
+// staff member does not tag an order "Waiting on PIP Payment" unless the auto
+// insurer is the payer, so the label is a reliable statement of the payer.
+// Once the order type ships, TYPE wins and this stays as the backstop for
+// orders written before the type existed.
+//
+// PIP still reports as PI everywhere else (revenue, commission, verticals):
+// only the pipeline splits. soClass() is deliberately unchanged.
+// THREE stages, not four. There is no dispatch stage: shipping is work that
+// happens inside 'Order received', and the only transition that matters to the
+// money is "are we waiting on the insurer" and then "is it settled".
+export const PIP_STAGES = [
+  'Order received',
+  'Waiting on PIP Payment',
+  'Bill settled',
+];
+
+/**
+ * Labels that IDENTIFY an order as PIP (not the same thing as PIP_LABEL_STAGE,
+ * which places an already-PIP order on the board).
+ *
+ * Deliberately narrow: only labels that name PIP outright. 'Shipped' or 'Paid'
+ * say nothing about who pays, so an order carrying only those stays on the PI
+ * board — moving it would silently strip a lien case out of the PI pipeline.
+ */
+/**
+ * ── REVIEW LABELS: exceptions, not stages ───────────────────────────────────
+ *
+ * These describe an order that has STOPPED, not one that has progressed. A
+ * pipeline stage answers "how far along is this"; HOLD, Attorney Denied and
+ * Case Dropped answer "why has this gone nowhere", which is a different
+ * question and belongs to a different queue.
+ *
+ * They used to be mapped into stages — HOLD and Attorney Denied into 'LOP
+ * requested', Case Dropped into 'Order received' — which made a stalled order
+ * indistinguishable from one that is actively being chased, and quietly
+ * inflated the stage it landed in.
+ *
+ * A label listed here contributes NO stage. The order still appears on the
+ * board wherever its OTHER labels place it: an order tagged
+ * "HOLD, 3rd LOP Request" is still a live LOP chase, it just also needs
+ * looking at. Only an order whose sole label is one of these falls back to
+ * stage 1, and it is surfaced in the review queue either way.
+ *
+ * Applies to BOTH boards — a stall is a stall whoever is paying.
+ */
+export const REVIEW_LABELS = [
+  'attorney denied',
+  'hold',
+  'case dropped',
+];
+
+export const PIP_IDENTIFYING_LABELS = [
+  'waiting on pip payment',
+  'waiting for pip payment',
+];
+
+// Same rules as PI_LABEL_STAGE below: label → stage (or stages), listed
+// everywhere attested, furthest along is the current position.
+// EVERY label in the Striven vocabulary appears below, including the ones that
+// resolve to stage 1. Listing them all is the point: an unlisted label is
+// indistinguishable from a mapped-to-stage-1 label at runtime, and only the
+// explicit list shows a reader that the label was considered.
+export const PIP_LABEL_STAGE = {
+  // → 1. Order received. Everything before the money is outstanding, INCLUDING
+  // dispatch: with no shipping stage, a shipped order is still simply received.
+  // An order labelled both 'Shipped' and 'Waiting on PIP Payment' still lands
+  // in stage 2, because furthest along wins.
+  'shipped': 'Order received',
+  'dispense': 'Order received',
+  'cancelled': 'Order received',
+  // 'hold' and 'case dropped' are NOT here: see REVIEW_LABELS above. They say
+  // the order has stopped, not how far it got, so they carry no stage.
+  // LOP / Lienstar / settlement labels CANNOT legitimately apply to PIP — it
+  // never goes to Lienstar and never settles. They are mapped rather than left
+  // out so behaviour is deterministic, but a PIP order carrying one is a
+  // mislabel in Striven, and leaving it in stage 1 is what makes that visible.
+  'waiting for lop': 'Order received',
+  '1st lop request': 'Order received',
+  '2nd lop request': 'Order received',
+  '3rd lop request': 'Order received',
+  // 'attorney denied' is NOT here either: see REVIEW_LABELS above.
+  'enter into lienstar': 'Order received',
+  'hold for settlement': 'Order received',
+  'negotiating': 'Order received',
+
+  // → 2. Waiting on PIP Payment. The bill is with the auto insurer.
+  // Striven spells it "Waiting on PIP Payment"; "waiting for" is how people say
+  // it. Both map, so a relabel cannot silently drop an order to stage 1.
+  'waiting on pip payment': 'Waiting on PIP Payment',
+  'waiting for pip payment': 'Waiting on PIP Payment',
+  // Delivery is what puts the bill in front of the insurer, so these are the
+  // same wait under different names.
+  'delivered': 'Waiting on PIP Payment',
+  'pod sent': 'Waiting on PIP Payment',
+  'waiting for first payment': 'Waiting on PIP Payment',
+  'waiting for final payment': 'Waiting on PIP Payment',
+  'waiting for reimbursement': 'Waiting on PIP Payment',
+  'tricare order submitted': 'Waiting on PIP Payment',
+
+  // → 3. Bill settled. PIP is paid in full in one go: no advance, no
+  // settlement negotiation, so 'Paid' IS the end of the pipeline.
+  'paid': 'Bill settled',
+  'tricare paid': 'Bill settled',
+};
+
+// ── Striven LABEL → PI stage ─────────────────────────────────────────────────
+// Striven tags a sales order with LABELS, and an order can carry several at
+// once ("Waiting for first payment, Shipped"). Three rules turn a label SET
+// into the board:
+//
+//   1. this map, label → one stage OR a list of stages. A list is for a label
+//      that is genuinely true of more than one stage at the same time; see
+//      'delivered' below.
+//   2. LISTED EVERYWHERE IT IS ATTESTED. The order appears at every stage its
+//      labels reach, so "Waiting for first payment, Shipped" shows on the
+//      dispatch card AND the payment card. Nothing is back-filled: a stage no
+//      label names stays empty, even if the order must logically have passed
+//      through it.
+//   3. FURTHEST ALONG WINS, for its CURRENT position — the single stage the
+//      order counts at in the flow bar. That same example is awaiting payment
+//      now; it is merely also on record as having shipped.
+//
+// Anything not listed here leaves the order in 'Order received' — the state a
+// sales order is in from the moment it is created.
+//
+// Keys are matched case-insensitively after trimming.
+export const PI_LABEL_STAGE = {
+  // → LOP requested. A 1st/2nd/3rd request is the SAME state (see PI_STAGES
+  // above).
+  //
+  // HOLD and Attorney Denied USED TO SIT HERE and no longer do — they are the
+  // chase stalling, not a step of it, so counting them as an active LOP request
+  // overstated this stage and hid the stall. They are in REVIEW_LABELS above.
+  'waiting for lop': 'LOP requested',
+  '1st lop request': 'LOP requested',
+  '2nd lop request': 'LOP requested',
+  '3rd lop request': 'LOP requested',
+
+  // → Dispensed & shipped. Dispensing IS shipping here.
+  'shipped': 'Dispensed & shipped',
+  'dispense': 'Dispensed & shipped',
+
+  // → BOTH 'Delivered' and 'Waiting for first payment'.
+  //
+  // Delivery is two things at once: a milestone of its own, and the event that
+  // puts the order into Lienstar and starts the wait for the first payment
+  // ("it has to enter into stage 5 waiting for the first payment
+  // SIMULTANEOUSLY"). It used to resolve to the payment stage alone, because
+  // only one stage could win per label — so the Delivered stage sat permanently
+  // empty even though delivered orders existed. A label may now attest to
+  // several stages, so both are true at once and neither is lost. The order's
+  // CURRENT position is still the furthest of them, i.e. unchanged.
+  'delivered': ['Delivered', 'Waiting for first payment'],
+  'enter into lienstar': 'Waiting for first payment',
+  'waiting for first payment': 'Waiting for first payment',
+
+  // → Waiting for settlement.
+  'negotiating': 'Waiting for settlement',
+  // These three were not in the brief. Left unmapped they fell to 'Order
+  // received', which put 29 of the furthest-along orders in the furthest-back
+  // stage — a worse answer than any of the alternatives. All three are waits
+  // that happen AFTER the first payment, so they sit with settlement:
+  //   'Waiting for final payment' (29) — the balance after the first payment
+  //   'Waiting on PIP Payment'     (3) — the patient's own auto policy paying
+  //   'Hold for Settlement'        (1) — says settlement outright
+  // Move any of them if the business reads them differently.
+  'waiting for final payment': 'Waiting for settlement',
+  'waiting on pip payment': 'Waiting for settlement',
+  'hold for settlement': 'Waiting for settlement',
+
+  // The rest of the vocabulary, listed so no label is silently unhandled.
+  'waiting for reimbursement': 'Waiting for settlement',   // the wait after the first payment
+  'pod sent': 'Delivered',                                 // proof of delivery
+  // 'Paid' is past the end of this pipeline — PI_STAGES stops at settlement, so
+  // the furthest stage available is the closest true answer. Add a 'Paid' stage
+  // if the business wants completed orders shown separately.
+  'paid': 'Waiting for settlement',
+  'tricare paid': 'Waiting for settlement',
+  'tricare order submitted': 'Dispensed & shipped',
+  // 'CANCELLED' is here for completeness only: cancelled orders never reach
+  // this pipeline — getOrderAnalytics drops them before it is built.
+  // 'case dropped' is NOT here: a dropped case has stopped, not progressed, so
+  // it carries no stage and goes to the review queue. See REVIEW_LABELS above.
+  'cancelled': 'Order received',
+};
+
 // ── Standings masking ────────────────────────────────────────────────────────
-// When true, a rep sees ONLY the order count for other reps — units, devices and
-// account counts are nulled too, so Team Standings is strictly order-count-only.
-// Set false to let reps compare volume more richly (units and accounts return).
-// Money is never affected by this flag; it is withheld from non-self rows always.
+// LARGELY MOOT. This governed how much of a PEER's row a rep received, back when
+// they received one: true meant order counts only, false let units and accounts
+// through as well. A rep is now restricted to their own data and gets no peer
+// row at all, so there is nothing left for the flag to mask on a rep login.
+//
+// It is kept, and kept true, because it still governs the per-row `lean`
+// redaction in getRepOverview. If peer rows are ever reinstated, that redaction
+// is what stops them arriving unredacted — setting this false would widen what
+// a peer row carries the moment one exists again.
 export const STANDINGS_ORDERS_ONLY = true;
 
 // Names that carry orders in Striven but must NOT appear on the leaderboard.
@@ -121,16 +325,18 @@ export const STANDINGS_ORDERS_ONLY = true;
 // Denise Zavala is deliberately NOT here: she folds into Maylon Sanders in
 // commRep(), so her orders rank under Maylon rather than disappearing.
 //
-// NOTE: 'House Account' and 'Santiago Family Chiropractic' are left ON the
-// board. The meeting covered both ways ("Santiago doesn't need any reporting"
-// then "you can leave the house account on there") and the written punch list
-// names neither, so they stay visible until someone says otherwise.
+// 'House Account' (a house bucket, not a person) and 'Santiago Family
+// Chiropractic' (a practice, not a rep) were previously left ON the board — the
+// meeting had covered both ways. Both have since been named explicitly for
+// removal, so the board is now producers only.
 export const STANDINGS_EXCLUDE = [
   'Crystal Chambers',
   'Angel Santiago',
   'Cassie',
   'Kinley Shepherd',
   'Zach Shank',
+  'House Account',
+  'Santiago Family Chiropractic',
 ];
 
 // The sheet verification gate is gone with the sheet feed: MIN_MATCH_RATE had
@@ -207,11 +413,21 @@ export const REP_DIRECTORY = [
   { email: 'admin@sportsmedrecovery.com', repName: null, role: 'admin' },
   { email: 'crystal@sportsmedrecovery.com', repName: null, role: 'admin' },
   { email: 'rishi@sportsmedrecovery.com', repName: null, role: 'admin' },
+  // Kevin: FULL admin — the entire Company side (P&L, AR/AP, QuickBooks) and
+  // every rep's revenue and commission. There is no partial-company role, so
+  // "decide what he sees later" currently means widening from nothing or
+  // narrowing from everything; this is the latter, chosen deliberately.
+  { email: 'kevin@sportsmedrecovery.com', repName: null, role: 'admin' },
   // Rep logins. repName must stay exactly as spelled in REP_NAMES above.
   { email: 'alle@sportsmedrecovery.com', repName: 'Alle Ann', role: 'rep' },
   { email: 'jillian@sportsmedrecovery.com', repName: 'Jillian', role: 'rep' },
   { email: 'cassie@sportsmedrecovery.com', repName: 'Cassie', role: 'rep' },
   { email: 'christy@sportsmedrecovery.com', repName: 'Christy', role: 'rep' },
+  // Added after the fact: the dashboard_users login existed but this row did
+  // not, so Maylon authenticated successfully and then matched no rep row —
+  // an empty dashboard with every tile at zero. This is the failure the note
+  // above describes; a login without a directory row fails closed and silent.
+  { email: 'maylon@sportsmedrecovery.com', repName: 'Maylon Sanders', role: 'rep' },
 ];
 
 // Verticals. VA and PI are active; DOL is future (may have zero orders);

@@ -7,6 +7,7 @@ const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m)
 const OrdersTab = lazy(() => import('./components/OrdersTab').then((m) => ({ default: m.OrdersTab })));
 const ArApTab = lazy(() => import('./components/ArApTab').then((m) => ({ default: m.ArApTab })));
 const ApSheetTab = lazy(() => import('./components/ApSheetTab').then((m) => ({ default: m.ApSheetTab })));
+const ArSheetTab = lazy(() => import('./components/ArSheetTab').then((m) => ({ default: m.ArSheetTab })));
 const PLTab = lazy(() => import('./components/PLTab').then((m) => ({ default: m.PLTab })));
 const VendorsItemsTab = lazy(() => import('./components/VendorsItemsTab').then((m) => ({ default: m.VendorsItemsTab })));
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
@@ -20,7 +21,7 @@ const TeamStandings = lazy(() => import('./components/RepsTab').then((m) => ({ d
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'repsroster' | 'standings' | 'reports' | 'quickbooks';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'arsheet' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'repsroster' | 'standings' | 'reports' | 'quickbooks';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -144,6 +145,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     overview: <OverviewCharts />,
     receivables: <ArApTab initialMode="ar" />,
     payables: <ArApTab initialMode="ap" />,
+    arsheet: <ArSheetTab />,
     apsheet: <ApSheetTab />,
     pl: <PLTab />,
     orders: <OrdersTab />,
@@ -159,7 +161,11 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     reps: <RepsTab initialSub="overview" />,
     repsorders: <RepsTab initialSub="orders" />,
     repspipeline: <RepsTab initialSub="pipeline" />,
-    repsroster: <RepsTab initialSub="team" />,
+    // 'repsroster' opened the Roster sub-view, which no longer exists — the
+    // roster is a section of the dashboard now. The key still resolves (an old
+    // bookmark or #hash should not dead-end) but it lands on that dashboard,
+    // where the roster is. It is no longer offered in the nav.
+    repsroster: <RepsTab initialSub="overview" />,
     standings: <TeamStandings />,
     reports: <ReportsTab />,
     quickbooks: <QuickBooksTab />,

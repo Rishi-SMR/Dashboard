@@ -11,11 +11,22 @@ async function get<T>(path: string): Promise<T> {
 
 export type StrivenStatus = { connected: boolean; company: string | null; subdomain?: string | null; reason?: string; phiMasked?: boolean };
 
-export type SoRecent = { id: number; ref: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; date: string | null };
-export type SoPivaKey = 'PI' | 'VA' | 'TriCare' | 'Other';
+/** `labels` are the Striven tags that DECIDE the order's stage — `status` is
+ *  only Striven's In Progress / Completed. Empty where Striven has tagged
+ *  nothing: the labels report covers the PI/PIP book, not the whole catalogue. */
+export type SoRecent = { id: number; ref: string; type: string; rep: string; payer: string; value: number; status: string; invStatus: string; date: string | null; labels?: string[];
+  /** First INITIAL + surname, never a full first name. Empty where the labels
+   *  report has no row for the order. */
+  patient?: string };
+/** getSO() emits a bucket per soClass(), which includes DEMO and Contract — the
+ *  type listed only four and was silently narrower than the payload. */
+export type SoPivaKey = 'PI' | 'VA' | 'TriCare' | 'DEMO' | 'Contract' | 'Other';
 export type SoStatusGroup = 'active' | 'completed' | 'cancelled';
 export type SoResult = {
-  // count/totalValue/piva/byType/byRep = the ORDER BOOK (cancelled + demo excluded).
+  // count/totalValue/piva/byType/byRep = the ORDER BOOK: cancelled excluded,
+  // DEMO INCLUDED. The comment used to claim demo was excluded too; getSO()
+  // stopped filtering it out (it was hiding 27 orders worth $17,369) and this
+  // was not updated. `demoCount` carries how many of them there are.
   count: number; totalValue: number;
   piva: Record<SoPivaKey, { count: number; value: number }>;
   byType: { type: string; count: number; value: number }[];
@@ -38,11 +49,15 @@ export type VendorsResult = { count: number; vendors: Vendor[] };
 export type Item = { id: number; name: string; number: string; type: string; description: string; price: number; cost: number; active: boolean };
 export type ItemsResult = { count: number; items: Item[] };
 
-export type TrendPoint = { month: string; revenue: number; expenses: number; net: number };
+/** `invoices`/`bills` are the COUNTS behind that month's amounts, so a count
+ *  shown beside a figure always describes the same period the figure does. */
+export type TrendPoint = { month: string; revenue: number; expenses: number; net: number; invoices?: number; bills?: number };
 export type TrendsResult = { series: TrendPoint[] };
 
 export type Payment = { id: number; ref: string; customer: string; date: string | null; amount: number; status: string };
-export type PaymentsResult = { count: number; total: number; byMonth: { month: string; amount: number }[]; recent: Payment[]; phiMasked: boolean };
+/** `count` at the top level is every payment ever taken; the per-month `count`
+ *  is what belongs beside a period-scoped total. */
+export type PaymentsResult = { count: number; total: number; byMonth: { month: string; amount: number; count?: number }[]; recent: Payment[]; phiMasked: boolean };
 
 export type BillPayment = { id: number; ref: string; vendor: string; account: string; date: string | null; amount: number; status: string };
 export type BillPaymentsResult = { count: number; total: number; recent: BillPayment[] };
@@ -95,6 +110,115 @@ export const fetchStrivenAP = () => get<ApResult>('/api/ap');
 export const fetchStrivenAccounts = () => get<AccountsResult>('/api/accounts');
 export const fetchStrivenPL = () => get<PlResult>('/api/pl');
 export const fetchStrivenSO = () => get<SoResult>('/api/so');
+
+/** AP REGISTER — vendor bills from the "AP Ledgers" tab of the AP workbook, NOT
+ *  from Striven. It will not reconcile with Payables: different book, kept by
+ *  hand. The workbook's top "Total Outstanding" cell is deliberately NOT read:
+ *  it is hand-typed and stale. Outstanding comes from the Outstanding column,
+ *  cross-checked per vendor against the sheet's own block subtotals. */
+export type ApLedgerBill = {
+  no: string; subLedger: string; date: string; due: string;
+  /** What COUNTS toward the payable: signed, so a credit note nets, and ZERO on
+   *  a cancelled bill. Sum this and the answer is right without special-casing. */
+  total: number;
+  /** What the document says, regardless of whether it counts. Differs from
+   *  `total` only on a cancelled bill, which prints at face value but adds nothing. */
+  faceValue: number;
+  /** Which side of the creditors ledger the row sits on, and whether it stands.
+   *  A credit note is a DEBIT: it takes value back off the account. Carried
+   *  explicitly because neither a credit note nor a cancelled bill can be told
+   *  apart from an unpaid one by its status alone. */
+  kind: 'bill' | 'credit-note' | 'cancelled';
+  status: string; terms: string; dueDays: number; aging: string; open: number;
+};
+export type ApLedgerGroup = {
+  subLedger: string; bills: number; billed: number; open: number; openBills: number; oldestDays: number; terms: string;
+  /** Credit notes inside this block. Their amount is netted out of `billed`
+   *  but NOT out of the sheet's Outstanding column, so it is exactly the gap
+   *  between `billed - paid` and `open` — which lets an explained difference be
+   *  labelled instead of flagged as unreconciled. */
+  creditNotes: number; creditNoteAmount: number;
+  /** What the sheet records as PAID to this vendor, from the Debit column,
+   *  across `paymentRows` rows. `paidGap` is how far that sits from what the
+   *  bills imply was settled (billed - outstanding) — they disagree on four of
+   *  six vendors, so both are carried rather than one chosen silently. */
+  paidRecorded: number; paymentRows: number; paidGap: number;
+  /** The sheet's own "Total Outstanding" row for this vendor block, and how far
+   *  it sits from what the rows beneath it add to. `null` = no subtotal row to
+   *  check against, which is different from one that checks out. */
+  sheetOpen: number | null; openGap: number | null;
+};
+export type ApLedger = {
+  ok: boolean; configured: boolean; note?: string;
+  bills: ApLedgerBill[]; subLedgers: ApLedgerGroup[];
+  totals?: {
+    bills: number; billed: number; open: number; openBills: number;
+    creditNotes: number; creditNoteAmount: number;
+    cancelled: number; cancelledAmount: number;
+    paidRecorded: number; paymentRows: number; paidImplied: number;
+    blocksChecked: number; blocksMatched: number; blockOpenTotal: number;
+    blockMismatches: { subLedger: string; rows: number; sheet: number; gap: number }[];
+  };
+  droppedHeaderRows?: number; fetchedAt?: string;
+};
+export const fetchApLedger = () => get<ApLedger>('/api/ap-ledger');
+
+/** AR REGISTER — the invoice book behind the AR tab.
+ *
+ *  Striven supplies the BOOK (which invoices exist, what is still open); the
+ *  accountant's Sales_Activity_Report sheet supplies the DETAIL (invoice date,
+ *  patient, PO memo, GL account). Driven off Striven deliberately, so an invoice
+ *  the sheet has not caught up with shows as a row missing its detail rather
+ *  than silently shrinking the total — `inSheet: false` is that row.
+ *
+ *  ADMIN ONLY: every row names a patient. The name is reduced to initial +
+ *  surname server-side before serialization; the full name never leaves the API. */
+export type ArRegisterInvoice = {
+  no: string; date: string; dueDate: string;
+  patient: string; payer: string; memo: string; gl: string;
+  /** Face value, what has been settled, and what is still outstanding. `open` is
+   *  NET of unapplied customer credits — the same rule the AR tab reports on. */
+  total: number; paid: number; open: number;
+  /** How `paid` was actually settled. `cashPaid + creditApplied + open === total`
+   *  on every row: cash banked against this invoice, an unapplied customer
+   *  credit covering the rest, and what is still owed. */
+  cashPaid: number; creditApplied: number;
+  /** `credited` = settled by an unapplied customer credit rather than by a
+   *  payment against this invoice. `zero-value` billed nothing at all. */
+  status: 'open' | 'paid' | 'credited' | 'zero-value';
+  /** False when Striven has this invoice but the sheet does not. */
+  inSheet: boolean;
+  /** Present only when the sheet disagrees with Striven on the amount. */
+  sheetAmount: number | null; variance: number | null;
+};
+export type ArRegister = {
+  ok: boolean; configured: boolean; note?: string;
+  invoices: ArRegisterInvoice[];
+  byMonth: { month: string; invoices: number; billed: number }[];
+  aging: Record<string, number>;
+  totals?: {
+    invoices: number; billed: number; outstanding: number; openInvoices: number;
+    collected: number; collectedInvoices: number;
+    credited: number; creditedAmount: number; unappliedCredits: number;
+    /** `cashCollected + creditCollected === collected`, by construction. */
+    cashCollected: number; creditCollected: number;
+    collectionRate: number; zeroValue: number;
+    sheetRows: number; missingFromSheet: number; missingAmount: number;
+    variances: number; varianceAmount: number;
+    apRowsExcluded: number; apAmountExcluded: number;
+  };
+  fetchedAt?: string;
+};
+export const fetchArRegister = () => get<ArRegister>('/api/ar-register');
+
+/** UNITS BY DEVICE — counts only, no money. `heldUnits`/`heldOrders` come from
+ *  the Striven HOLD label, which is the only place a hold survives: the
+ *  commission engine drops a held order entirely, so it reports none.
+ *  Admin-only server-side; a rep receives an empty list. */
+export type DeviceMixRow = { device: string; vertical: string; units: number; orders: number; heldUnits: number; heldOrders: number };
+export type DeviceMix = { ok: boolean; scoped: boolean; devices: DeviceMixRow[] };
+export const fetchDeviceMix = (as?: string | null) =>
+  get<DeviceMix>(`/api/device-mix${as ? `?as=${encodeURIComponent(as)}` : ''}`);
 export const fetchStrivenPO = () => get<PoResult>('/api/po');
 export const fetchStrivenCustomers = () => get<CustomersResult>('/api/customers');
 export const fetchStrivenVendors = () => get<VendorsResult>('/api/vendors');
@@ -272,7 +396,10 @@ export type CommState = 'payable' | 'waiting';
 /** `patient` is the SURNAME only, and only on the rep's own orders: the one
  *  place PHI is deliberately surfaced, so a rep can reconcile a line against
  *  their own records. Empty when the report cache has no row for the order. */
-export type StrivenOrderLine = { ref: string; patient?: string; item: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; value: number; units: number; comm: number; state: CommState };
+export type StrivenOrderLine = { ref: string; patient?: string; item: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; value: number; units: number; comm: number; state: CommState;
+  /** Set when the reconciliation sheet could not tie this row to a Striven
+   *  record. The line is still paid; the remark says the match is missing. */
+  unmatched?: boolean };
 /** nTricare/nVa/nPi are ORDERS per vertical; uTricare/… are units per vertical. */
 /** Volume fields (`orders`, `units`, `nTricare`/`nVa`/`nPi`) are the FULL order
  *  book from Striven. `commOrders`/`commUnits` are the subset the commission was
@@ -322,6 +449,10 @@ export type CommissionResult = {
   minMatchRate?: number;
   scopedToRep?: string | null;      // set when the payload was scoped to one rep
   reps: CommissionRep[]; periods: CommissionPeriod[]; periodCount: number; itemCount: number;
+  /** Producing reps — the names the admin "View as" picker offers, matching the
+   *  Reps section. Empty for a rep: it is an admin control, and a list of names
+   *  is peer disclosure. */
+  roster?: string[];
   sheetsRead: number; sheetsConfigured: number; errors: string[];
   sources: { label: string; url: string }[]; striven?: StrivenCommission; reconcile?: CommissionReconcile;
 };
@@ -339,6 +470,10 @@ export type AnalyticsOrder = {
   /** Mirrors soClass(): one bucket per Striven sales order type. */
   vertical: 'PI' | 'VA' | 'DOL' | 'TriCare' | 'DEMO' | 'Contract' | 'Other';
   account: string; rep: string;
+  /** Patient SURNAME only — never a first name. How a rep recognises the order,
+   *  since "SO-476" means nothing to them. Empty when the report cache has no
+   *  row for this SO yet. */
+  patient: string;
   revenue: number; units: number; devices: AnalyticsDevice[];
   status: string; invStatus: string;
   daysSinceUpdate: number | null;   // interim ageing proxy
@@ -404,10 +539,41 @@ export const fetchRepOverview = (as?: string | null) =>
   get<RepOverview>(`/api/rep-overview${as ? `?as=${encodeURIComponent(as)}` : ''}`);
 
 // ── PI stage pipeline ────────────────────────────────────────────────────────
-/** Stages are tracked in the portal: Striven has no equivalent field. */
-export type PiStageName = 'Order received' | 'Awaiting LOP' | 'Dispensed' | 'Shipped' | 'Delivered';
+/**
+ * A stage name. Deliberately a plain string, not a union: the names come from
+ * the server (PI_STAGES / PIP_STAGES) and the two pipelines have DIFFERENT
+ * lists, so a fixed union here could only ever be wrong for one of them. The
+ * union that used to live here had already drifted from the real stages.
+ */
+export type PiStageName = string;
 export type PiStageOrder = AnalyticsOrder & {
+  /** Its CURRENT position: one stage, the furthest its labels reach. */
   stage: PiStageName;
+  /** Every stage this order is listed under — one entry per stage its labels
+   *  attest to. "Shipped, Waiting for first payment" appears at both, so an
+   *  order can show on more than one card. Rows that are not label-driven have
+   *  a single entry equal to `stage`. */
+  stages?: PiStageName[];
+  /** The exact labels Striven has on this order, in Striven's own wording. */
+  labels?: string[];
+  /** Labels on this order that no stage map recognises — a DEFECT. They
+   *  contribute nothing, so the order falls back to stage 1 and reads as brand
+   *  new, silently. Mapping the label is the fix. */
+  unknown?: string[];
+  /** Known EXCEPTION labels (HOLD, Attorney Denied, Case Dropped). The order has
+   *  stopped rather than progressed, so these carry no stage by design; the
+   *  order is a stalled case to chase, not a mapping bug. */
+  flagged?: string[];
+  /** Which board this order belongs to. */
+  pipeline?: 'PI' | 'PIP';
+  /** Where the stage came from, most authoritative first:
+   *  'labels'  — derived from this order's Striven labels. NOT movable from the
+   *              portal: the label is re-read on every load and would overwrite
+   *              any move, so the UI offers no dropdown for these.
+   *  'striven' — the mirrored Stage custom field
+   *  'portal'  — moved by hand here
+   *  'default' — nothing known; it sits in stage 1 */
+  source?: 'labels' | 'striven' | 'portal' | 'default';
   stageSince: string | null;
   daysInStage: number | null;
   /** true when ageing falls back to the order date because the order has never
@@ -416,10 +582,25 @@ export type PiStageOrder = AnalyticsOrder & {
   movedBy: string | null;
   history: { stage: string; at: string; by: string }[];
 };
-export type PiStageBucket = { stage: PiStageName; count: number; revenue: number; units: number; oldestDays: number; avgDays: number };
+/** `count` is every order LISTED at this stage and OVERLAPS with other stages,
+ *  so counts (and revenue/units with them) do not sum to the board total.
+ *  `current` counts only orders whose current position is this stage, so those
+ *  DO sum to the total — use it for anything expressing a share of the whole. */
+export type PiStageBucket = { stage: PiStageName; count: number; current?: number; revenue: number; units: number; oldestDays: number; avgDays: number };
 export type PiStages = {
   ok: boolean; scopedToRep: string | null; canEdit: boolean;
   stageNames: PiStageName[]; stages: PiStageBucket[]; orders: PiStageOrder[];
+  /** PIP is a SEPARATE pipeline: it never reaches Lienstar, so it has its own
+   *  stage list (no LOP, no settlement). Empty until the PIP order type exists
+   *  in Striven, so the UI can render it unconditionally. */
+  pipStageNames?: PiStageName[]; pipStages?: PiStageBucket[]; pipOrders?: PiStageOrder[];
+  /** REVIEW QUEUE — orders whose labels place them in no stage, across both
+   *  boards, and the distinct labels behind them. Two reasons: 'flagged' (a
+   *  known exception — HOLD, Attorney Denied, Case Dropped) and 'unknown' (a
+   *  label nobody has mapped yet). ADMIN ONLY: acting on either means editing
+   *  Striven, which is Crystal's call, so this is always empty for a rep. */
+  reviewOrders?: PiStageOrder[];
+  reviewLabels?: { label: string; reason: 'flagged' | 'unknown'; count: number; boards: ('PI' | 'PIP')[] }[];
   trackedCount: number; autoFromTracking: boolean;
 };
 export const fetchPiStages = (as?: string | null) =>

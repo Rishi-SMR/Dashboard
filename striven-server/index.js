@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getPiStages, setPiStage, getRepOverview, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
 import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -222,6 +222,19 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Units by device — admin only, and the gate is inside getDeviceMix so the
+  // route cannot forget it. Identity-scoped like the two above.
+  if (pathname === '/api/device-mix') {
+    try {
+      const out = await getDeviceMix(viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
   // Commission — identity-scoped. Handled here rather than via ROUTES because
   // the redaction needs the caller, and ROUTES handlers take no arguments.
   if (pathname === '/api/commission') {
@@ -245,6 +258,26 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
     }
+  }
+
+  // ---- company data is admin-only ------------------------------------------
+  // THIS GATE WAS MISSING HERE. api/index.js has carried it for the serverless
+  // deployment since the roles landed, but this dev/self-host server dispatched
+  // straight into ROUTES, so a signed-in REP could read /api/pl, /api/ar,
+  // /api/ap-ledger, /api/vendors — the whole company book — simply by asking
+  // for the URL. Every one of them returned 200. None of these handlers takes a
+  // viewer, so none of them redacts; hiding the tab in the sidebar never stopped
+  // a fetch. The two servers must not disagree about who may read what.
+  //
+  // Deliberately the SAME allow-list, kept verbatim so the pair can be diffed:
+  // a route added later is admin-only until someone opens it on purpose. The
+  // rep-scoped endpoints (/api/commission, /api/reps/*, /api/pi-stages,
+  // /api/order-analytics, /api/device-mix) all return above this point and
+  // already narrow their own payload to the caller.
+  const OPEN_TO_REPS = new Set(['/api/health', '/api/status']);
+  if (!OPEN_TO_REPS.has(pathname)) {
+    const me = await getMe({ user: currentUser });
+    if (me?.role !== 'admin') { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'admin only' })); }
   }
 
   let fn = ROUTES[pathname];

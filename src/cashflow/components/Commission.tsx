@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { printToPdf } from '../export';
-import { fetchCommission, fetchMe, type Me, type CommissionResult, type StrivenCommRep, type StrivenOrderLine, type UnmatchedOrder } from '../strivenApi';
+import { fetchCommission, fetchMe, type Me, type CommissionResult, type StrivenCommRep, type StrivenOrderLine } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
+import { isKevinLogin } from '../viewProfile';
 
 const PROG_C: Record<string, string> = { TriCare: '#0D9488', PI: '#0A369F', VA: '#16A34A', DOL: '#7C3AED' };
 const REP_C = ['#0A369F', '#16A34A', '#D97706', '#7C3AED', '#DB2777', '#0891B2'];
@@ -53,6 +54,17 @@ export function CommissionTab() {
     finally { if (!silent) setLoading(false); }
   }
   useEffect(() => { load(false, viewAs); const r = setInterval(() => load(true, viewAs), 120_000); return () => clearInterval(r); }, [viewAs]);
+  // THE LOGIN DECIDES, NOT THE PROFILE — see the note in RepsTab. The view
+  // profile is browser-wide localStorage, so keying on it meant one preview of
+  // Kevin's board stripped the picker from every other admin who later signed
+  // in on that machine.
+  const isKevin = isKevinLogin(me?.email);
+  // KEVIN'S BOARD IS KEVIN'S BOARD. The rep-preview picker is a finance/ops
+  // tool, and on the owner view it only muddies whose figures are on screen —
+  // so it is not offered, and any preview left running from Crystal's view is
+  // dropped on the way in rather than persisting into a board that no longer
+  // shows a way out of it. Switching back to Crystal restores the picker.
+  useEffect(() => { if (isKevin && viewAs) setViewAs(null); }, [isKevin, viewAs]);
   // Identity decides what the payload already CONTAINS: it is not a client-side
   // filter. The server redacted before this ever reached the browser.
   useEffect(() => { fetchMe().then(setMe).catch(() => setMe(null)); }, []);
@@ -63,28 +75,40 @@ export function CommissionTab() {
   const myRep = viewAs ?? me?.repName ?? null;
   const s = data?.striven;
   const sel = month === 'all' ? null : s?.months.find((m) => m.month === month) ?? null;
-  const reps: StrivenCommRep[] = sel ? sel.reps : (s?.byRep ?? []);
+  const allReps: StrivenCommRep[] = sel ? sel.reps : (s?.byRep ?? []);
+  // PRODUCERS ONLY, from the server's `roster` — the same four names the Reps
+  // dashboard lists. `roster` is empty for a rep (it is an admin control and a
+  // bare list of names is peer disclosure), and a rep's payload is already
+  // their own row alone, so this is a no-op on their view.
+  const rosterSet = new Set(data?.roster ?? []);
+  const reps = rosterSet.size ? allReps.filter((r) => rosterSet.has(r.rep)) : allReps;
+  const trimmed = reps.length !== allReps.length;
   const own = myRep ? reps.find((r) => r.rep === myRep) ?? null : null;
   const maxRep = Math.max(1, ...reps.map((r) => num(r.total)));
 
   // Totals for the scope on screen, summed off the rendered rows so the footer
   // can never drift from the table.
-  // Off-roster volume is shown only on the all-months view: the figure covers
-  // the whole book and has no month breakdown to filter by, so adding it to a
-  // single month's column would overstate that month.
-  const off = month === 'all' ? s?.offRoster : undefined;
-  const showOff = Boolean(off && off.orders > 0);
-
+  //
+  // These used to be SEEDED with the off-roster figures, because an "Off roster"
+  // row carried them in the table. That row is gone, so seeding them here left
+  // the Total reading 376 orders / 517 units above four rows summing to
+  // 374 / 516 — a total with no rows behind it. Starts from zero now.
   const vt = reps.reduce((a, r) => ({
     TriCare: a.TriCare + num(r.nTricare), VA: a.VA + num(r.nVa), PI: a.PI + num(r.nPi),
     orders: a.orders + num(r.orders), units: a.units + num(r.units),
-  }), showOff
-    ? { TriCare: num(off?.nTricare), VA: num(off?.nVa), PI: num(off?.nPi), orders: num(off?.orders), units: num(off?.units) }
-    : { TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0 });
-  const bp = sel
-    ? { TriCare: sel.TriCare, VA: sel.VA, PI: sel.PI }
-    : (s?.byProgram ?? { TriCare: null, VA: null, PI: null });
-  const total = sel ? sel.total : (s?.grandTotal ?? null);
+  }), { TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0 });
+  // When rows were trimmed the SERVER aggregates no longer describe what is on
+  // screen — grandTotal still counts every name in the roster. Re-summing the
+  // rendered rows is the same rule `vt` above already follows: the headline can
+  // never disagree with the table beneath it.
+  const sumOf = (pick: (r: StrivenCommRep) => number | null | undefined) =>
+    reps.reduce((a, r) => a + num(pick(r)), 0);
+  const bp = trimmed
+    ? { TriCare: sumOf((r) => r.tricare), VA: sumOf((r) => r.va), PI: sumOf((r) => r.pi) }
+    : sel
+      ? { TriCare: sel.TriCare, VA: sel.VA, PI: sel.PI }
+      : (s?.byProgram ?? { TriCare: null, VA: null, PI: null });
+  const total = trimmed ? sumOf((r) => r.total) : (sel ? sel.total : (s?.grandTotal ?? null));
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -102,8 +126,14 @@ export function CommissionTab() {
           {/* The "Orders & revenue" toggle lived here too, rendering the same
               dashboard reachable from the sidebar and from Reps. Removed: this
               tab is commission only. */}
-          {me?.role === 'admin' && (
-            <ViewAs reps={(data?.reps ?? []).map((r) => r.rep)} value={viewAs} onChange={setViewAs} />
+          {/* `roster` is the producing reps, from the server's one shared rule.
+              This used to map over `data.reps`, the raw commission rows, so the
+              picker offered House Account, Santiago Family Chiropractic and
+              every departed name — people the Reps section had already dropped
+              and whose "view" is not a thing to preview. */}
+          {/* NOT on Kevin's board — see the effect above. */}
+          {me?.role === 'admin' && !isKevin && (
+            <ViewAs reps={data?.roster ?? []} value={viewAs} onChange={setViewAs} />
           )}
           {<button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>}
         </div>
@@ -129,33 +159,64 @@ export function CommissionTab() {
 
       {data && s?.available && (
         <>
-          {/* Payable/Due vs Waiting: the caller's own state, or company-wide for admin. */}
+          {/* Commission state and the headline tiles, SIDE BY SIDE. They answer
+              one question between them — what is owed, and where it came from —
+              and each was half-empty across a full row on its own, especially
+              now that empty verticals no longer take a tile. */}
+          <div className="comm-head-pair">
+          {/* Payable/Due vs Waiting: the caller's own state, or the producing
+              reps for an admin. Re-summed when rows were trimmed, for the same
+              reason the headline above is: s.payableTotal counts every name in
+              the roster, which is no longer what this page reports. */}
           <StateSplit
             who={own ? own.rep : (isAdmin ? 'All reps' : null)}
-            payable={own ? own.payableTotal : (isAdmin ? s.payableTotal : null)}
-            waiting={own ? own.waitingTotal : (isAdmin ? s.waitingTotal : null)}
+            payable={own ? own.payableTotal : (isAdmin ? (trimmed ? sumOf((r) => r.payableTotal) : s.payableTotal) : null)}
+            waiting={own ? own.waitingTotal : (isAdmin ? (trimmed ? sumOf((r) => r.waitingTotal) : s.waitingTotal) : null)}
             held={s.heldOrders}
             zeroValue={s.zeroValueOrders}
           />
 
-          <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 14 }}>
-            <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={money}
-              foot={`${vt.orders} orders · ${vt.units} units · tap for detail`} deltaText={sel ? 'selected month' : 'all months'}
-              onClick={() => setDrill(drill === 'total' ? null : 'total')} />
-            <KpiR ico="shield" tint={PROG_C.TriCare} label="TriCare" value={bp.TriCare} format={money}
-              foot={`${vt.TriCare} orders · legacy vertical`} deltaText={pct(bp.TriCare, total)}
-              onClick={() => setDrill(drill === 'TriCare' ? null : 'TriCare')} />
-            <KpiR ico="clip" tint={PROG_C.VA} label="VA" value={bp.VA} format={money}
-              foot={`${vt.VA} orders · units × device rate`} deltaText={pct(bp.VA, total)}
-              onClick={() => setDrill(drill === 'VA' ? null : 'VA')} />
-            <KpiR ico="trend" tint={PROG_C.PI} label="Personal Injury" value={bp.PI} format={money}
-              foot={`${vt.PI} orders · units × device rate`} deltaText={pct(bp.PI, total)}
-              onClick={() => setDrill(drill === 'PI' ? null : 'PI')} />
+          {/* Only verticals the caller ACTUALLY has orders in. A rep working VA
+              alone was reading "$0 · 0% OF TOTAL · 0 orders" twice over, for
+              programmes they do not touch — three tiles to carry one figure.
+              The column count follows the tiles so the row still fills. */}
+          {(() => {
+            const progs = [
+              { key: 'TriCare' as const, ico: 'shield' as const, tint: PROG_C.TriCare, label: 'TriCare', value: bp.TriCare, orders: vt.TriCare, note: 'legacy vertical' },
+              { key: 'VA' as const, ico: 'clip' as const, tint: PROG_C.VA, label: 'VA', value: bp.VA, orders: vt.VA, note: 'units × device rate' },
+              { key: 'PI' as const, ico: 'trend' as const, tint: PROG_C.PI, label: 'Personal Injury', value: bp.PI, orders: vt.PI, note: 'units × device rate' },
+            ].filter((p) => p.orders > 0);
+            return (
+              // SHAPE FOLLOWS THE COUNT. This strip sits in half a row beside a
+              // taller card, so a single row of short tiles left an obvious band
+              // of nothing beneath it. Two tiles stack full-width instead —
+              // `gridAutoRows: 1fr` then splits the column's height between
+              // them, so they end level with the card and the shape reads as
+              // deliberate. Three or four still go two-up, where the row is
+              // already full.
+              <div className="kpi-r-strip" style={{
+                display: 'grid', gap: 14, height: '100%',
+                gridTemplateColumns: progs.length + 1 <= 2 ? '1fr' : 'repeat(auto-fit, minmax(190px, 1fr))',
+                gridAutoRows: '1fr',
+              }}>
+                <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={money}
+                  foot={`${vt.orders} orders · ${vt.units} units · tap for detail`} deltaText={sel ? 'selected month' : 'all months'}
+                  onClick={() => setDrill(drill === 'total' ? null : 'total')} />
+                {progs.map((p) => (
+                  <KpiR key={p.key} ico={p.ico} tint={p.tint} label={p.label} value={p.value} format={money}
+                    foot={`${p.orders} orders · ${p.note}`} deltaText={pct(p.value, total)}
+                    onClick={() => setDrill(drill === p.key ? null : p.key)} />
+                ))}
+              </div>
+            );
+          })()}
           </div>
 
           {drill && <KpiDrill
-            title={`${drill === 'total' ? 'Total commission' : drill === 'PI' ? 'Personal Injury' : drill}: by rep${sel ? ` · ${monthLabel(sel.month)}` : ''}`}
-            sub="Dollar figures appear only for your own row."
+            // Same rule as the table heading below: named for the signed-in rep,
+            // "by rep" only where there is more than one to be by.
+            title={`${drill === 'total' ? 'Total commission' : drill === 'PI' ? 'Personal Injury' : drill}: ${!isAdmin && myRep ? myRep : 'by rep'}${sel ? ` · ${monthLabel(sel.month)}` : ''}`}
+            sub={!isAdmin && myRep ? 'Your figures for this period.' : 'Dollar figures appear only for your own row.'}
             accent={drill === 'total' ? C.brand : PROG_C[drill]}
             rows={reps.map((r) => ({
               name: r.rep,
@@ -177,10 +238,20 @@ export function CommissionTab() {
 
           <div className="section chart-card">
             <div className="section-head"><div>
-              <h2 className="section-title">{sel ? monthLabel(sel.month) : 'All months'} · by rep</h2>
+              {/* Named for whoever is signed in. "by rep" is right for a manager
+                  looking at four of them; for a rep the table holds ONE row —
+                  their own — so the heading says whose it is. `myRep` follows a
+                  "view as" preview, so it names the previewed rep, not the
+                  admin doing the previewing. */}
+              <h2 className="section-title">
+                {sel ? monthLabel(sel.month) : 'All months'} · {!isAdmin && myRep ? myRep : 'by rep'}
+              </h2>
               <div className="section-sub">
-                Order counts are shown for every rep; commission is shown for your own row only.
-                {' '}Tap your row for the order-by-order figure.
+                {!isAdmin && myRep
+                  // The old copy promised "order counts for every rep", which
+                  // stopped being true when peer rows left this payload.
+                  ? <>Your commission, month by month. Tap the row for the order-by-order figure.</>
+                  : <>Order counts are shown for every rep; commission is shown for your own row only.{' '}Tap your row for the order-by-order figure.</>}
               </div>
             </div></div>
             <div className="table-wrap">
@@ -232,36 +303,20 @@ export function CommissionTab() {
                       </tr>
                     );
                   })}
-                  {/* Orders booked to someone who is not a rep. Carried as a row
-                      so the columns tie to the order book: without it the table
-                      totalled 450 orders / 643 units against a book of 452/644. */}
-                  {showOff && off && (
-                    <tr style={{ background: 'var(--panel-2)' }}
-                      title={`Booked in Striven to ${off.reps.join(', ')}: not on the commission roster. Counted in the order book; earns no commission.`}>
-                      <td style={{ color: C.muted }}>-</td>
-                      <td style={{ fontWeight: 600, color: C.sub, fontStyle: 'italic' }}>
-                        Off roster
-                        <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, color: C.muted }}>
-                          {off.reps.join(', ')}
-                        </span>
-                      </td>
-                      <OrderCountCells t={off.nTricare} v={off.nVa} p={off.nPi} />
-                      <td className="num" style={{ color: C.sub }}>{off.orders}</td>
-                      <td className="num" style={{ color: C.sub }}>{off.units}</td>
-                      <td className="num" style={{ color: C.muted }}>$0</td>
-                      <td className="num" style={{ color: C.muted }}>$0</td>
-                      <td className="num" style={{ color: C.muted, fontWeight: 700 }}>$0</td>
-                      <td />
-                    </tr>
-                  )}
+                  {/* The "Off roster" row rendered here — orders booked to
+                      someone who is not a rep, carried so the columns tied to
+                      the order book. Removed on request; the totals below no
+                      longer include it, so this table now describes the reps
+                      above and nothing else. */}
                 </tbody>
                 {reps.length > 0 && (
                   <tfoot><tr className="total-row">
                     <td /><td>Total</td>
                     <td className="num">{vt.TriCare}</td><td className="num">{vt.VA}</td><td className="num">{vt.PI}</td>
                     <td className="num">{vt.orders}</td><td className="num">{vt.units}</td>
-                    <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(own ? own.payableTotal : (isAdmin ? s.payableTotal : null))}</td>
-                    <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(own ? own.waitingTotal : (isAdmin ? s.waitingTotal : null))}</td>
+                    {/* Same population as the Commission cell beside it. */}
+                    <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(own ? own.payableTotal : (isAdmin ? (trimmed ? sumOf((r) => r.payableTotal) : s.payableTotal) : null))}</td>
+                    <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(own ? own.waitingTotal : (isAdmin ? (trimmed ? sumOf((r) => r.waitingTotal) : s.waitingTotal) : null))}</td>
                     <td className="num" style={{ fontWeight: 800 }}>{money(total)}</td><td />
                   </tr></tfoot>
                 )}
@@ -282,8 +337,13 @@ export function CommissionTab() {
             </div>
           </div>
 
-          {/* Orders with no usable sales order: vertical + whatever else exists. */}
-          {s.unmatched && s.unmatched.length > 0 && <UnmatchedTable rows={s.unmatched} totalValue={s.unmatchedValue} />}
+          {/* The "No sales order" panel rendered here. It listed orders the
+              engine could not tie to a sales order — not commissioned, but real
+              volume — so the gap between this page and the order book was
+              visible rather than silent. Removed on request.
+              `striven.unmatched` and `unmatchedValue` are still computed and
+              still returned by /api/commission; nothing is dropped server-side,
+              so this is a one-line restore if the reconciliation is wanted back. */}
 
           {s.rateGaps && s.rateGaps.length > 0 && (
             <div className="qb-flash warn" style={{ marginTop: 12 }}>
@@ -312,7 +372,9 @@ function ViewAs({ reps, value, onChange }: { reps: string[]; value: string | nul
       View as
       <select value={value ?? ''} onChange={(e) => onChange(e.target.value || null)}
         style={{ padding: '5px 9px', borderRadius: 7, border: `1px solid ${C.muted}55`, background: 'var(--panel-2)', color: C.ink, fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
-        <option value="">Admin (everything)</option>
+        {/* Same control, same wording as the Reps dashboard's "View as": the
+            unrestricted view named for the person who owns it. */}
+        <option value="">Crystal Chambers (everything)</option>
         {names.map((n) => <option key={n} value={n}>{n}</option>)}
       </select>
     </label>
@@ -406,7 +468,9 @@ function StateSplit({ payable, waiting, held, zeroValue, who }: { payable?: numb
   if (payable == null && waiting == null) return null;
   const p = payable ?? 0, w = waiting ?? 0, tot = p + w;
   return (
-    <div className="section chart-card" style={{ marginBottom: 14 }}>
+    // No bottom margin: it sits in .comm-head-pair now, and that grid owns the
+    // gap. Its own margin would have stacked a second one under the card.
+    <div className="section chart-card" style={{ marginBottom: 0 }}>
       <div className="section-head"><div>
         <h2 className="section-title">{who ? `${who}: commission state` : 'Commission state'}</h2>
         <div className="section-sub">
@@ -443,48 +507,17 @@ function VerticalBar({ parts, height = 9 }: { parts: { n: number; c: string; lab
   );
 }
 
-// Orders the engine could not tie to a sales order. They are NOT commissioned,
-// but the vertical and volume are real, so they are surfaced rather than lost.
-function UnmatchedTable({ rows, totalValue }: { rows: UnmatchedOrder[]; totalValue?: number }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="section chart-card" style={{ marginTop: 14 }}>
-      <div className="section-head" style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}><div>
-        <h2 className="section-title">No sales order · {rows.length} order{rows.length === 1 ? '' : 's'}</h2>
-        <div className="section-sub">
-          These could not be matched to a sales order, so they earn no commission and are excluded from every figure above.
-          Vertical and volume are shown from what is available{totalValue ? ` · ${formatCurrency(totalValue)} of order value` : ''}. Tap to {open ? 'hide' : 'show'}.
-        </div>
-      </div></div>
-      {open && (
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead><tr>
-              <th>Vertical</th><th>Item</th><th className="num">Units</th><th className="num">Order value</th>
-              <th>Status</th><th>Rep</th><th>Why</th>
-            </tr></thead>
-            <tbody>
-              {rows.map((u, i) => (
-                <tr key={`${u.soId}-${i}`}>
-                  <td style={{ fontWeight: 700, color: PROG_C[u.prog] || C.ink }}>{u.prog}</td>
-                  <td style={{ color: C.sub, fontSize: 12.5 }}>{u.item || '-'}{u.itemCount > 1 ? ` +${u.itemCount - 1}` : ''}</td>
-                  <td className="num">{u.units || '-'}</td>
-                  <td className="num">{u.value ? formatCurrency(u.value) : '-'}</td>
-                  <td style={{ fontSize: 12.5 }}>{u.status || '-'}</td>
-                  <td style={{ fontSize: 12.5 }}>{u.rep || <span style={{ color: C.muted }}>unassigned</span>}</td>
-                  <td style={{ fontSize: 12, color: C.warning }}>{u.reason}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
+// UnmatchedTable lived here — the "No sales order" panel. It went with the
+// section above; the data behind it is untouched on the server.
 
 // Modal shell: backdrop + card, closes on Esc / backdrop click.
-function Modal({ title, sub, accent, onClose, children }: { title: string; sub?: string; accent?: string; onClose: () => void; children: React.ReactNode }) {
+// `width` is opt-in. The default 760px was sized for the six-column drill; the
+// tables that now hold four columns rattle around inside it, so they ask for
+// something narrower rather than every modal shrinking.
+function Modal({ title, sub, accent, onClose, children, width = 760 }: {
+  title: string; sub?: string; accent?: string; onClose: () => void;
+  children: React.ReactNode; width?: number;
+}) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -492,15 +525,15 @@ function Modal({ title, sub, accent, onClose, children }: { title: string; sub?:
   }, [onClose]);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', overflowX: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${accent || C.brand}` }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: `min(${width}px, 100%)`, maxHeight: '90vh', overflowY: 'auto', overflowX: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${accent || C.brand}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '14px 16px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: C.ink, wordBreak: 'break-word' }}>{title}</div>
-            {sub && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>{sub}</div>}
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, wordBreak: 'break-word' }}>{title}</div>
+            {sub && <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{sub}</div>}
           </div>
           <button className="btn ghost" onClick={onClose} aria-label="Close" style={{ flex: 'none' }}>✕</button>
         </div>
-        <div style={{ padding: '16px 18px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>{children}</div>
+        <div style={{ padding: '12px 16px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>{children}</div>
       </div>
     </div>
   );
@@ -597,10 +630,16 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
                   <td>{ln.prog}</td>
                   <td className="num">{ln.units}</td>
                   <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
+                  {/* The remark rides the EXISTING rightmost column rather than
+                      adding one. An unmatched row is still paid — the sheet is
+                      the base — so this reports the missing Striven match, it
+                      does not withhold the line. */}
                   <td>
-                    {ln.state === 'waiting'
-                      ? <span style={{ color: C.warning, fontWeight: 600 }}>Waiting</span>
-                      : <span style={{ color: C.positive, fontWeight: 600 }}>Payable</span>}
+                    {ln.unmatched
+                      ? <span style={{ color: C.warning, fontWeight: 600, whiteSpace: 'nowrap' }}>Unmatched from Striven</span>
+                      : ln.state === 'waiting'
+                        ? <span style={{ color: C.warning, fontWeight: 600 }}>Waiting</span>
+                        : <span style={{ color: C.positive, fontWeight: 600 }}>Payable</span>}
                   </td>
                 </tr>
               ))}
@@ -633,29 +672,25 @@ function KpiDrill({ title, sub, accent, rows, onClose }: {
 }) {
   const sorted = rows.filter((r) => num(r.value) > 0 || r.orders > 0)
     .sort((a, b) => (num(b.value) - num(a.value)) || (b.orders - a.orders));
-  const sum = sorted.reduce((s, r) => s + num(r.value), 0);
-  const maxO = Math.max(1, ...sorted.map((r) => r.orders));
+  // `sum` (share denominator) and `maxO` (bar scale) went with the two columns
+  // they existed for. Ranking still uses the raw value, so row order is unchanged.
+  // Narrow: four columns and at most a handful of reps. At the default 760px
+  // the figures sat marooned at opposite edges of the card.
   return (
-    <Modal title={title} sub={sub} accent={accent} onClose={onClose}>
+    <Modal title={title} sub={sub} accent={accent} onClose={onClose} width={460}>
       <table className="data-table">
         <thead><tr>
-          <th style={{ width: 34 }}>#</th><th>Rep</th><th className="num">Orders</th>
-          <th className="num">Commission</th><th className="num">Share</th><th style={{ width: '30%' }} />
+          <th style={{ width: 28 }}>#</th><th>Rep</th><th className="num">Orders</th>
+          <th className="num">Commission</th>
         </tr></thead>
         <tbody>
-          {sorted.length === 0 && <tr><td colSpan={6} style={{ color: C.muted }}>No data.</td></tr>}
+          {sorted.length === 0 && <tr><td colSpan={4} style={{ color: C.muted }}>No data.</td></tr>}
           {sorted.map((r, i) => (
             <tr key={r.name}>
               <td style={{ color: C.muted }}>{i + 1}</td>
               <td style={{ fontWeight: 700 }}>{r.name}</td>
               <td className="num" style={{ fontWeight: 700 }}>{r.orders || '-'}</td>
               <td className="num" style={{ fontWeight: 800 }}>{money(r.value)}</td>
-              <td className="num">{r.value != null && sum > 0 ? `${Math.round((r.value / sum) * 100)}%` : '-'}</td>
-              <td>
-                <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${(r.orders / maxO) * 100}%`, background: accent, borderRadius: 999 }} />
-                </div>
-              </td>
             </tr>
           ))}
         </tbody>

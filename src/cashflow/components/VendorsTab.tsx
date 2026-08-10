@@ -104,9 +104,18 @@ export function VendorsTab() {
 
   // Click a status (KPI or bar) → the vendors carrying that status ('Total' = all).
   function openStatusDrill(status: string) {
+    // ACTIVE FIRST, then everything else, each block A→Z.
+    //
+    // A flat alphabetical list buried the 5 active suppliers among 100
+    // prospects, so the ones actually being traded with were the hardest to
+    // find. Rank is by trading relevance, not by the status word: any status
+    // not listed sorts after the known ones rather than landing in the middle.
+    const STATUS_RANK: Record<string, number> = { active: 0, prospect: 1 };
+    const rank = (s: string) => STATUS_RANK[(s || '').trim().toLowerCase()] ?? 90;
     const rows = vendors
       .filter((v) => status === 'Total' || ((v.status || 'Unknown').trim() || 'Unknown') === status)
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      .sort((a, b) => rank(a.status) - rank(b.status)
+        || (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }))
       .map((v) => ({
         name: <strong>{v.name || '-'}</strong>,
         number: v.number || '-',

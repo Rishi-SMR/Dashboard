@@ -167,48 +167,42 @@ export function resolveIdentity(email, directory = REP_DIRECTORY) {
 }
 
 // ── Server-side redaction ────────────────────────────────────────────────────
-// Financial fields a rep may see ONLY on their own row.
-const REP_MONEY = ['tricare', 'pi', 'va', 'total', 'payableTotal', 'waitingTotal', 'strivenValue', 'commPerOrder', 'pctOfValue'];
-const STRIVEN_MONEY = ['tricare', 'va', 'pi', 'total', 'payableTotal', 'waitingTotal', 'value'];
-const RECONCILE_MONEY = ['sheet', 'striven', 'diff'];
-
+// The per-field money registries (REP_MONEY / STRIVEN_MONEY / RECONCILE_MONEY)
+// and the blankMoney() helper are gone with the row-blanking they served. A
+// peer row is dropped whole now, so there is no row left to null fields on —
+// and no registry to keep in step with every field somebody adds later.
 const isOwn = (viewer, repName) => Boolean(viewer?.repName) && norm(viewer.repName) === norm(repName);
-
-function blankMoney(row, keys) {
-  const out = { ...row };
-  for (const k of keys) if (k in out) out[k] = null;
-  return out;
-}
 
 /**
  * Redact one payload for one viewer. Runs on the SERVER before serialization —
  * another rep's dollars must never reach the browser, hidden by CSS or not.
  *
- * Rep role  → own row in full; every other rep reduced to operational counts.
+ * Rep role  → their OWN row, and nothing about anybody else.
  * Admin     → untouched.
+ *
+ * A peer row used to survive here, stripped to operational counts: name, order
+ * count, unit count, per-programme counts. That was the "volume is shared, pay
+ * is not" model the leaderboard was built on. A rep is now restricted to their
+ * own data, so peer rows are DROPPED rather than blanked — a row reduced to a
+ * name and a count still tells a rep who else is on the book and how much they
+ * booked, which is precisely what is being withheld.
+ *
+ * `keepOwn` is the one rule, applied to every collection of rep rows in the
+ * payload. Miss one and that view leaks the whole roster.
  */
 export function redactCommissionPayload(payload, viewer) {
   if (!payload || viewer?.role === 'admin') return payload;
   const out = { ...payload };
+  const keepOwn = (rows) => (rows || []).filter((r) => isOwn(viewer, r.rep));
 
-  // Sheet rows. A non-own row keeps only operational counts (Business Rule 1).
+  // Sheet rows: own only. A viewer with no repName (a login absent from the
+  // directory) matches nothing and gets an empty list — least privilege, and
+  // the same fail-closed behaviour the rest of the payload has.
   const ownSheet = (payload.reps || []).find((r) => isOwn(viewer, r.rep)) || null;
-  out.reps = (payload.reps || []).map((r) => {
-    if (isOwn(viewer, r.rep)) return r;
-    return {
-      rep: r.rep,
-      count: r.count ?? null,
-      strivenOrders: r.strivenOrders ?? 0,
-      strivenUnits: r.strivenUnits ?? 0,
-      matchRate: r.matchRate ?? null,
-      orderCounts: r.orderCounts || { TriCare: 0, VA: 0, PI: 0, DOL: 0 },
-      verified: r.verified ?? false,
-      flag: r.flag ?? null,
-      recon: null,                 // entire block is financial → own row only
-      redacted: true,
-      ...Object.fromEntries(REP_MONEY.map((k) => [k, null])),
-    };
-  });
+  out.reps = keepOwn(payload.reps);
+  // The "View as" roster is an ADMIN control. To a rep it is a list of their
+  // colleagues' names — the same disclosure every other rule here removes.
+  out.roster = [];
 
   // Company-wide dollar totals would leak the other reps in aggregate, so a rep
   // sees their OWN totals here; admins keep the true company figures.
@@ -216,6 +210,14 @@ export function redactCommissionPayload(payload, viewer) {
   out.byProgram = ownSheet
     ? { TriCare: ownSheet.tricare ?? 0, PI: ownSheet.pi ?? 0, VA: ownSheet.va ?? 0 }
     : { TriCare: null, PI: null, VA: null };
+  // payableTotal / waitingTotal / heldOrders were NOT scoped here, so a rep
+  // received the COMPANY's figures under names that read like their own — the
+  // whole book's $216,815.64 sitting beside their own $29,250. grandTotal was
+  // scoped and these were not, which is exactly how the gap went unnoticed.
+  const ownPay = (payload.striven?.byRep || []).find((r) => isOwn(viewer, r.rep)) || null;
+  out.payableTotal = ownPay ? (ownPay.payableTotal ?? 0) : null;
+  out.waitingTotal = ownPay ? (ownPay.waitingTotal ?? 0) : null;
+  out.heldOrders = ownPay ? (ownPay.heldOrders ?? 0) : null;
   out.scopedToRep = viewer?.repName ?? null;
 
   // Pay-period tabs carry the same per-rep dollars.
@@ -223,7 +225,7 @@ export function redactCommissionPayload(payload, viewer) {
     out.periods = payload.periods.map((p) => ({
       ...p,
       total: null,
-      reps: (p.reps || []).map((r) => (isOwn(viewer, r.rep) ? r : blankMoney({ ...r, redacted: true }, ['tricare', 'va', 'pi', 'total']))),
+      reps: keepOwn(p.reps),
     }));
   }
 
@@ -233,12 +235,18 @@ export function redactCommissionPayload(payload, viewer) {
     out.striven = {
       ...payload.striven,
       grandTotal: ownStriven ? ownStriven.total : null,
+      // Same omission as above, one level down.
+      payableTotal: ownStriven ? (ownStriven.payableTotal ?? 0) : null,
+      waitingTotal: ownStriven ? (ownStriven.waitingTotal ?? 0) : null,
+      heldOrders: ownStriven ? (ownStriven.heldOrders ?? 0) : null,
+      // offRoster NAMES other people ("Kevin Parker", "Rishi Arora") and carries
+      // their value. It is a reconciliation aid for an admin and a colleague
+      // list to a rep, so it goes entirely.
+      offRoster: null,
       byProgram: ownStriven
         ? { TriCare: ownStriven.tricare ?? 0, VA: ownStriven.va ?? 0, PI: ownStriven.pi ?? 0 }
         : { TriCare: null, VA: null, PI: null },
-      byRep: (payload.striven.byRep || []).map((r) => (
-        isOwn(viewer, r.rep) ? r : { ...blankMoney(r, STRIVEN_MONEY), lines: undefined, redacted: true }
-      )),
+      byRep: keepOwn(payload.striven.byRep),
       // A month's headline figures are scoped the same way the all-months ones
       // are: the caller's OWN numbers for that month, not the company's. Nulling
       // them outright would hide a rep's own pay the moment they picked a month.
@@ -253,9 +261,7 @@ export function redactCommissionPayload(payload, viewer) {
           value: ownM ? ownM.value : null,
           payableTotal: ownM ? ownM.payableTotal : null,
           waitingTotal: ownM ? ownM.waitingTotal : null,
-          reps: (m.reps || []).map((r) => (
-            isOwn(viewer, r.rep) ? r : { ...blankMoney(r, STRIVEN_MONEY), lines: undefined, redacted: true }
-          )),
+          reps: keepOwn(m.reps),
         };
       }),
     };
@@ -266,11 +272,7 @@ export function redactCommissionPayload(payload, viewer) {
     out.reconcile = {
       ...payload.reconcile,
       totals: { sheet: null, striven: null, diff: null },
-      reps: (payload.reconcile.reps || []).map((r) => (
-        isOwn(viewer, r.rep)
-          ? r
-          : { ...blankMoney(r, RECONCILE_MONEY), sheetProg: null, strivenProg: null, redacted: true }
-      )),
+      reps: keepOwn(payload.reconcile.reps),
     };
   }
 

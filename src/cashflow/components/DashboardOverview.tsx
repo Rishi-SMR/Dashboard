@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { fetchOrderAnalytics, fetchPiStages, type OrderAnalytics, type PiStages, type RepRow } from '../strivenApi';
 import { formatCurrency } from '../format';
-import { C, VERTICAL_COLORS as V_C } from '../chartTheme';
+import { C } from '../chartTheme';
 import { shortDeviceName } from './DeviceChips';
 
 // Palettes below were checked with the categorical validator, not chosen by eye.
@@ -34,8 +33,13 @@ const OTHER_C = '#94A3B8';
 const MAX_SLICES = 7;
 
 /** `key` is the value this slice filters BY. Absent means the slice is not
- *  clickable: a folded "Other (12)" bucket has no single value to filter to. */
-type Slice = { name: string; value: number; color: string; key?: string };
+ *  clickable: a folded "Other (12)" bucket has no single value to filter to.
+ *  `members` is what a folded bucket swallowed, so the legend can name every
+ *  one instead of leaving a count the reader cannot open. */
+type Slice = {
+  name: string; value: number; color: string; key?: string;
+  members?: { name: string; value: number }[];
+};
 
 /**
  * Ranks the FULL, unfiltered dataset once and pins a hue to each leading entity
@@ -57,16 +61,22 @@ function pinColors(totals: Map<string, number>): Map<string, string> {
 /** Everything outside the pinned set collapses into one gray slice. */
 function foldSlices(totals: Map<string, number>, pinned: Map<string, string>, otherLabel = 'Other'): Slice[] {
   const out: Slice[] = [];
-  let rest = 0;
-  let restCount = 0;
+  // The folded entries are KEPT, not just counted. "Other devices (44)" told
+  // the reader 44 things existed and gave them no way to learn what they were;
+  // the legend expands this list instead.
+  const rest: { name: string; value: number }[] = [];
   for (const [name, value] of totals) {
     const color = pinned.get(name);
     if (color) out.push({ name, value, color, key: name });
-    else { rest += value; restCount++; }
+    else if (value > 0) rest.push({ name, value });
   }
   out.sort((x, y) => y.value - x.value);
+  rest.sort((x, y) => y.value - x.value || x.name.localeCompare(y.name));
+  const restTotal = rest.reduce((s, r) => s + r.value, 0);
   // No `key`: a fold of many categories has no single value to filter to.
-  if (rest > 0) out.push({ name: `${otherLabel} (${restCount})`, value: rest, color: OTHER_C });
+  if (restTotal > 0) {
+    out.push({ name: `${otherLabel} (${rest.length})`, value: restTotal, color: OTHER_C, members: rest });
+  }
   return out;
 }
 
@@ -134,11 +144,19 @@ function Field({ label, value, onChange, options }: {
 }
 
 /**
- * A summary donut. The hole carries the total, so the chart answers "how much
- * altogether" and "how is it split" in one glance rather than needing a legend
- * lookup for the headline figure.
+ * A ranked horizontal bar chart.
+ *
+ * This was a donut. A donut answers "what share of the whole" for a handful of
+ * categories; this chart carries 51 devices, and at that count the ring became
+ * unreadable — seven slices plus a 36% grey "Other", with 4% and 6% wedges
+ * indistinguishable by eye and every label pushed out to a legend you had to
+ * match back by colour.
+ *
+ * Bars fix exactly that: the name sits beside its own bar, length is compared
+ * along a shared baseline instead of by arc angle, and the ranking is the
+ * reading order. The total moves out of the ring's hole and onto the card.
  */
-function Donut({ title, sub, slices, total, fmt = (n: number) => String(n), empty, activeKey, onPick }: {
+function BarList({ title, sub, slices, total, fmt = (n: number) => String(n), empty, activeKey, onPick }: {
   title: string; sub?: string; slices: Slice[]; total: number;
   fmt?: (n: number) => string; empty?: string;
   /** The value currently filtered to, if this chart's dimension is filtered. */
@@ -150,7 +168,14 @@ function Donut({ title, sub, slices, total, fmt = (n: number) => String(n), empt
   // Hovering either the ring or its legend row focuses the same slice: the two
   // are one control, so the legend is a way to read the chart, not just a key.
   const [hot, setHot] = useState<number | null>(null);
+  // A folded bucket can be opened to name everything inside it. Collapsed by
+  // default: 44 extra rows would bury the seven slices the chart is actually
+  // about, and the count on the row already says how much is hidden.
+  const [openFold, setOpenFold] = useState(false);
   const pct = (v: number) => (total ? Math.round((v / total) * 100) : 0);
+  // Bars are scaled against the leader, so the longest bar always fills the
+  // track and the rest are read relative to it.
+  const max = Math.max(1, ...live.map((s) => s.value));
   const pickable = (s: Slice) => Boolean(onPick && s.key);
   const pick = (s: Slice) => { if (onPick && s.key) onPick(s.key); };
   return (
@@ -169,59 +194,37 @@ function Donut({ title, sub, slices, total, fmt = (n: number) => String(n), empt
         </div>
       ) : (
         <>
-          <div style={{ position: 'relative', height: 168 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                {/* A 2px surface-coloured ring between segments, so touching
-                    fills never blend into one another at the seam. */}
-                <Pie data={live} dataKey="value" nameKey="name" cx="50%" cy="50%"
-                  innerRadius={52} outerRadius={76} paddingAngle={2}
-                  stroke="var(--panel)" strokeWidth={2} isAnimationActive={false}
-                  onMouseEnter={(_: unknown, i: number) => setHot(i)} onMouseLeave={() => setHot(null)}
-                  onClick={(_: unknown, i: number) => pick(live[i])}>
-                  {live.map((s, i) => {
-                    // When this dimension is filtered, the chosen slice stays
-                    // solid and the rest recede: the chart shows what the
-                    // filter did rather than just re-rendering smaller.
-                    const selected = activeKey != null && s.key === activeKey;
-                    const dimmed = activeKey != null ? !selected : hot !== null && hot !== i;
-                    return (
-                      <Cell key={s.name} fill={s.color}
-                        opacity={dimmed ? 0.24 : 1}
-                        stroke={selected ? s.color : 'var(--panel)'}
-                        strokeWidth={selected ? 3 : 2}
-                        cursor={pickable(s) ? 'pointer' : 'default'}
-                        style={{ transition: 'opacity .16s ease' }} />
-                    );
-                  })}
-                </Pie>
-                <Tooltip
-                  formatter={(v: number, n: string) => [`${fmt(v)} · ${total ? Math.round((v / total) * 100) : 0}%`, n]}
-                  contentStyle={{ borderRadius: 10, border: `1px solid ${C.muted}33`, fontSize: 12.5, boxShadow: '0 8px 24px rgba(20,36,58,.16)' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-            {/* The hole is the headline: and on hover it becomes the readout for
-                the focused slice, so the eye never leaves the ring to find the
-                number it is pointing at. */}
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', padding: '0 46px', textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.4, fontVariantNumeric: 'tabular-nums', color: C.ink, transition: 'color .16s ease' }}>
-                {hot === null ? fmt(total) : fmt(live[hot].value)}
-              </div>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: C.muted, marginTop: 1, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {hot === null ? 'total' : `${pct(live[hot].value)}% · ${live[hot].name}`}
-              </div>
-            </div>
+          {/* The total, which used to live in the ring's hole. A bar chart has
+              no hole, and the headline figure still has to be on the card. */}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 8 }}>
+            <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.4, fontVariantNumeric: 'tabular-nums', color: C.ink }}>
+              {hot === null ? fmt(total) : fmt(live[hot].value)}
+            </span>
+            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: C.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {hot === null ? 'total' : `${pct(live[hot].value)}% · ${live[hot].name}`}
+            </span>
           </div>
 
-          <div style={{ display: 'grid', gap: 1, marginTop: 8 }}>
+          <div style={{ display: 'grid', gap: 1 }}>
             {live.map((s, i) => {
               const on = hot === i;
               const selected = activeKey != null && s.key === activeKey;
               const can = pickable(s);
+              const foldable = Boolean(s.members?.length);
               return (
-                <div key={s.name}
+                <div key={s.name} style={{ display: 'contents' }}>
+                <div
                   onMouseEnter={() => setHot(i)} onMouseLeave={() => setHot(null)}
+                  {...(foldable ? {
+                    role: 'button' as const,
+                    tabIndex: 0,
+                    'aria-expanded': openFold,
+                    title: openFold ? 'Hide the folded devices' : `Show all ${s.members!.length}`,
+                    onClick: () => setOpenFold((v) => !v),
+                    onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+                      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenFold((v) => !v); }
+                    },
+                  } : {})}
                   {...(can ? {
                     role: 'button' as const,
                     tabIndex: 0,
@@ -233,37 +236,68 @@ function Donut({ title, sub, slices, total, fmt = (n: number) => String(n), empt
                     },
                   } : {})}
                   style={{
-                    display: 'grid', gridTemplateColumns: '10px 1fr auto auto', gap: 8, alignItems: 'center',
-                    fontSize: 12.5, padding: '3px 6px', margin: '0 -6px', borderRadius: 7,
-                    cursor: can ? 'pointer' : 'default',
+                    display: 'grid', gridTemplateColumns: 'minmax(0, 34%) 1fr 46px 38px', gap: 10, alignItems: 'center',
+                    fontSize: 12.5, padding: '4px 6px', margin: '0 -6px', borderRadius: 7,
+                    cursor: can || foldable ? 'pointer' : 'default',
                     background: selected
                       ? `color-mix(in srgb, ${s.color} 16%, transparent)`
                       : on ? `color-mix(in srgb, ${s.color} 9%, transparent)` : 'transparent',
                     boxShadow: selected ? `inset 0 0 0 1px color-mix(in srgb, ${s.color} 45%, transparent)` : 'none',
-                    opacity: activeKey != null ? (selected ? 1 : 0.45) : (hot === null || on ? 1 : 0.5),
+                    opacity: activeKey != null ? (selected ? 1 : 0.45) : 1,
                     transition: 'background-color .16s ease, opacity .16s ease',
                   }}>
-                  {/* The swatch grows into a bar on focus: identity is never
-                      carried by colour alone, and the shift confirms the hover. */}
-                  <span aria-hidden="true" style={{
-                    width: on ? 10 : 9, height: on ? 14 : 9, borderRadius: on ? 3 : 3,
-                    background: s.color, transition: 'height .16s ease, width .16s ease',
-                  }} />
-                  <span style={{ color: on ? C.ink : C.sub, fontWeight: on ? 600 : 400, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color .16s ease' }}>{s.name}</span>
-                  <span style={{ fontWeight: 700, color: C.ink, fontVariantNumeric: 'tabular-nums' }}>{fmt(s.value)}</span>
-                  <span style={{ color: on ? s.color : C.muted, fontWeight: on ? 700 : 400, fontVariantNumeric: 'tabular-nums', minWidth: 34, textAlign: 'right', transition: 'color .16s ease' }}>
+                  <span style={{ color: on ? C.ink : C.sub, fontWeight: on ? 700 : 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color .16s ease' }}>
+                    {s.name}
+                    {foldable && <span style={{ color: C.muted, fontWeight: 600 }}>{openFold ? ' ▾' : ' ▸'}</span>}
+                  </span>
+                  {/* The bar is scaled to the LARGEST value, not to the total.
+                      Against the total, a 4% device drew a sliver barely
+                      distinguishable from a 6% one — the readability problem the
+                      donut had. Against the leader, the whole track is usable
+                      range. The `max(2, …)` floor keeps a tiny value visible as
+                      a mark rather than nothing at all. */}
+                  <span style={{ display: 'block', height: 14, borderRadius: 4, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                    <span style={{
+                      display: 'block', height: '100%', width: `${Math.max(2, (s.value / max) * 100)}%`,
+                      background: s.color, borderRadius: 4,
+                      transition: 'width .18s ease, opacity .16s ease',
+                      opacity: hot === null || on ? 1 : 0.55,
+                    }} />
+                  </span>
+                  <span style={{ fontWeight: 700, color: C.ink, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>{fmt(s.value)}</span>
+                  <span style={{ color: on ? s.color : C.muted, fontWeight: on ? 700 : 400, fontVariantNumeric: 'tabular-nums', textAlign: 'right', transition: 'color .16s ease' }}>
                     {pct(s.value)}%
                   </span>
+                </div>
+
+                {/* Everything the fold swallowed, named. Same four columns as
+                    the bars above, so the figures stay in one vertical line and
+                    it reads as a breakdown rather than more bars. Their bars are
+                    scaled against the same leader, which is why they are short:
+                    that IS the point of the fold. */}
+                {foldable && openFold && s.members!.map((m) => (
+                  <div key={`${s.name}::${m.name}`}
+                    style={{
+                      display: 'grid', gridTemplateColumns: 'minmax(0, 34%) 1fr 46px 38px', gap: 10, alignItems: 'center',
+                      fontSize: 11.5, padding: '2px 6px', margin: '0 -6px', borderRadius: 7,
+                      color: C.muted,
+                    }}>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingLeft: 12 }}>{m.name}</span>
+                    <span style={{ display: 'block', height: 6, borderRadius: 3, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                      <span style={{ display: 'block', height: '100%', width: `${Math.max(2, (m.value / max) * 100)}%`, background: OTHER_C, borderRadius: 3 }} />
+                    </span>
+                    <span style={{ fontWeight: 600, color: C.sub, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>{fmt(m.value)}</span>
+                    <span style={{ fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>{pct(m.value)}%</span>
+                  </div>
+                ))}
                 </div>
               );
             })}
           </div>
 
-          {/* Cards in a row stretch to the tallest, so a donut with four legend
-              rows sat above a block of dead space. `marginTop:auto` pins this
-              strip to the bottom and spends that space on the concentration
-              figure: how much of the whole the leaders actually account for,
-              which is the question a part-to-whole chart invites next. */}
+          {/* The concentration figure: how much of the whole the leaders
+              actually account for, which is the question a ranked chart invites
+              next. `marginTop:auto` pins it to the foot of the card. */}
           <div style={{
             marginTop: 'auto', paddingTop: 10, display: 'flex', alignItems: 'baseline',
             justifyContent: 'space-between', gap: 8, fontSize: 11,
@@ -353,62 +387,20 @@ function StageStrip({ slices, unfiltered }: { slices: Slice[]; unfiltered?: bool
   );
 }
 
-/** A compact ranked list: the "top five" beside the charts. */
-function TopList({ title, sub, rows, fmt }: {
-  title: string; sub: string; rows: { label: string; value: number; note?: string }[]; fmt: (n: number) => string;
-}) {
-  const max = Math.max(1, ...rows.map((r) => r.value));
-  return (
-    // Matches the donuts: full height, and the rows sit directly under the head
-    // rather than floating in a stretched card.
-    <div className="section chart-card" style={{ marginTop: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div className="section-head" style={{ minHeight: 52, alignItems: 'flex-start' }}><div>
-        <h2 className="section-title" style={{ fontSize: 15 }}>{title}</h2>
-        <div className="section-sub">{sub}</div>
-      </div></div>
-      <div style={{ display: 'grid', gap: 7, padding: '2px 2px 0', alignContent: 'start' }}>
-        {rows.length === 0 && <div style={{ fontSize: 13, color: C.muted }}>Nothing in range.</div>}
-        {rows.map((r, i) => (
-          <div key={r.label} className="toplist-row"
-            style={{ display: 'grid', gridTemplateColumns: '22px 1fr 92px', gap: 10, alignItems: 'center', padding: '4px 6px', margin: '0 -6px', borderRadius: 8 }}>
-            {/* The leader gets a solid badge; the rest are quiet outlines, so
-                rank is legible without numbering every row loudly. */}
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 19, height: 19, borderRadius: 6, fontSize: 11, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-              background: i === 0 ? C.brand : 'var(--panel-2)', color: i === 0 ? '#fff' : C.muted,
-            }}>{i + 1}</span>
-            <span style={{ minWidth: 0 }}>
-              <span style={{ display: 'block', fontSize: 12.5, color: C.ink, fontWeight: i === 0 ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {r.label}{r.note && <span style={{ color: C.muted, fontWeight: 400 }}> · {r.note}</span>}
-              </span>
-              <span style={{ display: 'block', height: 5, borderRadius: 999, background: 'var(--panel-2)', marginTop: 4, overflow: 'hidden' }}>
-                <span style={{
-                  display: 'block', height: '100%', width: `${(r.value / max) * 100}%`, borderRadius: 999,
-                  background: `linear-gradient(90deg, ${C.brand}, color-mix(in srgb, ${C.brand} 62%, #7C3AED))`,
-                  // Rank fades the bar, so first place reads first.
-                  opacity: 1 - i * 0.13,
-                }} />
-              </span>
-            </span>
-            <span style={{ fontSize: 12.5, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmt(r.value)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /**
  * The dashboard's summary layer: one screen that carries the gist of every other
- * tab: revenue by vertical, order status, the PI pipeline, who is producing,
- * and the leading accounts and devices.
+ * tab: order status, the PI pipeline, who is producing, and where the revenue
+ * and the units sit.
  *
  * It reads the same identity-scoped endpoints as those tabs, so a rep sees their
  * own book summarised and a manager sees the company's. Nothing here can show a
  * figure the detail pages would withhold.
  */
-export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: string | null }) {
+export function DashboardOverview({ reps, viewAs, aside }: {
+  reps: RepRow[]; viewAs?: string | null;
+  /** Rendered beside the Units-by-device chart. See the `chart-pair` note below. */
+  aside?: ReactNode;
+}) {
   const [a, setA] = useState<OrderAnalytics | null>(null);
   const [pi, setPi] = useState<PiStages | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -428,10 +420,12 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
   };
   const [vert, setVert] = useState('all');
   const [rep, setRep] = useState('all');
-  // Set by clicking a slice. `null` means that dimension is unfiltered: these
-  // have no dropdown, so the chart IS the control.
-  const [status, setStatus] = useState<string | null>(null);
-  const [account, setAccount] = useState<string | null>(null);
+  // Set by clicking a slice. `null` means unfiltered: there is no dropdown for
+  // device, so the chart IS the control.
+  //
+  // `status` and `account` used to live here too. Their donuts were the only
+  // thing that could set them, so with those gone the state could only ever be
+  // null — a filter nothing could turn on, and a chip nothing could show.
   const [device, setDevice] = useState<string | null>(null);
 
   /** Click a slice: select it, or clear it if it is already the selection. */
@@ -447,13 +441,11 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
     return () => { live = false; };
   }, [viewAs]);
 
-  // `scopedToRep` is non-null only when the SERVER narrowed this payload to one
-  // rep, so it is a trustworthy role signal: an admin cannot be mistaken for a
-  // rep and a rep cannot claim to be an admin by editing client state.
-  // A rep may see counts and units, never dollars. getOrderAnalytics already
-  // nulls every revenue field for them, so these panels would otherwise render
-  // a page of $0 rather than simply not existing.
-  const isRep = Boolean(a?.scopedToRep);
+  // No `isRep` branch is left on this screen. It existed to withhold the
+  // revenue panels from a rep (getOrderAnalytics nulls their dollar fields, so
+  // those panels would have rendered a page of $0); every one of them has since
+  // been removed for everybody, so there is nothing role-dependent to gate.
+  // The SERVER still scopes the payload — that has not changed.
   const allOrders = a?.orders ?? [];
   const repNames = new Set(reps.map((r) => r.rep));
 
@@ -466,10 +458,7 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
   // Hues are pinned from the UNFILTERED book: see pinColors. Doing this before
   // the filter is the whole point: the leaders keep their colours whatever the
   // controls are set to.
-  const pinnedAccounts = useMemo(() => pinColors(tally(allOrders, (o) => o.account, (o) => o.revenue)), [a]);
   const pinnedDevices = useMemo(() => pinColors(tally(deviceRows, (d) => d.item, (d) => d.qty)), [a]);
-  const pinnedStatus = useMemo(() => pinColors(tally(allOrders, (o) => o.status || 'Unknown', () => 1)), [a]);
-  const pinnedReps = useMemo(() => pinColors(tally(allOrders.filter((o) => repNames.has(o.rep)), (o) => o.rep, () => 1)), [a, reps]);
 
   // A window rather than a single cutoff, so a custom range can close at both
   // ends. `null` means no date filtering at all.
@@ -497,69 +486,26 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
       if (!Number.isFinite(t) || t < win.from || t > win.to) return false;
     }
     if (vert !== 'all' && o.vertical !== vert) return false;
-    if (status && (o.status || 'Unknown') !== status) return false;
-    if (account && o.account !== account) return false;
     // Device lives on the order's line items, so this asks "did this order
     // include that device", not "is this order that device".
     if (device && !o.devices.some((d) => shortDeviceName(d.item) === device)) return false;
     if (rep === '__none') return !repNames.has(o.rep);
     if (rep !== 'all') return o.rep === rep;
     return true;
-  }), [a, win, vert, rep, reps, status, account, device]);
+  }), [a, win, vert, rep, reps, device]);
 
   const revenue = orders.reduce((s, o) => s + o.revenue, 0);
   const units = orders.reduce((s, o) => s + o.units, 0);
 
+  // Still the source of the Vertical dropdown's options, though no donut
+  // breaks the book down this way any more.
   const VERTS = ['PI', 'VA', 'TriCare', 'DEMO', 'Contract', 'DOL', 'Other'];
-  const vertSlices = (pick: (o: typeof orders[number]) => number): Slice[] => VERTS.map((v) => ({
-    name: v === 'Other' ? 'Unclassified' : v, color: V_C[v], key: v,
-    value: orders.filter((o) => o.vertical === v).reduce((s, o) => s + pick(o), 0),
-  }));
-  // Orders: not revenue: so this donut can be checked straight against
-  // Striven's own order-type counts (VA Order / PI Order / Tri-Care / Unclassified).
-  const ordersByVertical = vertSlices(() => 1);
-  const byVertical = vertSlices((o) => o.revenue);
-
-  const byStatus = foldSlices(tally(orders, (o) => o.status || 'Unknown', () => 1), pinnedStatus, 'Other statuses');
-  const byAccount = foldSlices(tally(orders, (o) => o.account, (o) => o.revenue), pinnedAccounts, 'Other vendors');
 
   const orderSet = new Set(orders);
   const filteredDevices = deviceRows.filter((d) => orderSet.has(d.o));
   const byDevice = foldSlices(tally(filteredDevices, (d) => d.item, (d) => d.qty), pinnedDevices, 'Other devices');
 
   const byStage: Slice[] = (pi?.stages ?? []).map((s) => ({ name: s.stage, value: s.count, color: STAGE_C[s.stage] ?? C.muted }));
-
-  // The reps, PLUS everything booked to somebody else. Without that last slice
-  // this donut totalled 261 while the vertical donut beside it totalled 419,
-  // two charts on one screen quietly counting different things.
-  const repCounts = tally(orders.filter((o) => repNames.has(o.rep)), (o) => o.rep, () => 1);
-  const unattributed = orders.filter((o) => !repNames.has(o.rep)).length;
-  const byRep: Slice[] = [
-    ...foldSlices(repCounts, pinnedReps, 'Other reps'),
-    ...(unattributed > 0 ? [{ name: 'Not a rep', value: unattributed, color: OTHER_C, key: '__none' }] : []),
-  ];
-
-  // Ranked by revenue for a manager, by ORDER COUNT for a rep. Same panel, same
-  // ranking question ("who are my biggest accounts"), answered without money.
-  const topAccounts = [...tally(orders, (o) => o.account, (o) => (isRep ? 1 : o.revenue)).entries()]
-    .sort((x, y) => y[1] - x[1]).slice(0, 5)
-    .map(([label, value]) => ({ label, value, note: `${orders.filter((o) => o.account === label).length} ord` }));
-
-  const topDevices = (() => {
-    const m = new Map<string, { revenue: number; units: number }>();
-    for (const d of filteredDevices) {
-      const e = m.get(d.item) ?? { revenue: 0, units: 0 };
-      e.revenue += d.revenue; e.units += d.qty; m.set(d.item, e);
-    }
-    // Rep: rank and label by UNITS. Crystal's line was "you can give her a
-    // number of top devices, but not the revenue".
-    if (isRep) {
-      return [...m.entries()].filter(([, v]) => v.units > 0).sort((x, y) => y[1].units - x[1].units).slice(0, 5)
-        .map(([label, v]) => ({ label, value: v.units, note: `${v.units} unit${v.units === 1 ? '' : 's'}` }));
-    }
-    return [...m.entries()].filter(([, v]) => v.revenue >= 0.01).sort((x, y) => y[1].revenue - x[1].revenue).slice(0, 5)
-      .map(([label, v]) => ({ label, value: v.revenue, note: `${v.units}u` }));
-  })();
 
   if (err) return <div className="error" style={{ marginBottom: 14 }}>{err}</div>;
   if (!a || !pi) return <div className="page-sub" style={{ padding: 16 }}>Loading summary…</div>;
@@ -573,7 +519,7 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
   const clearAll = () => {
     setPeriod('all'); setVert('all'); setRep('all');
     setFrom(''); setTo('');
-    setStatus(null); setAccount(null); setDevice(null);
+    setDevice(null);
   };
   const periodLabel = period === 'custom'
     ? `${from || 'earliest'} → ${to || 'latest'}`
@@ -582,8 +528,6 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
     period !== 'all' && { label: 'Period', value: periodLabel, clear: () => { setPeriod('all'); setFrom(''); setTo(''); } },
     vert !== 'all' && { label: 'Vertical', value: vert === 'Other' ? 'Unclassified' : vert, clear: () => setVert('all') },
     rep !== 'all' && { label: 'Rep', value: rep === '__none' ? 'Not a rep' : rep, clear: () => setRep('all') },
-    status && { label: 'Status', value: status, clear: () => setStatus(null) },
-    account && { label: 'Vendor', value: account, clear: () => setAccount(null) },
     device && { label: 'Device', value: device, clear: () => setDevice(null) },
   ].filter(Boolean) as { label: string; value: string; clear: () => void }[];
 
@@ -660,51 +604,23 @@ export function DashboardOverview({ reps, viewAs }: { reps: RepRow[]; viewAs?: s
         </div>
       </div>
 
-      {/* Six donuts: each a part-to-whole of the same filtered set, so they
-          belong together and stretch to a common height. */}
-      <div className={`donut-grid${isRep ? ' donut-grid-4' : ''}`}>
-        <Donut title="Orders by vertical" sub="Click a slice to filter · matches Striven's order types"
-          slices={ordersByVertical} total={orders.length} empty="No orders in range."
-          activeKey={vert === 'all' ? null : vert} onPick={(k) => setVert(vert === k ? 'all' : k)} />
-        {!isRep && (
-          <Donut title="Revenue by vertical" sub="Order value by vertical"
-            slices={byVertical} total={revenue} fmt={formatCurrency} empty="No revenue in range."
-            activeKey={vert === 'all' ? null : vert} onPick={(k) => setVert(vert === k ? 'all' : k)} />
-        )}
-        <Donut title="Orders by status" sub={`Where the book stands · top ${MAX_SLICES} shown`}
-          slices={byStatus} total={orders.length} empty="No orders in range."
-          activeKey={status} onPick={toggle(status, setStatus)} />
-        <Donut title="Orders by rep" sub="The same book, by who it is booked to"
-          slices={byRep} total={byRep.reduce((s, x) => s + x.value, 0)} empty="No rep orders yet."
-          activeKey={rep === 'all' ? null : rep} onPick={(k) => setRep(rep === k ? 'all' : k)} />
-        {!isRep && (
-          <Donut title="Revenue by vendor" sub={`The account billed: never a patient · top ${MAX_SLICES}`}
-            slices={byAccount} total={revenue} fmt={formatCurrency} empty="No revenue in range."
-            activeKey={account} onPick={toggle(account, setAccount)} />
-        )}
-        <Donut title="Units by device" sub={`Devices dispensed · top ${MAX_SLICES} by volume`}
+      {/* Units by device, with whatever the caller wants beside it. `aside` is
+          how the Leaderboard comes to sit here: it belongs to RepsTab, which
+          owns the roster and the click-through, but it reads better paired with
+          the chart than stacked under it — and pairing them stops the chart's
+          640px cap leaving half the row empty. With no `aside` the chart keeps
+          that cap and sits alone. */}
+      <div className={aside ? 'chart-pair' : 'chart-solo'}>
+        <BarList title="Units by device" sub={`Devices dispensed · top ${MAX_SLICES} by volume, then the rest`}
           slices={byDevice} total={byDevice.reduce((s, x) => s + x.value, 0)} empty="No devices in range."
           activeKey={device} onPick={toggle(device, setDevice)} />
+        {aside}
       </div>
 
       {/* The pipeline is a SEQUENCE, not a composition: a donut implied its
           stages were parts of a whole and left an orphaned fifth card. A full
           width funnel reads left to right, the way the work actually flows. */}
       {showStages && <StageStrip slices={byStage} unfiltered={filtered} />}
-
-      <div className="pair-grid">
-        <TopList
-          title="Top accounts"
-          sub={isRep ? 'By order count: the vendor billed on the order, never a patient'
-                     : 'By revenue: the vendor billed on the order, never a patient'}
-          rows={topAccounts}
-          fmt={isRep ? (v: number) => `${v} order${v === 1 ? '' : 's'}` : formatCurrency} />
-        <TopList
-          title="Top devices"
-          sub={isRep ? 'By units dispensed' : 'By revenue, apportioned across an order by unit share'}
-          rows={topDevices}
-          fmt={isRep ? (v: number) => `${v} unit${v === 1 ? '' : 's'}` : formatCurrency} />
-      </div>
     </>
   );
 }

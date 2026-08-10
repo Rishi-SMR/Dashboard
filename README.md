@@ -113,18 +113,35 @@ is never trusted as identity. `GET /api/me` returns `{ email, repName, role }`
 resolved from the verified session — the role is looked up live from the directory
 rather than trusted from the token, so a revoked admin loses access immediately.
 
-`GET /api/commission` is redacted **server-side, before serialization**:
+**A rep is restricted to their own data: order count, unit count, and their own
+commission.** Nothing about another rep reaches them — not a figure, not a name.
+
+`GET /api/commission` and `GET /api/rep-overview` are redacted **server-side,
+before serialization**:
 
 | Viewer | Sees |
 | --- | --- |
 | Own row | Every financial field, plus order-by-order detail |
-| Another rep's row | `rep`, `count`, `strivenOrders`, `strivenUnits`, `orderCounts`. All dollar fields `null` |
+| Another rep's row | **Nothing — the row is absent from the payload** |
 | Admin | Everything, unredacted |
+
+> **This changed.** A peer row used to survive, stripped to operational counts
+> (`rep`, `count`, `strivenOrders`, `strivenUnits`, `orderCounts`) with the money
+> nulled, because team *volume* was treated as shared even where pay was not.
+> That is what the leaderboard and Team Standings were built from. Peer rows are
+> now **dropped** rather than blanked: a row reduced to a name and a count still
+> discloses who is on the book and how much they booked. Dropping also fails
+> safe — a field added to a row later cannot leak by default.
+>
+> Consequences: **Team Standings is gone from the rep nav** (a ranking needs
+> peers), and `STANDINGS_ORDERS_ONLY` no longer has anything to govern for a rep.
+> Commission is unaffected: every rep is still paid exactly as before.
 
 Company-wide dollar aggregates (`grandTotal`, `byProgram`) are scoped to the
 caller's own totals for a rep role — a company total would leak the other reps in
 aggregate. No query parameter can widen this: the viewer is built from the session
-alone, and a missing viewer **fails closed**.
+alone, and a missing viewer **fails closed** (an unknown login matches no name, so
+it receives an empty list rather than a list of locked rows).
 
 ## Order labels
 
