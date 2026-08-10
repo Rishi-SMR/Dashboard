@@ -104,15 +104,17 @@ The **only** place accounts are provisioned. There is deliberately no signup flo
 - An email absent from the directory gets **least privilege**: role `rep` with no
   own row, so nothing is unlocked.
 
-There are seven `dashboard_users` accounts: three finance/ops (`admin@`, `crystal@`,
-`rishi@`) configured as admins, and one per rep (`alle@`, `jillian@`, `christy@`,
-`maylon@`) configured as `rep`.
+There are seven `dashboard_users` accounts, verified against the live table:
+three finance/ops (`rishi@`, `crystal@`, `kevin@`) configured as admins, and one
+per rep (`alle@`, `jillian@`, `christy@`, `maylon@`) configured as `rep`.
 
-`cassie@` still exists in `dashboard_users` but **no longer has a directory row**
-(see `EXCLUDED_REPS`). Removing the mapping removes her rep identity, not her
-account: she can still authenticate, and resolves to `{ repName: null }` — every
-company figure 403s and there is no own row to show. **To block the sign-in
-itself, delete her `dashboard_users` row in Supabase.**
+`admin@` is provisioned in `REP_DIRECTORY` but has **no `dashboard_users` row**,
+so it cannot currently sign in. A directory row grants an identity, not an
+account; both are needed to log in.
+
+`cassie@` has neither, and nothing needs to be revoked: she was removed from
+`REP_DIRECTORY` with her roster entry (see `EXCLUDED_REPS`), and she has no
+`dashboard_users` row either — so there is no credential to disable.
 
 > **Every login needs a directory row.** An account that authenticates but is
 > absent here resolves to `{ repName: null, role: "rep" }`. That fails closed on

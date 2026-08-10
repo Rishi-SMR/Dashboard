@@ -458,12 +458,12 @@ export const REP_DIRECTORY = [
   // Rep logins. repName must stay exactly as spelled in REP_NAMES above.
   { email: 'alle@sportsmedrecovery.com', repName: 'Alle Ann', role: 'rep' },
   { email: 'jillian@sportsmedrecovery.com', repName: 'Jillian', role: 'rep' },
-  // cassie@ removed with her roster entry (EXCLUDED_REPS). Deleting the mapping
-  // does NOT delete the account: the `dashboard_users` row lives in Supabase and
-  // still authenticates. What it removes is her rep IDENTITY, so she resolves to
-  // { repName: null, role: 'rep' } — every company figure 403s and there is no
-  // own row to show. That is the documented fail-closed path, not an error
-  // state. To stop the sign-in itself, delete her `dashboard_users` row too.
+  // cassie@ removed with her roster entry (EXCLUDED_REPS). NOTHING FURTHER IS
+  // OUTSTANDING: the live `dashboard_users` table was checked and holds no row
+  // for her, so there is no credential left to revoke. An earlier note here
+  // assumed the account still existed and asked for it to be deleted; it does
+  // not, and repeating that would send the next reader looking for a row that
+  // was never there.
   { email: 'christy@sportsmedrecovery.com', repName: 'Christy', role: 'rep' },
   // Added after the fact: the dashboard_users login existed but this row did
   // not, so Maylon authenticated successfully and then matched no rep row —
