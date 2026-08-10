@@ -1557,8 +1557,29 @@ export async function getDeviceMix(viewer = null) {
 // with the sheet's due/paid position. Safe to pay/portal-load without further
 // checks." Needs-review and Unmatched rows are carried as counts so the money
 // held back is visible, but they are never added to a payable figure.
-const RECON_ID = () => process.env.COMMISSION_RECON_SHEET_ID || '';
-const RECON_GID = () => process.env.COMMISSION_RECON_GID || '1281286844';
+// WHERE THE SHEET ID COMES FROM. Supabase `app_config` first, environment
+// second — the same order as shippoToken(), and for the same reason: a value
+// that lives in the table can be changed without a redeploy, and one host
+// forgetting to set it is not a silent outage.
+//
+// It used to read process.env ONLY, and that is exactly how production and
+// local came to disagree. Vercel had no COMMISSION_RECON_SHEET_ID, so
+// getCommissionRecon() returned `configured: false`, the whole reconciliation
+// block was skipped, and Commission Due silently fell back to the Striven
+// engine ($211,269) while localhost — which had the variable in
+// striven-server/.env — showed the sheet's $169,909.20. Neither figure was
+// wrong for the code that produced it; the two hosts were simply not running
+// the same configuration, and nothing on the page said so.
+//
+// Reading the table closes that: set the key once in Supabase and every host
+// picks it up, including any future one nobody remembers to configure.
+const reconConfig = async () => {
+  const t = await readConfigTable().catch(() => ({}));
+  return {
+    id: t.COMMISSION_RECON_SHEET_ID || process.env.COMMISSION_RECON_SHEET_ID || '',
+    gid: t.COMMISSION_RECON_GID || process.env.COMMISSION_RECON_GID || '1281286844',
+  };
+};
 
 // ── THE hard-exclusion rule, in one place ────────────────────────────────────
 // Companion to isStandingsExcluded() further down, and deliberately NOT the
@@ -1607,10 +1628,15 @@ const reconRep = (raw) => {
  * never leaves this function.
  */
 export async function getCommissionRecon() {
-  const id = RECON_ID();
-  if (!id) return { ok: false, configured: false, byRep: [], note: 'COMMISSION_RECON_SHEET_ID is not set.' };
+  const { id, gid } = await reconConfig();
+  if (!id) {
+    return {
+      ok: false, configured: false, byRep: [],
+      note: 'COMMISSION_RECON_SHEET_ID is set neither in Supabase app_config nor in the environment.',
+    };
+  }
   return cached('derived:commission-recon', async () => {
-    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${RECON_GID()}`;
+    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
     const csv = await fetch(url).then((r) => (r.ok ? r.text() : '')).catch(() => '');
     if (!csv) return { ok: false, configured: true, byRep: [], note: 'Reconciliation sheet is unreachable.' };
 
