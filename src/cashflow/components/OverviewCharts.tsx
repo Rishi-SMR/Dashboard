@@ -142,9 +142,11 @@ export function OverviewCharts() {
   // Commission tab shows when this tile is clicked.
   //
   // It read `striven.payableTotal`, which is the whole roster: it counted
-  // Cassie, Kinley Shepherd and House Account, none of whom appear on the
+  // Kinley Shepherd and House Account, neither of whom appears on the
   // Commission tab any more. The tile said $218,116 and the page it opened said
   // $209,815 — an $8,301 gap between a figure and the breakdown behind it.
+  // (Cassie was in that gap too; she is now dropped server-side entirely, so
+  // she is no longer part of what this scoping has to correct for.)
   //
   // `roster` is the server's producer list, empty for a non-admin; this board
   // is admin-only, but the fallback keeps it honest if that ever changes.

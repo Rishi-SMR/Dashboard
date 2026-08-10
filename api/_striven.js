@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { PO_STATUS } from './po-status.js';
 import {
   COMMISSION_RATES, FALLBACK_VERTICAL_RATES, ORDER_LABEL_RULES,
-  REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, STANDINGS_EXCLUDE, PI_STAGES, STRIVEN_STAGE_FIELD,
+  REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, STANDINGS_EXCLUDE, EXCLUDED_REPS, PI_STAGES, STRIVEN_STAGE_FIELD,
   PI_LABEL_STAGE, PIP_STAGES, PIP_LABEL_STAGE, PIP_IDENTIFYING_LABELS, REVIEW_LABELS,
 } from './_commission-config.js';
 import {
@@ -1560,6 +1560,25 @@ export async function getDeviceMix(viewer = null) {
 const RECON_ID = () => process.env.COMMISSION_RECON_SHEET_ID || '';
 const RECON_GID = () => process.env.COMMISSION_RECON_GID || '1281286844';
 
+// ── THE hard-exclusion rule, in one place ────────────────────────────────────
+// Companion to isStandingsExcluded() further down, and deliberately NOT the
+// same test. isStandingsExcluded asks "should this rep be ranked?" — a display
+// question, answered per leaderboard. This asks "is this a rep at all?", and a
+// `true` means the name must not survive to ANY payload: not a roster row, not
+// a picker entry, not an off-roster remark, not a dollar in a total.
+//
+// It is applied at every point a name can enter a response, rather than filtered
+// once at the end, because the payload is assembled from four independent
+// sources (REP_NAMES, the order book, the reconciliation sheet, and the analytics
+// rollup) and a single late filter would have to know all four shapes. The call
+// sites are: the recon reader below, and getCommission's roster / offRoster /
+// unmatched blocks.
+//
+// Compared against the FOLDED name (commRep / reconRep output), so raw spelling
+// variants are already collapsed by the time this runs.
+export const isExcludedRep = (rep) => (EXCLUDED_REPS || [])
+  .some((s) => String(s).trim().toLowerCase() === String(rep ?? '').trim().toLowerCase());
+
 // The sheet spells one rep two ways ("Jillian" and "Jillian Colin"), which would
 // otherwise split her total across two rows. Names are folded onto the portal's
 // REP_DIRECTORY spelling here, at the boundary, so nothing downstream has to
@@ -1628,6 +1647,12 @@ export async function getCommissionRecon() {
       const amt = sheetMoney(r[C.amt]);
       if (!repRaw || !amt) continue;
       const rep = reconRep(repRaw);
+      // Dropped BEFORE `totals` is touched, so an excluded name contributes to
+      // no figure the page can print — not the payable headline, not the
+      // auto/review/unmatched split, not the row count. Skipping later (at the
+      // byRep merge, say) would have left their money inside `totals` with no
+      // row to explain it, which is the one outcome worse than either choice.
+      if (isExcludedRep(rep)) continue;
       const tier = tierOf(r[C.status]);
       const e = byRep.get(rep) ?? {
         rep, payableTotal: 0, reviewTotal: 0, unmatchedTotal: 0,
@@ -2630,7 +2655,12 @@ export async function getCommission(viewer = null) {
         soId: String(o.soId ?? ''),
         ref: info?.ref || '',
         prog: o.program || info?.program || 'Unclassified',
-        rep: bookedTo,
+        // The ROW stays, the NAME goes — same trade as offRoster.reps above.
+        // Cassie's orders land here now that she is off the roster, and this
+        // list is exactly the "who was it booked to" field that would put her
+        // back on screen. Nulled, so the order is still surfaced as a data
+        // problem and `reason` below still explains it.
+        rep: isExcludedRep(bookedTo) ? null : bookedTo,
         item: (o.items || [])[0]?.item || '',
         itemCount: (o.items || []).length,
         units,
@@ -2755,9 +2785,18 @@ export async function getCommission(viewer = null) {
       if (s) r.lines = s.lines.slice().sort((a, b) => b.comm - a.comm);
       else r.lines = [];
     }
-    // Reps the sheet knows but the order book does not (e.g. "CMC (direct)")
-    // still have to be paid, so they are appended rather than dropped.
+    // Reps the sheet knows but the order book does not still have to be paid,
+    // so they are appended rather than dropped. This is how a sheet-only payee
+    // reaches the page at all.
+    //
+    // "CMC (direct)" used to be the example here and is now the counter-example:
+    // it is in EXCLUDED_REPS, so getCommissionRecon() never emits a row for it
+    // and there is nothing to append. The guard below repeats that test rather
+    // than trusting it, because THIS loop is what invents a rep row out of a
+    // sheet name — if an excluded name ever reached it, it would be re-created
+    // downstream of every other filter.
     for (const s of recon.byRep) {
+      if (isExcludedRep(s.rep)) continue;
       if (striven.byRep.some((r) => r.rep === s.rep)) continue;
       striven.byRep.push({
         rep: s.rep, tricare: 0, va: 0, pi: 0, total: s.payableTotal,
@@ -2868,7 +2907,13 @@ export async function getCommission(viewer = null) {
       nTricare: offRows.filter((o) => o.vertical === 'TriCare').length,
       nVa: offRows.filter((o) => o.vertical === 'VA').length,
       nPi: offRows.filter((o) => o.vertical === 'PI').length,
-      reps: [...new Set(offRows.map((o) => o.rep))].sort(),
+      // The NAMES are filtered; the volume above is not. An excluded rep's
+      // orders are still real orders and still have to be counted somewhere, or
+      // this block stops doing the job it was added for (making the commission
+      // table's columns sum to the book). So the orders/units/value keep them
+      // and only the attribution is withheld — "booked off-roster" without
+      // saying to whom.
+      reps: [...new Set(offRows.map((o) => o.rep))].filter((n) => !isExcludedRep(n)).sort(),
     };
   } catch { /* analytics optional — volume columns stay on the engine's counts */ }
 
@@ -2912,12 +2957,18 @@ export async function getCommission(viewer = null) {
     // PRODUCERS *PLUS* ANYONE THE RECONCILIATION PAYS. producerNames() alone is
     // REP_NAMES minus STANDINGS_EXCLUDE — a Striven-order-volume rule — and it
     // had drifted from who actually has commission to look at: Crystal and Rishi
-    // were offered Maylon (now $0) but not Cassie ($21,555.00 across 57 lines)
-    // or CMC (direct) ($930.00), so those two views could not be opened at all.
+    // were offered Maylon (now $0) but not the sheet-only payees, so those views
+    // could not be opened at all. The second term is what fixes that.
     //
-    // STANDINGS_EXCLUDE is left alone: it governs the LEADERBOARD, where "Cassie
-    // has left" is still the right call. Being unrankable and being unpayable
-    // are different things, and only the second should empty this list.
+    // STANDINGS_EXCLUDE is still left alone here: it governs the LEADERBOARD,
+    // and being unrankable is not the same as being unpayable. Only the second
+    // should empty this list.
+    //
+    // EXCLUDED_REPS is the opposite case and IS filtered. This union reaches
+    // into striven.byRep, which is assembled from sources with their own
+    // notions of who exists, so it is the one place a dropped name could
+    // reappear as a selectable "View as" target — a picker entry for somebody
+    // the rest of the payload no longer has any rows for.
     //
     // Emptied for a rep by redactCommissionPayload: it is an admin control, and
     // a bare list of names is exactly the peer disclosure the rest of that
@@ -2925,7 +2976,7 @@ export async function getCommission(viewer = null) {
     roster: [...new Set([
       ...producerNames(),
       ...(striven.byRep || []).filter((r) => (r.payableTotal || 0) > 0 || (r.lines || []).length).map((r) => r.rep),
-    ])],
+    ])].filter((n) => !isExcludedRep(n)),
     sources: [],
   };
   // Redaction happens HERE, before serialization — another rep's dollars must
@@ -3214,8 +3265,14 @@ export async function getRepOverview(viewer = null) {
   // units summed the entire company book, which made the row contradict itself
   // and disagree with the Orders & Revenue page.
   // THE roster for this payload: producers only. A viewer who is themselves
-  // excluded (Cassie still has a login) keeps their own row, or they would sign
-  // in to an empty dashboard and no figure of their own anywhere.
+  // STANDINGS-excluded keeps their own row, or they would sign in to an empty
+  // dashboard and no figure of their own anywhere.
+  //
+  // This carve-out does NOT extend to EXCLUDED_REPS, and cannot: those names are
+  // gone from REP_NAMES, so `rows` above never builds them a row to keep. That
+  // is the intended difference — an unranked rep still has a dashboard, a name
+  // that is not a rep has nothing to show. Cassie was the reason this sentence
+  // used to name her; her directory row went with her roster entry.
   //
   // Everything below counts `shown`, not `rows` — the table footer has to be
   // the sum of the rows above it, and the KPI tiles have to agree with both.

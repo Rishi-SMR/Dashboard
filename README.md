@@ -74,8 +74,19 @@ Striven books orders under other people too (house/clinic accounts, ops staff).
 They are **not** reps: such an order earns no commission and is reported in
 `striven.unmatched`.
 
-`STANDINGS_EXCLUDE` removes non-producers (Crystal's demos, Angel, Cassie,
-Kinley, Zach) from the **leaderboard only**. They keep their commission rows.
+`STANDINGS_EXCLUDE` removes non-producers (Crystal's demos, Angel, Kinley, Zach)
+from the **leaderboard only**. They keep their commission rows.
+
+`EXCLUDED_REPS` is the harder rule and is **not** the same list. A name here is
+not a rep in any sense: it is dropped from every roster, picker, total, drill and
+remark, and **no money is reported against it anywhere**. Currently `Cassie`
+(departed) and `CMC (direct)` (a direct-sales channel, not a person). Their
+reconciliation-sheet rows are skipped at the reader, so Commission Due excludes
+what the sheet signs off for them.
+
+Their **orders are not deleted** — they stay in the company book and are counted
+as off-roster volume, with the attribution withheld rather than the numbers. The
+name is removed, not the business.
 
 ### `REP_DIRECTORY` — rep → email → role
 
@@ -83,8 +94,8 @@ The **only** place accounts are provisioned. There is deliberately no signup flo
 
 ```json
 [
-  { "email": "admin@sportsmedrecovery.com", "repName": null,     "role": "admin" },
-  { "email": "cassie@sportsmedrecovery.com", "repName": "Cassie", "role": "rep"  }
+  { "email": "admin@sportsmedrecovery.com",   "repName": null,      "role": "admin" },
+  { "email": "jillian@sportsmedrecovery.com", "repName": "Jillian", "role": "rep"  }
 ]
 ```
 
@@ -94,8 +105,14 @@ The **only** place accounts are provisioned. There is deliberately no signup flo
   own row, so nothing is unlocked.
 
 There are seven `dashboard_users` accounts: three finance/ops (`admin@`, `crystal@`,
-`rishi@`) configured as admins, and one per rep (`alle@`, `jillian@`, `cassie@`,
-`christy@`) configured as `rep`.
+`rishi@`) configured as admins, and one per rep (`alle@`, `jillian@`, `christy@`,
+`maylon@`) configured as `rep`.
+
+`cassie@` still exists in `dashboard_users` but **no longer has a directory row**
+(see `EXCLUDED_REPS`). Removing the mapping removes her rep identity, not her
+account: she can still authenticate, and resolves to `{ repName: null }` — every
+company figure 403s and there is no own row to show. **To block the sign-in
+itself, delete her `dashboard_users` row in Supabase.**
 
 > **Every login needs a directory row.** An account that authenticates but is
 > absent here resolves to `{ repName: null, role: "rep" }`. That fails closed on

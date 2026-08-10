@@ -571,9 +571,12 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
   }, [viewAs]);
 
   // Only producers are ranked. House/ops/departed names (Crystal's demos, Angel,
-  // Cassie, Kinley, Zach) carry orders in Striven but are not competing, and a
+  // Kinley, Zach) carry orders in Striven but are not competing, and a
   // leaderboard that lists them reads as noise. Their own row still survives if
   // one of them is somehow the viewer, so nobody ever loses sight of their own.
+  //
+  // Cassie is not among them and needs no filter here: EXCLUDED_REPS drops her
+  // server-side, so she never reaches `data.reps` in the first place.
   const ranked = [...(data?.reps ?? [])]
     .filter((r) => !r.standingsExcluded || r.isSelf)
     .sort((a, b) => b.orders - a.orders);

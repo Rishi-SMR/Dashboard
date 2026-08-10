@@ -319,11 +319,16 @@ export const STANDINGS_ORDERS_ONLY = true;
 //
 // They are real Sales Rep values, so they stay in REP_NAMES and keep earning
 // their commission rows; they are simply not producers being ranked against
-// each other. Crystal's own orders are demos, Cassie and Zach have left, and
-// Angel and Kinley are ops rather than sales.
+// each other. Crystal's own orders are demos, Zach has left, and Angel and
+// Kinley are ops rather than sales.
 //
 // Denise Zavala is deliberately NOT here: she folds into Maylon Sanders in
 // commRep(), so her orders rank under Maylon rather than disappearing.
+//
+// Cassie is no longer here either, for the opposite reason: she is not merely
+// unranked but gone entirely — see EXCLUDED_REPS below. Listing a name in both
+// places would be misleading, because this list promises a commission row that
+// EXCLUDED_REPS has already taken away.
 //
 // 'House Account' (a house bucket, not a person) and 'Santiago Family
 // Chiropractic' (a practice, not a rep) were previously left ON the board — the
@@ -332,11 +337,41 @@ export const STANDINGS_ORDERS_ONLY = true;
 export const STANDINGS_EXCLUDE = [
   'Crystal Chambers',
   'Angel Santiago',
-  'Cassie',
   'Kinley Shepherd',
   'Zach Shank',
   'House Account',
   'Santiago Family Chiropractic',
+];
+
+// ── Hard exclusions: not reps at all ─────────────────────────────────────────
+// NOT THE SAME THING AS STANDINGS_EXCLUDE, and the difference is the whole
+// point. A standings-excluded name is a rep who is not ranked: they keep a
+// roster row, a commission figure and a login. A name here is not a rep in any
+// sense — it is dropped from every roster, picker, total, drill and remark, and
+// no money is reported against it anywhere in the dashboard.
+//
+// Excluded by instruction ("do not consider them in reps or anywhere in the
+// dashboard"):
+//   · Cassie        — departed. Was in REP_NAMES, STANDINGS_EXCLUDE and
+//                     REP_DIRECTORY; removed from all three.
+//   · CMC (direct)  — a direct-sales channel, not a person. It never reached
+//                     REP_NAMES; it was minted by reconRep() in _striven.js
+//                     from the reconciliation sheet's own "CMC" rows and
+//                     appended to striven.byRep as a payee.
+//
+// THIS DROPS MONEY FROM THE HEADLINE. Their reconciliation-sheet rows are
+// skipped at the reader, so Commission Due no longer includes what the sheet
+// signs off for them (Cassie $21,555.00 across 57 lines, CMC (direct) $930.00
+// at the time of the change). That is the intended reading of "anywhere": a
+// name that is not considered cannot be owed a visible balance either.
+//
+// Matched case-insensitively against the FOLDED name — the value commRep() and
+// reconRep() produce, not the raw Striven / sheet spelling. Both folds are kept
+// deliberately so every variant ("Maverick Medical- Cassie Wates", "CMC",
+// "cmc direct") lands on one canonical string for this list to catch.
+export const EXCLUDED_REPS = [
+  'Cassie',
+  'CMC (direct)',
 ];
 
 // The sheet verification gate is gone with the sheet feed: MIN_MATCH_RATE had
@@ -388,7 +423,9 @@ export const REP_NAMES = [
   'Santiago Family Chiropractic',   //  17 orders
   'Angel Santiago',                 //  14 orders — House Account- Angel Santiago
   'House Account',                  //  10 orders
-  'Cassie',                         //  10 orders — Maverick Medical- Cassie Wates
+  // 'Cassie' removed: EXCLUDED_REPS above. Her 10 orders stay in the company
+  // book and are reported as off-roster volume, exactly as any other non-rep's
+  // are — the orders are not deleted, the REP is.
   'Kinley Shepherd',                //   3 orders
   'Crystal Chambers',               //   2 orders
   // 'Denise Zavala' removed: she is Maylon's sub-rep and commRep() folds her
@@ -421,7 +458,12 @@ export const REP_DIRECTORY = [
   // Rep logins. repName must stay exactly as spelled in REP_NAMES above.
   { email: 'alle@sportsmedrecovery.com', repName: 'Alle Ann', role: 'rep' },
   { email: 'jillian@sportsmedrecovery.com', repName: 'Jillian', role: 'rep' },
-  { email: 'cassie@sportsmedrecovery.com', repName: 'Cassie', role: 'rep' },
+  // cassie@ removed with her roster entry (EXCLUDED_REPS). Deleting the mapping
+  // does NOT delete the account: the `dashboard_users` row lives in Supabase and
+  // still authenticates. What it removes is her rep IDENTITY, so she resolves to
+  // { repName: null, role: 'rep' } — every company figure 403s and there is no
+  // own row to show. That is the documented fail-closed path, not an error
+  // state. To stop the sign-in itself, delete her `dashboard_users` row too.
   { email: 'christy@sportsmedrecovery.com', repName: 'Christy', role: 'rep' },
   // Added after the fact: the dashboard_users login existed but this row did
   // not, so Maylon authenticated successfully and then matched no rep row —
