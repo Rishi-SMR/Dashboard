@@ -1573,13 +1573,24 @@ export async function getDeviceMix(viewer = null) {
 //
 // Reading the table closes that: set the key once in Supabase and every host
 // picks it up, including any future one nobody remembers to configure.
-const reconConfig = async () => {
+// THE resolution order for every externally-configured value, in one place:
+// Supabase `app_config` first, environment second, hardcoded default last.
+//
+// Generalised from reconConfig() after the same bug bit three more keys. Any
+// setting read straight from process.env is a setting that can be present on
+// one host and absent on another, and the failure is not loud: a missing sheet
+// id renders "X is not set" on the tab, or — worse, as it did for commission —
+// silently falls back to a different calculation and shows a plausible wrong
+// number. Reading the table means the value is set once and every host agrees.
+export const cfgValue = async (key, fallback = '') => {
   const t = await readConfigTable().catch(() => ({}));
-  return {
-    id: t.COMMISSION_RECON_SHEET_ID || process.env.COMMISSION_RECON_SHEET_ID || '',
-    gid: t.COMMISSION_RECON_GID || process.env.COMMISSION_RECON_GID || '1281286844',
-  };
+  return t[key] || process.env[key] || fallback;
 };
+
+const reconConfig = async () => ({
+  id: await cfgValue('COMMISSION_RECON_SHEET_ID'),
+  gid: await cfgValue('COMMISSION_RECON_GID', '1281286844'),
+});
 
 // ── THE hard-exclusion rule, in one place ────────────────────────────────────
 // Companion to isStandingsExcluded() further down, and deliberately NOT the
@@ -1766,8 +1777,9 @@ export async function getCommissionRecon() {
 //
 // The workbook id lives in the environment, never in committed source, matching
 // how STRIVEN_LABELS_URL is handled.
-const AP_LEDGER_ID = () => process.env.AP_LEDGER_SHEET_ID || '';
-const AP_LEDGER_GID = () => process.env.AP_LEDGER_GID || '575084060';
+// Supabase app_config first, env second — see cfgValue().
+const AP_LEDGER_ID = () => cfgValue('AP_LEDGER_SHEET_ID');
+const AP_LEDGER_GID = () => cfgValue('AP_LEDGER_GID', '575084060');
 
 /** RFC4180-ish CSV parse: quoted fields may contain commas and newlines. */
 function parseCsvRows(text) {
@@ -1806,10 +1818,11 @@ const sheetDate = (s) => {
  * it is deliberately not read here.)
  */
 export async function getApLedger() {
-  const id = AP_LEDGER_ID();
-  if (!id) return { ok: false, configured: false, bills: [], subLedgers: [], note: 'AP_LEDGER_SHEET_ID is not set.' };
+  const id = await AP_LEDGER_ID();
+  const gid = await AP_LEDGER_GID();
+  if (!id) return { ok: false, configured: false, bills: [], subLedgers: [], note: 'AP_LEDGER_SHEET_ID is set neither in Supabase app_config nor in the environment.' };
   return cached('derived:ap-ledger', async () => {
-    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${AP_LEDGER_GID()}`;
+    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
     const csv = await fetch(url).then((r) => (r.ok ? r.text() : '')).catch(() => '');
     if (!csv) return { ok: false, configured: true, bills: [], subLedgers: [], note: 'AP Ledgers sheet is unreachable.' };
     const rows = parseCsvRows(csv);
@@ -2066,17 +2079,19 @@ export async function getApLedger() {
 // PHI: every sheet row names a patient in full. commInitialLastDisp() reduces
 // the first name to a letter HERE, at the boundary — the full name is never
 // cached or serialized, the same rule the commission feed follows.
-const AR_REGISTER_ID = () => process.env.AR_REGISTER_SHEET_ID || '';
-const AR_REGISTER_GID = () => process.env.AR_REGISTER_GID || '687173788';
+// Supabase app_config first, env second — see cfgValue().
+const AR_REGISTER_ID = () => cfgValue('AR_REGISTER_SHEET_ID');
+const AR_REGISTER_GID = () => cfgValue('AR_REGISTER_GID', '687173788');
 
 /** Rows on this report that are NOT receivables. */
 const AR_SHEET_AP_TYPES = /^(bills?|received items)/i;
 
 export async function getArRegister() {
-  const id = AR_REGISTER_ID();
-  if (!id) return { ok: false, configured: false, invoices: [], note: 'AR_REGISTER_SHEET_ID is not set.' };
+  const id = await AR_REGISTER_ID();
+  const gid = await AR_REGISTER_GID();
+  if (!id) return { ok: false, configured: false, invoices: [], note: 'AR_REGISTER_SHEET_ID is set neither in Supabase app_config nor in the environment.' };
   return cached('derived:ar-register', async () => {
-    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${AR_REGISTER_GID()}`;
+    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
     const csv = await fetch(url).then((r) => (r.ok ? r.text() : '')).catch(() => '');
     if (!csv) return { ok: false, configured: true, invoices: [], note: 'Sales activity sheet is unreachable.' };
     const rows = parseCsvRows(csv);
@@ -3431,7 +3446,8 @@ export { PI_STAGES };
 // Striven-side one (widen that report, or save a second for the other
 // programmes), and accepting a list means it lands as an env change with no
 // code release.
-const LABELS_URLS = () => String(process.env.STRIVEN_LABELS_URL || '')
+// Supabase app_config first, env second — see cfgValue().
+const LABELS_URLS = async () => String(await cfgValue('STRIVEN_LABELS_URL'))
   .split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 
 /**
@@ -3461,7 +3477,7 @@ async function fetchLabelReport(url) {
 
 /** soId → the labels Striven has on that order. Empty when unconfigured. */
 async function soLabelsBySoId() {
-  const urls = LABELS_URLS();
+  const urls = await LABELS_URLS();
   if (!urls.length) return new Map();
   return cached('derived:so-labels', async () => {
     const [pages, soBlob] = await Promise.all([
