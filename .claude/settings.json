@@ -71,7 +71,27 @@
       "Bash(node -e \"import\\('./api/_striven.js'\\).then\\(\\(\\)=>console.log\\('loads OK'\\)\\).catch\\(e=>console.log\\('ERR:',e.message\\)\\)\")",
       "Bash(node -e \"import\\('./api/_striven.js'\\).then\\(m=>console.log\\('restored OK, getCommission:', typeof m.getCommission\\)\\).catch\\(e=>console.log\\('ERR:',e.message\\)\\)\")",
       "Bash(node -e \"import\\('./api/_striven.js'\\).then\\(m=>console.log\\('loads OK, getCommission:', typeof m.getCommission\\)\\).catch\\(e=>console.log\\('ERR:',e.message\\)\\)\")",
-      "Bash(awk 'NR>1755 && NR<1900' api/_striven.js)"
+      "Bash(awk 'NR>1755 && NR<1900' api/_striven.js)",
+      "PowerShell(npm test 2>&1)",
+      "PowerShell(npm run build 2>&1)",
+      "PowerShell(git fetch origin 2>&1)",
+      "PowerShell(git push origin main 2>&1)",
+      "PowerShell(npx vercel ls --yes 2>&1)",
+      "PowerShell(npx vercel inspect https://dashboard-g9tdzto1v-rishi-smr.vercel.app 2>&1)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://www.smr-board.com\" -UseBasicParsing -TimeoutSec 30; \"status: $\\($r.StatusCode\\)\"; \\($r.Content | Select-String -Pattern 'assets/main-[A-Za-z0-9_-]+\\\\.js' -AllMatches\\).Matches.Value } catch { \"ERR: $\\($_.Exception.Message\\)\" })",
+      "PowerShell(git log --all --oneline -S \"Units by programme\" -i)",
+      "PowerShell($p='d:\\\\SMR Portal\\\\src\\\\cashflow\\\\components\\\\OverviewCharts.tsx'; $b=[System.IO.File]::ReadAllBytes\\($p\\); $b[0..7] -join ','; \\(Get-Item $p\\).Length)",
+      "PowerShell($p='d:\\\\SMR Portal\\\\src\\\\cashflow\\\\components\\\\OverviewCharts.tsx'; $b=[System.IO.File]::ReadAllBytes\\($p\\); $idx=@\\(\\); for\\($i=0;$i -lt $b.Length;$i++\\){ if\\($b[$i] -eq 0\\){ $idx += $i } }; \"NUL count: $\\($idx.Count\\)\"; \"offsets: $\\($idx -join ', '\\)\")",
+      "PowerShell($p='d:\\\\SMR Portal\\\\src\\\\cashflow\\\\components\\\\OverviewCharts.tsx'; $b=[System.IO.File]::ReadAllBytes\\($p\\); $s=[System.Text.Encoding]::UTF8.GetString\\($b[33150..33400]\\); $s -replace \"`0\",\"<<<NUL>>>\")",
+      "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\src\\\\cashflow\\\\components\\\\OverviewCharts.tsx' -Pattern 'UnitsByDevice|UNITS BY|Units by programme|order book|DEMO orders' | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\api\\\\index.js' -Pattern 'device-mix|getDeviceMix|deviceMix' | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\src\\\\cashflow\\\\strivenApi.ts' -Pattern 'device-mix|deviceMix|DeviceMix' | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\api\\\\index.js' -Pattern \"order-analytics|pathname ===|seg ===|p ===|route ===\" | Select-Object -First 40 | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\api\\\\_striven.js' -Pattern \"device-mix\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" }; \"---ROUTES---\"; Select-String -Path 'd:\\\\SMR Portal\\\\api\\\\_striven.js' -Pattern \"export const ROUTES\" | ForEach-Object { $_.LineNumber })",
+      "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\api\\\\_endpoints.test.js' -Pattern \"order-analytics|rep-overview|pathname|parity|device\" | Select-Object -First 30 | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\src\\\\cashflow\\\\components\\\\OverviewCharts.tsx' -Pattern 'unitSlices' | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "PowerShell(node --test api/_endpoints.test.js 2>&1)",
+      "PowerShell(git add .claude/settings.json)"
     ]
   }
 }
