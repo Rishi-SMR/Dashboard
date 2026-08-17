@@ -91,7 +91,17 @@
       "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\api\\\\_endpoints.test.js' -Pattern \"order-analytics|rep-overview|pathname|parity|device\" | Select-Object -First 30 | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
       "PowerShell(Select-String -Path 'd:\\\\SMR Portal\\\\src\\\\cashflow\\\\components\\\\OverviewCharts.tsx' -Pattern 'unitSlices' | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
       "PowerShell(node --test api/_endpoints.test.js 2>&1)",
-      "PowerShell(git add .claude/settings.json)"
+      "PowerShell(git add .claude/settings.json)",
+      "PowerShell(git branch -d fix/ap-single-source-and-commission-reconciliation 2>&1)",
+      "PowerShell(git push origin --delete fix/ap-single-source-and-commission-reconciliation 2>&1)",
+      "PowerShell(git fetch origin --prune 2>&1)",
+      "PowerShell(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>&1)",
+      "PowerShell(gh api repos/Rishi-SMR/Dashboard/branches --jq '.[].name' 2>&1)",
+      "PowerShell(git ls-remote --heads origin 2>&1)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://www.smr-board.com/api/device-mix\" -UseBasicParsing -TimeoutSec 45 -ErrorAction Stop; \"status: $\\($r.StatusCode\\)\"; $r.Content.Substring\\(0,[Math]::Min\\(200,$r.Content.Length\\)\\) } catch { $resp=$_.Exception.Response; if\\($resp\\){ \"status: $\\([int]$resp.StatusCode\\)\"; $sr=New-Object System.IO.StreamReader\\($resp.GetResponseStream\\(\\)\\); $sr.ReadToEnd\\(\\).Substring\\(0,200\\) } else { \"ERR: $\\($_.Exception.Message\\)\" } })",
+      "PowerShell(foreach \\($p in @\\('/api/device-mix','/api/no-such-route-xyz'\\)\\) { try { $r = Invoke-WebRequest -Uri \"https://www.smr-board.com$p\" -UseBasicParsing -TimeoutSec 45 -ErrorAction Stop; \"$p -> $\\($r.StatusCode\\)\" } catch { $resp=$_.Exception.Response; if\\($resp\\){ \"$p -> $\\([int]$resp.StatusCode\\)\" } else { \"$p -> ERR $\\($_.Exception.Message\\)\" } } })",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://www.smr-board.com\" -UseBasicParsing -TimeoutSec 45; \"status: $\\($r.StatusCode\\)\"; \\($r.Content | Select-String -Pattern 'assets/[A-Za-z]+-[A-Za-z0-9_-]+\\\\.js' -AllMatches\\).Matches.Value | Sort-Object -Unique } catch { \"ERR: $\\($_.Exception.Message\\)\" })",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://www.smr-board.com/assets/OverviewCharts-zzoPgLzT.js\" -UseBasicParsing -TimeoutSec 45; \"OverviewCharts-zzoPgLzT.js -> $\\($r.StatusCode\\), $\\($r.RawContentLength\\) bytes\" } catch { $resp=$_.Exception.Response; if\\($resp\\){ \"-> $\\([int]$resp.StatusCode\\)\" } else { \"ERR: $\\($_.Exception.Message\\)\" } })"
     ]
   }
 }
