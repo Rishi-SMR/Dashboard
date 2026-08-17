@@ -195,7 +195,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               designed against ~380px. A manager keeps OverviewPanel beside
               Units by device; they come here for the book, not for a rank. */}
           {view === 'overview' && !isManager && (
-            <Leaderboard reps={reps} months={data.months} viewAs={viewAs} />
+            <Leaderboard reps={reps} months={data.months} viewAs={viewAs} boardScoped={data.boardScoped} />
           )}
 
           {/* The house KPI card (KpiExec, shared from chartKit): the same

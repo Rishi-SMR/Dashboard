@@ -5015,6 +5015,38 @@ export async function getRepOverview(viewer = null) {
     : producers.filter((r) => r.isSelf || !blindspots.has(String(r.rep).trim().toLowerCase()));
   const shownNames = new Set(shown.map((r) => r.rep));
 
+  // ── boardRank: THE POSITION ON THIS VIEWER'S BOARD ──────────────────────────
+  //
+  // `rank` above is the TRUE position over the whole producing field, and it
+  // stays that way. But a withheld rep left a hole in it — Jillian's board read
+  // 2nd, 3rd, 4th, 5th with no 1st — and a numbering that starts at 2 reads as
+  // broken and advertises that somebody is missing.
+  //
+  // So the rows carry BOTH. `boardRank` is contiguous over the rows this viewer
+  // actually receives and is what the board draws; `rank` is the truth and is
+  // what any CLAIM about standing must be made from.
+  //
+  // THE TWO ARE NOT INTERCHANGEABLE, and Jillian is exactly why. All-time she
+  // is 2nd on 102 behind Alle's 185; with Alle withheld her boardRank is 1.
+  // Drawing that is fine — it is her board, and the caption says so. Firing the
+  // top-of-the-board celebration on it would be the portal telling her she has
+  // overtaken someone she has not. The client keys the confetti off `rank`.
+  const stampBoardRank = (rows, get, set) => {
+    [...rows].filter((r) => get(r) != null).sort((a, b) => get(b).orders - get(a).orders || a.rep.localeCompare(b.rep))
+      .forEach((r, i) => set(r, i + 1));
+  };
+  stampBoardRank(shown, (r) => r, (r, v) => { r.boardRank = v; });
+  for (const key of monthKeys) {
+    const field = shown
+      .map((r) => (r.byMonth ?? []).find((x) => x.month === key))
+      .filter((m) => m && m.orders > 0)
+      .sort((a, b) => b.orders - a.orders);
+    field.forEach((m, i) => { m.boardRank = i + 1; });
+  }
+  // Says WHY the two can differ, so the client can caption an adjusted board
+  // rather than leaving a renumbered position to be taken as the real one.
+  const boardScoped = shown.length < producers.length;
+
   // ── "WORKS UNDER YOU" — the other half of the reporting line ────────────────
   //
   // Marks a row as the viewer's sub-rep so their login can say so. DISPLAY ONLY:
@@ -5146,6 +5178,9 @@ export async function getRepOverview(viewer = null) {
       ...shown.flatMap((r) => (r.commissionByCycle ?? []).map((m) => m.month)),
     ])].sort(),
     reps: shown.sort((a, b) => (b.revenue ?? -1) - (a.revenue ?? -1) || b.orders - a.orders),
+    // True when a producing rep was withheld from this viewer, so `boardRank`
+    // and `rank` disagree and the board can say which one it is drawing.
+    boardScoped,
     teamTotals,
     teamByMonth,
     unattributed,

@@ -589,6 +589,11 @@ export type RepRow = {
    *  everyone below being promoted: Jillian reads 2nd with no 1st on screen,
    *  instead of being told she leads a board Alle is missing from. */
   rank?: number;
+  /** POSITION ON THIS VIEWER'S BOARD — contiguous over the rows they actually
+   *  receive, so a withheld rep does not leave a hole in the numbering. Draw
+   *  this. Never make a CLAIM about standing from it: with a rep withheld it can
+   *  say 1st for someone who is 2nd. `rank` above is the truth. */
+  boardRank?: number;
   /** Set to the supervisor's name when this rep works under the VIEWER — so
    *  Alle's login can mark Jillian's row as hers. Display only: the row carries
    *  no more than any other peer's, and nothing rolls up into the supervisor's
@@ -613,7 +618,7 @@ export type RepRow = {
    *  producing field just as the row-level one is — so a period selector cannot
    *  fall back to array position and promote a rep over a row the viewer was
    *  not sent. Only months the rep booked in carry one. */
-  byMonth?: { month: string; orders: number; units: number | null; revenue: number | null; accounts: number | null; rank?: number; byVertical: RepVertical[] }[];
+  byMonth?: { month: string; orders: number; units: number | null; revenue: number | null; accounts: number | null; rank?: number; boardRank?: number; byVertical: RepVertical[] }[];
   /** COMMISSION DUE — signed-off and not yet paid — split by vertical and by
    *  month. Cut by the SALES ORDER's date so it shares a basis with the order
    *  counts beside it; `undated` is the part that ties to no live order and so
@@ -645,6 +650,9 @@ export type RepOverview = {
    *  the rows, so it never offers a period with nothing to rank. */
   months?: string[];
   reps: RepRow[];
+  /** A producing rep was withheld from this viewer, so `boardRank` is a
+   *  renumbering of what they can see and not the true field position. */
+  boardScoped?: boolean;
   /** All four figures describe the same set of orders: the rep-attributed book. */
   teamTotals: { reps: number; orders: number; units: number | null; accounts: number | null; revenue: number | null; commission: number | null };
   /** The same totals cut by month, for the team table's period selector. Needed

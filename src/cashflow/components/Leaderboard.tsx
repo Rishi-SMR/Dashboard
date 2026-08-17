@@ -403,7 +403,7 @@ function OwnDrawer({ rep, viewAs, onClose }: { rep: RepRow; viewAs?: string | nu
   );
 }
 
-export function Leaderboard({ reps, months, viewAs }: { reps: RepRow[]; months?: string[]; viewAs?: string | null }) {
+export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRow[]; months?: string[]; viewAs?: string | null; boardScoped?: boolean }) {
   const [open, setOpen] = useState<RepRow | null>(null);
   // Collapsed by default: the board is a ranking first, and a supervisor's
   // sub-rep detail is a second question they choose to ask.
@@ -462,7 +462,7 @@ export function Leaderboard({ reps, months, viewAs }: { reps: RepRow[]; months?:
       // downstream reads one `rank` and never has to know which period it came
       // from.
       const row = scoped
-        ? { ...r, orders: m?.orders ?? 0, units: m?.units ?? null, byVertical: m?.byVertical ?? [], rank: m?.rank }
+        ? { ...r, orders: m?.orders ?? 0, units: m?.units ?? null, byVertical: m?.byVertical ?? [], rank: m?.rank, boardRank: m?.boardRank }
         : r;
       return { ...row, lifetimeOrders: r.orders };
     })
@@ -501,7 +501,19 @@ export function Leaderboard({ reps, months, viewAs }: { reps: RepRow[]; months?:
   // projection above swaps in the month's when a period is selected — so this
   // reads one field either way. The array index survives only as the fallback
   // for a payload that predates `rank`, where the field is whole anyway.
-  const rankOf = (r: RepRow, i: number) => (typeof r.rank === 'number' ? r.rank : i + 1);
+  // WHAT THE BOARD DRAWS, and it is deliberately NOT the true field position.
+  //
+  // A withheld rep used to leave a hole: Jillian's board opened at 2nd with no
+  // 1st, which reads as broken and says out loud that a row is missing.
+  // `boardRank` is contiguous over the rows this viewer received, so the board
+  // numbers what is on it.
+  const rankOf = (r: RepRow, i: number) => (typeof r.boardRank === 'number' ? r.boardRank
+    : typeof r.rank === 'number' ? r.rank : i + 1);
+  // THE TRUE POSITION, for anything that makes a CLAIM rather than draws a list.
+  // With Alle withheld, Jillian's boardRank is 1 on 102 orders while Alle sits
+  // above her on 185 — drawing that is fine, congratulating her on it is the
+  // portal telling her she has overtaken someone she has not.
+  const trueRankOf = (r: RepRow, i: number) => (typeof r.rank === 'number' ? r.rank : rankOf(r, i));
   const selfArrIdx = board.findIndex((r) => r.isSelf);
   // 0-based, so every comparison below (`=== 0` for the leader, `> 0` for a
   // chaser) keeps reading the way it did.
@@ -539,7 +551,14 @@ export function Leaderboard({ reps, months, viewAs }: { reps: RepRow[]; months?:
     // pass in silence. A reward that can be triggered by changing a dropdown is
     // not a reward.
     const badge = badgeFor(self.lifetimeOrders);
-    const mark = (!scoped && selfIdx === 0) ? 'rank1' : badge ? `m${badge}` : null;
+    // TRUE RANK, NOT BOARD RANK. `selfIdx` is drawn from `boardRank`, which
+    // renumbers over the rows this viewer received — with Alle withheld that
+    // puts Jillian at position 1 on 102 orders while Alle leads on 185. Drawing
+    // a 1 there is her board; firing the top-of-the-board celebration on it
+    // would be a claim the data does not support, and the one-per-achievement
+    // key would burn the real one when it finally came.
+    const selfTrue = trueRankOf(self, selfArrIdx);
+    const mark = (!scoped && selfTrue === 1) ? 'rank1' : badge ? `m${badge}` : null;
     if (!mark) return;
     const key = `smr.lb.${self.rep}.${mark}`;
     try {
@@ -623,6 +642,12 @@ export function Leaderboard({ reps, months, viewAs }: { reps: RepRow[]; months?:
           <div className="section-sub">
             By orders booked, {scoped ? <b>{monthLabel(period)}</b> : 'all time'}.
             {self ? ' Tap your row for your full breakdown.' : ''}
+            {/* SAYS WHOSE BOARD THIS IS. The positions are renumbered over the
+                reps on it, so without this a 1st reads as a claim about the
+                whole team. Only shown when a rep is actually withheld — on an
+                admin's board, and on a rep's with nobody hidden, the two
+                numberings are identical and the caveat would be noise. */}
+            {boardScoped ? ' Ranked among the reps on your board.' : ''}
           </div>
         </div>
         <MonthSelect months={available} month={period} onMonth={setMonth}
