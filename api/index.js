@@ -182,6 +182,17 @@ export default async function handler(req, res) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
+  // ---- units by device — admin only, and the gate is inside getDeviceMix ----
+  // Handled HERE, above the admin allow-list, for the same reason commission and
+  // order-analytics are: getDeviceMix already narrows its own payload to the
+  // caller (a rep gets `devices: []`, never a 403), so routing it through the
+  // blanket gate below would answer a rep differently to the dev server.
+  if (pathname === '/api/device-mix') {
+    try {
+      return res.status(200).json(await getDeviceMix(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as'))));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
   // ---- QuickBooks Online (OAuth + posting) — behind the session gate ----
   if (pathname.startsWith('/api/qb/')) {
     try {
@@ -202,8 +213,9 @@ export default async function handler(req, res) {
   //
   // Allow-list, not a block-list: a route added later is admin-only until
   // someone deliberately opens it. The rep-scoped endpoints (/api/commission,
-  // /api/reps/*, /api/pi-stages, /api/order-analytics) never get here — they
-  // are handled above and already narrow their payload to the caller.
+  // /api/reps/*, /api/pi-stages, /api/order-analytics, /api/device-mix) never
+  // get here — they are handled above and already narrow their payload to the
+  // caller.
   const OPEN_TO_REPS = new Set(['/api/health', '/api/status']);
   if (!OPEN_TO_REPS.has(pathname)) {
     const me = await getMe({ user: currentUser });

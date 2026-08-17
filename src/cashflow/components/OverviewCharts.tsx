@@ -551,7 +551,7 @@ export function OverviewCharts() {
       // already has. Keyed on the name alone, demo units would be added
       // silently into the real device's count, which is the one outcome this
       // whole separate-cache design exists to prevent.
-      const k = `${row.demo ? 'demo ' : ''}${row.device.toLowerCase()}`;
+      const k = `${row.demo ? 'demo ' : ''}${row.device.toLowerCase()}`;
       const e = m.get(k);
       if (!e) { m.set(k, row); continue; }
       e.units += row.units; e.orders += row.orders;

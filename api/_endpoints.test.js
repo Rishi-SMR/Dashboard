@@ -7,6 +7,7 @@
 // so `npm test` still works on a machine without them.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   getOrderAnalytics, getRepOverview, getCommission, getPiStages,
   viewerFor, setPiStage, PI_STAGES, monthOfPayoutCycle,
@@ -32,6 +33,26 @@ async function load() {
   }
   return cache;
 }
+
+// ── dev and production serve the SAME routes ─────────────────────────────────
+// Two routers exist: striven-server/index.js runs locally, api/index.js is what
+// Vercel deploys. A route added to the first and forgotten in the second works
+// perfectly on the developer's machine and 404s in production — and because the
+// clients swallow a failed fetch into an empty list, the symptom is a card that
+// silently disappears rather than an error anyone can see. That is exactly how
+// /api/device-mix shipped without Units by device or Units by programme.
+//
+// Static: reads both files, needs no credentials, runs everywhere.
+test('every dev route is also served by the deployed handler', () => {
+  const paths = (file) => {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8');
+    return new Set([...src.matchAll(/pathname (?:===|\.startsWith\()\s*'([^']+)'/g)].map((m) => m[1]));
+  };
+  const dev = paths('../striven-server/index.js');
+  const prod = paths('./index.js');
+  const missing = [...dev].filter((p) => !prod.has(p)).sort();
+  assert.deepEqual(missing, [], `served locally but not in production: ${missing.join(', ')}`);
+});
 
 // ── the ?as= lockdown — the escalation path that must not exist ──────────────
 test('viewerFor: a rep passing ?as= is ignored', () => {
