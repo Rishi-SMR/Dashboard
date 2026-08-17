@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   rateForDevice, classifyOrderLabel, commissionForOrder, splitByState,
-  resolveIdentity, redactCommissionPayload, isCancelledStatus,
+  resolveIdentity, redactCommissionPayload, isCancelledStatus, reconcileToWorkbook,
 } from './_commission-core.js';
 
 // A self-contained rate card, so these tests never depend on the placeholder
@@ -58,6 +58,10 @@ const payload = () => ({
       { rep: 'Cassie', tricare: 500, va: 1900, pi: 700, total: 3100, orders: 9, units: 12, value: 40000 },
       { rep: 'Dana', tricare: 500, va: 700, pi: 900, total: 2100, orders: 6, units: 8, value: 25000 },
     ] }],
+    recon: {
+      totals: { auto: 4000, review: 0, unmatched: 1000, payable: 5000 },
+      corrections: { lines: 5, added: 1, amount: -1300, reps: [{ rep: 'Dana', lines: 5, added: 1, amount: -1300 }] },
+    },
   },
   reconcile: {
     totals: { sheet: 5000, striven: 5200, diff: -200 },
@@ -247,6 +251,45 @@ test('viii. unlabelled orders stay payable', () => {
   assert.equal(classifyOrderLabel(undefined), 'payable');
 });
 
+// ── viii. THE RULES MUST SEE THE LABELS ──────────────────────────────────────
+// The bug this pins: every rule in ORDER_LABEL_RULES is written for a Striven
+// LABEL ("HOLD", "Waiting for Reimbursement") and the caller only ever passed
+// the order STATUS, which reads "In Progress" / "Completed" / "Canceled". 50
+// orders in the live book carried the HOLD label and not one had a status that
+// matched it, so both rules were dead code: every order classified payable,
+// heldOrders reported 0, and waitingTotal was $0 for every rep in every month.
+// $39,000 was sitting in Payable that the business does not consider payable.
+test('viii. hold and waiting are read from the LABELS, not just the status', () => {
+  // A live order whose label says held. This is the exact shape the engine sees.
+  assert.equal(classifyOrderLabel(['In Progress', 'HOLD']), 'hold');
+  assert.equal(classifyOrderLabel(['Completed', 'Waiting for Reimbursement']), 'waiting');
+  // Hold still wins when both are present, whichever order they arrive in.
+  assert.equal(classifyOrderLabel(['In Progress', 'Waiting for Reimbursement', 'HOLD']), 'hold');
+  assert.equal(classifyOrderLabel(['In Progress', 'HOLD', 'Waiting for Reimbursement']), 'hold');
+  // A status alone still classifies exactly as it always did.
+  assert.equal(classifyOrderLabel('In Progress'), 'payable');
+  assert.equal(classifyOrderLabel(['In Progress', 'Paid']), 'payable');
+});
+
+test('viii. commissionForOrder routes a labelled order by its label', () => {
+  const order = (labels) => ({ status: 'In Progress', labels, program: 'VA', value: 1500, items: [{ item: 'VA Genesys Lumbar', qty: 1 }] });
+  // Costed either way — a held order is still worth something, it is just not
+  // payable — so the state is what has to change, not the money.
+  const held = commissionForOrder(order(['HOLD']));
+  assert.equal(held.state, 'hold');
+  assert.ok(held.commission > 0, 'a held order is still costed, so it can show as Waiting');
+
+  assert.equal(commissionForOrder(order(['Waiting for Reimbursement'])).state, 'waiting');
+  assert.equal(commissionForOrder(order(['Paid'])).state, 'payable');
+  assert.equal(commissionForOrder(order([])).state, 'payable');
+
+  // CANCELLATION STAYS ON THE STATUS. A 'CANCELLED' label on a live order is a
+  // mislabel in Striven, and letting a tag void an order would let someone be
+  // silently unpaid by an edit in another system.
+  assert.equal(commissionForOrder(order(['CANCELLED'])).state, 'payable');
+  assert.equal(commissionForOrder({ ...order([]), status: 'Canceled' }).state, 'cancelled');
+});
+
 // ── i / ii / iii. Rep scoping ────────────────────────────────────────────────
 test('i. a rep sees their own dollars in full', () => {
   const out = redactCommissionPayload(payload(), CASSIE);
@@ -291,6 +334,11 @@ test('iii. no figure for another rep survives anywhere in the payload', () => {
   // The NAME is disclosure too: it tells a rep who else is on the book.
   assert.ok(!seen.includes('Dana'), 'a peer\'s name must not appear anywhere in the payload');
   assert.equal(out.reconcile.totals.sheet, null);
+  // The reconciliation block is company money and, since the workbook check,
+  // names the reps whose figures it moved. Admin-only.
+  assert.equal(out.striven.recon, null);
+  // ...and an admin still gets it, or the corrections are answerable to nobody.
+  assert.equal(redactCommissionPayload(payload(), ADMIN).striven.recon.corrections.amount, -1300);
 });
 
 test('iii. redaction is identity-driven, so no query param can widen it', () => {
@@ -387,3 +435,130 @@ test('iii. admin "view as" narrows to that rep and never widens', async () => {
 
 // The sheet verification gate's tests went with the gate: Striven is the only
 // source now, so there is no second figure to reconcile a rep against.
+
+// ── reconcileToWorkbook ──────────────────────────────────────────────────────
+const sheetLine = (patient, item, comm) => ({ patient, item, comm, prog: 'TRICARE', month: '2026-06' });
+const bookRow = (patient, item, comm) => ({ patient, item, comm });
+
+test('a sheet that agrees with the workbook is left completely alone', () => {
+  const lines = [sheetLine('C. Thomson', 'HCPCS combo/brace', 425), sheetLine('T. Erik', 'L1833RT', 80)];
+  const out = reconcileToWorkbook(lines, [
+    bookRow('C. Thomson', 'E0731/E0730/A4556(120)', 425),
+    bookRow('T. Erik', 'L1833RT', 80),
+  ]);
+  assert.equal(out.corrected.length, 0);
+  assert.equal(out.added.length, 0);
+  assert.equal(out.orphaned.length, 0);
+  assert.equal(out.delta, 0);
+  // The device text is NOT rewritten on a row whose money already agrees —
+  // only a corrected line takes the workbook's spelling.
+  assert.equal(lines[0].item, 'HCPCS combo/brace');
+});
+
+test('the workbook wins on a line the sheet valued wrongly', () => {
+  // Cassie's July 2026 cycle, reduced: a brace transcribed at the combo rate.
+  const lines = [sheetLine('R. Hedstrom', 'HCPCS combo/brace', 425)];
+  const out = reconcileToWorkbook(lines, [bookRow('R. Hedstrom', 'L1833RT', 80)]);
+  assert.equal(out.corrected.length, 1);
+  assert.deepEqual(out.corrected[0], {
+    patient: 'R. Hedstrom', was: 425, now: 80, wasItem: 'HCPCS combo/brace', item: 'L1833RT',
+  });
+  assert.equal(lines[0].comm, 80, 'the line itself is corrected in place');
+  assert.equal(lines[0].item, 'L1833RT', 'and takes the workbook\'s device name');
+  assert.equal(out.delta, -345);
+});
+
+test('a patient holding two lines pairs on the amount before the name', () => {
+  // The failure this prevents: pairing on the patient alone lets the $425 combo
+  // consume the $80 brace row, "correcting" a line that was already right and
+  // leaving the real one untouched.
+  const lines = [sheetLine('E. Michael', 'combo', 425), sheetLine('E. Michael', 'brace', 80)];
+  const out = reconcileToWorkbook(lines, [
+    bookRow('E. Michael', 'E0731/E0730/A4556(120)', 425),
+    bookRow('E. Michael', 'L1833LT', 80),
+  ]);
+  assert.equal(out.corrected.length, 0, 'both rows pair exactly');
+  assert.equal(out.delta, 0);
+  assert.deepEqual(lines.map((l) => l.comm), [425, 80]);
+});
+
+test('a patient with one right line and one wrong one corrects only the wrong one', () => {
+  const lines = [sheetLine('E. Michael', 'combo', 425), sheetLine('E. Michael', 'combo', 425)];
+  const out = reconcileToWorkbook(lines, [
+    bookRow('E. Michael', 'E0731/E0730/A4556(120)', 425),
+    bookRow('E. Michael', 'L1833LT', 80),
+  ]);
+  assert.equal(out.corrected.length, 1);
+  assert.equal(out.delta, -345);
+  assert.deepEqual(lines.map((l) => l.comm).sort((a, b) => b - a), [425, 80]);
+});
+
+test('a workbook row the sheet never carried comes back as an addition', () => {
+  const lines = [sheetLine('C. Thomson', 'combo', 425)];
+  const out = reconcileToWorkbook(lines, [
+    bookRow('C. Thomson', 'E0731/E0730/A4556(120)', 425),
+    bookRow('J. Rainey', 'E0731/E0730/A4556(120)', 425),
+  ]);
+  assert.equal(out.added.length, 1);
+  assert.equal(out.added[0].patient, 'J. Rainey');
+  assert.equal(out.delta, 425, 'a dropped row is money the rep is owed');
+  assert.equal(lines.length, 1, 'the caller builds the line, not this function');
+});
+
+test('a sheet line the workbook does not have is reported, never deleted', () => {
+  const lines = [sheetLine('C. Thomson', 'combo', 425), sheetLine('X. Unknown', 'combo', 350)];
+  const out = reconcileToWorkbook(lines, [bookRow('C. Thomson', 'combo', 425)]);
+  assert.equal(out.orphaned.length, 1);
+  assert.equal(out.orphaned[0].patient, 'X. Unknown');
+  assert.equal(out.delta, 0, 'reporting it changes no money');
+  assert.equal(lines.length, 2);
+});
+
+test('Cassie July 2026: five corrections and one addition, net +1,300 removed', () => {
+  // The real bucket, minus the rows that were already right on both sides.
+  const wrong = ['F. Jordan', 'E. Samya', 'K. Andrew', 'M. Jarrett', 'R. Hedstrom'];
+  const lines = wrong.map((p) => sheetLine(p, 'HCPCS combo/brace', 425));
+  const rows = [
+    ...wrong.map((p) => bookRow(p, 'L1833RT', 80)),
+    bookRow('J. Rainey', 'E0731/E0730/A4556(120)', 425),
+  ];
+  const out = reconcileToWorkbook(lines, rows);
+  assert.equal(out.corrected.length, 5);
+  assert.equal(out.added.length, 1);
+  // 5 × -345 = -1,725, plus the 425 that was missing = -1,300.
+  assert.equal(out.delta, -1300);
+});
+
+test('no workbook rows means no opinion — nothing is corrected or dropped', () => {
+  const lines = [sheetLine('C. Thomson', 'combo', 425)];
+  const out = reconcileToWorkbook(lines, []);
+  assert.equal(out.corrected.length, 0);
+  assert.equal(out.added.length, 0);
+  assert.equal(out.delta, 0);
+  assert.equal(lines[0].comm, 425);
+});
+
+test('pairing uses the sheet\'s own name, not the Striven spelling shown', () => {
+  // The live failure this guards: an auto-matched line displays Striven's
+  // reading of a compound surname ("D. Garcia") while the workbook has the
+  // sheet's ("D. Gonzales"). Pairing on the displayed name found no match, so
+  // the row was re-added as though the sheet had dropped it — money invented
+  // out of a spelling difference.
+  const line = { ...sheetLine('D. Garcia', 'GENESYS LUMBAR', 650), sheetPatient: 'D. Gonzales' };
+  const rows = [bookRow('D. Gonzales', 'GENESYS LUMBAR', 650)];
+
+  const naive = reconcileToWorkbook([{ ...line }], rows);
+  assert.equal(naive.added.length, 1, 'the default key cannot pair these');
+
+  const out = reconcileToWorkbook([line], rows, { keyOf: (x) => x.sheetPatient || x.patient });
+  assert.equal(out.added.length, 0);
+  assert.equal(out.orphaned.length, 0);
+  assert.equal(out.delta, 0, 'a correctly transcribed row changes nothing');
+});
+
+test('patient names match regardless of case and spacing', () => {
+  const lines = [sheetLine('R.  HEDSTROM', 'combo', 425)];
+  const out = reconcileToWorkbook(lines, [bookRow('r. hedstrom', 'L1833RT', 80)]);
+  assert.equal(out.corrected.length, 1);
+  assert.equal(lines[0].comm, 80);
+});

@@ -12,14 +12,18 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { PO_STATUS } from './po-status.js';
+import { readXlsxBuffer } from './_xlsx-read.js';
 import {
   COMMISSION_RATES, FALLBACK_VERTICAL_RATES, ORDER_LABEL_RULES,
-  REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, STANDINGS_EXCLUDE, EXCLUDED_REPS, PI_STAGES, STRIVEN_STAGE_FIELD,
+  REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, STANDINGS_EXCLUDE, EXCLUDED_REPS,
+  REP_SUB_REPS, REP_BLINDSPOTS, blindspotsFor, supervisorOf, PI_STAGES, STRIVEN_STAGE_FIELD,
   PI_LABEL_STAGE, PIP_STAGES, PIP_LABEL_STAGE, PIP_IDENTIFYING_LABELS, REVIEW_LABELS,
+  VA_STAGES, VA_LABEL_STAGE, COMMISSION_PAID_THROUGH, canonicalStage, arExpectedFor,
+  verticalOfCommissionLine,
 } from './_commission-config.js';
 import {
   commissionForOrder, splitByState, resolveIdentity,
-  redactCommissionPayload, isCancelledStatus,
+  redactCommissionPayload, isCancelledStatus, reconcileToWorkbook,
 } from './_commission-core.js';
 import { INVOICE_STATUS } from './invoice-status.js';
 
@@ -101,18 +105,51 @@ async function resolveUsers() {
 const SB_URL = () => (process.env.SUPABASE_URL || process.env.SUPABASE_REST_URL || '').replace(/\/$/, '');
 const SB_KEY = () => process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 // Striven creds + access password live in the Supabase `app_config` table (key,value).
+/**
+ * The app_config table, MEMOISED for 60 seconds and de-duplicated in flight.
+ *
+ * Every cfgValue() call used to be its own Supabase round trip, and there are
+ * thirteen call sites — sheet ids, report URLs, the recon config, the paid-
+ * through map, the Shippo token. A single cold page load therefore spent most of
+ * a second re-reading the same fifteen-row table over and over, serially,
+ * because each caller awaited its own copy.
+ *
+ * `_cfgInflight` is the important half: without it, the ten endpoints a page
+ * fires in parallel each miss the empty cache at the same instant and start
+ * their own fetch, so the memo saves nothing on the very load that needs it.
+ * Sharing the promise collapses those into one request.
+ *
+ * 60s is short enough that changing a value in Supabase still takes effect
+ * within a minute — which is the property the whole config-not-code pattern
+ * exists for — and long enough that no single page load reads it twice.
+ */
+let _cfgCache = { at: 0, data: null };
+let _cfgInflight = null;
+const CFG_TTL = 60_000;
 export async function readConfigTable() {
   const url = SB_URL(), key = SB_KEY();
   if (!url || !key) return {};
-  try {
-    const res = await fetch(`${url}/rest/v1/app_config?select=key,value`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
-    if (!res.ok) return {};
-    const rows = await res.json();
-    if (!Array.isArray(rows)) return {};
-    const out = {};
-    for (const r of rows) out[r.key] = r.value;
-    return out;
-  } catch { return {}; }
+  if (_cfgCache.data && Date.now() - _cfgCache.at < CFG_TTL) return _cfgCache.data;
+  if (_cfgInflight) return _cfgInflight;
+  _cfgInflight = (async () => {
+    try {
+      const res = await fetch(`${url}/rest/v1/app_config?select=key,value`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+      if (!res.ok) return _cfgCache.data ?? {};
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return _cfgCache.data ?? {};
+      const out = {};
+      for (const r of rows) out[r.key] = r.value;
+      _cfgCache = { at: Date.now(), data: out };
+      return out;
+    } catch {
+      // A blip serves the LAST GOOD copy rather than {}. Returning empty would
+      // read as "nothing is configured" and silently fall back to defaults —
+      // which is how one host once computed commission a different way from
+      // another. Stale config is recoverable; absent config is not.
+      return _cfgCache.data ?? {};
+    } finally { _cfgInflight = null; }
+  })();
+  return _cfgInflight;
 }
 // Audit every login attempt into the Supabase `login_events` table (best-effort).
 async function logLoginEvent(username, success, ip) {
@@ -566,6 +603,14 @@ function persistentCached(key, fn) {
 // Out-of-band refresh: force-fetch every base dataset from Striven and write it
 // to Supabase. Called by /api/refresh (pg_cron every 6h). Never on the hot path.
 async function refreshAll() {
+  // The whole run has to fit Vercel's 60s function cap (vercel.json), and the
+  // two incremental top-ups below are the only open-ended part of it. They share
+  // what is left of a 50s allowance rather than each claiming a fixed budget —
+  // two 25s defaults plus the base fetches above would have overrun. Whatever
+  // does not fit is picked up by the next cycle, which is why both are
+  // incremental in the first place.
+  const startedAt = Date.now();
+  const leftMs = () => 50_000 - (Date.now() - startedAt);
   const jobs = [
     ['invoices', '/v1/invoices/search'], ['bills', '/v1/bills/search'], ['so', '/v1/sales-orders/search'],
     ['po', '/v1/purchase-orders/search'], ['customers', '/v1/customers/search'], ['vendors', '/v1/vendors/search'],
@@ -585,8 +630,25 @@ async function refreshAll() {
   // by every vertical, commission and analytics figure. Refreshing `so` without
   // it is what let new orders go uncounted — so it runs here, on the same cycle,
   // rather than waiting for someone to remember the generator.
-  try { out.so_detail = await refreshDerived(); }
-  catch (e) { out.so_detail = `FAIL ${e.message}`; }
+  try {
+    out.so_detail = leftMs() > 2_000
+      ? await refreshDerived({ budgetMs: Math.min(25_000, leftMs()) })
+      : 'skipped: out of time, next cycle';
+  } catch (e) { out.so_detail = `FAIL ${e.message}`; }
+
+  // The device lines, on the same cycle and for the same reason. This used to be
+  // rebuilt only by a script someone had to remember to run, so every order
+  // newer than the last run showed a blank Devices column and 0 units while its
+  // revenue and counts looked normal — wrong in a way nothing on screen said.
+  //
+  // It runs AFTER so_detail deliberately: it reads so_detail for each order's
+  // type and status to skip demo and cancelled orders, so it wants the fresher
+  // copy.
+  try {
+    out.report_patient_items = leftMs() > 2_000
+      ? await refreshReportItems({ budgetMs: Math.min(20_000, leftMs()) })
+      : 'skipped: out of time, next cycle';
+  } catch (e) { out.report_patient_items = `FAIL ${e.message}`; }
 
   return out;
 }
@@ -627,7 +689,17 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
   const soRows = (await sbCacheRead('so'))?.data || [];
   const detail = { ...((await sbCacheRead('so_detail'))?.data || {}) };
 
-  const missing = soRows.map((r) => r.id).filter((id) => !(id in detail));
+  // MISSING ENTIRELY, or written before a field existed.
+  //
+  // The second half is what makes adding a field to this cache work at all.
+  // Entries are only ever written once, so a new field would otherwise reach
+  // new orders only, and the whole back catalogue would read as "no tracking
+  // number" — indistinguishable from a genuinely untracked order. Testing for
+  // the KEY (not a truthy value) is the difference: an order Striven has no
+  // tracking number for stores '' and is then left alone, so this converges
+  // instead of re-fetching the same orders every cycle for ever.
+  const stale = (id) => !(id in detail) || !('tracking' in (detail[id] || {}));
+  const missing = soRows.map((r) => r.id).filter(stale);
   const todo = missing.slice(0, maxOrders);
 
   let fetched = 0, failed = 0;
@@ -642,6 +714,13 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
           type: d?.type?.name ?? '', rep: d?.salesRep?.name ?? '', payer: soPayerOf(d),
           total: Number(d?.orderTotal ?? 0), invStatus: d?.invoiceStatus?.name ?? '',
           status: d?.status?.name ?? '', stage: String(soCustomField(d, 'Stage') || '').trim(),
+          // Carrier tracking number, straight off the sales order in Striven —
+          // the ONLY place one exists. Sparsely filled today (~6% of the book),
+          // so most orders store '' and the columns downstream show a dash.
+          // That is the honest reading: blank means nobody entered one, not
+          // that the order never shipped.
+          tracking: String(d?.trackingNumber ?? '').trim(),
+          shipVia: d?.shipVia?.name ?? d?.shipVia ?? '',
         };
         fetched++;
       } catch { failed++; }
@@ -655,11 +734,153 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
     _cache.delete('derived:so');                           // getSO memo is now stale
   }
   return {
+    // Orders needing a fetch: never seen, PLUS ones whose entry predates a
+    // field. After a field is added the first run reports the whole book here.
     missingBefore: missing.length,
     fetched,
     failed,
     remaining: Math.max(0, missing.length - fetched),
     complete: fetched >= missing.length,
+    ms: Date.now() - started,
+  };
+}
+
+// ── report_patient_items: the DEVICE LINES ───────────────────────────────────
+// The per-order device lines every Devices column, unit count and commission
+// figure reads. It was rebuilt ONLY by scripts/gen-reports.mjs (minutes, every
+// order) or scripts/top-up-reports.mjs, both run by hand — so it went stale
+// between runs and new orders rendered a blank Devices column and 0 units while
+// their revenue and counts appeared normally. That is the exact failure
+// refreshDerived() above was written for, one cache along: it showed up on the
+// VA board as 25 of the newest orders with "-" in Devices.
+//
+// So it runs on the 6h cycle too. Incremental, like so_detail: only orders in
+// `so` that the report has never seen, under a wall-clock budget so a backlog
+// makes progress across successive runs instead of timing out and writing
+// nothing. A full rebuild — changed lines on EXISTING orders — is still the
+// generator's job.
+//
+// HIPAA: LAST NAME ONLY, patients keyed as PT-<id>. No first name, DOB or
+// address is read out of the detail, and a demo/test customer's name is used to
+// filter the row out and never stored.
+const reportLastName = (name) => {
+  const v = String(name ?? '').trim();
+  if (!v) return '';
+  if (v.includes(',')) return v.split(',')[0].trim();
+  const parts = v.split(/\s+/).filter(Boolean);
+  return parts[parts.length - 1] || '';
+};
+const reportProgram = (t) => {
+  const s = String(t?.name ?? t ?? '').toLowerCase();
+  if (/tri.?care/.test(s)) return 'TriCare';
+  if (/\bva\b|veteran/.test(s)) return 'VA';
+  if (/\bpi\b|personal injury/.test(s)) return 'PI';
+  return 'Other';
+};
+
+/**
+ * Fill in device lines for orders the report has never seen.
+ *
+ * Shared by the 6h refresh and scripts/top-up-reports.mjs, so the scheduled path
+ * and the manual one cannot extract orders differently — which is the only way
+ * a hand-run top-up and a cron top-up could ever leave the cache in two
+ * different shapes.
+ *
+ * @param {{budgetMs?:number, maxOrders?:number, log?:(msg:string)=>void}} opts
+ */
+export async function refreshReportItems({ budgetMs = 20_000, maxOrders = 400, log } = {}) {
+  const started = Date.now();
+  const blob = (await sbCacheRead('report_patient_items'))?.data;
+  // Never bootstrap from nothing: writing a fresh blob here would replace a
+  // report the generator builds from EVERY order with one built from whatever
+  // happened to be missing, and silently drop the patient aggregates.
+  if (!blob) return { skipped: 'report_patient_items is empty — run scripts/gen-reports.mjs first' };
+
+  const orders = [...(blob.orders || [])];
+  const patients = blob.patients || [];
+  const soRows = (await sbCacheRead('so'))?.data || [];
+  const detail = (await sbCacheRead('so_detail'))?.data || {};
+  const have = new Set(orders.map((o) => String(o.soId)));
+
+  let skippedDemo = 0, skippedCancelled = 0;
+  const todo = [];
+  for (const so of soRows) {
+    if (have.has(String(so.id))) continue;
+    const meta = detail[so.id] || {};
+    if (isCancelledStatus(meta.status)) { skippedCancelled += 1; continue; }
+    // DEMO orders carry no device lines by the same rule the full generator
+    // applies. They still count in the order book.
+    if (isDemoType(meta.type) || isDemoType(meta.status)) { skippedDemo += 1; continue; }
+    todo.push(so);
+  }
+
+  const byRef = new Map(patients.map((p) => [p.ref, p]));
+  let added = 0, failed = 0, itemsAdded = 0;
+  // Orders VISITED, not orders added. An order can be walked and still add
+  // nothing — a demo customer is only recognisable from the detail, so it is
+  // filtered inside the loop — and counting those as outstanding would report
+  // `complete: false` forever on a list that is fully worked.
+  let walked = 0;
+  for (const so of todo.slice(0, maxOrders)) {
+    if (Date.now() - started > budgetMs) break;              // leave time to write
+    walked += 1;
+    let d = null;
+    for (let attempt = 0; attempt < 3 && !d; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      try { d = await striven('GET', `/v1/sales-orders/${so.id}`); } catch { /* retry */ }
+    }
+    if (!d) { failed += 1; log?.(`  FAIL  SO ${so.id} — detail unavailable after 3 attempts`); continue; }
+    if (isDemoType(d.customer?.name)) { skippedDemo += 1; continue; }
+
+    const custRef = d.customer?.id ? `PT-${d.customer.id}` : '(unassigned)';
+    const p = byRef.get(custRef) || { ref: custRef, soCount: 0, totalValue: 0, items: [] };
+    const itemMap = new Map((p.items || []).map((i) => [i.item, { ...i }]));
+
+    const soItems = [];
+    let soValue = 0;
+    for (const li of (d.lineItems || [])) {
+      const item = li.item?.name;
+      if (!item) continue;
+      const qty = Number(li.qty ?? li.quantity ?? 0);
+      const val = round2(qty * Number(li.price ?? 0) + Number(li.shippingPrice ?? 0));
+      soValue = round2(soValue + val);
+      const it = itemMap.get(item) || { item, qty: 0, value: 0, soCount: 0 };
+      it.qty += qty; it.value = round2(it.value + val); it.soCount += 1;
+      itemMap.set(item, it);
+      soItems.push({ item, qty, value: val });
+      itemsAdded += 1;
+    }
+
+    p.soCount += 1;
+    p.totalValue = round2(p.totalValue + soValue);
+    p.items = [...itemMap.values()].sort((a, b) => b.qty - a.qty);
+    byRef.set(custRef, p);
+
+    orders.push({
+      soId: so.id, so: `SO-${so.id}`,
+      ref: String(d?.orderNumber ?? d?.number ?? d?.referenceNumber ?? '').trim(),
+      custRef, lastName: reportLastName(d.customer?.name), program: reportProgram(d.type),
+      date: (d.dateCreated ?? so.dateCreated ?? null), value: soValue, items: soItems,
+    });
+    added += 1;
+    log?.(`  ok    SO ${String(so.id).padEnd(5)} ${String(detail[so.id]?.type ?? '').padEnd(10)} ${soItems.length} device line(s)`);
+  }
+
+  if (added > 0) {
+    orders.sort((a, b) => String(a.ref).localeCompare(String(b.ref), undefined, { numeric: true }) || a.soId - b.soId);
+    const patientReport = [...byRef.values()].sort((a, b) => b.soCount - a.soCount || b.totalValue - a.totalValue);
+    await sbCacheWrite('report_patient_items', {
+      ...blob, patients: patientReport, orders, count: patientReport.length, orderCount: orders.length,
+    });
+  }
+  return {
+    missingBefore: todo.length, added, failed, itemsAdded,
+    skippedDemo, skippedCancelled,
+    // A failure is retryable, so it stays outstanding; a walked-and-filtered
+    // order does not.
+    remaining: Math.max(0, todo.length - walked + failed),
+    complete: walked >= todo.length && failed === 0,
+    orderCount: orders.length,
     ms: Date.now() - started,
   };
 }
@@ -671,8 +892,12 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
  */
 export async function getCacheHealth() {
   const KEYS = ['so', 'so_detail', 'report_patient_items', 'invoices', 'customers'];
-  // Rebuilt by scripts/gen-reports.mjs only; nothing refreshes it automatically.
-  const MANUAL_ONLY = new Set(['report_patient_items']);
+  // Nothing here is manual any more. report_patient_items used to be — new
+  // orders got their device lines only when someone ran the generator — and it
+  // is now topped up incrementally on the same 6h cycle as so_detail. A FULL
+  // rebuild (changed lines on existing orders) is still gen-reports.mjs's job,
+  // but that is a different question from "is this cache current".
+  const MANUAL_ONLY = new Set();
   const now = Date.now();
   const rows = await Promise.all(KEYS.map(async (key) => {
     const hit = await sbCacheRead(key);
@@ -932,11 +1157,65 @@ async function getAR() {
     invoices: invoices.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')),
   };
 }
+// ── ONE VENDOR, TWO RECORDS ──────────────────────────────────────────────────
+// Striven carries "WMD" (id 33) and "Wholesale Medical Devices" (id 306) as
+// separate vendor records for the same supplier: the second took two POs in
+// June, everything from July onward is booked to the first. Every figure
+// grouped by vendor NAME therefore split one supplier in two — the PO
+// breakdown listed $840.50 and $70.00 as if they were unrelated companies, and
+// neither half could be tied to the AP ledger, which knows the vendor by a
+// third spelling again ("WHOLESALE MEDICAL DEVICES LLC").
+//
+// Folded HERE, at the boundary, exactly as reconRep() folds a rep's spellings,
+// so one canonical name reaches every consumer and the vendor chart, the PO
+// drill, the vendor drill and the bill list cannot disagree about who bought
+// what.
+//
+// A DISPLAY FOLD, NOT A MERGE. Both records still exist in Striven and both
+// still appear in the vendor master list — that list is a list OF RECORDS and
+// would be lying if it quietly showed one. The real fix is merging them in
+// Striven; until someone does, this keeps the money grouped correctly.
+//
+// IT DOES NOT MOVE A CENT. Only the grouping changes: the active PO total is
+// the same figure before and after, which is the check to run on any addition
+// here.
+//
+// Extend without a redeploy via the app_config key VENDOR_ALIASES — JSON of
+// { "<alias, as Striven spells it>": "<canonical name>" }, merged over the
+// defaults below. Keys match case-insensitively after trimming.
+export const VENDOR_ALIASES = {
+  // Folded TOWARDS the full name: it is what the AP ledger and the vendor
+  // master both call the company, so the canonical form is the one already in
+  // use everywhere else.
+  'wmd': 'Wholesale Medical Devices',
+};
+
+const vendorAliasMap = async () => {
+  const raw = String(await cfgValue('VENDOR_ALIASES', '')).trim();
+  let extra = {};
+  if (raw) {
+    // A malformed override keeps the checked-in defaults rather than dropping
+    // every fold — a typo in app_config must not silently re-split a vendor.
+    try { const v = JSON.parse(raw); if (v && typeof v === 'object' && !Array.isArray(v)) extra = v; } catch { /* defaults stand */ }
+  }
+  const m = new Map();
+  for (const [k, v] of Object.entries({ ...VENDOR_ALIASES, ...extra })) m.set(String(k).trim().toLowerCase(), String(v));
+  return m;
+};
+/** @param {Map<string,string>} map @returns {(name:unknown)=>string} */
+const canonicalVendorWith = (map) => (name) => {
+  const s = String(name ?? '').trim();
+  return map.get(s.toLowerCase()) ?? s;
+};
+
 async function getAP() {
   const bills = openOnly(await allBills()).filter(notVoid);
+  const canon = canonicalVendorWith(await vendorAliasMap());
   const rows = bills.map((r) => ({
     id: r.id, number: r.number ?? String(r.id),
-    vendor: r.vendor?.name ?? '', vendorId: r.vendor?.id ?? null,
+    // The NAME is folded; `vendorId` is not, because it identifies the Striven
+    // record and two records are what is actually there.
+    vendor: canon(r.vendor?.name), vendorId: r.vendor?.id ?? null,
     dueDate: r.dueDate ?? null, total: Number(r.totalAmount ?? 0), open: Number(r.openBalance ?? 0),
     currency: r.currency?.currencyISOCode ?? 'USD',
   }));
@@ -1010,6 +1289,53 @@ async function getPL() {
 // SO type/rep/value come from the offline 'so_detail' enrichment (search omits them).
 async function soDetailMap() { const sb = await sbCacheRead('so_detail'); return (sb && sb.data) || {}; }
 // invoice # → payer, built from the SO→invoice order_chain (each order carries its payer).
+/**
+ * invoice number → its PROGRAMME (PI / VA / TriCare / …), from two sources.
+ *
+ * An invoice carries no vertical of its own: it is a Striven transaction
+ * against a customer, and the programme lives on the sales order behind it. So
+ * it has to be joined, and one join is not enough:
+ *
+ *   1. `order_chain` — the SO→invoice link, so the SO's own type decides. This
+ *      is the authoritative answer and covers most of the book.
+ *   2. PT-<customer id> → the patient's programme in report_patient_items.
+ *      The chain is rebuilt by a script and is currently a month stale, so the
+ *      NEWEST invoices — exactly the ones at the top of the register, the ones
+ *      anyone is actually looking at — are missing from it. This cache is on
+ *      the 6h refresh, so it covers them.
+ *   3. the payer text, last. `payerOf()` returns 'Veterans Affairs' or
+ *      'TriCare' straight from the order type and the law firm otherwise, so a
+ *      payer that names neither programme came from the PI branch.
+ *
+ * Blank when nothing resolves — the column shows a dash rather than a guess.
+ */
+async function invoiceVerticalMap() {
+  const [sb, rc] = await Promise.all([
+    sbCacheRead('order_chain').catch(() => null),
+    sbCacheRead('report_patient_items').catch(() => null),
+  ]);
+  const byInvoice = {};
+  for (const o of Object.values((sb && sb.data) || {})) {
+    const v = soClass(o.type || '');
+    if (!v || v === 'Other') continue;
+    for (const inv of (o.invoices || [])) {
+      const num = String(inv.ref || '').replace(/^#/, '');
+      if (num) byInvoice[num] = v;
+    }
+  }
+  const byCustRef = new Map();
+  for (const o of (rc?.data?.orders || [])) if (o.custRef && o.program) byCustRef.set(o.custRef, o.program);
+  return { byInvoice, byCustRef };
+}
+/** Programme implied by the payer, for invoices neither join reaches. */
+const verticalOfPayer = (payer) => {
+  const s = String(payer ?? '').trim();
+  if (!s) return '';
+  if (/veteran|\bva\b/i.test(s)) return 'VA';
+  if (/tri.?care/i.test(s)) return 'TriCare';
+  return 'PI';                       // payerOf() only names a law firm for PI
+};
+
 async function invoicePayerMap() {
   const sb = await sbCacheRead('order_chain');
   const chain = (sb && sb.data) || {};
@@ -1153,9 +1479,31 @@ async function getSO() {
   const repRep = await sbCacheRead('report_patient_items');
   const unitsBySo = new Map();
   for (const o of (repRep?.data?.orders || [])) unitsBySo.set(String(o.soId), (o.items || []).reduce((s, i) => s + Number(i.qty || 0), 0));
+  // THE ROSTER, FOLDED — this list is the leaderboard, and a leaderboard is of
+  // REPS. It used to be every distinct Striven "Sales Rep" value passed through
+  // cleanRep(), which ranked a house bucket, a chiropractic practice and two
+  // admins alongside the five people who sell.
+  //
+  // commRep() BEFORE the roster test, and that ordering is the whole thing.
+  // Striven stores the reps under company prefixes and married/legal spellings —
+  // "Maverick Medical - Alle Ann Dubberley", "CVT Medical - Christy Tan",
+  // "Maverick Medical- Cassie Wates" — so of the five only "Maylon Sanders"
+  // matches REP_NAMES literally. Testing the raw value against the roster would
+  // have dropped the other four and left a leaderboard of one.
+  //
+  // Folding also MERGES the sub-rep: "Maylon Sanders - Denise Zavala" is
+  // Maylon's order and Denise had her own 3-order bar next to his 32.
+  //
+  // Off-roster orders are not deleted from anything — they stay in `book`,
+  // `count`, `totalValue`, `byType` and `recent`. They are simply not a rep, so
+  // they are not on the rep board. The difference (count minus the sum of these
+  // rows) is what the UI reports as off-roster volume.
+  const rosterSet = new Set(REP_NAMES);
   const byRepMap = {};
   for (const r of book) {
-    const rep = cleanRep(r.d.rep) || 'Unassigned';
+    const raw = String(r.d.rep ?? '').trim();
+    const rep = raw ? commRep(raw) : 'Unassigned';
+    if (!rosterSet.has(rep)) continue;
     if (!byRepMap[rep]) byRepMap[rep] = { count: 0, value: 0, units: 0 };
     byRepMap[rep].count += 1;
     byRepMap[rep].value += Number(r.d.total || 0);
@@ -1171,9 +1519,28 @@ async function getSO() {
   // The labels report does not cover the whole book — it carries the PI/PIP
   // orders only — so most rows come back with an empty array rather than a
   // label. Empty is the honest answer: it means Striven has tagged nothing.
-  const soTags = await soLabelsBySoId().catch(() => new Map());
+  // TWO SAVED REPORTS, FETCHED TOGETHER. They are independent Striven requests
+  // of ~2s each; awaiting them one after the other put both on the critical path
+  // of every page that reaches getSO — which is nearly all of them — and cost a
+  // needless ~1.9s on every cold load. Nothing here reads one to build the
+  // other, so there was never a reason to serialise them.
+  const [soTags, soTrack] = await Promise.all([
+    soLabelsBySoId().catch(() => new Map()),
+    // TRACKING, read per request rather than off the 6h cache, so a number
+    // entered in Striven this morning is on the board now.
+    soTrackingBySoId().catch(() => new Map()),
+  ]);
   const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
     .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: soStatusOf(r), invStatus: r.d.invStatus || '', date: r.dateCreated ?? null, updated: r.d.lastUpdatedDate ?? null, stage: r.d.stage || '', labels: soTags.get(String(r.id))?.labels ?? [],
+      // REPORT FIRST, CACHE SECOND. Both read the same field in Striven and
+      // agree on every row, so this is about FRESHNESS and COVERAGE, not about
+      // one being more correct: the report is fetched now but is scoped to
+      // PI + VA, while `so_detail` covers the whole book and can be up to 6h
+      // old. Taking the report where it has a row and the cache everywhere else
+      // is the only combination with neither a stale PI order nor a blank
+      // TriCare one.
+      tracking: soTrack.get(String(r.id))?.tracking || r.d.tracking || '',
+      shipVia: soTrack.get(String(r.id))?.shipVia || r.d.shipVia || '',
       // FIRST INITIAL + SURNAME, already reduced at the boundary by
       // commInitialLastDisp() — the full first name is never carried here. Empty
       // where the labels report has no row for this order.
@@ -1245,20 +1612,52 @@ async function poToSoMap() {
 }
 async function getPO() {
   const all = await poStatusMap();                       // each PO enriched with statusName / classified
-  const rows = all.filter((r) => r.classified && !poIsVoid(r));   // active, known-good
-  const cancelled = all.filter((r) => r.classified && poIsVoid(r));
-  const pending = all.filter((r) => !r.classified);      // not yet classified this session
-  const sum = (list) => round2(list.reduce((s, r) => s + Number(r.poTotal ?? 0), 0));
-  const byVendorMap = {};
-  for (const r of rows) { const v = r.vendor?.name ?? 'Unknown'; byVendorMap[v] = (byVendorMap[v] || 0) + Number(r.poTotal ?? 0); }
-  const byVendor = Object.entries(byVendorMap).map(([vendor, total]) => ({ vendor, total: round2(total) })).sort((a, b) => b.total - a.total).slice(0, 12);
+
+  // ── DEMO PURCHASE ORDERS ARE NOT SPEND ──────────────────────────────────────
+  //
+  // A PO raised to fulfil a DEMO sales order buys stock for a demonstration, and
+  // counting it as vendor spend overstated the book by $9,818 across 27 POs —
+  // 8% of the total. It also distorted the ranking rather than merely inflating
+  // it: HiDow International was HALF demo ($13,160 against a real $6,440), so
+  // the chart put it third on volume it never really bought.
+  //
+  // A PO CARRIES NO TYPE OF ITS OWN. Demo lives on the SALES ORDER, so the test
+  // is the order-chain link — which is also why an UNLINKED PO is kept: with no
+  // sales order behind it there is nothing to call it a demo, and dropping it
+  // would quietly delete real spend on a guess.
+  //
+  // Filtered before the active / cancelled / pending split so no bucket carries
+  // them, and reported as `demoCount` / `demoValue` so the exclusion is visible
+  // on the card rather than being a silent shrink.
+  const soDet = (await sbCacheRead('so_detail'))?.data || {};
+  const demoSo = new Set(Object.entries(soDet)
+    .filter(([, d]) => isDemoType(d?.type) || isDemoType(d?.status))
+    .map(([id]) => `SO-${id}`));
   const rev = await poToSoMap();
+  const refOf = (r) => safeRef('PO', r.id, r.poNumber);
+  const isDemoPo = (r) => { const so = rev[refOf(r)]; return Boolean(so) && demoSo.has(so); };
+
+  const demo = all.filter(isDemoPo);
+  const live = all.filter((r) => !isDemoPo(r));
+
+  const rows = live.filter((r) => r.classified && !poIsVoid(r));   // active, known-good
+  const cancelled = live.filter((r) => r.classified && poIsVoid(r));
+  const pending = live.filter((r) => !r.classified);     // not yet classified this session
+  const sum = (list) => round2(list.reduce((s, r) => s + Number(r.poTotal ?? 0), 0));
+  // One supplier held under two Striven records is one supplier here — see
+  // VENDOR_ALIASES above. Applied before the grouping, so the aggregate is
+  // right rather than corrected afterwards.
+  const canon = canonicalVendorWith(await vendorAliasMap());
+  const byVendorMap = {};
+  for (const r of rows) { const v = canon(r.vendor?.name) || 'Unknown'; byVendorMap[v] = (byVendorMap[v] || 0) + Number(r.poTotal ?? 0); }
+  const byVendor = Object.entries(byVendorMap).map(([vendor, total]) => ({ vendor, total: round2(total) })).sort((a, b) => b.total - a.total).slice(0, 12);
   const recent = rows.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
-    .map((r) => { const ref = safeRef('PO', r.id, r.poNumber); return { id: r.id, ref, vendor: r.vendor?.name ?? '', total: Number(r.poTotal ?? 0), date: r.dateCreated ?? null, status: r.statusName ?? '', so: rev[ref] ?? '' }; });
+    .map((r) => { const ref = refOf(r); return { id: r.id, ref, vendor: canon(r.vendor?.name), total: Number(r.poTotal ?? 0), date: r.dateCreated ?? null, status: r.statusName ?? '', so: rev[ref] ?? '' }; });
   return {
     count: rows.length, totalValue: sum(rows), byVendor, recent,
     cancelledCount: cancelled.length, cancelledValue: sum(cancelled),
     pendingCount: pending.length, pendingValue: sum(pending),
+    demoCount: demo.length, demoValue: sum(demo),
     totalCount: all.length,
     phiMasked: MASK_PHI,
   };
@@ -1298,7 +1697,9 @@ async function getPODetail(id) {
   const r = await cached(`po-${id}`, () => striven('GET', `/v1/purchase-orders/${id}`));
   const nm = (x) => x?.name ?? '';
   return {
-    id: r.id, ref: safeRef('PO', r.id, r.poNumber), vendor: nm(r.vendor),
+    // Folded like the list views, or opening a PO from the chart would show a
+    // vendor name the chart does not use.
+    id: r.id, ref: safeRef('PO', r.id, r.poNumber), vendor: canonicalVendorWith(await vendorAliasMap())(r.vendor?.name),
     status: r.status?.name ?? '', vendorStatus: r.vendorStatus?.name ?? '', type: nm(r.type), title: r.title ?? '',
     poDate: r.poDate ?? r.dateCreated ?? null, promiseDate: r.promiseDate ?? null,
     requestedBy: nm(r.requestedBy), contact: nm(r.contact), createdBy: nm(r.createdBy), createdDate: r.dateCreated ?? null,
@@ -1516,10 +1917,20 @@ async function getReportPatientItems() {
  */
 export async function getDeviceMix(viewer = null) {
   if (viewer?.role !== 'admin') return { ok: true, devices: [], scoped: false };
-  const [rc, tags] = await Promise.all([
+  const [rc, tags, soBlob] = await Promise.all([
     sbCacheRead('report_patient_items').catch(() => null),
     soLabelsBySoId().catch(() => new Map()),
+    // WHEN each order was raised. The units source carries no date of its own —
+    // it is a device report keyed by sales order — so the month has to be joined
+    // from the order book. Without it this endpoint can only ever answer for the
+    // whole book, which is why Units by programme ignored the period filter.
+    sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
   ]);
+  const monthBySo = new Map(
+    (Array.isArray(soBlob) ? soBlob : [])
+      .filter((o) => o?.id != null && o?.dateCreated)
+      .map((o) => [String(o.id), String(o.dateCreated).slice(0, 7)]),
+  );
   const orders = rc?.data?.orders ?? [];
   const held = new Set(['hold']);                 // the label, not a stage
   // Keyed case-insensitively: item names are typed by hand, so "PI TENS/NMES"
@@ -1528,15 +1939,26 @@ export async function getDeviceMix(viewer = null) {
   for (const o of orders) {
     const onHold = (tags.get(String(o.soId))?.labels ?? [])
       .some((l) => held.has(String(l).trim().toLowerCase()));
+    const month = monthBySo.get(String(o.soId)) || '';
     for (const it of o.items ?? []) {
       const name = String(it.item ?? '').trim();
       const units = Number(it.qty ?? 0);
       if (!name || units <= 0) continue;          // zero-unit rows are hidden, not zero bars
       const k = name.toLowerCase();
-      const e = m.get(k) ?? { device: name, vertical: o.program || 'Other', units: 0, orders: 0, heldUnits: 0, heldOrders: 0 };
+      const e = m.get(k) ?? { device: name, vertical: o.program || 'Other', units: 0, orders: 0, heldUnits: 0, heldOrders: 0, byMonth: {} };
       e.units += units;
       e.orders += 1;
       if (onHold) { e.heldUnits += units; e.heldOrders += 1; }
+      // PER MONTH, so the board can scope units to a period. An order the `so`
+      // cache has no date for lands in no month and is reported by the client as
+      // undated rather than folded into one — the same rule the rep board uses,
+      // because silently banking undated work into a month is how a period total
+      // comes to disagree with the all-time one it should sum into.
+      if (month) {
+        const b = e.byMonth[month] ?? { units: 0, orders: 0 };
+        b.units += units; b.orders += 1;
+        e.byMonth[month] = b;
+      }
       m.set(k, e);
     }
   }
@@ -1630,6 +2052,38 @@ const reconRep = (raw) => {
   return s;
 };
 
+// ── Payout cycle → the MONTH it pays for ─────────────────────────────────────
+// The sheet's "Payout Cycle" column names a PAY DATE, not a period: "Payable 15
+// Aug 26 (due)", "Paid ~15 Jul 26", "Paid ~Apr/May 26". A cycle settles the
+// PREVIOUS month's work — the 15 Aug 26 run pays July — so the month is the pay
+// month minus one. This is the rule the source workbooks encode in their tab
+// names (a tab called 8/15/2026 holds July's commission).
+//
+// THE FIRST MONTH NAMED WINS. "Paid ~Apr/May 26" is one run that went out over
+// a month boundary; its work is March, and taking the later name would collide
+// with the "15 May 26" cycle, which is April. Verified against both workbooks:
+// all five live cycles resolve to the tab that contains exactly the same lines
+// and the same total, to the cent.
+//
+// Unparseable → null. Such a line keeps its money and its place in the rep's
+// total; it simply belongs to no month and is reachable only under All months.
+// Guessing a month for it would move real money into a period at random.
+const CYCLE_MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+export function monthOfPayoutCycle(cycle) {
+  const s = String(cycle ?? '');
+  const m = new RegExp(`\\b(${CYCLE_MON.join('|')})[a-z]*`, 'i').exec(s);
+  if (!m) return null;
+  // The year token AFTER the month name, so the "15" in "15 Aug 26" cannot be
+  // read as one. Two digits are 20xx: this sheet has no 19xx cycle.
+  const y = /\b(\d{2}|\d{4})\b/.exec(s.slice(m.index + m[0].length));
+  if (!y) return null;
+  const year = Number(y[1]) < 100 ? 2000 + Number(y[1]) : Number(y[1]);
+  const payIdx = CYCLE_MON.indexOf(m[1].toLowerCase());
+  const d = new Date(year, payIdx, 1);
+  d.setMonth(d.getMonth() - 1);                 // the cycle pays the month before
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 /**
  * Per-rep commission from the reconciliation sheet.
  *
@@ -1660,6 +2114,19 @@ export async function getCommissionRecon() {
     const soRows = Array.isArray(soBlob?.data) ? soBlob.data : [];
     const soByNumber = new Map(soRows.filter((o) => o?.number != null)
       .map((o) => [String(o.number).trim().toLowerCase(), o]));
+    // patient (initial + surname) → the order(s) carrying it, for the fallback
+    // below. The `so` cache is PHI-scrubbed — its customer is a PT-<id> — so the
+    // names come from the labels report, the one source that has them. A key
+    // with more than one order is kept AS a list precisely so the fallback can
+    // see it is ambiguous and refuse.
+    const soById = new Map(soRows.map((o) => [String(o.id), o]));
+    const soByPatient = new Map();
+    for (const [soId, tag] of await soLabelsBySoId().catch(() => new Map())) {
+      const key = String(tag?.patient ?? '').trim().toLowerCase();
+      const row = soById.get(String(soId));
+      if (!key || !row) continue;
+      soByPatient.set(key, [...(soByPatient.get(key) ?? []), row]);
+    }
 
     const rows = parseCsvRows(csv);
     const hIdx = rows.findIndex((r) => r.some((c) => /match status/i.test(String(c))));
@@ -1716,8 +2183,29 @@ export async function getCommissionRecon() {
       // so the row falls back to the sheet's own Patient column.
       const matchedRaw = cell.split('/')[0].trim();
       const matched = /^(not\s*found|none|n\/?a|no\s*match|-|—)$/i.test(matchedRaw) ? '' : matchedRaw;
-      const soNum = cell.includes('/') ? cell.split('/').slice(1).join('/').trim() : '';
-      const so = soNum ? soByNumber.get(soNum.toLowerCase()) : null;
+      // THE CELL CAN NAME MORE THAN ONE ORDER: "Ruben Eloi / REloi,158" and
+      // "Arnold Agaba / 113,116" are single sheet rows covering two sales
+      // orders. Joining the tail back into one string looked up "REloi,158",
+      // which is not an order number, so rows the sheet had correctly matched
+      // came out with no reference at all. Each candidate is tried in turn;
+      // the first that resolves wins, which is the right one to show because
+      // the row is one commission line however many orders fed it.
+      const soNums = (cell.includes('/') ? cell.split('/').slice(1).join('/') : '')
+        .split(',').map((s) => s.trim()).filter(Boolean);
+      let so = null;
+      for (const n of soNums) { so = soByNumber.get(n.toLowerCase()) || null; if (so) break; }
+      // FALLBACK: the number is wrong but the ORDER EXISTS. The sheet writes an
+      // initials-style number for some VA rows ("LCarpenter", "CBaham",
+      // "MMoniz") that Striven never issued — those orders are numbered 442,
+      // 443 and 447. The patient in the same cell does identify them, so it is
+      // used, but ONLY when it picks out exactly one order in the whole book:
+      // a surname shared by two patients must stay unresolved rather than
+      // attach a rep's commission to somebody else's order.
+      if (!so && matched) {
+        const key = commInitialLastDisp(matched).trim().toLowerCase();
+        const hit = key ? soByPatient.get(key) : null;
+        if (hit && hit.length === 1) so = hit[0];
+      }
       e.lines.push({
         // '' rather than a guess when the sheet row ties to no live order —
         // CMC-direct, pre-Striven and unmatched rows genuinely have none, and
@@ -1728,43 +2216,391 @@ export async function getCommissionRecon() {
         // Patient column — reduced to an initial + surname either way, at this
         // boundary, before anything is stored.
         patient: commInitialLastDisp(matched || r[C.pat]),
+        // WHEN THE SALES ORDER WAS RAISED. Off the matched Striven order, not
+        // the sheet — the sheet has a payout cycle but no order date, and a
+        // payout cycle is when the money moves, not when the work happened. A
+        // rep reconciling a line against their own records needs the latter.
+        //
+        // null on a row that ties to no live order (CMC-direct, pre-Striven,
+        // unmatched); there is genuinely no date to show and inventing the
+        // cycle's would make an unverifiable row look verified.
+        date: so?.dateCreated ?? null,
         prog: String(r[C.vert] ?? '').trim(),
         item: String(r[C.item] ?? '').trim(),
         cycle: String(r[C.cycle] ?? '').trim(),
+        // WHICH MONTH THIS LINE IS COMMISSION FOR — the payout cycle's own
+        // period, which is what the business pays on, not the sales order's
+        // date. See monthOfPayoutCycle() above.
+        month: monthOfPayoutCycle(r[C.cycle]),
         comm: round2(amt),
         state: 'payable',
         // The one flag the UI needs. Everything else about a row's provenance
         // stays out of the payload.
         unmatched: tier === 'unmatched',
+        // Internal, and deleted before this function returns: the totals are
+        // computed from the lines AFTER the workbook check below, so each line
+        // has to carry the tier it was read at.
+        tier,
+        // ALSO INTERNAL, and the name the workbook check pairs on. It is NOT
+        // `patient` above: that one prefers the STRIVEN spelling of a matched
+        // row, and Striven and the workbook disagree about which token of a
+        // compound name is the surname often enough to matter. The sheet's own
+        // Patient column is the column the workbook was transcribed from, so it
+        // is the only one that can be relied on to pair.
+        sheetPatient: commInitialLastDisp(r[C.pat]),
       });
 
-      e.payableTotal = round2(e.payableTotal + amt);
-      if (tier === 'auto') {
-        e.autoRows += 1;
-        totals.auto = round2(totals.auto + amt);
-      } else if (tier === 'review') {
-        e.reviewTotal = round2(e.reviewTotal + amt); e.reviewRows += 1;
-        totals.review = round2(totals.review + amt);
-      } else if (tier === 'unmatched') {
-        e.unmatchedTotal = round2(e.unmatchedTotal + amt); e.unmatchedRows += 1;
-        totals.unmatched = round2(totals.unmatched + amt);
-      }
       byRep.set(rep, e);
     }
 
+    // ── THE SHEET AGAINST THE WORKBOOK IT WAS TRANSCRIBED FROM ───────────────
+    // Applied BEFORE any total is computed, so every figure below — the rep's
+    // payable, the auto/review/unmatched split, the sheet-wide payable — is
+    // taken from the corrected lines and no two of them can disagree.
+    //
+    // Cassie's July 2026 cycle is why this runs: five $80 brace lines had been
+    // transcribed at the $425 combo rate and a $425 line was missing outright,
+    // so her board read $21,555 against a workbook that says $20,255. Every
+    // other rep-month in both books agrees with the sheet to the cent, which is
+    // what makes the check safe to apply everywhere rather than to one rep.
+    const source = await commissionSourceIndex().catch(() => null);
+    const corrections = { lines: 0, added: 0, amount: 0, orphanedLines: 0, reps: [] };
+    if (source?.configured) {
+      for (const [rep, e] of byRep) {
+        const byMonth = new Map();
+        for (const l of e.lines) {
+          if (!l.month) continue;                // no month, no bucket to check it against
+          byMonth.set(l.month, [...(byMonth.get(l.month) ?? []), l]);
+        }
+        let repDelta = 0, repLines = 0, repAdded = 0;
+        for (const [month, lines] of byMonth) {
+          const wbRows = source.byRepMonth.get(`${rep}|${month}`);
+          if (!wbRows?.length) continue;         // the books say nothing here; leave the sheet alone
+          const { corrected, added, orphaned, delta } = reconcileToWorkbook(lines, wbRows, {
+            // The sheet's own Patient column on a sheet line; the workbook's
+            // own on a workbook row, which carries no `sheetPatient` at all.
+            keyOf: (x) => x.sheetPatient || x.patient,
+          });
+          // A workbook row with no sheet line at all. It is still owed, so it
+          // becomes a line — carrying the cycle and vertical of its own
+          // rep-month, because the workbook records neither and a sibling row
+          // from the same bucket is the only honest source for them.
+          for (const a of added) {
+            const sib = lines[0] ?? {};
+            const hit = soByPatient.get(String(a.patient).trim().toLowerCase());
+            const so = hit && hit.length === 1 ? hit[0] : null;
+            e.lines.push({
+              ref: so ? safeRef('SO', so.id, so.number) : '',
+              patient: a.patient,
+              date: so?.dateCreated ?? null,
+              prog: sib.prog ?? '',
+              item: a.item,
+              cycle: sib.cycle ?? `Paid ~${a.cycle}`,
+              month,
+              comm: a.comm,
+              state: 'payable',
+              // Absent from the reconciliation sheet, so there is no Striven
+              // match evidence for it — the same remark the sheet's own
+              // unmatched rows carry, and for the same reason.
+              unmatched: true,
+              tier: 'unmatched',
+            });
+          }
+          repDelta = round2(repDelta + delta);
+          repLines += corrected.length;
+          repAdded += added.length;
+          corrections.orphanedLines += orphaned.length;
+        }
+        if (repLines || repAdded) {
+          corrections.lines += repLines;
+          corrections.added += repAdded;
+          corrections.amount = round2(corrections.amount + repDelta);
+          // NAMES ONLY, never a patient. This is an operator-facing count of
+          // where the sheet and the books disagree, not a second copy of the
+          // detail — the corrected lines themselves already carry that.
+          corrections.reps.push({ rep, lines: repLines, added: repAdded, amount: repDelta });
+        }
+      }
+    }
+
+    // ── TOTALS, COMPUTED FROM THE LINES ──────────────────────────────────────
+    // Not accumulated as the rows were read, which is what they used to be. A
+    // total added up during the read is a total that cannot survive a later
+    // correction: it would still hold the sheet's $425 for a line now paying
+    // $80, and nothing would flag the two disagreeing. Deriving every figure
+    // from the same array the page prints makes that impossible by construction.
+    for (const e of byRep.values()) {
+      e.payableTotal = 0; e.reviewTotal = 0; e.unmatchedTotal = 0;
+      e.autoRows = 0; e.reviewRows = 0; e.unmatchedRows = 0;
+      for (const l of e.lines) {
+        e.payableTotal = round2(e.payableTotal + l.comm);
+        if (l.tier === 'auto') { e.autoRows += 1; totals.auto = round2(totals.auto + l.comm); }
+        else if (l.tier === 'review') { e.reviewTotal = round2(e.reviewTotal + l.comm); e.reviewRows += 1; totals.review = round2(totals.review + l.comm); }
+        else if (l.tier === 'unmatched') { e.unmatchedTotal = round2(e.unmatchedTotal + l.comm); e.unmatchedRows += 1; totals.unmatched = round2(totals.unmatched + l.comm); }
+      }
+      // Both are reading aids, not payload. Dropped once the totals and the
+      // pairing they drive are done, so the line the browser receives is the
+      // shape it has always been.
+      for (const l of e.lines) { delete l.tier; delete l.sheetPatient; }
+    }
+
+    const reps = [...byRep.values()].sort((a, b) => b.payableTotal - a.payableTotal);
     return {
       ok: true,
       configured: true,
-      byRep: [...byRep.values()].sort((a, b) => b.payableTotal - a.payableTotal),
+      byRep: reps,
+      // Where the sheet and the workbooks it was transcribed from disagree, and
+      // by how much. Zero everywhere is the expected reading; a non-zero
+      // `amount` is a transcription error the portal has corrected, not a rule
+      // it has applied.
+      corrections,
       totals: {
         ...totals,
+        // Appended lines are rows the sheet should have carried and did not.
+        rows: totals.rows + corrections.added,
         // NOTHING IS HELD BACK ANY MORE — every valued row is paid and the
         // unmatched ones are marked instead. Kept at 0 rather than deleted so a
         // consumer still reading it gets "none withheld" instead of undefined.
         heldBack: 0,
-        // The whole sheet, which is now also the payable total.
-        payable: round2(totals.auto + totals.review + totals.unmatched),
+        // The whole sheet, which is now also the payable total. Summed from the
+        // rep rows rather than from the three tiers: a row whose Match Status
+        // the sheet spells in a way tierOf() does not recognise is in none of
+        // them, and adding the tiers up would quietly leave its money out of a
+        // figure named for the total.
+        payable: round2(reps.reduce((t, r) => t + r.payableTotal, 0)),
       },
+      fetchedAt: new Date().toISOString(),
+    };
+  }, 300_000);
+}
+
+// ── COMMISSION WORKBOOKS: a tab per payout cycle ─────────────────────────────
+// A second shape of commission source, for reps the reconciliation sheet does
+// not carry. Maylon Sanders is the live case and the reason this exists: 39 PI
+// orders in Striven, not one row in the reconciliation sheet, so his login read
+// $0 for every month while his own workbook says $2,489.86.
+//
+// THE TAB NAME IS THE PERIOD. Each tab is named for its pay date ("8/15/2026",
+// which Excel stores as 8152026 because a sheet name cannot contain a slash)
+// and the run pays the previous month — the same rule the reconciliation
+// sheet's cycle strings follow, via monthOfPayoutCycle(). Nothing inside a tab
+// repeats the date, which is why this reads the workbook as .xlsx rather than
+// per-tab CSV: the CSV export identifies a tab only by an opaque gid, so every
+// new month would need a config edit. Reading names means next month's tab
+// appears on the dashboard on its own.
+//
+// TWO LAYOUTS, because the workbooks differ:
+//   PATIENT | REP | DEVICE | COMMISSION   — a shared book, rep per row
+//   PATIENT | DEVICE | COMMISSION         — one rep's book, named in config
+// Detected from the header row, so a workbook can change shape without code.
+//
+// Configure with COMMISSION_WORKBOOKS: a JSON array of
+//   { "id": "<google sheet id>", "rep": "<name>", "vertical": "PI" }
+// `rep` is required only for the three-column layout; `vertical` defaults to PI.
+const workbookConfig = async () => {
+  const raw = String(await cfgValue('COMMISSION_WORKBOOKS', '')).trim();
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return (Array.isArray(v) ? v : [v]).filter((w) => w && w.id);
+  } catch { return []; }
+};
+
+const isPatientHeader = (r) => /^patient$/i.test(String(r[0] ?? '').trim());
+
+/**
+ * Every VALUED row of one commission workbook, flattened across its tabs.
+ *
+ * The tab-name and column rules live here in one place because two readers now
+ * need them — getCommissionWorkbooks() below, which pays reps the
+ * reconciliation sheet does not carry, and commissionSourceIndex(), which
+ * checks the sheet against the book it was transcribed from. Two copies would
+ * drift the first time a workbook changed shape.
+ *
+ * PATIENTS ARE REDUCED TO AN INITIAL + SURNAME HERE, at the parse, so the full
+ * legal names these workbooks carry never reach a caller, a cache or a payload.
+ *
+ * @param {Buffer} buffer an .xlsx export of the workbook
+ * @param {string} defaultRep owner for the three-column layout, which names no rep
+ * @returns {Array<{rep:string, cycle:string, month:string, patient:string, item:string, comm:number}>}
+ */
+function commissionBookRows(buffer, defaultRep = '') {
+  let sheets = [];
+  try { sheets = readXlsxBuffer(buffer); } catch { return []; }
+  const out = [];
+  for (const sheet of sheets) {
+    // "8152026" → the pay date, then the month it settles.
+    const d = String(sheet.name).replace(/\D/g, '');
+    const md = /^(\d{1,2})(\d{2})(\d{4})$/.exec(d);
+    if (!md) continue;                           // not a payout-cycle tab
+    const cycle = `${Number(md[1])}/${Number(md[2])}/${md[3]}`;
+    // The same "pays the previous month" rule as monthOfPayoutCycle(), but
+    // computed from the digits: that function reads month NAMES, which is what
+    // the reconciliation sheet's cycle strings use, and a tab name is numeric.
+    // Passing "8/15/2026" to it matches no month name and silently returns
+    // null — which is exactly how this shipped empty the first time.
+    const payDate = new Date(Number(md[3]), Number(md[1]) - 1, 1);
+    payDate.setMonth(payDate.getMonth() - 1);
+    const month = `${payDate.getFullYear()}-${String(payDate.getMonth() + 1).padStart(2, '0')}`;
+
+    // TWO LAYOUTS, resolved from the header row so a workbook can change shape
+    // without a code change:
+    //   PATIENT | REP | DEVICE | COMMISSION   — a shared book, rep per row
+    //   PATIENT | DEVICE | COMMISSION         — one rep's book, named in config
+    let cols = null;
+    for (const r of sheet.rows) {
+      if (isPatientHeader(r)) {
+        cols = /^rep$/i.test(String(r[1] ?? '').trim())
+          ? { rep: 1, item: 2, amt: 3 }
+          : { rep: -1, item: 1, amt: 2 };
+        continue;
+      }
+      if (!cols) continue;                       // rows above the header are titles
+      const patient = String(r[0] ?? '').trim();
+      const comm = sheetMoney(r[cols.amt]);
+      if (!patient || !(comm > 0)) continue;
+      const repRaw = cols.rep >= 0 ? String(r[cols.rep] ?? '').trim() : String(defaultRep ?? '').trim();
+      if (!repRaw) continue;                     // a row with no owner pays nobody
+      out.push({
+        rep: reconRep(repRaw),
+        cycle,
+        month,
+        patient: commInitialLastDisp(patient),
+        item: String(r[cols.item] ?? '').trim(),
+        comm: round2(comm),
+      });
+    }
+  }
+  return out;
+}
+
+// ── THE WORKBOOKS THE RECONCILIATION SHEET WAS TRANSCRIBED FROM ──────────────
+// Not the same list as COMMISSION_WORKBOOKS above, and the difference matters.
+// That list is a SUBSTITUTE source, for reps the reconciliation sheet has no
+// rows for at all; this one is the ORIGINAL of rows the sheet does carry, and
+// it is read only to check them. A book in the wrong list either pays a rep
+// twice or corrects nothing, so they stay separate.
+//
+// Configure with COMMISSION_SOURCE_WORKBOOKS — a JSON array of
+//   { "id": "<google sheet id>", "label": "Team", "rep": "<name>" }
+// `rep` is needed only by the three-column layout. Falling back to
+// COMMISSION_SHEETS is deliberate: that key already names exactly these two
+// books on every host, left over from the feed that used to read them, so the
+// check works out of the box rather than waiting on a config edit nobody knows
+// is outstanding.
+const sourceBookConfig = async () => {
+  const raw = String((await cfgValue('COMMISSION_SOURCE_WORKBOOKS', ''))
+    || (await cfgValue('COMMISSION_SHEETS', ''))).trim();
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return (Array.isArray(v) ? v : [v]).filter((w) => w && w.id);
+  } catch { return []; }
+};
+
+/**
+ * The source workbooks indexed by "rep|month", for reconcileToWorkbook().
+ *
+ * @returns {Promise<{configured:boolean, books:number, byRepMonth:Map<string,Array>}>}
+ */
+async function commissionSourceIndex() {
+  const books = await sourceBookConfig();
+  if (!books.length) return { configured: false, books: 0, byRepMonth: new Map() };
+  return cached('derived:commission-source-index', async () => {
+    // Downloaded together: these are ~2s Google exports apiece and nothing in
+    // one is needed to read the other.
+    const buffers = await Promise.all(books.map((w) => fetch(`https://docs.google.com/spreadsheets/d/${w.id}/export?format=xlsx`)
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .catch(() => null)));
+    const byRepMonth = new Map();
+    let read = 0;
+    for (let i = 0; i < books.length; i += 1) {
+      if (!buffers[i]) continue;
+      read += 1;
+      for (const row of commissionBookRows(Buffer.from(buffers[i]), books[i].rep)) {
+        if (isExcludedRep(row.rep)) continue;
+        const k = `${row.rep}|${row.month}`;
+        byRepMonth.set(k, [...(byRepMonth.get(k) ?? []), row]);
+      }
+    }
+    return { configured: true, books: read, byRepMonth };
+  }, 300_000);
+}
+
+/**
+ * Commission lines from every configured workbook, shaped exactly like the
+ * reconciliation sheet's so both merge through one code path.
+ *
+ * @returns {Promise<{ok:boolean, configured:boolean, byRep:Array, note?:string}>}
+ */
+export async function getCommissionWorkbooks() {
+  const books = await workbookConfig();
+  if (!books.length) return { ok: true, configured: false, byRep: [] };
+  return cached('derived:commission-workbooks', async () => {
+    const soBlob = await sbCacheRead('so').catch(() => null);
+    const soRows = Array.isArray(soBlob?.data) ? soBlob.data : [];
+    const soById = new Map(soRows.map((o) => [String(o.id), o]));
+    // patient (initial + surname) → order(s). These workbooks carry no order
+    // number at all, so the patient is the only join available; a name shared
+    // by two orders stays unresolved rather than guessing which one paid.
+    const soByPatient = new Map();
+    for (const [soId, tag] of await soLabelsBySoId().catch(() => new Map())) {
+      const key = String(tag?.patient ?? '').trim().toLowerCase();
+      const row = soById.get(String(soId));
+      if (!key || !row) continue;
+      soByPatient.set(key, [...(soByPatient.get(key) ?? []), row]);
+    }
+
+    const byRep = new Map();
+    // EVERY WORKBOOK DOWNLOADED AT ONCE. These are ~2.2s Google Sheets exports
+    // apiece and were fetched in sequence, so two books cost 4.4s on the single
+    // slowest endpoint the dashboard has. They are independent files; nothing in
+    // one is needed to read the other. Downloading in parallel and PARSING in
+    // the original order keeps the merge below deterministic — later books must
+    // still win over earlier ones, and a race would make that order arbitrary.
+    const buffers = await Promise.all(books.map((w) => fetch(`https://docs.google.com/spreadsheets/d/${w.id}/export?format=xlsx`)
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .catch(() => null)));
+    for (let bi = 0; bi < books.length; bi += 1) {
+      const w = books[bi];
+      if (!buffers[bi]) continue;
+      // Tab names, column layout and the patient mask all live in
+      // commissionBookRows() — see it for the rules this reader used to spell
+      // out inline.
+      for (const row of commissionBookRows(Buffer.from(buffers[bi]), w.rep)) {
+        if (isExcludedRep(row.rep)) continue;
+        // These workbooks carry no order number at all, so the patient is the
+        // only join available; a name shared by two orders stays unresolved
+        // rather than guessing which one paid.
+        const hit = soByPatient.get(row.patient.trim().toLowerCase());
+        const so = hit && hit.length === 1 ? hit[0] : null;
+
+        const e = byRep.get(row.rep) ?? { rep: row.rep, payableTotal: 0, lines: [] };
+        e.lines.push({
+          ref: so ? safeRef('SO', so.id, so.number) : '',
+          patient: row.patient,
+          date: so?.dateCreated ?? null,
+          prog: String(w.vertical || 'PI'),
+          item: row.item,
+          cycle: `Paid ~${row.cycle}`,
+          month: row.month,
+          comm: row.comm,
+          state: 'payable',
+          // The workbook is not the reconciliation sheet, so it carries no
+          // match status of its own. A line that found no order is marked the
+          // same way the sheet's unmatched rows are — it is still paid, the
+          // remark just says the Striven tie is missing.
+          unmatched: !so,
+          fromWorkbook: true,
+        });
+        e.payableTotal = round2(e.payableTotal + row.comm);
+        byRep.set(row.rep, e);
+      }
+    }
+    return {
+      ok: true,
+      configured: true,
+      byRep: [...byRep.values()].sort((a, b) => b.payableTotal - a.payableTotal),
       fetchedAt: new Date().toISOString(),
     };
   }, 300_000);
@@ -1829,11 +2665,19 @@ export async function getApLedger() {
 
     // ROW 0'S "Total Outstanding" CELL IS NOT READ. Dropped on request.
     //
-    // It is a hand-typed figure that nothing recomputes, and it had drifted
-    // $5,845.86 below what the sheet's own vendor blocks add to. Reporting a gap
-    // against it put a permanent discrepancy notice on a register whose every
-    // block reconciles — a warning about a stale cell, dressed as a warning
-    // about the data.
+    // It is a hand-typed figure that nothing recomputes, and it sits ABOVE what
+    // the sheet's own vendor blocks add to. Reporting a gap against it put a
+    // permanent discrepancy notice on a register whose every block reconciles —
+    // a warning about a stale cell, dressed as a warning about the data.
+    //
+    // THE DRIFT GROWS, which is why no figure for it is quoted here any more.
+    // This note used to name one ($5,845.86); the cell has not been touched
+    // since while the blocks below it have, so that number was wrong within
+    // weeks and read as current. As of 14 Aug 2026 the cell says $36,587.80
+    // against a true payable of $29,557.23 — and the $7,030.57 between them is
+    // exactly ManaMed's recorded payments, i.e. one update that never happened
+    // rather than an accumulation of small errors. Recompute it before citing
+    // it; do not trust this paragraph's arithmetic either.
     //
     // The register's authority for what is outstanding is the Outstanding
     // COLUMN, validated block by block against the per-vendor subtotal rows
@@ -1875,6 +2719,7 @@ export async function getApLedger() {
     // ManaMed merges the last two onto one row, so the label is tested first.
     const blockTotals = new Map();
     const blockPaid = new Map();
+    const payments = [];
     let blockVendor = null;
     for (const r of rows.slice(3) ?? []) {
       const sub = String(r[2] ?? '').trim();
@@ -1897,6 +2742,20 @@ export async function getApLedger() {
         const g = blockPaid.get(blockVendor) ?? { amount: 0, rows: 0 };
         g.amount = round2(g.amount + debit); g.rows += 1;
         blockPaid.set(blockVendor, g);
+        // KEPT ROW BY ROW, not only summed. The payables page lists what has
+        // actually been settled, and it was listing Striven's bill-payment
+        // records — ONE payment, $840 — while this sheet holds the real fifty-
+        // odd debits. (It was 50 rows / $74,265.17 when this was written and 51
+        // / $76,026.06 a few weeks later; the count is quoted loosely on purpose,
+        // because a payments ledger grows and a comment naming its size is a
+        // comment that starts lying almost immediately.) A total with no rows
+        // behind it cannot be checked by the person reconciling it.
+        //
+        // A payment row carries a DATE and an AMOUNT and nothing else: the
+        // sheet gives it no invoice number (that is what marks it as a payment
+        // rather than a bill) and no bank account. The card shows the three
+        // facts that exist rather than printing empty columns.
+        payments.push({ subLedger: blockVendor, date: sheetDate(r[3]), amount: round2(debit) });
       }
     }
 
@@ -2023,6 +2882,8 @@ export async function getApLedger() {
       ok: true,
       configured: true,
       bills,
+      // Newest first, which is the order the payables page reads them in.
+      payments: payments.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))),
       subLedgers: [...bySub.values()].sort((a, b) => b.open - a.open || b.billed - a.billed),
       totals: {
         bills: bills.length,
@@ -2064,17 +2925,22 @@ export async function getApLedger() {
 // the DETAIL for each invoice (date, patient, PO memo, GL account) and Striven
 // supplies the BOOK — which invoices exist, and what is still open.
 //
-// That split is deliberate and load-bearing. The sheet is missing invoice #116
-// ($1,500, Veterans Affairs) — the single gap in an otherwise unbroken 2→166
-// sequence. Driving the register off the sheet would have silently understated
-// the book by that invoice, and the next row someone forgets to paste in would
-// go the same way with nothing on screen to show for it. Driving it off Striven
-// means a missing sheet row shows up as a row with no detail, which is visible.
+// That split is deliberate and load-bearing, and THE SHEET RUNS BEHIND — which
+// is the whole reason the book comes from Striven. Driving the register off the
+// sheet would understate AR by whatever has not been pasted in yet, and the next
+// row someone forgets would go the same way with nothing on screen to show for
+// it. Driving it off Striven means an un-pasted invoice appears as a row with no
+// detail: counted in every figure, visibly missing its narrative.
 //
-// The two agree exactly on everything else: Striven's P&L reports 165 invoices
-// / $285,959.32, the sheet holds 164 / $284,459.32, and the difference is
-// precisely #116. All 10 of Striven's other open invoices match the sheet to
-// the cent.
+// THE GAP IS ALWAYS ONE-DIRECTIONAL AND ALWAYS THE NEWEST ROWS. It was one
+// invoice (#116) when this was written; at 14 Aug 2026 it is six — #167..#172,
+// every one of them dated 10 Aug — against a sheet that has since gained #116.
+// So no figure is quoted here: it is a lag, it moves every time someone updates
+// the sheet, and `totals.missingFromSheet` / `missingAmount` report it live.
+//
+// What does NOT move is the quality of the overlap: every invoice present in
+// both agrees to the cent, and no sheet row has ever named an invoice Striven
+// does not have (`totals.orphanSheetRows`). The sheet is late, never wrong.
 //
 // PHI: every sheet row names a patient in full. commInitialLastDisp() reduces
 // the first name to a letter HERE, at the boundary — the full name is never
@@ -2122,6 +2988,7 @@ export async function getArRegister() {
     // ── Striven: the book, and what is still open ───────────────────────────
     const all = (await allInvoices()).filter((r) => !isVoidStatus(INVOICE_STATUS[r.id] ?? ''));
     const payerByInv = await invoicePayerMap().catch(() => ({}));
+    const vertMap = await invoiceVerticalMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
     // Same netting the AR tab applies — see netOpenByInvoice(). Reading raw
     // `openBalance` here would put two different outstanding figures on one page.
     const { net, unappliedCredits } = await netOpenByInvoice(all);
@@ -2140,6 +3007,13 @@ export async function getArRegister() {
       // banked against invoices versus what was cleared by a credit sitting on
       // the customer's account, and have the two add back to the total.
       const creditApplied = round2(rawOpen - open);
+      // Which programme billed this decides what is expected back on it, so the
+      // vertical has to be resolved before the expectation is — see below.
+      const vertical = vertMap.byInvoice[no]
+        || vertMap.byCustRef.get(`PT-${r.customer?.id}`)
+        || verticalOfPayer(payerByInv[no])
+        || '';
+      const expected = arExpectedFor({ vertical, billed: total });
       return {
         no,
         // The sheet's date is the invoice date; Striven's is the created stamp.
@@ -2148,6 +3022,14 @@ export async function getArRegister() {
         dueDate: r.dueDate ? String(r.dueDate).slice(0, 10) : '',
         patient: d?.patient ?? maskName(r.customer?.name),
         payer: payerByInv[no] || '',
+        // Which programme billed this — see invoiceVerticalMap().
+        vertical,
+        // WHAT IS EXPECTED BACK, not what was billed. PI settles out of a lien
+        // at a fraction of face value; everything else is expected in full.
+        // `arBasis` names the rule so the table can mark a discounted row rather
+        // than leaving the reader to wonder why a figure differs from Billed.
+        arExpected: expected.amount,
+        arBasis: expected.basis,
         memo: d?.memo ?? '',
         gl: d?.gl ?? '',
         total,
@@ -2180,6 +3062,12 @@ export async function getArRegister() {
     const billed = sum(invoices, 'total');
     const outstanding = sum(openRows, 'open');
     const missing = invoices.filter((i) => !i.inSheet);
+    // The reverse lookup: sheet rows no Striven invoice claimed. Built from the
+    // invoice numbers actually consumed above, so it cannot drift from them.
+    const claimed = new Set(invoices.map((i) => String(i.no)));
+    const orphanSheet = [...detail.entries()]
+      .filter(([no]) => !claimed.has(String(no)))
+      .map(([no, d]) => ({ no: String(no), amount: d.amount, date: d.date }));
     const variances = invoices.filter((i) => i.variance != null && Math.abs(i.variance) >= 0.005);
     const aging = bucketAging(openRows, 'dueDate', 'open');
     for (const k of Object.keys(aging)) aging[k] = round2(aging[k]);
@@ -2219,6 +3107,14 @@ export async function getArRegister() {
       totals: {
         invoices: invoices.length,
         billed,
+        // The register-wide expectation, summed from the SAME per-row figures
+        // the table renders, so the headline can never disagree with the column
+        // under it. `arDiscount` is what the PI rule takes off — surfaced
+        // because "billed 290k, expected 248k" invites the question, and the
+        // answer should not require re-deriving it.
+        arExpected: sum(invoices, 'arExpected'),
+        arDiscount: round2(billed - sum(invoices, 'arExpected')),
+        arDiscounted: invoices.filter((i) => i.arBasis === 'pi-15').length,
         outstanding,
         openInvoices: openRows.length,
         collected: round2(billed - outstanding),
@@ -2240,8 +3136,24 @@ export async function getArRegister() {
         // reconciled — the difference is someone's data entry, not a rule this
         // code could apply.
         sheetRows: detail.size,
+        sheetAmount: round2([...detail.values()].reduce((s, d) => s + (d.amount || 0), 0)),
         missingFromSheet: missing.length,
         missingAmount: sum(missing, 'total'),
+        // THE OTHER DIRECTION, which this reader could not see.
+        //
+        // The register walks STRIVEN and looks each invoice up in the sheet, so
+        // a sheet row with no Striven invoice behind it was invisible by
+        // construction — not reported as zero, simply never asked about. That is
+        // the more alarming of the two gaps if it ever happens: an invoice
+        // number on the accountant's report that the system of record has no
+        // invoice for is either a typo or a document raised outside Striven, and
+        // neither should pass unremarked.
+        //
+        // Zero today across all 164 rows. Reported anyway, because "we checked
+        // and there are none" and "we never looked" are the same number.
+        orphanSheetRows: orphanSheet.length,
+        orphanSheetAmount: round2(orphanSheet.reduce((s, o) => s + (o.amount || 0), 0)),
+        orphanSheetNos: orphanSheet.map((o) => o.no),
         variances: variances.length,
         varianceAmount: round2(variances.reduce((s, i) => s + i.variance, 0)),
         apRowsExcluded: apRows,
@@ -2623,6 +3535,10 @@ export async function getCommission(viewer = null) {
       rep: commRep(o.rep || 'Unassigned'), ref: o.ref || `SO-${o.id}`,
       status: o.status || '', date: o.date || '', program: o.type || 'Other', value: Number(o.value || 0),
       stage: o.stage || '',
+      // The Striven LABELS, which is where HOLD and "Waiting for
+      // Reimbursement" live. They were already on this row and simply were not
+      // being read — see the note in classifyOrderLabel().
+      labels: Array.isArray(o.labels) ? o.labels : [],
     });
   }
 
@@ -2718,7 +3634,7 @@ export async function getCommission(viewer = null) {
     if (!['TriCare', 'VA', 'PI', 'DOL'].includes(program)) continue;
 
     const value = Number(o.value || info.value || 0);
-    const res = commissionForOrder({ status: info.status, program, items: o.items, value }, commCfg);
+    const res = commissionForOrder({ status: info.status, labels: info.labels, program, items: o.items, value }, commCfg);
     for (const g of res.rateGaps) rateGaps.add(g);
     if (res.state === 'cancelled') { sCancelled++; continue; }    // cancelled → never earned
     if (res.state === 'zero-value') { sZeroValue++; continue; }   // $0 order earns nothing
@@ -2764,6 +3680,9 @@ export async function getCommission(viewer = null) {
     // the report cache has no row, so the drill degrades to the SO ref.
     (strivenLinesByRep[rep] = strivenLinesByRep[rep] || []).push({
       ref: info.ref, patient: lastNameBySo.get(String(o.soId ?? info.soId ?? '')) || '',
+      // The sales-order date — the same field the month bucket above is cut
+      // from, so a line and the month it is paid in can never disagree.
+      date: info.date || null,
       item: (o.items || [])[0]?.item || '', prog: program,
       value: round2(value), units: res.units, comm: c, state: res.state,
     });
@@ -2888,8 +3807,280 @@ export async function getCommission(viewer = null) {
       zeroValueAmount,
       cancelledRefLines,
       cancelledRefAmount,
+      // Rows where the sheet disagreed with the workbook it was transcribed
+      // from, and which the workbook won. Surfaced rather than applied
+      // silently: this changes what a rep is paid, so it has to be answerable.
+      corrections: recon.corrections ?? null,
       fetchedAt: recon.fetchedAt,
     };
+  }
+
+  // ── WORKBOOK SOURCES, for reps the reconciliation sheet does not carry ──────
+  // Maylon Sanders is why: 39 PI orders in Striven and no row in the sheet, so
+  // his login read $0 every month. His commission lives in a workbook of its
+  // own — see getCommissionWorkbooks().
+  //
+  // GUARDED PER REP × MONTH. A workbook line is taken only where the sheet has
+  // nothing for that rep in that month. The sheet stays the base wherever it
+  // speaks, and pointing this at a workbook the sheet already covers cannot
+  // double anyone's pay — which is the failure that would be least visible and
+  // worst to ship, since both sources are legitimately named the same thing.
+  const workbooks = await getCommissionWorkbooks().catch(() => null);
+  if (workbooks?.configured) {
+    const covered = new Set();               // "rep|month" the sheet already pays
+    for (const r of striven.byRep) {
+      for (const l of r.lines || []) if (l.month) covered.add(`${r.rep}|${l.month}`);
+    }
+    let added = 0, skipped = 0, addedAmt = 0;
+    for (const w of workbooks.byRep) {
+      const take = w.lines.filter((l) => !covered.has(`${w.rep}|${l.month}`));
+      skipped += w.lines.length - take.length;
+      if (!take.length) continue;
+      let row = striven.byRep.find((r) => r.rep === w.rep);
+      if (!row) { row = { ...zeroRepRow(w.rep), strivenPayable: 0, reviewTotal: 0, unmatchedTotal: 0 }; striven.byRep.push(row); }
+      const amt = round2(take.reduce((s, l) => s + l.comm, 0));
+      row.lines = [...(row.lines || []), ...take].sort((a, b) => b.comm - a.comm);
+      row.payableTotal = round2((row.payableTotal || 0) + amt);
+      row.total = row.payableTotal;
+      row.reconciled = true;                 // signed off, just not by that sheet
+      added += take.length; addedAmt = round2(addedAmt + amt);
+    }
+    striven.byRep.sort((a, b) => b.payableTotal - a.payableTotal);
+    striven.payableTotal = round2(striven.byRep.reduce((t, r) => t + (r.payableTotal || 0), 0));
+    striven.grandTotal = striven.payableTotal;
+    striven.workbooks = { lines: added, amount: addedAmt, skippedCoveredBySheet: skipped, fetchedAt: workbooks.fetchedAt };
+  }
+
+  // ── WHAT HAS ALREADY BEEN PAID ──────────────────────────────────────────────
+  // "Payable / Due" was every signed-off dollar a rep had ever earned, months
+  // after the money left the bank. COMMISSION_PAID_THROUGH names the last month
+  // each vertical has actually been paid for, and those lines become `paid`:
+  // still theirs, still in the total, no longer owed.
+  //
+  // Marked HERE, before the month rollup below, so one rule decides the state
+  // and every figure downstream — rep row, month row, drill line — splits the
+  // same way. Nothing is removed: `total` still carries the lot, which is what
+  // stops a rep's year-to-date shrinking the day they are paid.
+  const paidThrough = await (async () => {
+    const raw = String(await cfgValue('COMMISSION_PAID_THROUGH', '')).trim();
+    if (!raw) return COMMISSION_PAID_THROUGH;
+    try { const v = JSON.parse(raw); return v && typeof v === 'object' ? v : COMMISSION_PAID_THROUGH; }
+    catch { return COMMISSION_PAID_THROUGH; }
+  })();
+  // The sheet's Vertical column spells things loosely; fold it to the same three
+  // names the config is keyed by, so "VA Order" and "va" both land on VA.
+  // Shared with getRepOverview's commission rollup — see the config module.
+  const vertOfLine = (l) => verticalOfCommissionLine(l?.prog);
+  // An UNDATED line is never marked paid. Its cycle could not be resolved to a
+  // month, so there is no way to tell which side of the cut-off it falls — and
+  // calling money paid when it may not be is the worse error of the two.
+  const isPaidLine = (l) => {
+    const v = vertOfLine(l);
+    const through = v && paidThrough[v];
+    return Boolean(through && l.month && String(l.month) <= String(through));
+  };
+  const splitPaid = (lines) => {
+    let paid = 0, due = 0;
+    for (const l of lines) {
+      if (isPaidLine(l)) { l.state = 'paid'; paid += l.comm; } else due += l.comm;
+    }
+    return { paid: round2(paid), due: round2(due) };
+  };
+  for (const r of striven.byRep) {
+    const { paid, due } = splitPaid(r.lines || []);
+    r.paidTotal = paid;
+    r.payableTotal = due;
+    r.total = round2(paid + due);
+  }
+  striven.paidTotal = round2(striven.byRep.reduce((t, r) => t + (r.paidTotal || 0), 0));
+  striven.payableTotal = round2(striven.byRep.reduce((t, r) => t + (r.payableTotal || 0), 0));
+  // The headline stays the WHOLE signed-off figure. Paying a rep does not
+  // reduce what they earned, and a "Total commission" tile that fell every
+  // payday would be reporting the wrong thing.
+  striven.grandTotal = round2(striven.paidTotal + striven.payableTotal);
+  striven.paidThrough = paidThrough;
+
+  // ── THE MONTHS ARE THE PAYOUT CYCLES ────────────────────────────────────────
+  // A month on this page now means "the commission settled by the payout run
+  // for that month", which is the thing the business actually pays and the
+  // thing a rep is asking about. Two problems this fixes:
+  //
+  //   1. THE MONEY. Month rows carried the Striven ENGINE's figure while the
+  //      all-months row carried the signed-off sheet's. Alle Ann therefore read
+  //      $63,025 on All months and months that summed to $94,000 — two bases
+  //      behind one selector, with nothing on screen saying which was which.
+  //      (The label fix above closed most of that gap; this closes the rest.)
+  //   2. THE ATTRIBUTION. Lines were bucketed by SALES ORDER DATE, which is not
+  //      when the commission is paid and does not agree with the sheet: Alle
+  //      Ann's lines fell 26/29/78 across Jul/Jun/May by order date, against
+  //      28/30/36/19/21 by payout cycle. Same money, wrong months.
+  //
+  // The cycle → month rule is monthOfPayoutCycle(). Verified line-for-line and
+  // cent-for-cent against the two source workbooks across all 18 rep×month
+  // cells; the one disagreement (Cassie, June) is a difference between the
+  // WORKBOOK and the signed-off SHEET, and the sheet wins here because it is
+  // the base every other figure on this page already comes from.
+  //
+  // Volume (orders, units) is untouched: it comes from the order book and is a
+  // different question from what is owed.
+  {
+    const zeroMoney = (row) => {
+      row.strivenPayable = row.payableTotal;      // keep the engine's, for comparison
+      row.payableTotal = 0; row.paidTotal = 0; row.total = 0;
+      row.tricare = 0; row.va = 0; row.pi = 0;
+      row.lines = []; row.reconciled = false;
+    };
+    // month → rep → its signed-off lines
+    const byMonth = new Map();
+    for (const r of striven.byRep) {
+      for (const l of r.lines || []) {
+        if (!l.month) continue;                    // undated cycle: All months only
+        const reps = byMonth.get(l.month) ?? new Map();
+        const arr = reps.get(r.rep) ?? [];
+        arr.push(l); reps.set(r.rep, arr); byMonth.set(l.month, reps);
+      }
+    }
+    const known = new Map(striven.months.map((M) => [M.month, M]));
+    for (const [month, reps] of byMonth) {
+      let M = known.get(month);
+      if (!M) {
+        // A month the sheet pays for but the order book has no orders in — the
+        // sheet reaches further back than report_patient_items does. It is a
+        // real payout and must not vanish for want of a Striven bucket.
+        M = { month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, ...zeroState(), reps: [] };
+        striven.months.push(M); known.set(month, M);
+      }
+      const rowOf = new Map(M.reps.map((r) => [r.rep, r]));
+      for (const [rep, lines] of reps) {
+        let row = rowOf.get(rep);
+        if (!row) { row = { ...zeroRepRow(rep) }; M.reps.push(row); rowOf.set(rep, row); }
+        row.strivenPayable = row.payableTotal;
+        // Same paid/due split as the rep row above, off the same rule.
+        const { paid, due } = splitPaid(lines);
+        row.paidTotal = paid;
+        row.payableTotal = due;
+        row.total = round2(paid + due);
+        row.reconciled = true;
+        row.lines = lines.slice().sort((a, b) => b.comm - a.comm);
+        // Per vertical, off the SHEET's own Vertical column rather than the
+        // engine's programme — same source as the money beside it.
+        const prog = (re) => round2(lines.filter((l) => re.test(String(l.prog || ''))).reduce((s, l) => s + l.comm, 0));
+        row.tricare = prog(/tri.?care/i);
+        row.va = prog(/\bva\b|veteran/i);
+        row.pi = prog(/\bpi\b|personal injury/i);
+      }
+      // A rep with orders that month but no signed-off line is owed nothing for
+      // it. Leaving the engine's figure would mix the two bases back together.
+      for (const row of M.reps) if (!reps.has(row.rep)) zeroMoney(row);
+      M.paidTotal = round2(M.reps.reduce((s, r) => s + (r.paidTotal || 0), 0));
+      M.payableTotal = round2(M.reps.reduce((s, r) => s + (r.payableTotal || 0), 0));
+      M.total = round2(M.paidTotal + M.payableTotal);
+      M.TriCare = round2(M.reps.reduce((s, r) => s + (r.tricare || 0), 0));
+      M.VA = round2(M.reps.reduce((s, r) => s + (r.va || 0), 0));
+      M.PI = round2(M.reps.reduce((s, r) => s + (r.pi || 0), 0));
+      M.reconciled = true;
+    }
+
+    // ── THE IN-FLIGHT MONTH ────────────────────────────────────────────────────
+    // A month with orders but no payout cycle yet: the current one, and any
+    // month settled after this sheet was last saved. NOTHING IN IT IS PAYABLE —
+    // commission is settled by the 15th of the following month, so until that
+    // run exists there is no signed-off figure and the engine's number is an
+    // estimate, not an entitlement.
+    //
+    // So its money moves to WAITING rather than being deleted: the rep still
+    // sees what the month has earned, in the column that says "not yet". Marked
+    // `reconciled: false` so the page can say why.
+    for (const M of striven.months) {
+      if (byMonth.has(M.month)) continue;
+      for (const row of M.reps) {
+        const earned = round2((row.payableTotal || 0) + (row.waitingTotal || 0));
+        zeroMoney(row);
+        row.waitingTotal = earned;
+      }
+      M.waitingTotal = round2(M.reps.reduce((s, r) => s + (r.waitingTotal || 0), 0));
+      M.payableTotal = 0; M.paidTotal = 0; M.total = 0; M.TriCare = 0; M.VA = 0; M.PI = 0;
+      M.reconciled = false;
+    }
+    striven.months.sort((a, b) => b.month.localeCompare(a.month));
+  }
+
+  // ── ONE BASIS FOR EVERY MONEY FIGURE ON THE PAGE ────────────────────────────
+  //
+  // Everything above rebuilt the rep rows and the month rows off the signed-off
+  // sheet. Two families of field did NOT get rebuilt and kept the Striven
+  // ENGINE's figures, which is how the page came to print two bases side by
+  // side with nothing saying which was which:
+  //
+  //   tricare/va/pi   the vertical split. Company-wide it read $238,523 under a
+  //   and byProgram   $195,954 headline, and the ranking INVERTED — TriCare
+  //                   $37,348 engine against $68,865 signed off, PI $48,250
+  //                   against $14,414. Picking a single month switched the same
+  //                   three tiles to the sheet, because month rows ARE rebuilt,
+  //                   so one dropdown gave two answers. A rep saw it too: their
+  //                   own split is read off these row fields (see
+  //                   redactCommissionPayload), so their $0 rows still showed a
+  //                   per-vertical breakdown of money nobody was paying them.
+  //
+  //   waitingTotal    the engine's held/waiting sum, printed beside a sheet
+  //                   payable. A RECONCILED MONTH CANNOT HAVE ANYTHING WAITING:
+  //                   the sheet has signed every line in it off as either paid
+  //                   or due. The only real waiting is the in-flight cycle — the
+  //                   month with no payout run yet — which the block above has
+  //                   already worked out. The rest was engine residue, and it
+  //                   made "Payable + Waiting" add up to nothing in particular.
+  //
+  // Both are re-derived from the LINES, which is where the money on the row
+  // already comes from, so the split sums to the total by construction instead
+  // of by luck — and the admin table's trimmed path (which re-sums the rendered
+  // rows) can no longer disagree with its untrimmed one.
+  //
+  // `strivenPayable` stays on every row. That is the engine's figure kept
+  // deliberately and labelled, for the comparison the recon block exists to
+  // make; a field nobody rebuilt is a different thing.
+  {
+    // WAITING IS THE IN-FLIGHT CYCLE, NOTHING ELSE.
+    const waitingByRep = new Map();
+    for (const M of striven.months) {
+      if (M.reconciled) {
+        for (const row of M.reps) row.waitingTotal = 0;
+        M.waitingTotal = 0;
+        continue;
+      }
+      for (const row of M.reps) {
+        const w = round2(row.waitingTotal || 0);
+        row.waitingTotal = w;
+        if (w) waitingByRep.set(row.rep, round2((waitingByRep.get(row.rep) || 0) + w));
+      }
+      M.waitingTotal = round2(M.reps.reduce((s, r) => s + (r.waitingTotal || 0), 0));
+    }
+    for (const r of striven.byRep) r.waitingTotal = waitingByRep.get(r.rep) || 0;
+    striven.waitingTotal = round2(striven.byRep.reduce((s, r) => s + (r.waitingTotal || 0), 0));
+
+    // THE VERTICAL SPLIT COMES OFF THE SAME LINES AS THE TOTAL.
+    //
+    // verticalOfCommissionLine() is the shared fold — the one the month rows
+    // above already use — so a spelling learned in one place is learned in
+    // both. It returns '' for anything it does not recognise, and that money is
+    // reported as `byProgramUnassigned` rather than banked into one of the
+    // three: a split that silently absorbs an unfoldable line is how the two
+    // bases hid from each other in the first place.
+    let unassigned = 0;
+    for (const r of striven.byRep) {
+      const v = { TriCare: 0, VA: 0, PI: 0 };
+      for (const l of r.lines || []) {
+        const k = verticalOfCommissionLine(l.prog);
+        if (k) v[k] = round2(v[k] + (l.comm || 0));
+        else unassigned = round2(unassigned + (l.comm || 0));
+      }
+      r.tricare = v.TriCare; r.va = v.VA; r.pi = v.PI;
+    }
+    striven.byProgram = {
+      TriCare: round2(striven.byRep.reduce((s, r) => s + (r.tricare || 0), 0)),
+      VA: round2(striven.byRep.reduce((s, r) => s + (r.va || 0), 0)),
+      PI: round2(striven.byRep.reduce((s, r) => s + (r.pi || 0), 0)),
+    };
+    striven.byProgramUnassigned = unassigned;
   }
 
   // ── Volume columns come from the ORDER BOOK, not the commission engine ──────
@@ -3049,14 +4240,24 @@ export async function getOrderAnalytics(viewer = null) {
   let rcOrders = [];
   try { rcOrders = (await sbCacheRead('report_patient_items'))?.data?.orders || []; } catch { /* optional */ }
 
-  // soId → devices on that order (item + qty), and soId → patient SURNAME.
+  // soId → devices on that order (item + qty), and soId → the PATIENT NAME.
   //
-  // The surname is here because a REP cannot identify an order from "SO-476" —
-  // they know their patients by name. It is the same minimum-necessary field the
-  // commission drill and order tracking already carry: LAST NAME ONLY, straight
-  // from report_patient_items, which strips the first name at ingest. No new
-  // category of PHI is introduced by this, and nothing more is fetched: the same
-  // cache read was already happening one line above for the devices.
+  // FIRST INITIAL + SURNAME — "C. Richmond" — matching every other patient field
+  // in the portal. This map used to be surname-only, because report_patient_items
+  // is its only always-present source and that report strips the first name at
+  // ingest. The result was the same person reading two different ways on screens
+  // a rep uses together: the pipeline said "C. Richmond" (it overlays the labels
+  // report) while My Orders beside it said "Richmond".
+  //
+  // THREE SOURCES, WEAKEST FIRST, each overwriting the last:
+  //   1. report_patient_items — surname only, but covers the whole book
+  //   2. the TRACKING report — names ~14 orders the labels report misses
+  //   3. the LABELS report — the most complete, and the one the pipeline uses,
+  //      so this ends on exactly the value the other boards show
+  //
+  // No new PHI is introduced and nothing extra is fetched: both reports are
+  // already read on this request path and memoised, and both reduce the name to
+  // an initial at their own boundary — the full first name is never stored.
   const devBySo = new Map();
   const lastNameBySo = new Map();
   for (const o of rcOrders) {
@@ -3067,6 +4268,12 @@ export async function getOrderAnalytics(viewer = null) {
     const ln = commLastDisp(o.lastName);
     if (ln && o.soId != null) lastNameBySo.set(String(o.soId), ln);
   }
+  const [nameTrack, nameTags] = await Promise.all([
+    soTrackingBySoId().catch(() => new Map()),
+    soLabelsBySoId().catch(() => new Map()),
+  ]);
+  for (const [soId, t] of nameTrack) if (t?.patient) lastNameBySo.set(String(soId), t.patient);
+  for (const [soId, tag] of nameTags) if (tag?.patient) lastNameBySo.set(String(soId), tag.patient);
 
   const now = Date.now();
   const days = (d) => { const t = d ? new Date(d).getTime() : NaN; return Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 86_400_000)) : null; };
@@ -3105,6 +4312,17 @@ export async function getOrderAnalytics(viewer = null) {
       status: r.status || '',
       invStatus: r.invStatus || '',
       strivenStage: r.stage || '',            // '' until the tag is mirrored
+      // SHIPMENT. Read from Striven — the saved tracking report where it has a
+      // row, the sales-order detail cache otherwise. NOT redacted for a rep: a
+      // tracking number is operational, not financial, and a rep chasing "where
+      // is my patient's device" is the main reason to show it.
+      //
+      // `tracking` is the raw string exactly as Striven holds it, which is what
+      // search and the exports need; `shipments` is that string resolved into
+      // one entry per parcel, because an order can carry more than one.
+      tracking: r.tracking || '',
+      shipments: shipmentsOf(r.tracking, r.shipVia),
+      shipVia: r.shipVia || '',
       // Interim ageing proxy until portal stage history accrues: an edit to the
       // order resets this, so it understates genuinely stale orders.
       daysSinceUpdate: days(r.updated || r.date),
@@ -3144,7 +4362,25 @@ export async function getOrderAnalytics(viewer = null) {
  * and narrowed per caller here. Redaction always runs, so a cache hit can never
  * hand one rep another rep's figures.
  */
-export async function getCommissionFor(viewer = null) {
+/**
+ * @param {{fresh?:boolean}} opts `fresh` RE-READS THE RECONCILIATION SHEET.
+ *
+ * The sheet is edited by hand and the figures on this page are its figures, so
+ * "I changed the sheet and the portal still shows the old number" is the one
+ * failure that makes the page untrustworthy. A page load and the Refresh button
+ * both pass this, so a reload always shows what the sheet says right now.
+ *
+ * The 2-minute background poll deliberately does NOT: the sheet is a ~1s
+ * fetch from Google, and paying that on every tab's timer, forever, to catch an
+ * edit nobody has made is the wrong trade. Refresh the page — that is what the
+ * flag is for.
+ */
+export async function getCommissionFor(viewer = null, { fresh = false } = {}) {
+  if (fresh) {
+    _cache.delete('derived:commission:raw');
+    _cache.delete('derived:commission-recon');
+    _cache.delete('derived:commission-workbooks');
+  }
   const raw = await cached('derived:commission:raw', () => getCommission({ repName: null, role: 'admin' }), 60_000);
   return redactCommissionPayload(raw, viewer || { repName: null, role: 'rep' });
 }
@@ -3234,7 +4470,144 @@ export async function getRepOverview(viewer = null) {
   ]);
   const commByRep = new Map((comm.striven?.byRep || []).map((r) => [r.rep, r]));
   const sheetByRep = new Map((comm.reps || []).map((r) => [r.rep, r]));
-  const VERTS = ['PI', 'VA', 'DOL', 'TriCare', 'DEMO', 'Contract'];
+
+  // ── MONEY BY PAYOUT CYCLE, LIFTED STRAIGHT OFF THE COMMISSION PAYLOAD ───────
+  //
+  // THIS PAGE AND THE COMMISSION TAB HAVE TO AGREE, and they did not: Jillian's
+  // July read $21,966 there and $6,646 here. Neither was wrong — they were
+  // answering different questions. The Commission tab buckets by PAYOUT CYCLE
+  // (the run the money actually goes out in), this page bucketed commission by
+  // the SALES ORDER's date. Same money, different months, and $28,526 of
+  // Jillian's lines tie to no live order at all, so on order-date they fell into
+  // no month and simply vanished from every period.
+  //
+  // The payout cycle wins, because it is what the business pays on and what the
+  // Commission tab — the authority for pay — already reports. Read from
+  // `comm.striven.months`, the very rows that tab renders, so agreement is by
+  // construction rather than by two calculations happening to match.
+  //
+  // WAITING COMES FREE WITH IT. It is a cycle figure by nature (the run that has
+  // not gone out yet), so it has no order-date equivalent and had to be withheld
+  // under a period filter. Per cycle it is simply a column like the others.
+  //
+  // The consequence, and it is deliberate: on one row the ORDER columns are cut
+  // by order date and the MONEY columns by payout cycle. Two meanings of "month"
+  // side by side is a real cost, paid so that the pay figure on this page is the
+  // pay figure on the Commission tab. The UI states it rather than hiding it.
+  const cycleByRep = new Map();
+  for (const M of comm.striven?.months || []) {
+    for (const r of (M.reps || [])) {
+      const arr = cycleByRep.get(r.rep) ?? [];
+      arr.push({
+        month: M.month,
+        paid: round2(r.paidTotal ?? 0),
+        payable: round2(r.payableTotal ?? 0),
+        waiting: round2(r.waitingTotal ?? 0),
+        total: round2(r.total ?? 0),
+      });
+      cycleByRep.set(r.rep, arr);
+    }
+  }
+  for (const arr of cycleByRep.values()) arr.sort((a, b) => a.month.localeCompare(b.month));
+
+  /**
+   * COMMISSION DUE, cut by vertical and by month, from the signed-off lines.
+   *
+   * OWED ONLY. A line whose state is 'paid' has already left the bank — it is
+   * still the rep's earnings but it is not due, and "Commission due" that
+   * includes paid money is not a figure anyone can act on. This is the same
+   * split the Commission page reports, so the two agree by construction.
+   *
+   * CUT BY THE SALES ORDER'S DATE, not the payout cycle. The cycle is when the
+   * money moves and is the more complete field — every line has one — but this
+   * sits in a row of ORDER counts under a month selector that filters orders,
+   * and a column whose "month" means something different from the columns
+   * beside it is worse than one that is merely incomplete.
+   *
+   * The incompleteness is real and is reported rather than absorbed: 127 lines
+   * tie to no live sales order, so they have no date and belong to no month.
+   * `undated` carries them, and the UI states the figure — otherwise the months
+   * would quietly sum to less than the all-time total with nothing to say why.
+   */
+  const commissionRollup = (rep) => {
+    const allLines = (commByRep.get(rep)?.lines || []).filter(Boolean);
+    const lines = allLines.filter((l) => l.state !== 'paid');
+    const zero = () => Object.fromEntries(['PI', 'VA', 'DOL', 'TriCare'].map((v) => [v, 0]));
+    const all = zero();
+    let total = 0; let undated = 0;
+    const months = new Map();
+    for (const l of lines) {
+      const v = verticalOfCommissionLine(l.prog);
+      const amt = Number(l.comm) || 0;
+      total += amt;
+      if (v && all[v] != null) all[v] += amt;
+      const key = String(l.date || '').slice(0, 7);
+      if (!key) { undated += amt; continue; }
+      const e = months.get(key) ?? { month: key, total: 0, byVertical: zero() };
+      e.total += amt;
+      if (v && e.byVertical[v] != null) e.byVertical[v] += amt;
+      months.set(key, e);
+    }
+    // PAID LINES, bucketed the same way, so a month can report what was EARNED
+    // (paid + owed) and not only what is still owed. The team table's Commission
+    // column is the earned figure and its Payable column is the owed one; before
+    // this, only the owed half could be cut by month, so scoping that table
+    // would have put a month's Payable beside an all-time Commission.
+    //
+    // Tracked separately rather than by dropping the state filter above: `total`,
+    // `byVertical` and `undated` are the COMMISSION DUE figures other panels
+    // already read, and widening them to include paid money would overstate what
+    // is owed everywhere they appear.
+    const paidByMonth = new Map();
+    let paidUndated = 0;
+    for (const l of allLines) {
+      if (l.state !== 'paid') continue;
+      const amt = Number(l.comm) || 0;
+      const key = String(l.date || '').slice(0, 7);
+      if (!key) { paidUndated += amt; continue; }
+      paidByMonth.set(key, (paidByMonth.get(key) ?? 0) + amt);
+    }
+    const r2 = (o) => { for (const k of Object.keys(o)) o[k] = round2(o[k]); return o; };
+    // A month may hold ONLY paid lines (an old, fully-settled month), so the key
+    // set is the union — keying off `months` alone would drop it from the picker
+    // with money still in it.
+    const keys = [...new Set([...months.keys(), ...paidByMonth.keys()])].sort();
+    return {
+      total: round2(total),
+      undated: round2(undated),
+      paidUndated: round2(paidUndated),
+      byVertical: r2(all),
+      byMonth: keys.map((k) => {
+        const e = months.get(k);
+        const owed = e ? round2(e.total) : 0;
+        const paid = round2(paidByMonth.get(k) ?? 0);
+        return {
+          month: k,
+          total: owed,                          // unchanged: OWED, what is due
+          paid,                                 // already gone out
+          earned: round2(owed + paid),          // what the month is worth in total
+          byVertical: e ? r2(e.byVertical) : zero(),
+        };
+      }),
+    };
+  };
+  // THE FOUR REAL PROGRAMMES. DEMO and Contract used to be here and are gone:
+  // neither is a book a rep works, and both read as dead weight on every screen
+  // that listed them — a row of dashes and a zero on the By vertical table, and
+  // two permanently empty columns on the rep × vertical matrix.
+  //
+  // They are not equally empty, and neither is worth a row. 'Contract' has NO
+  // orders anywhere in the book, so it was pure phantom. 'DEMO' has 29, but
+  // only ONE is booked to a rep on the roster — the rest sit with house and ops
+  // names — and a demo earns no revenue and no commission by design.
+  //
+  // This matches OrderDashboard's own VERTICALS list, which has always been
+  // these four; the rep dashboard was the odd one out.
+  //
+  // ORDER COUNTS ARE UNCHANGED. `orders` below is still the rep's whole book,
+  // so nothing is subtracted from the leaderboard metric or from what any other
+  // page reports — the two verticals stop being LISTED, they are not deleted.
+  const VERTS = ['PI', 'VA', 'DOL', 'TriCare'];
 
   // Non-producers are flagged here and DROPPED below, so they are absent from
   // the whole rep dashboard rather than merely hidden by the two leaderboards.
@@ -3244,8 +4617,35 @@ export async function getRepOverview(viewer = null) {
   // This is a REP-DASHBOARD decision only. getCommission is a separate endpoint
   // and is untouched: a demo or house order still has to reconcile and still
   // pays whoever it pays, so no commission row is lost by this.
+  // ── REPORTING LINES ─────────────────────────────────────────────────────────
+  // Loaded HERE, above the rows, because two things below need them: which reps
+  // this viewer supervises (their rows carry operational detail) and which reps
+  // are withheld from them entirely (see `shown`).
+  const jsonCfg = async (key, fallback) => {
+    const raw = String(await cfgValue(key, '')).trim();
+    if (!raw) return fallback;
+    try { const v = JSON.parse(raw); return v && typeof v === 'object' ? v : fallback; }
+    catch { return fallback; }
+  };
+  const subRepMap = await jsonCfg('REP_SUB_REPS', REP_SUB_REPS);
+  const blindspots = blindspotsFor(mine, subRepMap, await jsonCfg('REP_BLINDSPOTS', REP_BLINDSPOTS));
+  // The reps THIS viewer supervises, lower-cased. Empty for an admin, who is
+  // already unredacted, and for anyone who supervises nobody.
+  const supervises = new Set(
+    Object.entries(subRepMap || {})
+      .filter(([boss]) => mine && String(boss).trim().toLowerCase() === mine)
+      .flatMap(([, subs]) => (subs || []).map((s) => String(s).trim().toLowerCase())),
+  );
+
   const rows = REP_NAMES.map((rep) => {
     const own = isAdmin || isOwn(rep);
+    // A REP THE VIEWER SUPERVISES. Their row carries the OPERATIONAL detail a
+    // supervisor needs — units, accounts, devices, last order, the per-vertical
+    // and per-month splits — which `lean` would otherwise strip to a bare order
+    // count. Deliberately NOT `own`: `own` is what unlocks MONEY, and pay stays
+    // between the rep and finance. Commission, payable, waiting and revenue are
+    // null on a sub-rep's row exactly as on any other peer's.
+    const supervised = !own && supervises.has(String(rep).trim().toLowerCase());
     const orders = analytics.orders.filter((o) => o.rep === rep);
     const cm = commByRep.get(rep) || null;
     const sh = sheetByRep.get(rep) || null;
@@ -3253,7 +4653,9 @@ export async function getRepOverview(viewer = null) {
     // Order counts are the one thing shared across the team. With
     // STANDINGS_ORDERS_ONLY on, everything else about another rep goes too, so
     // Team Standings can only ever be a ranking by volume.
-    const lean = !own && STANDINGS_ORDERS_ONLY;
+    // `supervised` opts out of lean: a supervisor sees their sub-rep's volume in
+    // full. Everyone else's peer row is still name-and-count only.
+    const lean = !own && !supervised && STANDINGS_ORDERS_ONLY;
     const byVertical = VERTS.map((v) => {
       const set = orders.filter((o) => o.vertical === v);
       return {
@@ -3282,19 +4684,78 @@ export async function getRepOverview(viewer = null) {
       // MANAGER ONLY. A rep's permitted figures are orders, units and their own
       // commission; the vendor spread is not one of them, so it is nulled even
       // on their own row rather than merely left off the tile row.
-      accounts: isAdmin && !lean ? new Set(orders.map((o) => o.account).filter(isRealAccount)).size : null,
+      accounts: (isAdmin || supervised) && !lean ? new Set(orders.map((o) => o.account).filter(isRealAccount)).size : null,
       // How many verticals this rep actually works in — the thing the old
       // "accounts" number was accidentally measuring for VA and TriCare reps.
       verticals: lean ? null : byVertical.filter((v) => v.orders > 0).length,
       devices: lean ? null : new Set(orders.flatMap((o) => o.devices.map((d) => d.item))).size,
       lastOrder: lean ? null : (orders.map((o) => o.date).filter(Boolean).sort().slice(-1)[0] || null),
       byVertical,
+      // THE SAME ROW, CUT BY CALENDAR MONTH — what a period selector on the
+      // leaderboard ranks. Derived from the very orders `orders` above counts,
+      // so a month's figures can never disagree with the all-time ones they sum
+      // to; deriving them from a second source is how two boards on one page
+      // start reporting different numbers.
+      //
+      // Order counts follow the same rule as the total: shared across the team.
+      // Units follow `lean`, so a peer row stays counts-only per month exactly
+      // as it is in aggregate — a period selector must not become a way to read
+      // a figure the aggregate withholds.
+      byMonth: (() => {
+        const m = new Map();
+        for (const o of orders) {
+          const key = String(o.date || '').slice(0, 7);
+          if (!key) continue;                       // undated orders join no month
+          const e = m.get(key) ?? { month: key, orders: 0, units: 0, revenue: 0, accts: new Set(), verts: new Map() };
+          e.orders += 1;
+          e.units += o.units;
+          e.revenue += Number(o.revenue || 0);
+          if (isRealAccount(o.account)) e.accts.add(o.account);
+          const v = e.verts.get(o.vertical) ?? { orders: 0, units: 0 };
+          v.orders += 1; v.units += o.units;
+          e.verts.set(o.vertical, v);
+          m.set(key, e);
+        }
+        return [...m.values()]
+          .sort((a, b) => a.month.localeCompare(b.month))
+          .map((e) => ({
+            month: e.month,
+            orders: e.orders,
+            units: lean ? null : e.units,
+            // REVENUE and ACCOUNTS were added so the team table can be read one
+            // month at a time rather than only in aggregate. Cut from the same
+            // `orders` pass as everything else here, and carrying the SAME
+            // redaction as their all-time counterparts above — revenue is
+            // admin-only, accounts is admin-and-not-lean. A period selector must
+            // never become a way to read a figure the aggregate withholds.
+            revenue: isAdmin ? round2(e.revenue) : null,
+            accounts: (isAdmin || supervised) && !lean ? e.accts.size : null,
+            // The SAME four verticals, in the same order, as byVertical above:
+            // the mix bar is drawn from this and would re-colour between periods
+            // if the list were built from whatever the month happened to hold.
+            byVertical: VERTS.map((v) => ({
+              vertical: v,
+              orders: e.verts.get(v)?.orders ?? 0,
+              units: lean ? null : (e.verts.get(v)?.units ?? 0),
+            })),
+          }));
+      })(),
+      // THE PAY FIGURES, BY PAYOUT CYCLE — the same rows the Commission tab
+      // renders, so the two pages cannot disagree. See the note where
+      // `cycleByRep` is built. Money, so it follows `own` exactly as the
+      // aggregate `commission` / `payable` / `waiting` below do: a peer row
+      // carries none of it, and a period selector must not be a way around that.
+      commissionByCycle: own ? (cycleByRep.get(rep) ?? []) : null,
       // Admin only, for the same reason as byVertical above: own revenue is
       // still revenue. Commission below IS the rep's to see.
       revenue: isAdmin ? round2(orders.reduce((s, o) => s + o.revenue, 0)) : null,
       commission: own ? (cm?.total ?? 0) : null,
       payable: own ? (cm?.payableTotal ?? 0) : null,
       waiting: own ? (cm?.waitingTotal ?? 0) : null,
+      // Commission DUE, per vertical and per month. Money, so it follows `own`
+      // exactly as the three figures above do — a peer row carries null, not a
+      // zero, because zero is a claim about their pay and null is silence.
+      commissionDue: own ? commissionRollup(rep) : null,
       matchRate: sh?.matchRate ?? null,       // operational, shared
       verified: sh?.verified ?? false,
     };
@@ -3330,14 +4791,77 @@ export async function getRepOverview(viewer = null) {
   // date, and no money of any kind. That is the whole of what a leaderboard
   // needs, and it is the whole of what a rep receives about anybody else.
   //
-  // This deliberately re-opens what the previous change had closed. Peer names
-  // and peer order counts ARE visible to a rep again; that is the cost of
+  // Peer names and peer order counts ARE visible to a rep; that is the cost of
   // ranking them against each other, and it was asked for explicitly. Pay is
   // not part of the trade: commission, payable, waiting and revenue stay
   // own-row-only here, and /api/commission still ships a rep nothing but their
   // own rows.
-  const shown = producers;
+  //
+  // ── EXCEPT WHERE A BLIND SPOT APPLIES ──────────────────────────────────────
+  //
+  // REP_BLINDSPOTS names, per viewer, the reps their login must show nothing
+  // about. Jillian works under Alle, so Alle's book is not hers to read. The
+  // row is DROPPED rather than blanked, for the reason redactCommissionPayload
+  // drops peers on /api/commission: a row cut down to a name and a count still
+  // names the rep, and nulling fields one at a time means the next field added
+  // leaks by default.
+  //
+  // RANK IS STAMPED BEFORE THE FILTER, and that is the part that matters.
+  // Removing Alle's 185 would otherwise float Jillian's 99 to the top of the
+  // list and the board would tell her she is 1st, fire the top-of-the-board
+  // banner and burn her one-per-achievement confetti — a false claim
+  // manufactured by the privacy filter itself. `rank` is computed over the whole
+  // producing field, so a hidden rep leaves a GAP in the numbering instead of
+  // promoting everyone below her. Jillian reads 2nd, and position 1 is simply
+  // not there.
+
+  // The true field, ranked on the metric the board ranks on: order count.
+  const byRank = [...producers].sort((a, b) => b.orders - a.orders || a.rep.localeCompare(b.rep));
+  byRank.forEach((r, i) => { r.rank = i + 1; });
+
+  // THE SAME RANK, PER MONTH. The board defaults to the current month, and
+  // without this the client fell back to array position whenever a period was
+  // selected — which re-opens the exact hole `rank` exists to close. A row the
+  // viewer does not receive (a blind spot, or a sub-rep now shown inside their
+  // supervisor's card) would silently promote everyone beneath it, so a rep
+  // could read 1st for a month they placed 2nd in.
+  //
+  // Ranked over the whole producing field, and only over reps who booked that
+  // month — the board itself drops a rep with nothing in the period rather than
+  // listing them last on zero, so ranking them would leave an unreachable number.
+  const monthKeys = new Set(producers.flatMap((r) => (r.byMonth ?? []).map((m) => m.month)));
+  for (const key of monthKeys) {
+    const field = producers
+      .map((r) => ({ rep: r.rep, m: (r.byMonth ?? []).find((x) => x.month === key) }))
+      .filter((x) => x.m && x.m.orders > 0)
+      .sort((a, b) => b.m.orders - a.m.orders || a.rep.localeCompare(b.rep));
+    field.forEach((x, i) => { x.m.rank = i + 1; });
+  }
+
+  const shown = isAdmin || !blindspots.size
+    ? producers
+    : producers.filter((r) => r.isSelf || !blindspots.has(String(r.rep).trim().toLowerCase()));
   const shownNames = new Set(shown.map((r) => r.rep));
+
+  // ── "WORKS UNDER YOU" — the other half of the reporting line ────────────────
+  //
+  // Marks a row as the viewer's sub-rep so their login can say so. DISPLAY ONLY:
+  // no figure moves and the row stays exactly as lean as any other peer's — the
+  // supervisor gets the relationship, not extra access. Rolling the volume up
+  // into the supervisor's own row is what commRep() does for Denise Zavala, and
+  // is deliberately NOT what happens here: Jillian is a rep in her own right
+  // with her own login and her own pay.
+  //
+  // STAMPED ONLY FOR THE SUPERVISOR (and for an admin, who sees the whole org
+  // anyway). Setting it on every payload would tell Christy and Cassie who
+  // reports to whom, which is a disclosure nobody asked for and the smallest
+  // possible version of this feature does not need.
+  for (const r of shown) {
+    const boss = supervisorOf(r.rep, subRepMap);
+    r.subRepOf = boss && !r.isSelf && (isAdmin || (mine && String(boss).trim().toLowerCase() === mine))
+      ? boss
+      : null;
+  }
 
   // The KPI TILES are a different question from the leaderboard. They describe
   // the caller: a rep's tiles are their own orders, units and commission, not
@@ -3365,6 +4889,36 @@ export async function getRepOverview(viewer = null) {
     revenue: isAdmin ? round2(repOrders.reduce((s, o) => s + o.revenue, 0)) : null,
     commission: isAdmin ? round2(shown.reduce((s, r) => s + (r.commission ?? 0), 0)) : (self?.commission ?? null),
   };
+  // THE SAME TOTALS, CUT BY MONTH — for the team table's period selector.
+  //
+  // ACCOUNTS IS WHY THIS EXISTS. Orders, units and revenue could be summed from
+  // the rep rows on the client, but `accounts` is a DISTINCT count: two reps
+  // both billing the same law firm are one payer, and adding their row figures
+  // counts it twice (the rows sum to 60 against a true 57 all-time). The union
+  // can only be taken where the orders are, so it is taken here.
+  //
+  // Same source and same redaction as `teamTotals` above, so a month can never
+  // disagree with the aggregate it sums into.
+  const teamByMonth = (() => {
+    const m = new Map();
+    for (const o of repOrders) {
+      const key = String(o.date || '').slice(0, 7);
+      if (!key) continue;                         // undated orders join no month
+      const e = m.get(key) ?? { month: key, orders: 0, units: 0, revenue: 0, accts: new Set() };
+      e.orders += 1;
+      e.units += o.units;
+      e.revenue += Number(o.revenue || 0);
+      if (isRealAccount(o.account)) e.accts.add(o.account);
+      m.set(key, e);
+    }
+    return [...m.values()].sort((a, b) => a.month.localeCompare(b.month)).map((e) => ({
+      month: e.month,
+      orders: e.orders,
+      units: e.units,
+      revenue: isAdmin ? round2(e.revenue) : null,
+      accounts: isAdmin ? e.accts.size : null,
+    }));
+  })();
   // The rest of the order book: everything not booked to a producing rep —
   // house/clinic accounts, ops staff, departed names, unassigned. Reported
   // rather than folded in, so the gap against Orders & Revenue is explained
@@ -3407,8 +4961,21 @@ export async function getRepOverview(viewer = null) {
     bookTotals,
     me: viewer?.repName ?? null,
     verticals: VERTS,
+    // EVERY month the shown book touches, oldest first, so a period selector
+    // offers exactly the periods that exist. Built from the rows rather than
+    // from a date range: a month nobody booked in is not a period to rank, and
+    // generating the range would offer an empty board as a valid choice.
+    // The UNION of order months and payout-cycle months. A cycle can settle in a
+    // month the order book has nothing in (2026-03 pays for work booked earlier),
+    // and keying the picker off orders alone would leave that money unreachable —
+    // present in the All time total, in no period you could select.
+    months: [...new Set([
+      ...shown.flatMap((r) => (r.byMonth ?? []).map((m) => m.month)),
+      ...shown.flatMap((r) => (r.commissionByCycle ?? []).map((m) => m.month)),
+    ])].sort(),
     reps: shown.sort((a, b) => (b.revenue ?? -1) - (a.revenue ?? -1) || b.orders - a.orders),
     teamTotals,
+    teamByMonth,
     unattributed,
     bookOrders: isAdmin ? analytics.orders.length : null,
     excludedCancelled: analytics.excludedCancelled ?? 0,
@@ -3440,26 +5007,40 @@ export { PI_STAGES };
 // SEVERAL REPORTS ARE ALLOWED. STRIVEN_LABELS_URL takes a comma- or
 // whitespace-separated list, and their rows are merged.
 //
-// This matters because the report is scoped IN STRIVEN, not here: the current
-// one returns totalRecords 119 — the PI/PIP book — so VA, TriCare and DEMO
-// orders come back with no labels however this code is written. The fix is a
-// Striven-side one (widen that report, or save a second for the other
-// programmes), and accepting a list means it lands as an env change with no
-// code release.
+// This matters because each report is SCOPED IN STRIVEN, not here, and no
+// amount of code on this side can give an order a label its report omits. The
+// first report used to return 119 rows — the PI/PIP book alone — which is why
+// the list exists; it has since been widened in Striven to 471 and now covers
+// the whole book, VA included.
+//
+// The second entry is the VA book (216 rows). It is a STRICT SUBSET of the
+// widened first report and agrees with it on every row, so today it changes no
+// figure. It is listed anyway because the first report's scope is a Striven-side
+// setting: if someone narrows it back to PI, the VA board would silently empty,
+// and naming the VA report is what stops the board depending on a setting that
+// lives outside this repository.
+//
+// Reports may overlap freely: rows merge into one soId → labels map, so an order
+// listed in several simply resolves once. TriCare and DEMO have no report of
+// their own and rely entirely on the first one.
 // Supabase app_config first, env second — see cfgValue().
 const LABELS_URLS = async () => String(await cfgValue('STRIVEN_LABELS_URL'))
   .split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 
 /**
- * Fetch one saved report, following pagination.
+ * Fetch one saved Striven report, following pagination.
  *
- * The response carries totalRecords / pageSize / pageIndex / nextPage. Today it
- * fits one page (119 of a 10,000 page size) so this changes nothing — but a
- * widened report covering the whole 497-order book could not, and silently
- * reading page one would then drop labels with no error anywhere. Capped so a
- * malformed nextPage cannot spin.
+ * The response carries totalRecords / pageSize / pageIndex / nextPage. Today
+ * every report fits one page (400-471 rows of a 10,000 page size) so this
+ * changes nothing — but a widened report covering the whole book could not, and
+ * silently reading page one would then drop rows with no error anywhere. Capped
+ * so a malformed nextPage cannot spin.
+ *
+ * Shared by the LABELS and TRACKING reports: both are saved reports on the same
+ * endpoint with a bearer token in the path, and the pagination bug above is one
+ * anybody would reintroduce writing the second fetcher from scratch.
  */
-async function fetchLabelReport(url) {
+async function fetchSavedReport(url) {
   const out = [];
   let next = url;
   for (let page = 0; next && page < 25; page += 1) {
@@ -3481,7 +5062,7 @@ async function soLabelsBySoId() {
   if (!urls.length) return new Map();
   return cached('derived:so-labels', async () => {
     const [pages, soBlob] = await Promise.all([
-      Promise.all(urls.map((u) => fetchLabelReport(u))),
+      Promise.all(urls.map((u) => fetchSavedReport(u))),
       sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
     ]);
     const rows = pages.flat();
@@ -3500,6 +5081,104 @@ async function soLabelsBySoId() {
       // the one source that has a first name at all: report_patient_items drops
       // it at ingest, so every other patient field in the portal is surname-only.
       out.set(id, { labels, patient: commInitialLastDisp(r?.PatientName) });
+    }
+    return out;
+  }, 60_000);
+}
+
+// ── Striven sales-order TRACKING NUMBERS ─────────────────────────────────────
+// A second saved report, one row per PI/VA sales order, carrying TrackingNumber
+// and ShipVia. Like the labels report the URL holds a bearer token in its path,
+// so it is configuration (Supabase app_config STRIVEN_TRACKING_URL), never
+// committed source, and a comma/whitespace list is accepted so more reports can
+// be added without a code change.
+//
+// WHY A REPORT WHEN /v1/sales-orders/{id} ALREADY RETURNS trackingNumber:
+//   · ONE request instead of 520. The detail route is only reachable through the
+//     `so_detail` cache, topped up on a 6h cycle, so a tracking number entered
+//     in Striven took up to 6h to appear. This is read per request (60s memo).
+//   · ShipVia. The detail endpoint returns it null on every order sampled;
+//     the report has it filled on every tracked row (UPS 84, USPS 13, Fed Ex 26),
+//     which replaces guessing the carrier from the number's format.
+// Verified against the detail route on 2026-08-12: 123 tracked orders, 123
+// agreements, zero contradictions.
+//
+// IT DOES NOT REPLACE `so_detail`. The report is scoped to PI + VA in Striven —
+// 400 of 520 orders — so TriCare, DEMO and Contract orders appear in it not at
+// all, and their tracking still comes from the cache. Report first, cache
+// second; see getSO().
+const TRACKING_URLS = async () => String(await cfgValue('STRIVEN_TRACKING_URL'))
+  .split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+
+// Striven's own ShipVia text → the carrier codes the tracking URLs are keyed by.
+// Normalised to letters only, so "Fed Ex", "FedEx" and "FEDEX" are one carrier.
+const SHIPVIA_CARRIER = {
+  ups: 'ups', usps: 'usps', unitedstatespostalservice: 'usps',
+  fedex: 'fedex', federalexpress: 'fedex', dhl: 'dhl_express', dhlexpress: 'dhl_express',
+};
+const carrierOfShipVia = (s) => SHIPVIA_CARRIER[String(s || '').toLowerCase().replace(/[^a-z]/g, '')] || null;
+
+// ONE ORDER CAN CARRY SEVERAL PARCELS. Striven has no repeating field for that,
+// so staff put both numbers in the one box: "1Z18H97F0306688623,
+// 1Z18H97F0310776841". Treating that as a single number produced a value no
+// carrier recognises and no format matches — which is exactly how it was found.
+const splitTracking = (raw) => String(raw || '').split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
+
+/**
+ * The parcels on one order: a number, and the carrier to track it with.
+ *
+ * ShipVia LEADS because it is what Striven records; the format detector is the
+ * fallback for the orders (and any future report) that carry a number and no
+ * carrier. Both can fail, and `carrier: null` is then the honest answer — the
+ * number still shows, unlinked, rather than pointing at a guessed carrier.
+ */
+export function shipmentsOf(raw, shipVia) {
+  const fromShipVia = carrierOfShipVia(shipVia);
+  return splitTracking(raw).map((tn) => {
+    const code = fromShipVia || detectCarrier(tn);
+    return {
+      tn,
+      carrier: code
+        ? { code, name: CARRIER_NAME[code] || code.toUpperCase(), url: (CARRIER_URL[code] || (() => ''))(tn) }
+        : null,
+    };
+  });
+}
+
+/** soId → { tracking, shipVia } from the tracking report. Empty when unconfigured. */
+async function soTrackingBySoId() {
+  const urls = await TRACKING_URLS();
+  if (!urls.length) return new Map();
+  return cached('derived:so-tracking', async () => {
+    const [pages, soBlob] = await Promise.all([
+      Promise.all(urls.map((u) => fetchSavedReport(u))),
+      sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
+    ]);
+    const so = Array.isArray(soBlob) ? soBlob : [];
+    // SalesOrderId is on this report and is the exact join, so unlike the labels
+    // report there is no name-matching to get wrong. The Number → id map is kept
+    // as a fallback for a report saved without that column.
+    const idByNumber = new Map(
+      so.filter((o) => o?.number != null).map((o) => [String(o.number).trim().toLowerCase(), String(o.id)]),
+    );
+    const out = new Map();
+    for (const r of pages.flat()) {
+      const id = r?.SalesOrderId != null
+        ? String(r.SalesOrderId)
+        : idByNumber.get(String(r?.Number ?? '').trim().toLowerCase());
+      const tracking = String(r?.TrackingNumber ?? '').trim();
+      // Rows with no tracking number are the majority and carry nothing this
+      // map is for. Skipping them keeps "has an entry" meaning "is tracked".
+      if (!id || !tracking) continue;
+      out.set(id, {
+        tracking,
+        shipVia: String(r?.ShipVia ?? '').trim(),
+        // The patient, reduced to an INITIAL + SURNAME at this boundary — the
+        // full first name is never stored, cached or serialized, exactly as the
+        // labels report is handled. Carried because this report names orders the
+        // labels one does not, and a rep identifies an order by patient.
+        patient: commInitialLastDisp(r?.PatientName),
+      });
     }
     return out;
   }, 60_000);
@@ -3555,7 +5234,9 @@ function stagesFromLabels(labels, stages, map) {
 }
 
 const STAGE_KEY = 'pi_stages';
-const isPiStage = (s) => PI_STAGES.includes(String(s));
+// canonicalStage first: a stage that has been RENAMED is still the same stage,
+// and the store holds whatever string was current when the order was moved.
+const isPiStage = (s) => PI_STAGES.includes(canonicalStage(s));
 
 async function readStageStore() {
   const hit = await sbCacheRead(STAGE_KEY).catch(() => null);
@@ -3567,10 +5248,13 @@ async function readStageStore() {
  * Move one order to a stage and record the transition.
  * @param {{soId:string, stage:string, user:string}} p
  */
-export async function setPiStage({ soId, stage, user }) {
+export async function setPiStage({ soId, stage: requested, user }) {
   const id = String(soId ?? '').trim();
   if (!id) throw new Error('soId is required');
-  if (!isPiStage(stage)) throw new Error(`unknown stage "${stage}" — expected one of: ${PI_STAGES.join(', ')}`);
+  if (!isPiStage(requested)) throw new Error(`unknown stage "${requested}" — expected one of: ${PI_STAGES.join(', ')}`);
+  // Written under the CURRENT name, so a caller still sending an old one does
+  // not seed the store with a string the next rename has to alias too.
+  const stage = canonicalStage(requested);
   return withKeyLock(STAGE_KEY, async () => {
   const store = await readStageStore();          // re-read inside the lock
   const prev = store[id];
@@ -3589,8 +5273,15 @@ export async function setPiStage({ soId, stage, user }) {
 }
 
 /**
- * The PI pipeline: one bucket per stage with its orders, plus how long each has
- * been sitting. Scoped like commission — a rep sees only their own orders.
+ * THREE pipelines off one payload: PI, PIP and VA. One bucket per stage with
+ * its orders, plus how long each has been sitting. Scoped like commission — a
+ * rep sees only their own orders.
+ *
+ * The boards are separate because their stages are: a PIP order never reaches
+ * Lienstar, and a VA order has neither an attorney nor a settlement. They share
+ * this function because they share everything else — the ageing, the label
+ * folding, the review queue and the redaction rules are one implementation, so
+ * the three boards cannot drift apart.
  */
 export async function getPiStages(viewer = null) {
   const isAdmin = viewer?.role === 'admin';
@@ -3616,8 +5307,14 @@ export async function getPiStages(viewer = null) {
   const isPip = (o) => isPipType(o.type || '')
     || (labelMap.get(String(o.soId))?.labels || [])
       .some((l) => pipLabels.has(String(l).trim().toLowerCase()));
-  const stagesFor = (o) => (isPip(o) ? PIP_STAGES : PI_STAGES);
-  const mapFor = (o) => (isPip(o) ? PIP_LABEL_STAGE : PI_LABEL_STAGE);
+  // VA needs no label sniffing: it is already its own VERTICAL, so the order
+  // type decides and nothing is inferred. Checked FIRST, so a VA order carrying
+  // a stray PIP label is still read against the VA stages — the vertical is a
+  // fact about the payer, the label is only ever evidence of one.
+  const isVa = (o) => o.vertical === 'VA';
+  const boardOf = (o) => (isVa(o) ? 'VA' : isPip(o) ? 'PIP' : 'PI');
+  const stagesFor = (o) => (isVa(o) ? VA_STAGES : isPip(o) ? PIP_STAGES : PI_STAGES);
+  const mapFor = (o) => (isVa(o) ? VA_LABEL_STAGE : isPip(o) ? PIP_LABEL_STAGE : PI_LABEL_STAGE);
 
   const build = (rows) => rows
     .map((o) => {
@@ -3644,8 +5341,15 @@ export async function getPiStages(viewer = null) {
       const flagged = labels.filter((l) => reviewSet.has(l.trim().toLowerCase()));
       const unknown = labels.filter((l) => !reviewSet.has(l.trim().toLowerCase())
         && stagesOfLabel(mapFor(o), l).length === 0);
-      const fromField = mine.includes(o.strivenStage) ? o.strivenStage : '';
-      const fromStore = mine.includes(rec?.stage) ? rec.stage : '';
+      // Both sources hold a free string written OUTSIDE this codebase — the
+      // Striven custom field by staff, the store by whoever last moved the
+      // order — so both are read through the rename map before being matched.
+      // Without it a renamed stage stops matching and the order drops to stage
+      // 1 with `source: 'default'`, which reads as "never tagged".
+      const fieldStage = canonicalStage(o.strivenStage);
+      const storeStage = canonicalStage(rec?.stage);
+      const fromField = mine.includes(fieldStage) ? fieldStage : '';
+      const fromStore = mine.includes(storeStage) ? storeStage : '';
       const stage = fromLabels || fromField || fromStore || mine[0];
       const src = fromLabels ? 'labels' : fromField ? 'striven' : fromStore ? 'portal' : 'default';
       // WHERE THIS ORDER IS VISIBLE. `stage` is its current position — one
@@ -3676,7 +5380,7 @@ export async function getPiStages(viewer = null) {
         // surname beats a blank. A rep identifies an order by patient, not by
         // "SO-476".
         patient: tag?.patient || o.patient || '',
-        pipeline: isPip(o) ? 'PIP' : 'PI',
+        pipeline: boardOf(o),
         stageSince: since,
         daysInStage: daysSince(since),
         estimated: !tracked,                    // ageing is a fallback, not measured
@@ -3692,12 +5396,19 @@ export async function getPiStages(viewer = null) {
       || String(b.date || '').localeCompare(String(a.date || ''))
       || String(b.ref || '').localeCompare(String(a.ref || '')));
 
-  // Two boards off one filtered set. `orders` stays the PI board so every
-  // existing caller keeps working; `pipOrders` / `pipStages` are additive.
+  // Three boards off one filtered set. `orders` stays the PI board so every
+  // existing caller keeps working; `pipOrders`/`pipStages` and `vaOrders`/
+  // `vaStages` are additive.
+  //
+  // PI and PIP split one vertical between them; VA is a vertical of its own, so
+  // the three books are disjoint by construction and no order can be counted
+  // twice across them.
   const piBook = analytics.orders.filter((o) => o.vertical === 'PI' && !isPip(o));
   const pipBook = analytics.orders.filter((o) => o.vertical === 'PI' && isPip(o));
+  const vaBook = analytics.orders.filter((o) => o.vertical === 'VA');
   const orders = build(piBook);
   const pipOrders = build(pipBook);
+  const vaOrders = build(vaBook);
 
   // TWO COUNTS PER STAGE, and they measure different things:
   //
@@ -3725,6 +5436,7 @@ export async function getPiStages(viewer = null) {
   });
   const stages = roll(orders, PI_STAGES);
   const pipStages = roll(pipOrders, PIP_STAGES);
+  const vaStages = roll(vaOrders, VA_STAGES);
 
   // ── REVIEW: labels nobody has mapped yet ────────────────────────────────────
   // Striven's label vocabulary is edited by staff, not by this codebase, so a
@@ -3738,7 +5450,7 @@ export async function getPiStages(viewer = null) {
   // book to find it. For a rep this is always an empty list — the same
   // redaction rule the rest of this payload follows.
   const reviewOrders = isAdmin
-    ? [...orders, ...pipOrders]
+    ? [...orders, ...pipOrders, ...vaOrders]
       .filter((o) => o.unknown.length > 0 || o.flagged.length > 0)
       .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
     : [];
@@ -3778,6 +5490,12 @@ export async function getPiStages(viewer = null) {
     pipStageNames: PIP_STAGES,
     pipStages,
     pipOrders,
+    // VA: its own board, off the VA vertical. Populated as soon as a VA labels
+    // report is listed in STRIVEN_LABELS_URL; before that every VA order sits in
+    // stage 1, which is the honest reading of "no label says otherwise".
+    vaStageNames: VA_STAGES,
+    vaStages,
+    vaOrders,
     // Orders carrying a label this codebase does not recognise, and the distinct
     // labels behind them. Admin-only; empty for a rep.
     reviewOrders,

@@ -45,6 +45,12 @@ const get = async (id) => {
         // route by which the real stage can reach the portal. Empty until then,
         // and the portal's own stage store takes over.
         stage: String(cf(d, 'Stage') || '').trim(),
+        // Carrier tracking number off the sales order. Must stay in step with
+        // refreshDerived() in api/_striven.js — the two write the same cache,
+        // and a field on one and not the other means the incremental top-up
+        // silently blanks what the full rebuild filled in.
+        tracking: String(d.trackingNumber ?? '').trim(),
+        shipVia: d.shipVia?.name ?? d.shipVia ?? '',
       };
       return;
     }

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  fetchStrivenAccounts, fetchStrivenPayments, fetchStrivenBillPayments,
+  fetchStrivenAccounts, fetchStrivenPayments, fetchStrivenBillPayments, fetchApLedger,
   type AccountsResult, type GlAccount, type PaymentsResult, type BillPaymentsResult,
+  type ApLedger,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
@@ -26,6 +27,8 @@ export function AccountsTab() {
   const [accts, setAccts] = useState<AccountsResult | null>(null);
   const [pay, setPay] = useState<PaymentsResult | null>(null);
   const [bp, setBp] = useState<BillPaymentsResult | null>(null);
+  // The AP ledger sheet — where the vendor payments actually live. See `paid`.
+  const [apl, setApl] = useState<ApLedger | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<Drill | null>(null);
@@ -35,10 +38,11 @@ export function AccountsTab() {
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
     try {
-      const [a, p, b] = await Promise.all([
+      const [a, p, b, l] = await Promise.all([
         fetchStrivenAccounts(), fetchStrivenPayments(), fetchStrivenBillPayments(),
+        fetchApLedger().catch(() => null),
       ]);
-      setAccts(a); setPay(p); setBp(b);
+      setAccts(a); setPay(p); setBp(b); setApl(l);
       setLastSync(Date.now());
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : 'Failed to load accounts.');
@@ -65,12 +69,32 @@ export function AccountsTab() {
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [accounts]);
 
+  // ── BILLS PAID COMES FROM THE AP LEDGER, like every other screen ───────────
+  //
+  // This card read Striven's bill-payment records: ONE payment, $840 to HiDow.
+  // The Payables tab had already moved to the AP ledger's Debit column — 51
+  // payments, $76,026.06 — so the site carried two tiles with the same label
+  // and a $75,186.06 gap between them, on different tabs where nobody would see
+  // them together and notice.
+  //
+  // Striven's own record is NOT dropped. It keeps its table below, retitled as
+  // what it is, so whoever remembers the $840 can still find it.
+  const useLedgerPaid = Boolean(apl?.ok && (apl.totals?.paymentRows ?? 0) > 0);
+  const paidTotal = useLedgerPaid ? (apl!.totals!.paidRecorded ?? 0) : (bp?.total ?? 0);
+  const paidRowCount = useLedgerPaid ? (apl!.totals!.paymentRows ?? 0) : (bp?.count ?? 0);
+
   // Bill payments grouped by vendor → amount paid (ranked money bar).
   const bpByVendor = useMemo(() => {
+    if (useLedgerPaid) {
+      return (apl?.subLedgers ?? [])
+        .filter((g) => g.paymentRows > 0)
+        .map((g) => ({ name: g.subLedger || '-', value: g.paidRecorded }))
+        .sort((a, b) => b.value - a.value);
+    }
     const m = new Map<string, number>();
     for (const r of bp?.recent ?? []) m.set(r.vendor || '-', (m.get(r.vendor || '-') ?? 0) + r.amount);
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [bp]);
+  }, [bp, apl, useLedgerPaid]);
 
   const paidCount = useMemo(() => (bp?.recent ?? []).filter((r) => isPaid(r.status)).length, [bp]);
 
@@ -163,11 +187,22 @@ export function AccountsTab() {
                 title: 'Payments Received', sub: 'Customer payments by month',
                 ...kv([...pay.byMonth.map((m) => ({ k: monthLabel(m.month), v: formatCurrency(m.amount) })), { k: 'Total received', v: formatCurrency(pay.total) }]),
               })} />
-            <KpiR ico="wallet" tint="#D97706" label="Bills Paid" value={bp.total} format={formatCurrency}
-              deltaText={`${paidCount} of ${bp.count} paid`} foot="money out · settled to vendors"
+            {/* Same source and therefore the same figure as the Payables tab's
+                "Bills Paid". They are the same claim about the same money and
+                must not be able to differ. */}
+            <KpiR ico="wallet" tint="#D97706" label="Bills Paid" value={paidTotal} format={formatCurrency}
+              deltaText={`${paidRowCount} payment${paidRowCount === 1 ? '' : 's'}`}
+              foot={useLedgerPaid ? 'AP ledger · Debit column' : 'Striven · ledger unavailable'}
               onClick={() => setDrill({
-                title: 'Bills Paid', sub: 'Vendor bill payments by vendor',
-                ...kv([...bpByVendor.map((v) => ({ k: v.name, v: formatCurrency(v.value) })), { k: 'Total paid', v: formatCurrency(bp.total) }]),
+                title: 'Bills Paid',
+                sub: `Vendor bill payments by vendor · ${useLedgerPaid ? 'AP ledger sheet' : 'Striven records'}`,
+                ...kv([
+                  ...bpByVendor.map((v) => ({ k: v.name, v: formatCurrency(v.value, true) })),
+                  { k: 'Total paid', v: formatCurrency(paidTotal, true) },
+                  ...(useLedgerPaid && (bp?.count ?? 0) > 0
+                    ? [{ k: `— Striven separately records ${bp!.count} payment${bp!.count === 1 ? '' : 's'} (included above)`, v: formatCurrency(bp!.total, true) }]
+                    : []),
+                ]),
               })} />
             <KpiR ico="users" tint="#7C3AED" label="Active Accounts" value={activeCount}
               deltaText={accounts.length ? `${Math.round((activeCount / accounts.length) * 100)}% of ledger` : '-'}
@@ -186,13 +221,25 @@ export function AccountsTab() {
           {/* ── Bill payments: PAID ────────────────────────────────── */}
           <ChartCard
             title="Bill Payments: Paid"
-            sub={`${formatCurrency(bp.total)} settled · ${paidCount} of ${bp.count} bill payment${bp.count === 1 ? '' : 's'} marked paid`}
+            sub={`${formatCurrency(paidTotal)} settled across ${paidRowCount} payment${paidRowCount === 1 ? '' : 's'}${useLedgerPaid ? ' · AP ledger · Debit column' : ''}`}
           >
             <div className="paid-banner">
               <span className="paid-banner-check">✓</span>
-              <span><strong>All caught up.</strong> Every recorded bill payment has been settled with the vendor: {formatCurrency(bp.total)} paid.</span>
+              <span><strong>All caught up.</strong> Every recorded bill payment has been settled with the vendor: {formatCurrency(paidTotal)} paid.</span>
             </div>
             {bpByVendor.length > 0 && <RankBar data={bpByVendor} money colorAt={() => C.positive} onSelect={openBpDrill} />}
+            {/* STRIVEN'S OWN RECORDS, and only those. The figures above come
+                from the AP ledger, which carries a vendor, a date and an amount
+                and no reference, bank account or status — so this table cannot
+                be rebuilt from it, and is kept as the narrower thing it is
+                rather than deleted. The payments here are INCLUDED in the total
+                above, not additional to it. */}
+            {(bp?.count ?? 0) > 0 && (
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 14, marginBottom: -4 }}>
+                Striven&rsquo;s own bill-payment records — {bp!.count} of the {paidRowCount} above, {formatCurrency(bp!.total)}.
+                The rest are recorded only in the AP ledger sheet, which carries no reference or bank account.
+              </div>
+            )}
             <div className="table-wrap" style={{ marginTop: 14 }}>
               <table className="data-table">
                 <thead>

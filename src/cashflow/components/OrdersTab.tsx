@@ -423,9 +423,13 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
       {mode === 'sales' && so && (
         <>
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            {/* Same correction as the chart below: this tile's $1,472,516 and
+                its 501 orders BOTH include the 29 demo ones, so "demo excluded"
+                was describing a filter that is not applied. Cancelled is the
+                only exclusion, and it is the one worth naming. */}
             <KpiR ico="bag" tint="#0A369F" label="Total Order Value" value={so.totalValue} format={formatCurrency}
               deltaText={`${so.count.toLocaleString()} open + completed orders`}
-              foot={`${so.statusGroups.cancelled.count} cancelled + ${so.demoCount} demo excluded`}
+              foot={`${so.statusGroups.cancelled.count} cancelled excluded · includes ${so.demoCount} demo`}
               onClick={() => filterTo('All')} />
             <KpiR ico="clock" tint="#D97706" label="Pending / In Progress" value={so.statusGroups.active.count}
               deltaText={formatCurrency(so.statusGroups.active.value)} foot="awaiting fulfilment · click to filter"
@@ -441,7 +445,13 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
           {!so.enriched && <div className="info-banner"><span className="info-banner-icon">ℹ</span><span>Order type / rep / value enrichment is still populating: numbers will fill in shortly.</span></div>}
 
           <div className="exec-grid12">
-            <ChartCard className="g12-6" title="Order Value by Type" sub="PI vs VA vs Tri-Care · DEMO excluded"
+            {/* "DEMO excluded" was a leftover, and a visibly false one — the
+                DEMO bar has been rendered on this chart all along, because
+                `so.byType` maps straight through and getSO() stopped filtering
+                demo out (it was hiding 29 orders worth $18,169). The subtitle
+                now names what IS held back: cancelled orders, 24 of them worth
+                $125,011, which is the only thing missing from these bars. */}
+            <ChartCard className="g12-6" title="Order Value by Type" sub="PI vs VA vs Tri-Care vs DEMO · cancelled orders excluded"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={typeMode === 'value' ? 'active' : ''} onClick={() => setTypeMode('value')}>By Order Value</button>
@@ -465,8 +475,19 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               <RankBar data={statusData} colorAt={(i) => STATUS_COLOR(statusData[i]?.name ?? '')} onSelect={drillSoStatus} />
             </ChartCard>
 
+            {/* `so.byRep` is the ROSTER now (folded to canonical names server-
+                side), so what it leaves out has to be said rather than left as
+                a gap between this board and the 501 on the tiles above. */}
             <ChartCard className="g12-12" title="Top Sales Reps · Leaderboard"
-              sub="PI reps by order count, VA reps by units (VA pays per unit): dollar value varies by program. Referral group removed, no patient data"
+              sub={`PI reps by order count, VA reps by units (VA pays per unit): dollar value varies by program. No patient data.${
+                (() => {
+                  const onRoster = so.byRep.reduce((s, r) => s + r.count, 0);
+                  const off = so.count - onRoster;
+                  return off > 0
+                    ? ` ${onRoster.toLocaleString()} of ${so.count.toLocaleString()} orders are booked to the ${so.byRep.length} reps; the other ${off.toLocaleString()} sit with house, practice and admin accounts, which are not reps and are not ranked.`
+                    : '';
+                })()
+              }`}
               right={
                 <div className="smr-seg" style={{ marginBottom: 0 }}>
                   <button className={repMetric === 'orders' ? 'active' : ''} onClick={() => setRepMetric('orders')}>Orders</button>
@@ -621,7 +642,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
           <div className="exec-grid12">
             <ChartCard className="g12-12"
               title="Top Vendors by PO Spend"
-              sub={`Active purchase orders only${po.cancelledCount ? ` · excludes ${po.cancelledCount} cancelled (${formatCurrency(po.cancelledValue ?? 0)})` : ''} · click a bar to drill in`}
+              sub={`Active purchase orders only${po.cancelledCount ? ` · excludes ${po.cancelledCount} cancelled (${formatCurrency(po.cancelledValue ?? 0)})` : ''}${po.demoCount ? ` and ${po.demoCount} raised for DEMO orders (${formatCurrency(po.demoValue ?? 0)})` : ''} · click a bar to drill in`}
             >
               <RankBar
                 data={vendorData}

@@ -49,8 +49,27 @@ export function rateForDevice(device, vertical, cfg = {}) {
  *  order book, so one definition governs revenue and commission alike. */
 export const isCancelledStatus = (s) => /cancel|void|lost|denied|rejected/i.test(String(s ?? ''));
 
+/**
+ * @param {string|string[]} status The order's status text AND/OR its Striven
+ *   labels. An array is joined, so a caller can pass both and have every rule
+ *   tested against every piece of evidence.
+ */
 export function classifyOrderLabel(status, rules = ORDER_LABEL_RULES) {
-  const s = String(status ?? '');
+  // THE RULES ARE NAMED FOR LABELS AND WERE ONLY EVER GIVEN A STATUS.
+  //
+  // ORDER_LABEL_RULES matches /hold/ and /waiting.*reimburse/, but the only
+  // thing ever passed in was the Striven order STATUS — which reads
+  // "In Progress", "Completed" or "Canceled" and nothing else. 50 orders in the
+  // book carry the HOLD label; not one has a status that matches it. So both
+  // rules were dead: every non-cancelled, non-$0 order classified as payable,
+  // heldOrders reported 0 across the board, and waitingTotal was $0 for every
+  // rep in every month.
+  //
+  // Accepting a list is what lets the caller pass the labels as well. Joined
+  // with a separator no rule can span, so two labels cannot combine into a
+  // phrase neither of them says.
+  const s = (Array.isArray(status) ? status : [status])
+    .map((v) => String(v ?? '').trim()).filter(Boolean).join(' | ');
   if (!s.trim()) return 'payable';
   for (const re of (rules.hold || [])) if (re.test(s)) return 'hold';
   for (const re of (rules.waiting || [])) if (re.test(s)) return 'waiting';
@@ -61,7 +80,7 @@ export function classifyOrderLabel(status, rules = ORDER_LABEL_RULES) {
 /**
  * commission = Σ (units × per-device rate) across the order's devices.
  * A `hold` order contributes $0 and produces no commission lines at all.
- * @param {{status?:string, program?:string, items?:{item:string, qty:number}[]}} order
+ * @param {{status?:string, labels?:string[], program?:string, items?:{item:string, qty:number}[]}} order
  * @returns {{state:string, units:number, commission:number, lines:Array, rateGaps:string[]}}
  */
 export function commissionForOrder(order, cfg = {}) {
@@ -74,7 +93,12 @@ export function commissionForOrder(order, cfg = {}) {
     return { state: 'cancelled', units: 0, commission: 0, lines: [], rateGaps: [] };
   }
 
-  const state = classifyOrderLabel(order?.status, cfg.labelRules);
+  // Status AND labels. The labels are where HOLD and "Waiting for
+  // Reimbursement" actually live; the status only says whether the order is
+  // open. Cancellation above stays on the STATUS alone, deliberately: a
+  // 'CANCELLED' label on a live order is a mislabel, and letting it void an
+  // order's commission would make a tag in Striven silently unpay someone.
+  const state = classifyOrderLabel([order?.status, ...(order?.labels || [])], cfg.labelRules);
 
   // Nothing was billed, so nothing is earned. A $0 order is excluded outright
   // rather than paying a device rate against revenue that never existed. This
@@ -148,6 +172,96 @@ export function splitByState(orders) {
   };
 }
 
+// ── The sheet against the workbook it was transcribed from ───────────────────
+/**
+ * Correct ONE rep-month's reconciliation-sheet lines against the SOURCE
+ * workbook rows for that same rep and month.
+ *
+ * WHY THIS EXISTS. The reconciliation sheet is not a source: it is a
+ * transcription of Crystal's commission workbooks with a Striven match column
+ * bolted on, and a transcription can be wrong. Cassie's July 2026 cycle is the
+ * case that found it — five L1833 brace lines carried the $425 combo rate
+ * instead of the $80 the workbook bills them at, and a sixth line (a $425
+ * combo) was dropped altogether. Net effect $1,300 too much, on a figure the
+ * page presents as signed off. Nothing on the page could have shown that,
+ * because the sheet was the only thing being read.
+ *
+ * THE WORKBOOK WINS ON MONEY AND DEVICE. It is the document the business
+ * actually pays from; the sheet's own value is its match evidence, which the
+ * workbook does not carry. So this takes the amount and the device name from
+ * the workbook and leaves everything else on the line — the Striven reference,
+ * the order date, the vertical, the payout cycle, the match tier — untouched.
+ *
+ * MATCHED IN TWO PASSES, patient-and-amount before patient-alone. A patient can
+ * legitimately hold several lines in one cycle (a combo AND a brace), so
+ * pairing on the patient alone would let a $425 combo consume the $80 brace row
+ * and report a "correction" that is really a mis-pairing. Exact pairs are taken
+ * out of the pool first; only what is left over can be a genuine disagreement.
+ *
+ * A SHEET LINE THE WORKBOOK DOES NOT HAVE IS KEPT, NOT DELETED, and returned in
+ * `orphaned` so it is counted rather than silently dropped. Removing it would
+ * be this function deciding a rep is owed less on the strength of a name that
+ * failed to match — the one error here that takes money away, and the one that
+ * nobody would see. Reporting it puts the question in front of a person.
+ *
+ * @param {Array<{patient:string, item:string, comm:number}>} lines
+ *   Sheet lines for one rep-month. MUTATED IN PLACE: the caller holds these
+ *   objects and wants the corrected values on them.
+ * @param {Array<{patient:string, item:string, comm:number}>} wbRows
+ *   The workbook's rows for the same rep-month, valued rows only.
+ * @param {{keyOf?:(x:object)=>string}} [opts]
+ *   How to read the name a row is paired on, for BOTH sides. It defaults to the
+ *   patient, and the reconciliation reader overrides it, because the two sides
+ *   do not spell a name from the same place: a sheet line shows the STRIVEN
+ *   spelling of an auto-matched patient ("D. Garcia"), while the workbook has
+ *   only what the sheet's own Patient column says ("D. Gonzales"). Pairing on
+ *   the displayed name made 19 correctly-transcribed rows look missing and
+ *   re-added them, which ADDED $9,286 to three reps who had nothing wrong.
+ * @returns {{corrected:Array, added:Array, orphaned:Array, delta:number}}
+ *   `added` are workbook rows with no sheet line at all — the caller builds
+ *   real lines from them, because only it knows how to resolve a Striven
+ *   reference. `delta` is the money this changes, corrections plus additions.
+ */
+export function reconcileToWorkbook(lines, wbRows, opts = {}) {
+  const keyOf = opts.keyOf || ((x) => x.patient);
+  const pool = (lines || []).map((line) => ({ line, taken: false }));
+  const rows = (wbRows || []).map((row) => ({ row, paired: false }));
+  const key = (x) => norm(keyOf(x));
+
+  // Pass 1 — patient AND amount agree. Nothing to correct, and taking these out
+  // first is what stops pass 2 pairing a patient's second line with their first.
+  for (const r of rows) {
+    const hit = pool.find((s) => !s.taken
+      && key(s.line) === key(r.row)
+      && round2(s.line.comm) === round2(r.row.comm));
+    if (hit) { hit.taken = true; r.paired = true; }
+  }
+
+  // Pass 2 — the patient agrees and the amount does not. The workbook wins.
+  const corrected = [];
+  for (const r of rows) {
+    if (r.paired) continue;
+    const hit = pool.find((s) => !s.taken && key(s.line) === key(r.row));
+    if (!hit) continue;
+    hit.taken = true; r.paired = true;
+    corrected.push({
+      patient: hit.line.patient,
+      was: round2(hit.line.comm), now: round2(r.row.comm),
+      wasItem: hit.line.item || '', item: r.row.item || '',
+    });
+    hit.line.comm = round2(r.row.comm);
+    if (r.row.item) hit.line.item = r.row.item;
+  }
+
+  const added = rows.filter((r) => !r.paired).map((r) => r.row);
+  const orphaned = pool.filter((s) => !s.taken).map((s) => s.line);
+  const delta = round2(
+    corrected.reduce((t, c) => t + (c.now - c.was), 0)
+    + added.reduce((t, a) => t + (Number(a.comm) || 0), 0),
+  );
+  return { corrected, added, orphaned, delta };
+}
+
 // The sheet verification gate (isRepVerified / MIN_MATCH_RATE) was removed with
 // the sheet feed itself: with Striven as the only source there is no second set
 // of figures to reconcile against, so nothing to mark verified or unverified.
@@ -216,6 +330,10 @@ export function redactCommissionPayload(payload, viewer) {
   // scoped and these were not, which is exactly how the gap went unnoticed.
   const ownPay = (payload.striven?.byRep || []).find((r) => isOwn(viewer, r.rep)) || null;
   out.payableTotal = ownPay ? (ownPay.payableTotal ?? 0) : null;
+  // Paid is a rep's OWN money too, and a company-wide figure here would leak the
+  // team's payroll under a label that reads like their own — the same omission
+  // the note above describes, one field newer.
+  out.paidTotal = ownPay ? (ownPay.paidTotal ?? 0) : null;
   out.waitingTotal = ownPay ? (ownPay.waitingTotal ?? 0) : null;
   out.heldOrders = ownPay ? (ownPay.heldOrders ?? 0) : null;
   out.scopedToRep = viewer?.repName ?? null;
@@ -237,12 +355,21 @@ export function redactCommissionPayload(payload, viewer) {
       grandTotal: ownStriven ? ownStriven.total : null,
       // Same omission as above, one level down.
       payableTotal: ownStriven ? (ownStriven.payableTotal ?? 0) : null,
+      paidTotal: ownStriven ? (ownStriven.paidTotal ?? 0) : null,
       waitingTotal: ownStriven ? (ownStriven.waitingTotal ?? 0) : null,
       heldOrders: ownStriven ? (ownStriven.heldOrders ?? 0) : null,
       // offRoster NAMES other people ("Kevin Parker", "Rishi Arora") and carries
       // their value. It is a reconciliation aid for an admin and a colleague
       // list to a rep, so it goes entirely.
       offRoster: null,
+      // `recon` goes for the same reason, and it USED TO SURVIVE HERE. It was
+      // company aggregates only (the sheet-wide auto/review/unmatched split), so
+      // it read as harmless and every explicit rule above stepped around it —
+      // but it is still the whole book's money on a rep's payload, and its
+      // `corrections` block now names other reps and what each of their figures
+      // moved by. Nothing in the UI reads it; it is an admin reconciliation aid
+      // and belongs only to an admin.
+      recon: null,
       byProgram: ownStriven
         ? { TriCare: ownStriven.tricare ?? 0, VA: ownStriven.va ?? 0, PI: ownStriven.pi ?? 0 }
         : { TriCare: null, VA: null, PI: null },
@@ -260,6 +387,7 @@ export function redactCommissionPayload(payload, viewer) {
           PI: ownM ? ownM.pi ?? 0 : null,
           value: ownM ? ownM.value : null,
           payableTotal: ownM ? ownM.payableTotal : null,
+          paidTotal: ownM ? (ownM.paidTotal ?? 0) : null,
           waitingTotal: ownM ? ownM.waitingTotal : null,
           reps: keepOwn(m.reps),
         };

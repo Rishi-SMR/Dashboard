@@ -78,12 +78,53 @@ test('the fold still resolves excluded names, so the exclusion can catch them', 
   // The folds are deliberately KEPT. Deleting them would let raw spellings
   // ("Maverick Medical- Cassie Wates") pass through unrecognised and land in
   // an off-roster list under her full name — excluded in name only.
-  assert.ok(isExcludedRep(commRep('Cassie')));
-  assert.ok(isExcludedRep(commRep('Maverick Medical- Cassie Wates')));
   assert.ok(isExcludedRep('CMC (direct)'));
   // Case and spacing in either source are not stable.
   assert.ok(isExcludedRep('  cmc (DIRECT) '));
-  assert.ok(isExcludedRep('cassie'));
+});
+
+// CASSIE IS PAID AGAIN — reinstated by instruction ("include Cassie as well
+// since it's there in Commission sheet"). She is a signed-off payee on the
+// reconciliation sheet ($21,555.00 across 57 lines) and excluding her made the
+// dashboard total disagree with the sheet it reconciles to.
+//
+// The fold that used to feed her name to the exclusion still has to work — it
+// is now what merges her sheet spellings onto ONE payee row instead of
+// splitting her money across two.
+test('Cassie folds to one name and is no longer excluded', () => {
+  assert.equal(commRep('Cassie'), 'Cassie');
+  assert.equal(commRep('Maverick Medical- Cassie Wates'), 'Cassie');
+  assert.ok(!isExcludedRep('Cassie'), 'Cassie is a payee again');
+  assert.ok(!isExcludedRep(commRep('Maverick Medical- Cassie Wates')));
+});
+
+// A LOGIN NEEDS A ROSTER ROW. Her commission resolved from the reconciliation
+// sheet without one, so it was easy to believe the account worked — but
+// getRepOverview builds its rows from REP_NAMES, so she signed in to an empty
+// My Dashboard while her own 20 orders sat in the book.
+//
+// This is the pairing that has to hold for ANY rep: a name that can log in must
+// be on the roster. Asserted against the whole directory rather than her alone,
+// so the next account provisioned without a roster row fails here rather than
+// on the rep's screen.
+test('every rep who can log in has a roster row', () => {
+  for (const d of REP_DIRECTORY) {
+    if (d.role !== 'rep' || !d.repName) continue;
+    assert.ok(REP_NAMES.includes(d.repName), `${d.repName} can log in, so must be on the roster`);
+    assert.ok(!isExcludedRep(d.repName), `${d.repName} can log in, so must not be excluded`);
+  }
+});
+
+test('Cassie is on the roster, so her own pages have a row to render', () => {
+  assert.ok(REP_NAMES.includes('Cassie'), 'on the roster');
+  // Her PAY still comes from the sheet, not the engine: the reconciliation
+  // merge overwrites payableTotal for every rep, so a roster row buys her
+  // volume columns and a Striven comparison, never extra money.
+  //
+  // Her login itself is provisioned in app_config REP_DIRECTORY (the documented
+  // way to add an account without a redeploy), so the hardcoded array below is
+  // not where it lives and is deliberately not asserted on.
+  assert.ok(!isExcludedRep('Cassie'));
 });
 
 test('the exclusion does not overreach', () => {

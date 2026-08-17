@@ -200,14 +200,16 @@ function FragmentRow({ rank, name, a, b, c, open, onToggle, columns, rows }: {
       {open && (
         <tr>
           <td colSpan={5} style={{ padding: '0 0 8px 0', background: 'var(--accent-soft-2)' }}>
-            <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
-              <thead><tr>{columns.map((col, i) => <th key={col} className={i > 0 ? 'num' : undefined}>{col}</th>)}</tr></thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i}>{r.map((cell, j) => <td key={j} className={j > 0 ? 'num' : undefined} style={j === 0 ? { fontWeight: 600 } : undefined}>{cell}</td>)}</tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="table-scroll">
+              <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
+                <thead><tr>{columns.map((col, i) => <th key={col} className={i > 0 ? 'num' : undefined}>{col}</th>)}</tr></thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i}>{r.map((cell, j) => <td key={j} className={j > 0 ? 'num' : undefined} style={j === 0 ? { fontWeight: 600 } : undefined}>{cell}</td>)}</tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </td>
         </tr>
       )}
@@ -218,30 +220,63 @@ function FragmentRow({ rank, name, a, b, c, open, onToggle, columns, rows }: {
 // SO-wise patient orders (client SOW): one row per sales order, with the shared
 // patient reference, last name (minimum-necessary PHI) and its line items.
 const PROG_C: Record<string, string> = { PI: '#0A369F', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };
+/** "2026-08-05T10:20:35.73" → "Aug 5, 2026". An unparseable date reads "-"
+ *  rather than "Invalid Date", which is the browser talking, not the data. */
+const fmtOrderDate = (s: string | null) => {
+  if (!s) return '-';
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
 function OrdersReport({ data }: { data: PatientItemsReport }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<number | null>(null);
   const all = data.orders ?? [];
 
+  // NEWEST FIRST, by order date. The server serves these grouped by patient
+  // reference, which is why the list read SO-3, SO-5, SO-6 … and then jumped to
+  // SO-479 — an order that is meaningful to the report's other tab and
+  // meaningless in a chronological list.
+  //
+  // Date, not the SO number, even though the two agree today: every one of the
+  // 472 orders carries a date and walking the numbers in order produces zero
+  // date inversions, so both keys give the identical sequence. They agree
+  // because Striven issues numbers in order — an accident of the numbering, not
+  // a rule about it. The date is the fact being asked for, so it is the key,
+  // and the SO id breaks a tie so the order is stable rather than dependent on
+  // the sort's internals.
+  //
+  // An undated order sorts LAST, not first: '' compares below any real date.
+  // There are none today, and if one appears it must not claim to be the newest
+  // thing in the book on the strength of a missing field.
+  const sorted = useMemo(() => [...all]
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.soId - a.soId), [all]);
+
   const orders = useMemo(() => {
     const t = q.trim().toLowerCase();
-    if (!t) return all;
-    return all.filter((o) =>
+    if (!t) return sorted;
+    return sorted.filter((o) =>
       o.so.toLowerCase().includes(t) || String(o.ref).toLowerCase().includes(t) ||
       (o.lastName || '').toLowerCase().includes(t) || (o.program || '').toLowerCase().includes(t) ||
       o.items.some((i) => i.item.toLowerCase().includes(t)));
-  }, [all, q]);
+  }, [sorted, q]);
 
   const totalValue = all.reduce((s, o) => s + o.value, 0);
   const patients = new Set(all.map((o) => o.custRef || o.ref).filter(Boolean)).size;
 
   function exportCsv() {
-    const rows = all.flatMap((o) => (o.items.length ? o.items : [{ item: '-', qty: 0, value: 0 }])
-      .map((i) => [o.so, o.ref || '', o.lastName || '', o.program || '', i.item, i.qty, i.value]));
+    // `sorted`, not `all`: the file comes out in the order the screen shows it,
+    // newest first. It still exports every order rather than the search
+    // results — that is the existing behaviour and a separate decision.
+    //
+    // The date is a COLUMN here, not just a sort key. A spreadsheet is where
+    // someone re-sorts, and a file ordered by a field it does not contain
+    // cannot be put back the way it came.
+    const rows = sorted.flatMap((o) => (o.items.length ? o.items : [{ item: '-', qty: 0, value: 0 }])
+      .map((i) => [o.so, o.ref || '', o.lastName || '', o.program || '', o.date?.slice(0, 10) || '', i.item, i.qty, i.value]));
     // "Patient (initial + surname)", matching what the column actually carries —
     // a file that leaves the portal labelled "Last name" while holding an
     // initial misstates the PHI in it.
-    downloadCsv('patient-orders.csv', ['Sales order', 'Reference', 'Patient (initial + surname)', 'Program', 'Item', 'Qty', 'Value'], rows);
+    downloadCsv('patient-orders.csv', ['Sales order', 'Reference', 'Patient (initial + surname)', 'Program', 'Order date', 'Item', 'Qty', 'Value'], rows);
   }
 
   if (!all.length) return <NotReady note={data.note} />;
@@ -260,53 +295,92 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>One row per sales order, ordered by reference. Click a row to see its items.</div>
+        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>One row per sales order, newest first by order date. Click a row to see its items.</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input className="login-input" style={{ maxWidth: 260, height: 38 }} placeholder="Search SO / ref / last name / item…" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn ghost" onClick={exportCsv}>⭳ CSV</button>
         </div>
       </div>
 
+      {/* ── ONE ROW, ONE HEIGHT ────────────────────────────────────────────────
+          This list was ragged in three separate ways, and all three came from
+          letting the browser size it:
+
+            · auto table layout, so every column shifted with its widest cell
+            · "SO-100" broke across two lines mid-token once the Items column
+              squeezed the order column
+            · the device chips wrapped, so a five-device order stood twice as
+              tall as a one-device order
+
+          A colgroup fixes the geometry, `nowrap` keeps identifiers whole, and
+          the chips are capped so the tallest cell in a row is one line. The
+          result is a grid you can scan down a column of, which is the whole job
+          of a hundred-row table. */}
       <div className="table-wrap">
-        <table className="data-table">
+        <table className="data-table so-table">
+          <colgroup>
+            <col className="c-idx" /><col className="c-so" /><col className="c-ref" /><col className="c-pat" />
+            <col className="c-prog" /><col className="c-date" /><col /><col className="c-val" />
+          </colgroup>
           <thead><tr>
             {/* "Patient", not "Last name": the column now carries an initial
                 too, and a header that says otherwise is a claim about PHI. */}
-            <th style={{ width: 40 }}>#</th><th>Sales order</th><th>Reference</th><th>Patient</th><th>Program</th>
+            <th>#</th><th>Sales order</th><th>Reference</th><th>Patient</th><th>Program</th>
+            {/* THE COLUMN THE LIST IS SORTED BY. Ordering rows by a field that
+                is nowhere on screen leaves a reader unable to check the claim —
+                and here it would read as "sorted by SO number descending",
+                which is a different rule that happens to agree. */}
+            <th>Order date</th>
             <th>Items</th><th className="num">Value</th>
           </tr></thead>
           <tbody>
-            {orders.length === 0 && <tr><td colSpan={7} style={{ color: C.muted }}>No orders match.</td></tr>}
+            {orders.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No orders match.</td></tr>}
             {orders.map((o, i) => (
               <Fragment key={o.soId}>
                 <tr onClick={() => o.items.length && setOpen(open === o.soId ? null : o.soId)}
                   style={{ cursor: o.items.length ? 'pointer' : 'default', background: open === o.soId ? 'var(--accent-soft-2)' : undefined, opacity: o.incomplete ? 0.6 : undefined }}>
-                  <td style={{ color: 'var(--muted)' }}>{i + 1}</td>
-                  <td style={{ fontWeight: 700 }}>{o.items.length ? (open === o.soId ? '▾ ' : '▸ ') : ''}{o.so}</td>
-                  <td style={{ fontWeight: 600 }}>{o.ref || '-'}</td>
-                  <td>{o.lastName || '-'}{o.incomplete && <span className="pill-tag tag-warn" style={{ marginLeft: 6, fontSize: 10 }}>incomplete</span>}</td>
+                  <td className="c-idx">{i + 1}</td>
+                  {/* The caret is its own fixed-width element rather than a
+                      character in the text: as a prefix it shifted every order
+                      number sideways by the width of a glyph the moment a row
+                      opened, and rows with no items shifted the other way. */}
+                  <td style={{ fontWeight: 700 }}>
+                    <span className="so-caret" aria-hidden="true">{o.items.length ? (open === o.soId ? '▾' : '▸') : ''}</span>{o.so}
+                  </td>
+                  <td style={{ fontWeight: 600 }} title={o.ref || undefined}>{o.ref || '-'}</td>
+                  <td title={o.lastName || undefined}>{o.lastName || '-'}{o.incomplete && <span className="pill-tag tag-warn" style={{ marginLeft: 6, fontSize: 10 }}>incomplete</span>}</td>
                   <td><span className="pill-tag" style={{ color: PROG_C[o.program] || PROG_C.Other, borderColor: 'currentColor' }}>{o.program || '-'}</span></td>
+                  {/* Date only. The payload carries a full timestamp and the
+                      sort uses all of it, but a time of day in a column scanned
+                      for sequence is noise. */}
+                  <td style={{ color: 'var(--muted-strong)' }} title={o.date || undefined}>{fmtOrderDate(o.date)}</td>
                   {/* DEVICE NAMES, not a count. The names were already in the
                       payload — the row expanded to show them, so the top level
-                      made you click to learn what "5" meant. The count stays as
-                      a trailing chip when there is more than one. */}
+                      made you click to learn what "5" meant.
+
+                      Capped at three: past that the chips wrapped and took the
+                      row's height with them. The rest collapse into a "+N" chip
+                      that names them on hover, and clicking the row still opens
+                      the full itemised list underneath. */}
                   <td>
                     {o.items.length === 0
                       ? <span style={{ color: C.muted }}>-</span>
-                      : <DeviceChips devices={o.items.map((it) => ({ item: it.item, qty: it.qty }))} />}
+                      : <DeviceChips max={3} devices={o.items.map((it) => ({ item: it.item, qty: it.qty }))} />}
                   </td>
                   <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.value)}</td>
                 </tr>
                 {open === o.soId && o.items.length > 0 && (
-                  <tr><td colSpan={7} style={{ padding: '0 0 8px 0', background: 'var(--accent-soft-2)' }}>
-                    <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
-                      <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Value</th></tr></thead>
-                      <tbody>
-                        {o.items.map((it, j) => (
-                          <tr key={j}><td style={{ fontWeight: 600 }}>{it.item}</td><td className="num">{it.qty}</td><td className="num">{formatCurrency(it.value)}</td></tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <tr><td colSpan={8} style={{ padding: '0 0 8px 0', background: 'var(--accent-soft-2)' }}>
+                    <div className="table-scroll">
+                      <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
+                        <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Value</th></tr></thead>
+                        <tbody>
+                          {o.items.map((it, j) => (
+                            <tr key={j}><td style={{ fontWeight: 600 }}>{it.item}</td><td className="num">{it.qty}</td><td className="num">{formatCurrency(it.value)}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </td></tr>
                 )}
               </Fragment>

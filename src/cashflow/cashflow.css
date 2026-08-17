@@ -1128,8 +1128,18 @@ code {
 /* ============================================================================
    SMR animations: subtle entrance + hover polish for the Striven tabs.
    ========================================================================== */
-@keyframes smrFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes smrPop    { from { opacity: 0; transform: scale(.96); }        to { opacity: 1; transform: scale(1); } }
+/* THE LAST KEYFRAME MUST BE `transform: none`, NOT A ZERO TRANSFORM.
+   These run with `animation-fill-mode: both` (see .main .section below), so the
+   element KEEPS the final keyframe's computed style forever. `translateY(0)` is
+   still a transform, and any transform makes an element the containing block
+   for `position: fixed` descendants — so a modal rendered inside a section had
+   its full-screen backdrop clipped to that section's box: the page header and
+   the preview banner stayed undimmed, and KPI cards below the section painted
+   straight over a z-index:1000 overlay.
+   `none` interpolates from a translate exactly as `translateY(0)` does, so the
+   motion is unchanged and the trap is gone once the animation settles. */
+@keyframes smrFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes smrPop    { from { opacity: 0; transform: scale(.96); }        to { opacity: 1; transform: none; } }
 
 /* Tabs mount into .main: fade their sections/KPIs up, with a gentle stagger. */
 .main .section { animation: smrFadeUp .5s cubic-bezier(.16,.84,.44,1) both; }
@@ -1395,6 +1405,47 @@ code {
    viewport edge, so the card's own heading is not the first thing clipped. */
 .ar-register .chart-card { scroll-margin-top: 14px; }
 
+/* ── AR EXPECTED card ────────────────────────────────────────────────────────
+   Sits between AR AGING and BILLED BY MONTH, both of which own a 240px
+   `.chart-box`. This one has no chart, so it matches that height explicitly and
+   spreads its content down it — otherwise the middle card of the three ends
+   short and the row reads as broken rather than as deliberately different. */
+.ar-exp { display: flex; flex-direction: column; height: 240px; padding-top: 2px; }
+.ar-exp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ar-exp-v { font-size: 26px; font-weight: 800; line-height: 1.05; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ar-exp-l { font-size: 12px; font-weight: 600; color: var(--muted-strong); margin-top: 2px; }
+/* The blended rate, sized as a caption. It is an outcome of the mix, not a rule
+   anyone applies, so it must not compete with the per-programme rates below. */
+.ar-exp-pct { text-align: right; flex: none; }
+.ar-exp-pct b { display: block; font-size: 15px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
+.ar-exp-pct span { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.ar-exp-bar { height: 8px; border-radius: 999px; background: rgba(220,38,38,.18); overflow: hidden; margin: 10px 0 0; }
+.ar-exp-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+
+/* Programme × billed × expected. A grid rather than a <table> so the three
+   columns stay aligned across rows without table layout fighting the card. */
+.ar-exp-tbl { margin-top: 12px; display: grid; gap: 5px; font-size: 12px; }
+.ar-exp-tr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: baseline; }
+.ar-exp-tr > span:nth-child(n+2) { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); text-align: right; min-width: 62px; }
+.ar-exp-tr > span:first-child { font-weight: 700; color: var(--ink); display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+/* The rate, on the row it applies to — this is the thing the card is for. */
+.ar-exp-tr > span:first-child i { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted-strong); background: var(--panel-2);
+  border: 1px solid rgba(148,163,184,.32); border-radius: 999px; padding: 1px 5px; flex: none; }
+.ar-exp-tr.is-head > span { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted); }
+.ar-exp-tr.is-head > span:first-child { color: var(--muted); }
+/* A discounted programme is the exception the card exists to show, so its rate
+   chip carries the warning colour rather than the muted one. */
+.ar-exp-tr.is-cut > span:first-child i { color: #B91C1C; background: rgba(220,38,38,.10); border-color: rgba(220,38,38,.30); }
+.ar-exp-tr.is-cut > span:last-child { color: #B91C1C; }
+.ar-exp-tr.is-total { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 1px; }
+.ar-exp-tr.is-total > span { font-weight: 800; }
+
+/* Pinned to the bottom so the three cards' baselines line up. */
+.ar-exp-foot { margin-top: auto; font-size: 11.5px; color: var(--muted-strong); }
+button.ar-exp-foot { align-self: flex-start; text-align: left; }
+
 .kpi--grad { position:relative; isolation:isolate; overflow:hidden; display:flex; flex-direction:column; min-height:118px;
   border-radius:16px; padding:16px; color:#0E1B2E; background:#FFFFFF; border:1px solid #E7EBF1;
   box-shadow:0 1px 2px rgba(14,27,46,.04), 0 8px 22px -14px rgba(14,27,46,.10); }
@@ -1537,7 +1588,19 @@ code {
    row's cards stretch to ONE shared height and every edge lines up. */
 .exec-grid12 { display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:18px; align-items:stretch; }
 .exec-grid12 > * { margin:0 !important; min-width:0; }
-.g12-3 { grid-column: span 3; } .g12-4 { grid-column: span 4; } .g12-5 { grid-column: span 5; } .g12-6 { grid-column: span 6; } .g12-7 { grid-column: span 7; } .g12-12 { grid-column: 1 / -1; }
+/* EVERY SPAN 1..12, not only the ones in use today.
+   A grid item with no `grid-column` falls back to ONE column — so a card
+   classed `g12-8` against a stylesheet that stopped at `g12-7` rendered a
+   twelfth of the width with seven columns of white space beside it, and
+   nothing anywhere reported a problem. That is exactly what happened to
+   Financial Insights. A missing utility class fails silently and looks like a
+   layout bug, so the set is completed rather than extended one span at a time. */
+.g12-1 { grid-column: span 1; } .g12-2 { grid-column: span 2; }
+.g12-3 { grid-column: span 3; } .g12-4 { grid-column: span 4; }
+.g12-5 { grid-column: span 5; } .g12-6 { grid-column: span 6; }
+.g12-7 { grid-column: span 7; } .g12-8 { grid-column: span 8; }
+.g12-9 { grid-column: span 9; } .g12-10 { grid-column: span 10; }
+.g12-11 { grid-column: span 11; } .g12-12 { grid-column: 1 / -1; }
 /* Consistent internals: fixed head rhythm, chart flex-fills the card body, the
    stat footer pins to the base: so titles, charts and footers align per row. */
 .exec-grid12 .section-head { margin-bottom: 12px; }
@@ -1546,13 +1609,149 @@ code {
 @media (max-width:1360px){
   .exec-grid12 { grid-template-columns: repeat(6, minmax(0,1fr)); }
   .g12-3, .g12-4 { grid-column: span 3; }
-  .g12-5, .g12-6, .g12-7 { grid-column: span 6; }
+  /* ANY span wider than the six tracks that now exist has to be brought down to
+     six. A span the explicit grid cannot hold does not clamp — it makes the
+     grid grow implicit columns to fit, so one `g12-8` card silently turns this
+     into an eight-column row and squeezes every other card in it. */
+  .g12-5, .g12-6, .g12-7, .g12-8, .g12-9, .g12-10, .g12-11 { grid-column: span 6; }
   /* Cards that would orphan into a half-empty row at 6 cols go full-width. */
   .g12-w { grid-column: 1 / -1 !important; }
 }
 @media (max-width:940px){
   .exec-grid12 { grid-template-columns: 1fr; }
-  .g12-3, .g12-4, .g12-5, .g12-6, .g12-7 { grid-column: 1 / -1; }
+  .g12-1, .g12-2, .g12-3, .g12-4, .g12-5, .g12-6,
+  .g12-7, .g12-8, .g12-9, .g12-10, .g12-11 { grid-column: 1 / -1; }
+}
+
+/* ── SALES-ORDER LIST (Reports) ──────────────────────────────────────────────
+   A hundred rows read as a grid or they read as nothing, and this one was being
+   sized by its content in three directions at once. Fixed geometry, whole
+   identifiers, one line per row.
+
+   `table-layout: fixed` is the load-bearing line: without it every column is as
+   wide as its widest cell, so the order column narrowed whenever a row happened
+   to carry five devices — which is how "SO-100" came to break across two lines
+   while "SO-95" did not. The min-width sends the whole table to the horizontal
+   scroll `.table-wrap` already provides rather than crushing columns further. */
+.so-table { table-layout: fixed; min-width: 1060px; }
+.so-table > colgroup > .c-idx { width: 48px; }
+.so-table > colgroup > .c-so  { width: 112px; }
+.so-table > colgroup > .c-ref { width: 124px; }
+.so-table > colgroup > .c-pat { width: 160px; }
+.so-table > colgroup > .c-prog{ width: 92px; }
+.so-table > colgroup > .c-date{ width: 104px; }
+.so-table > colgroup > .c-val { width: 112px; }
+/* Middle, not top. `.data-table` aligns to the top so a wrapped cell keeps its
+   label level with the first line; nothing wraps here any more, and top
+   alignment left the pills and chips sitting a pixel high against the text. */
+.so-table > tbody > tr > td { vertical-align: middle; }
+/* Identifiers and figures are single tokens — a break inside one turns a
+   reference into two half-references. Everything that can be truncated is,
+   with the full value on the cell's title. */
+.so-table > tbody > tr > td:nth-child(-n+6) {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.so-table > tbody > tr > td.c-idx { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The expander caret occupies the same width whether or not it is there, so an
+   order number never moves sideways when a row opens. */
+.so-caret { display: inline-block; width: 13px; flex: none; color: var(--muted); }
+/* The expanded detail row is a full-width cell holding a nested table, and it is
+   also cell 1 of its row — so the truncation rule above catches it and would
+   clip the itemised list to one line. Written at the SAME specificity and after
+   it, deliberately: a shorter selector loses on element count and silently does
+   nothing, which is how this kind of override usually fails.
+   The nested table's own cells are already safe — every rule here uses direct
+   child combinators from `.so-table`, so nothing reaches inside it. */
+.so-table > tbody > tr > td[colspan] { white-space: normal; overflow: visible; }
+.so-table > tbody > tr > td[colspan] .data-table { table-layout: auto; min-width: 0; }
+
+/* ── BILLS PAID card ─────────────────────────────────────────────────────────
+   Third card of the row that opens with Top Vendors and AP Aging, both of which
+   own a fixed 240px `.chart-box`. This one holds a payment TABLE that grows
+   with the ledger — 50 rows today, more every week — so it was the card SETTING
+   the row height instead of taking it: the grid stretched to fit every payment,
+   and the two charts beside it sat at 240px in a card several times that,
+   trailing a column of dead space. The row read as broken, which it was.
+
+   Two things were wrong at once, and fixing only the height would have left the
+   worse one: a card a third of a row wide fits roughly ONE payment. So the card
+   now summarises BY VENDOR — six rows, which fit — and the payment-level list
+   opens in a dialog on click, where there is room to read fifty of them.
+
+   `.paid-body` is the alignment half, and it is the same move .ar-exp makes
+   further up: a card with no chart declares the chart's height anyway, so the
+   row's three cards come out identical and every edge lines up. 240px is not a
+   guess — it is `.exec-grid12 .chart-card .chart-box`, and the two must stay
+   equal.
+
+   IT HAS TO BE A WRAPPER, not a rule on the card. The band being matched is
+   everything BELOW the head, and the head's own height varies with how the
+   subtitle wraps; sizing the whole card instead would push that variance
+   straight back into the content, which is the misalignment returning one level
+   down.
+
+   A DEFINITE height on the parent is also what makes the inner scroll work at
+   all. `flex: 1 1 auto; min-height: 0` only resolves against a parent that
+   knows how tall it is — left to intrinsic sizing the grid row measures every
+   row, sizes itself to them, and nothing has been fixed. */
+.paid-card { cursor: pointer; }
+/* 240 is a FLOOR that then grows, not a fixed height, and the difference is the
+   head. This card carries a title alone where its neighbours carry a title and
+   a subtitle, so its head is ~19px shorter — pin the band at exactly 240 and
+   the card comes up short of the row, sits at the top of the cell and leaves a
+   strip of empty white under the footer. Growing into whatever the row gives
+   puts that 19px where it is worth something (another vendor visible) and lands
+   the footer on the same baseline as the charts beside it. */
+.paid-card .paid-body { flex: 1 1 auto; min-height: 240px; display: flex; flex-direction: column; }
+/* THE VENDOR LIST IS THE ONLY THING THAT GIVES WAY. Banner and footer are fixed
+   statements — a shrunk banner is a clipped sentence, a shrunk footer loses the
+   total — and without this the browser is free to take the difference out of
+   whichever it reaches first once the band runs tight. */
+.paid-card .paid-banner, .paid-card .cfoot { flex: none; }
+.paid-card .paid-banner { margin-bottom: 10px; padding: 9px 12px; font-size: 12.5px; gap: 10px; }
+.paid-card .paid-banner-check { width: 22px; height: 22px; font-size: 13px; }
+
+/* "Details →", so the card says out loud that it opens something. A hover lift
+   is a hint; this is the sentence. */
+.paid-more {
+  flex: none; align-self: flex-start; font-size: 11.5px; font-weight: 700;
+  color: var(--accent); white-space: nowrap; letter-spacing: .01em;
+}
+.paid-card:hover .paid-more { text-decoration: underline; }
+
+/* Vendor · payments · amount, one line each. A <ul> rather than a <table>: three
+   values per row need alignment, not table semantics, and a grid holds the
+   columns straight without table layout fighting a card this narrow. */
+.paid-vendors {
+  /* Basis 0, NOT auto. With `auto` the list's flex base size is its full content
+     height, which is what the grid row measures — so a long vendor list would
+     stretch the row all over again and undo the alignment above. At 0 it
+     contributes nothing intrinsic and simply fills what the band has left. */
+  flex: 1 1 0; min-height: 0; overflow-y: auto;
+  margin: 0; padding: 0; list-style: none;
+}
+.paid-vendors li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px; align-items: baseline;
+  /* 4px and 12px is the budget, not a preference: banner + six rows + footer
+     has to come to 240. Loosen either and the sixth vendor drops below the
+     fold, which is the readability problem coming back at a smaller scale. */
+  padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 12px; line-height: 1.35;
+}
+.paid-vendors li:last-child { border-bottom: 0; }
+/* The names run long — "Doctors Medical, LLC / A&O Medical, LLC" — and wrapping
+   one costs a whole other vendor's row in a band this tall. The full name is on
+   the element's title, so it is folded, not lost. */
+.pv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text); }
+.pv-n { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pv-amt { font-weight: 700; color: var(--positive); font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+.pv-empty { display: block; color: var(--muted); font-size: 12px; padding: 6px 0; }
+
+/* Stacked, the card is alone in its row with no chart to match, so the band
+   stops being a compromise and simply shows every vendor. */
+@media (max-width:940px){
+  .paid-card .paid-body { min-height: 0; }
+  .paid-vendors { flex: 0 0 auto; max-height: 300px; }
 }
 
 /* Receivables KPI cards: icon tile + label, count-up value, delta, pinned foot. */
@@ -1583,7 +1782,15 @@ code {
   background:var(--panel); border:1px solid var(--border); box-shadow:0 1px 2px rgba(14,27,46,.04), 0 8px 22px -14px rgba(14,27,46,.10); }
 .kpi-r .kr-head { display:flex; align-items:center; gap:9px; }
 .kpi-r .kr-ico { flex:none; width:36px; height:36px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; }
-.kpi-r .kr-label { font-size:12px; font-weight:700; color:var(--muted-strong); display:flex; align-items:center; }
+/* TILE HEADINGS ARE CAPS, set here rather than by shouting in each label
+   string: every KpiR on every back-office tab picks it up, and a tile added
+   later cannot arrive in sentence case.
+   11px with letter-spacing rather than 12px flat — uppercase reads as a denser
+   block, and "ACTUAL COLLECTABLE" has to fit a sixth of the strip beside a 36px
+   icon. `line-height` is set so a label that does wrap to two lines does not
+   push the value out of the card. */
+.kpi-r .kr-label { font-size:11px; font-weight:800; letter-spacing:.055em; text-transform:uppercase;
+  line-height:1.25; color:var(--muted-strong); display:flex; align-items:center; }
 .kpi-r .kr-value { margin-top:10px; font-size:24px; font-weight:800; letter-spacing:-.022em; line-height:1.05; color:var(--text); font-variant-numeric:tabular-nums; }
 /* The qualifier under the headline figure ("all time", "176 orders", "open").
    Set as a formal small-caps eyebrow: uppercase with generous tracking reads as
@@ -2069,10 +2276,14 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 /* Units by device WITH the Leaderboard beside it. Both cards carry a column of
    ranked rows, so they read as a pair rather than two unrelated panels — and
    pairing them uses the row the 640px cap would otherwise leave half empty.
-   `align-items: start` so the shorter card keeps its own height instead of
-   stretching to match; they rarely hold the same number of rows.
+   `align-items: stretch` (the grid default, stated because it was once `start`):
+   both cards are now built to the same tile anatomy — 52px head, headline
+   figure, ranked rows, footer pinned with `margin-top: auto` — so stretching
+   ends them level instead of leaving one card's bottom edge hanging mid-row.
+   The pinned footer is what makes this safe: the shorter card grows its gap
+   above the footer rather than trailing blank space.
    Stacks below 1100px, where two columns of name+bar+figures cannot both fit. */
-.chart-pair { display: grid; gap: 14px; margin-bottom: 14px; grid-template-columns: 1fr; align-items: start; }
+.chart-pair { display: grid; gap: 14px; margin-bottom: 14px; grid-template-columns: 1fr; align-items: stretch; }
 @media (min-width: 1100px) { .chart-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 
 /* ── Orders dashboard card grid ───────────────────────────────────────────────
@@ -2139,20 +2350,31 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 .lbx-podium { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px; }
 @media (min-width: 560px) { .lbx-podium { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; } }
 
-.lbx-pod { position: relative; display: grid; gap: 2px; text-align: left; width: 100%;
+/* THE CARD IS A DIV NOW, and `.lbx-pod-main` is the clickable face inside it.
+   Split so the sub-rep toggle can be a sibling of that face rather than nested
+   in it — a button inside a button is invalid and keyboard-unreachable. Chrome
+   stays here; the content grid moved to the face. `:not(:disabled)` no longer
+   works as the "is this clickable" test (a div is never disabled), so the
+   component sets `.is-clickable` explicitly. */
+.lbx-pod { position: relative; text-align: left; width: 100%;
   background: var(--soft); border: 1px solid var(--border); border-top: 3px solid var(--ring);
-  border-radius: 12px; padding: 10px 12px; cursor: default; color: inherit;
+  border-radius: 12px; padding: 10px 12px; color: inherit;
   transition: transform .14s ease, box-shadow .18s ease; }
+/* `position: relative` so the medal pins to the FACE, not to the whole card.
+   Against the card it would ride up to the top edge as the roll-down opens and
+   drift away from the figures it belongs to. */
+.lbx-pod-main { position: relative; display: grid; gap: 2px; width: 100%; text-align: left;
+  background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: default; }
+.lbx-pod-main:not(:disabled) { cursor: pointer; }
+.lbx-pod-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
 /* The 1st-place card stands taller than 2nd and 3rd — the podium shape. */
 @media (min-width: 560px) {
   .lbx-pod-1 { padding-top: 18px; }
   .lbx-pod-2 { padding-top: 13px; }
 }
-.lbx-pod:not(:disabled) { cursor: pointer; }
-.lbx-pod:not(:disabled):hover { transform: translateY(-2px); box-shadow: 0 10px 22px -14px rgba(14,27,46,.5); }
-.lbx-pod:not(:disabled):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lbx-pod.is-clickable:hover { transform: translateY(-2px); box-shadow: 0 10px 22px -14px rgba(14,27,46,.5); }
 .lbx-pod.is-self { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
-.lbx-pod-medal { position: absolute; top: 8px; right: 10px; font-size: 21px; line-height: 1; }
+.lbx-pod-medal { position: absolute; top: 0; right: 0; font-size: 21px; line-height: 1; }
 /* The rank is the point of a leaderboard, so it is sized like one: 9.5px
    uppercase read as a caption on the card rather than as the placing. */
 .lbx-pod-rank { font-size: 17px; font-weight: 800; letter-spacing: .02em; line-height: 1;
@@ -2167,27 +2389,80 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
    under the podium's placings rather than clipping. */
 .lbx-row { display: grid; grid-template-columns: 28px minmax(70px, 1fr) minmax(0, 1.1fr) auto;
   gap: 9px; align-items: center; width: 100%; text-align: left; color: inherit;
-  background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 6px 8px;
+  background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 9px 8px;
   cursor: default; transition: background-color .15s ease, transform .12s ease; }
 .lbx-row:not(:disabled) { cursor: pointer; }
 .lbx-row:not(:disabled):hover { background: var(--panel-2); transform: translateX(2px); }
 .lbx-row:not(:disabled):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .lbx-row.is-self, .lbx-pod.is-self { background: var(--panel-2); }
 .lbx-row.is-self { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
-/* Matched to the podium's placing size, so 4th reads as the next rank down
-   rather than as a different kind of label. */
-.lbx-rank { font-size: 17px; font-weight: 800; color: var(--muted-strong);
+/* THE RUNNERS-UP READ AT THE PODIUM'S WEIGHT.
+   Ranks 4+ were set a size below the top three across the board — a 12.5px
+   name against 13.5px, and a 13px order count against the podium's 25px —
+   so the tail of the board looked like a footnote to itself and the reps in
+   it could barely read their own row. The list stays a LIST (no cards, no
+   medals: the podium has to keep winning something), but the three things a
+   rep looks for — their place, their name, their count — are now sized to be
+   read at the same glance. Row padding grew with the type so the rows do not
+   crowd. */
+.lbx-rank { font-size: 19px; font-weight: 800; color: var(--muted-strong);
   font-variant-numeric: tabular-nums; text-align: center; line-height: 1; }
 .lbx-name { min-width: 0; display: flex; align-items: center; gap: 5px; }
-.lbx-name-t { font-size: 12.5px; font-weight: 700; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lbx-orders { font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.lbx-orders b { font-size: 13px; color: var(--text); font-weight: 800; }
+.lbx-name-t { font-size: 14.5px; font-weight: 800; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lbx-orders { font-size: 12.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lbx-orders b { font-size: 18px; color: var(--text); font-weight: 800; }
 .lbx-you { font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--positive); }
 
+/* SUB-REP tag: "this rep works under you", on the supervisor's board only.
+   Deliberately quieter than .lbx-badge — a milestone is an achievement and
+   should catch the eye; a reporting line is context and should not compete with
+   the order count beside it. */
+.lbx-sub { flex: none; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted-strong); background: var(--panel-2); border: 1px solid rgba(148,163,184,.35);
+  border-radius: 999px; padding: 1px 6px; white-space: nowrap; }
+
+/* ── SUB-REP STRIP ───────────────────────────────────────────────────────────
+   Lives INSIDE the viewer's own card, under the figures, and OPENS A DIALOG.
+   Separated from the card's clickable face by a hairline, so the box reads as
+   one thing with two controls rather than two cards butted together. */
+.lbx-podsubs { margin-top: 9px; padding-top: 8px; border-top: 1px dashed rgba(148,163,184,.4); }
+.lbx-subtoggle { display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 5px 7px; border-radius: 8px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid rgba(148,163,184,.28);
+  font-size: 11.5px; color: var(--ink); text-align: left;
+  transition: background .14s ease, border-color .14s ease; }
+.lbx-subtoggle:hover { background: var(--panel); border-color: rgba(148,163,184,.5); }
+.lbx-subtoggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lbx-subtoggle-t { font-weight: 700; color: var(--muted-strong); }
+/* Pushed right: the affordance, not the label, so the eye lands on the count. */
+.lbx-subtoggle-hint { margin-left: auto; font-size: 10.5px; font-weight: 700; color: var(--accent); }
+
+/* One sub-rep's block inside the dialog. Only bordered when there is more than
+   one to separate — a single block would just draw a box inside a box. */
+.lbx-drawer-body .lbx-subcard + .lbx-subcard { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* Rank 4+ rows: the wrapper only matters when the row carries the strip, which
+   is why the plain case adds no box of its own. */
+.lbx-rowwrap.has-subs { border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px 8px; background: var(--soft); }
+.lbx-subcard-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.lbx-subcard-name { font-weight: 800; font-size: 13.5px; color: var(--accent); }
+
+/* auto-fit, because this now sits inside a podium card — a third of the board's
+   width on a wide screen and the full width on a narrow one. Six figures reflow
+   from one column to six without a breakpoint per layout. */
+.lbx-substats { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 7px; }
+.lbx-substat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.lbx-substat-v { font-size: 14px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.lbx-substat-l { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-strong); }
+
+/* .lbx-subverts / .lbx-subvert / .lbx-subfoot went with the inline accordion:
+   the vertical chips are a proper table in the dialog now, and the pay note
+   reuses .lbx-drawer-foot alongside the own-breakdown dialog's. */
+
 /* MILESTONE badge: the order threshold the rep has passed. */
-.lbx-badge { flex: none; font-size: 9.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+.lbx-badge { flex: none; font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums;
   color: #B8860B; background: rgba(212,160,23,.15); border: 1px solid rgba(212,160,23,.4);
-  border-radius: 999px; padding: 1px 6px; }
+  border-radius: 999px; padding: 2px 7px; }
 .lbx-pod .lbx-badge { justify-self: start; margin-top: 3px; }
 
 /* Segmented vertical pill. Track = the leader's length, fill = this rep's. */
@@ -2253,8 +2528,12 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
    `:not(:disabled)` matters: a rep's peer rows are disabled (their breakdown is
    not theirs to open), and offering hover feedback on a row that does nothing
    when clicked is a worse lie than offering none. */
-.lb-row { transition: background-color .15s ease, box-shadow .15s ease, transform .12s ease; }
-.lb-row:not(:disabled):hover { background: var(--panel-2) !important; transform: translateX(2px); }
+/* The hover TINT is inline on the row now (it has to lose to the signed-in
+   rep's own brand tint, which an `!important` here could not do), and the 2px
+   nudge is gone with it: the row sits in a tile paired with Units by device,
+   whose rows do not move on hover, and one column twitching while the other
+   held still was the tell that they were two different components. */
+.lb-row { transition: background-color .15s ease, box-shadow .15s ease; }
 .lb-row:not(:disabled):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The bar brightens with the row, so the eye lands on the thing being compared. */
 .lb-row:not(:disabled):hover .mix-fill { filter: saturate(1.15) brightness(1.04); }
@@ -2444,6 +2723,19 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 .lbl-vert > span { display: block; height: 100%; }
 .lbl-note { margin-top: 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .lbl-note b { color: var(--muted-strong); font-weight: 700; }
+/* The untagged-orders count, which OPENS the list of them.
+   Styled as running text rather than as a button: it sits mid-sentence in a
+   footnote, and a chip or a bordered control there would read as a new category
+   on a card whose every other control is a label. The underline and the pointer
+   are what say it is clickable — a bare colour change would not, at 11.5px on a
+   muted line. */
+.lbl-note .lbl-untagged {
+  border: 0; background: none; padding: 0; font: inherit; color: var(--accent);
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.lbl-note .lbl-untagged b { color: inherit; }
+.lbl-note .lbl-untagged:hover { color: var(--text); }
+.lbl-note .lbl-untagged:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 @media (prefers-reduced-motion: reduce) { .lbl-cat { transition: none; } .lbl-cat:hover { transform: none; } }
 
 /* ── AR DETAIL ──────────────────────────────────────────────────────────────
@@ -2593,7 +2885,13 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
    `table-layout: fixed` is what makes the shares equal AND stops the table
    widening to fit its content — nothing can overflow horizontally now. */
 .tbl-fit { table-layout: fixed; width: 100%; }
-.tbl-fit .num { width: auto; text-align: center; }
+/* THE HEADER HAS TO BE CENTRED TOO, and it needs `th.num` spelled out to get
+   there. `.data-table th.num` (line ~1184) is a class-class-ELEMENT selector, so
+   it outranks a plain `.tbl-fit .num` and kept right-aligning the header while
+   the cells below it centred — every figure sat ~95px to the left of its own
+   column title. Matching that selector's shape ties the specificity, and this
+   block comes later in the file, so it wins. */
+.tbl-fit .num, .tbl-fit th.num { width: auto; text-align: center; }
 /* Tighter side padding than the app default (10px). Under `table-layout: fixed`
    a declared column width INCLUDES its padding, so 20px of it left a 26px "#"
    column with 6px for the digits — enough to render "2" then ellipsise it. */
@@ -2766,4 +3064,101 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   flex: 1 1 0;
   padding: 7px 8px;
   text-align: center;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PHONE
+   ═══════════════════════════════════════════════════════════════════════════
+   REPS WORK FROM A PHONE. This is not a courtesy breakpoint for an occasional
+   visitor — it is the primary way the rep-facing screens are read, so the rule
+   is that nothing overflows the viewport and nothing needs pinch-zoom.
+
+   Placed LAST so these win on source order without reaching for !important.
+   The app already had a mobile pass (the sidebar collapses at 768px, the KPI
+   strips restack, the leaderboard podium is built mobile-first); this closes
+   what that pass did not reach. */
+
+/* ── A WIDE TABLE SCROLLS ITSELF, IT DOES NOT BREAK THE PAGE ────────────────
+   The single worst thing on a phone. Twelve tables on the rep screens — up to
+   TEN columns on My Orders — had no scroll container, so a 390px screen either
+   stretched the whole document sideways (taking the header and every card with
+   it) or crushed the columns to unreadable slivers.
+
+   `.table-scroll` is a bare overflow box, deliberately without the border and
+   radius `.table-wrap` carries: these tables sit inside modals and cards that
+   already draw their own frame, and a second one would read as a box in a box.
+   -webkit-overflow-scrolling keeps the momentum flick on iOS Safari. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* The scroll must be DISCOVERABLE. A table cut off at the viewport edge with no
+   visible affordance reads as a broken layout, not as something you can push.
+   A hairline shadow on the right edge appears only while there is more to see:
+   `background-attachment: local` pins the second gradient to the content, so it
+   fades out exactly when the content is fully scrolled. */
+.table-scroll {
+  background:
+    linear-gradient(to right, var(--panel) 30%, rgba(255,255,255,0)) left center,
+    linear-gradient(to left, var(--panel) 30%, rgba(255,255,255,0)) right center,
+    radial-gradient(farthest-side at 0 50%, rgba(15,27,46,.12), rgba(0,0,0,0)) left center,
+    radial-gradient(farthest-side at 100% 50%, rgba(15,27,46,.12), rgba(0,0,0,0)) right center;
+  background-repeat: no-repeat;
+  background-size: 28px 100%, 28px 100%, 12px 100%, 12px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
+@media (max-width: 768px) {
+  /* ── NOTHING ESCAPES THE VIEWPORT ────────────────────────────────────────
+     The guard, not the fix: every known overflow is handled above and below,
+     and this stops the next one from dragging the whole document sideways —
+     the failure that makes a page feel broken rather than merely cramped.
+     `overflow-x: clip` on the BODY only; `hidden` on <html> would kill
+     position:sticky inside, which the table heads rely on. */
+  body { overflow-x: clip; }
+  /* A grid child will not shrink below its content unless told it may. This is
+     what actually lets a long device name or account name wrap instead of
+     forcing its whole column wider than the screen. */
+  .main, .section, .chart-card, .exec-deck { min-width: 0; }
+
+  /* ── HEADS WRAP RATHER THAN COLLIDE ──────────────────────────────────────
+     `.section-head` is a space-between flex row: a title and a control that
+     both fit at 1400px overlap at 390px. Wrapping puts the control on its own
+     line and left-aligns it, which is also where a thumb expects it. */
+  .section-head { flex-wrap: wrap; }
+  .section-head > * { min-width: 0; }
+  .ov-filter { margin-left: 0 !important; }
+
+  /* ── TAP TARGETS ─────────────────────────────────────────────────────────
+     Small controls sized for a mouse. 16px on the select is deliberate and is
+     NOT a style choice: iOS Safari zooms the whole page when a font-size below
+     16px receives focus, and the page never zooms back — the single most
+     common way a form ruins a mobile layout. */
+  .ov-filter { padding: 9px 13px; }
+  .ov-filter select, .ov-filter input[type="date"], .ov-filter input[type="month"] { font-size: 16px; }
+  .tbl-search, .data-table select, input, select, textarea { font-size: 16px; }
+  .btn, .tbl-controls button, .pgn-pages button { min-height: 38px; }
+
+  /* Filter/segment rows scroll sideways instead of stacking into a tall wall
+     of controls that pushes the data itself off the first screen. */
+  .tbl-controls { flex-wrap: wrap; }
+  .smr-seg { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .smr-seg > button { flex: none; }
+
+  /* ── DRILL MODALS ────────────────────────────────────────────────────────
+     They open at `min(940px, 100%)`, which is right, but a centred box with
+     viewport padding wastes the two edges a phone can least spare. Full-bleed
+     from the bottom instead: the shape a phone user expects, and it puts the
+     close control within thumb reach rather than at the top of a tall sheet. */
+  .lbx-drawer { max-height: 92vh; }
+}
+
+/* ── PHONE, NARROW ───────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  /* Card padding is ~5% of a 390px screen on each side. Reclaiming it is the
+     cheapest width win available and costs nothing but whitespace. */
+  .section, .chart-card { padding: 14px 12px; }
+  .main { padding-left: 10px; padding-right: 10px; }
+  /* Two money figures per row rather than three or four crushed into one. */
+  .cm-stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  /* The board's own head: title, then the period control beneath it. */
+  .lbx .section-head { gap: 6px; }
 }

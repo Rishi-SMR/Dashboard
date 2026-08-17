@@ -7,6 +7,7 @@ import {
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
+import { Portal } from './Portal';
 
 // Demo default recipient: editable per the client's ask ("abhi email mera rahega").
 const DEFAULT_TO = 'infineedsolutions@gmail.com';
@@ -175,6 +176,9 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
   }
 
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div className="drill-backdrop" onClick={onClose}>
       <div className="drill" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" style={{ maxWidth: 740 }}>
         <div className="drill-head">
@@ -244,14 +248,16 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
                   {preview.vendorGroups.map((g, gi) => (
                     <div key={gi} style={{ border: '1px solid var(--border, #e5e7eb)', borderRadius: 10, padding: 12, marginTop: 10 }}>
                       <div style={{ fontWeight: 800, marginBottom: 6 }}>🏢 {g.vendor} <span className="page-sub" style={{ fontWeight: 400, fontSize: 12 }}>· one PO · {g.items.length} item(s)</span></div>
-                      <table className="data-table">
-                        <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Unit</th></tr></thead>
-                        <tbody>
-                          {g.items.map((it, ii) => (
-                            <tr key={ii}><td style={{ fontWeight: 600 }}>{it.itemName}</td><td className="num">{it.qty}</td><td className="num">{it.unit != null ? formatCurrency(it.unit) : '-'}</td></tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <div className="table-scroll">
+                        <table className="data-table">
+                          <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Unit</th></tr></thead>
+                          <tbody>
+                            {g.items.map((it, ii) => (
+                              <tr key={ii}><td style={{ fontWeight: 600 }}>{it.itemName}</td><td className="num">{it.qty}</td><td className="num">{it.unit != null ? formatCurrency(it.unit) : '-'}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   ))}
 
@@ -285,6 +291,7 @@ function AutoPoModal({ cand, demoOnly, onClose, onDone }: { cand: AutoPoCandidat
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

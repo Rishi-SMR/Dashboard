@@ -8,6 +8,7 @@ import {
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
+import { Portal } from './Portal';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
@@ -438,6 +439,9 @@ function InvoiceDocModal({ inv, onClose, onPosted }: { inv: QbInvoiceRow; onClos
   const blocked = !!plan && (plan.lines.length === 0 || plan.customer.ref.trim() === '');
 
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div className="drill-backdrop" onClick={onClose}>
       <div className="drill" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" style={{ maxWidth: 640 }}>
         <div className="drill-head">
@@ -512,5 +516,6 @@ function InvoiceDocModal({ inv, onClose, onPosted }: { inv: QbInvoiceRow; onClos
         </div>
       </div>
     </div>
+    </Portal>
   );
 }

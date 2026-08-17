@@ -40,6 +40,19 @@ function check(label, sources, { money = false, tolerance = 0 } = {}) {
   groups.push({ label, entries, ok, money, spread: round2(max - min) });
 }
 
+/**
+ * Records related figures that are NOT supposed to be equal.
+ *
+ * Every group above asserts agreement, so anything printed here would otherwise
+ * read as drift. Some numbers just differ for a reason worth showing — a line
+ * count against an order count — and asserting those trains the reader to
+ * ignore a DIFF, which is the one thing this script cannot afford.
+ */
+function info(label, sources, { money = false } = {}) {
+  const entries = Object.entries(sources).filter(([, v]) => v != null && !Number.isNaN(v));
+  groups.push({ label, entries, ok: true, money, spread: 0, note: true });
+}
+
 const orders = analytics.orders || [];
 const sv = comm.striven || {};
 const byRep = sv.byRep || [];
@@ -83,16 +96,36 @@ check('COMMISSION — grand total', {
   'sum months.total': (sv.months || []).reduce((s, m) => s + (m.total || 0), 0),
   'byProgram TriCare+VA+PI': sv.byProgram
     ? round2((sv.byProgram.TriCare || 0) + (sv.byProgram.VA || 0) + (sv.byProgram.PI || 0)) : null,
-  'payable + waiting': round2((sv.payableTotal || 0) + (sv.waitingTotal || 0)),
+  // The headline is PAID + PAYABLE, not payable + waiting. Waiting is the
+  // in-flight cycle: an estimate off the engine for a month with no payout run
+  // yet, deliberately OUTSIDE the signed-off total. Asserting the old sum meant
+  // this script reported a DIFF for a figure that was correct, and would have
+  // gone on reporting one however the two bases were reconciled.
+  'paid + payable': round2((sv.paidTotal || 0) + (sv.payableTotal || 0)),
   'repOverview.teamTotals.commission': overview.teamTotals?.commission,
   'sum of rep lines': byRep.reduce((s, r) => s + (r.lines || []).reduce((t, l) => t + (l.comm || 0), 0), 0),
 }, { money: true, tolerance: 0.05 });
 
 // ── Commission basis ─────────────────────────────────────────────────────────
+// A LINE IS NOT AN ORDER, and counting them as one was this script's own bug.
+// One order carries one line PER DEVICE: SO-292 is three Genesys units for one
+// patient on one order, so it is three lines earning $650 each. Thirteen orders
+// spread across 28 lines that way, which is exactly the spread reported here —
+// three of them (SO-292 and SO-333 have three lines apiece) leaking past the
+// two-line pairs. Nothing was double-paid; the label was wrong.
+//
+// So the comparison is against DISTINCT SALES ORDERS, and the raw line count is
+// reported beside it as its own figure rather than as a rival answer.
+const refLines = byRep.flatMap((r) => (r.lines || []).filter((l) => l.ref));
 check('COMMISSIONED ORDERS', {
   'striven.commissionedOrders': sv.commissionedOrders,
   'sum byRep.commOrders': byRep.length ? byRep.reduce((s, r) => s + (r.commOrders || 0), 0) : null,
-  'sum of rep lines (count)': byRep.reduce((s, r) => s + (r.lines || []).length, 0),
+});
+info('SIGNED-OFF LINES — a line is per DEVICE, not per order', {
+  'rep lines': byRep.reduce((s, r) => s + (r.lines || []).length, 0),
+  'of those, tied to a sales order': refLines.length,
+  '  → distinct sales orders': new Set(refLines.map((l) => l.ref)).size,
+  'untied to any sales order': byRep.reduce((s, r) => s + (r.lines || []).filter((l) => !l.ref).length, 0),
 });
 
 // ── Accounts ─────────────────────────────────────────────────────────────────
@@ -124,13 +157,16 @@ for (const [v, key] of [['TriCare', 'nTricare'], ['VA', 'nVa'], ['PI', 'nPi']]) 
 console.log('\nPORTAL CONSISTENCY AUDIT');
 console.log('='.repeat(78));
 for (const g of groups) {
-  console.log(`\n${g.ok ? 'OK  ' : 'DIFF'}  ${g.label}${g.ok ? '' : `   spread ${g.money ? usd(g.spread) : g.spread}`}`);
+  console.log(`\n${g.note ? 'NOTE' : g.ok ? 'OK  ' : 'DIFF'}  ${g.label}${g.ok ? '' : `   spread ${g.money ? usd(g.spread) : g.spread}`}`);
   for (const [src, val] of g.entries) {
     console.log(`        ${String(g.money ? usd(val) : val).padStart(14)}   ${src}`);
   }
 }
+// NOTE groups are not assertions, so they are not in the denominator either —
+// counting them as figures that "agree" would overstate what was checked.
+const asserted = groups.filter((g) => !g.note).length;
 console.log('\n' + '='.repeat(78));
 console.log(failures === 0
-  ? `ALL ${groups.length} FIGURES AGREE ACROSS EVERY SOURCE`
-  : `${failures} of ${groups.length} figures DISAGREE — see DIFF above`);
+  ? `ALL ${asserted} FIGURES AGREE ACROSS EVERY SOURCE`
+  : `${failures} of ${asserted} figures DISAGREE — see DIFF above`);
 process.exit(failures === 0 ? 0 : 1);

@@ -38,15 +38,33 @@ export function shortDeviceName(item: string, vertical = deviceVertical(item)): 
  * the right, so a five-device order can be counted at a glance. The vertical is
  * carried by a colour dot rather than repeating the word on every entry.
  */
-export function DeviceChips({ devices, showVertical = false }: {
+export function DeviceChips({ devices, showVertical = false, max }: {
   devices: { item: string; qty: number }[];
   /** Colour-dot each chip by vertical. Off inside a single-vertical view. */
   showVertical?: boolean;
+  /**
+   * Cap the chips shown, with the remainder collapsed into a "+N" chip.
+   *
+   * For a table that wants ONE ROW HEIGHT. Left unset the list wraps, and a
+   * five-device order is then twice the height of a one-device order — which is
+   * fine in a card and ragged in a hundred-row list. Nothing is lost: the
+   * overflow chip names what it is hiding on hover, and every caller that sets
+   * this has a row expander showing the full item list.
+   */
+  max?: number;
 }) {
   if (!devices?.length) return <span style={{ color: C.muted }}>-</span>;
+  const shown = max != null && max > 0 && devices.length > max ? devices.slice(0, max) : devices;
+  const hidden = devices.slice(shown.length);
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-      {devices.map((d, i) => {
+    <div style={{
+      display: 'flex', gap: 4, minWidth: 0,
+      flexWrap: max != null ? 'nowrap' : 'wrap',
+      // Capped mode is a single line by definition, so anything that will not
+      // fit has to be clipped here rather than spilling into the next column.
+      overflow: max != null ? 'hidden' : undefined,
+    }}>
+      {shown.map((d, i) => {
         const v = deviceVertical(d.item);
         return (
           <span key={`${d.item}-${i}`} title={`${d.item}: ${d.qty} unit${d.qty === 1 ? '' : 's'}`}
@@ -54,6 +72,11 @@ export function DeviceChips({ devices, showVertical = false }: {
               display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%',
               background: 'var(--panel-2)', borderRadius: 7, padding: '2px 6px 2px 7px',
               fontSize: 12, lineHeight: 1.5, color: C.ink, whiteSpace: 'nowrap',
+              // A flex item defaults to `min-width: auto` and so refuses to
+              // shrink below its text. On one line that means three long device
+              // names push the row wider instead of ellipsising; the quantity
+              // stays whole either way, because it is a separate span.
+              minWidth: 0,
             }}>
             {showVertical && <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 999, background: V_C[v] || C.muted, flex: 'none' }} />}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{shortDeviceName(d.item, v)}</span>
@@ -61,6 +84,17 @@ export function DeviceChips({ devices, showVertical = false }: {
           </span>
         );
       })}
+      {hidden.length > 0 && (
+        // Names what it hides, so the chip is a summary rather than a shrug.
+        <span title={hidden.map((d) => `${shortDeviceName(d.item)} ×${d.qty}`).join(', ')}
+          style={{
+            display: 'inline-flex', alignItems: 'center', flex: 'none',
+            background: 'var(--panel-2)', borderRadius: 7, padding: '2px 7px',
+            fontSize: 12, lineHeight: 1.5, fontWeight: 700, color: C.sub, whiteSpace: 'nowrap',
+          }}>
+          +{hidden.length}
+        </span>
+      )}
     </div>
   );
 }

@@ -133,15 +133,23 @@ function reconcileTag(check: number, creditNoteAmount: number, creditNotes: numb
 }
 
 /**
- * One bill register. Rendered twice — unpaid and paid — so each keeps its OWN
- * search, sort, page and CSV: paging through settled history should not move
- * your place in the list of what still has to be paid.
+ * THE BILL REGISTER — one table, paid and unpaid together.
  *
- * Sorting defaults differ by intent: the unpaid table leads with the largest
- * balance (a worklist), the paid table with the most recent (a record).
+ * It used to render twice, as two cards. Two registers meant a supplier's
+ * history was split across them: to answer "what has Doctors Medical billed us
+ * and where does it stand", you read one table, scrolled past a second, and
+ * re-applied the same sub-ledger filter. Every bill for a vendor now sits in one
+ * block, in invoice sequence, with the balance saying which are settled.
+ *
+ * The SEGMENT keeps the old worklist a click away: All / Unpaid / Paid, counted,
+ * over one shared search, sort, page and export.
  */
-function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 }: {
-  title: string; sub: string; bills: Bill[]; tone: 'open' | 'paid';
+function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount = 0 }: {
+  title: string; sub: string; bills: Bill[];
+  /** Splits the segment control and colours the Open column. Passed in rather
+   *  than re-derived here, so the table and the tiles above it can never
+   *  disagree about which bills are still owed. */
+  isUnpaid: (b: Bill) => boolean;
   /** Credit notes reduce what is owed, but they are filed with the SETTLED rows
    *  — they are not unpaid bills. So this table's Open column adds to the GROSS
    *  balance while the Outstanding tile above shows the net. Passing the offset
@@ -150,6 +158,9 @@ function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 
   creditOffset?: number; creditCount?: number;
 }) {
   const [query, setQuery] = useState('');
+  // Opens on ALL, because that is what the merge is for. The two old tables are
+  // still one click apart.
+  const [seg, setSeg] = useState<'all' | 'unpaid' | 'paid'>('all');
   // GROUPED BY SUB-LEDGER BY DEFAULT. The register is worked one supplier at a
   // time, so a list ordered by balance scattered each vendor's bills across
   // every page. Sorting by name keeps them contiguous; the columns still sort
@@ -162,17 +173,30 @@ function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 
   // a sub-ledger that is fully settled (and vice versa). Counted by bill.
   const subOpts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const b of bills) m.set(b.vendor, (m.get(b.vendor) ?? 0) + 1);
+    // Scoped to the SEGMENT, so the Unpaid view never offers a supplier who is
+    // fully settled — the same promise the two separate tables used to make.
+    for (const b of bills.filter((x) => seg === 'all' || (seg === 'unpaid' ? isUnpaid(x) : !isUnpaid(x)))) {
+      m.set(b.vendor, (m.get(b.vendor) ?? 0) + 1);
+    }
     return [...m.entries()].map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
-  }, [bills]);
+  }, [bills, seg, isUnpaid]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return bills.filter((b) =>
-      (pickSub.size === 0 || pickSub.has(b.vendor))
+      (seg === 'all' || (seg === 'unpaid' ? isUnpaid(b) : !isUnpaid(b)))
+      && (pickSub.size === 0 || pickSub.has(b.vendor))
       && (!q || b.no.toLowerCase().includes(q) || b.vendor.toLowerCase().includes(q)));
-  }, [bills, query, pickSub]);
+  }, [bills, query, pickSub, seg, isUnpaid]);
+  // Counts for the segment chips, off the WHOLE register so they do not move as
+  // the search narrows — a chip that renumbers itself is not a filter, it is a
+  // second result count.
+  const segCounts = useMemo(() => ({
+    all: bills.length,
+    unpaid: bills.filter(isUnpaid).length,
+    paid: bills.filter((b) => !isUnpaid(b)).length,
+  }), [bills, isUnpaid]);
   const sorted = useMemo(() => {
     const v = (b: Bill): number => (sort.key === 'total' ? b.total : sort.key === 'open' ? b.open
       : new Date((sort.key === 'due' ? b.due : b.date) + 'T00:00:00').getTime() || 0);
@@ -237,8 +261,8 @@ function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 
       // column that counts.
       ['Total', `${filtered.length} bills`, '', '', '', money(fTotal), money(fOpen), ''],
     ];
-    downloadXlsx([{ name: tone === 'open' ? 'Unpaid bills' : 'Paid bills', rows }],
-      stamped(`smr-ap-${tone === 'open' ? 'unpaid' : 'paid'}-bills`, 'xlsx'));
+    downloadXlsx([{ name: seg === 'all' ? 'Bills' : seg === 'unpaid' ? 'Unpaid bills' : 'Paid bills', rows }],
+      stamped(`smr-ap-${seg}-bills`, 'xlsx'));
   }
 
   return (
@@ -247,8 +271,18 @@ function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 
         <div>
           <h2 className="section-title">{title}</h2>
           <div className="section-sub">
-            {sub} · <b>{bills.length}</b> bill{bills.length === 1 ? '' : 's'}
-            {tone === 'open' && <> · <b style={{ color: C.negative }}>{formatCurrency(bills.reduce((s, b) => s + b.open, 0), true)}</b> outstanding</>}
+            {sub} · <b>{filtered.length}</b> of {bills.length} bill{bills.length === 1 ? '' : 's'}
+            {' '}· <b style={{ color: C.negative }}>{formatCurrency(filtered.reduce((s, b) => s + b.open, 0), true)}</b> outstanding
+          </div>
+          {/* THE OLD TWO TABLES, as a filter. Counted off the whole register so
+              the numbers are a property of the book rather than of the search. */}
+          <div className="smr-seg" style={{ marginTop: 8 }}>
+            {([['all', 'All'], ['unpaid', 'Unpaid'], ['paid', 'Paid']] as const).map(([k, label]) => (
+              <button key={k} className={seg === k ? 'active' : ''}
+                onClick={() => { setSeg(k); setPage(1); setPickSub(new Set()); }}>
+                {label} <span style={{ opacity: 0.65, fontWeight: 700 }}>{segCounts[k]}</span>
+              </button>
+            ))}
           </div>
         </div>
         {/* Search, reset and the export buttons are controls, not content:
@@ -295,7 +329,10 @@ function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 
               <th className="num sortable" onClick={() => setSortKey('total')}>Total {sortInd('total')}</th>
               {/* The paid table has no balance to show, so the column would be a
                   row of dashes. Dropped rather than rendered empty. */}
-              {tone === 'open' && <th className="num sortable" onClick={() => setSortKey('open')}>Open {sortInd('open')}</th>}
+              {/* Always shown now. It is the column that tells a settled bill
+                  from an owed one at a glance, which is the whole point of the
+                  two registers being one. */}
+              <th className="num sortable" onClick={() => setSortKey('open')}>Open {sortInd('open')}</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -321,18 +358,23 @@ function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 
                   title={b.kind === 'cancelled' ? 'Cancelled — excluded from every total on this page' : undefined}>
                   {formatCurrency(b.faceValue, true)}
                 </td>
-                {tone === 'open' && <td className="num cell-neg">{formatCurrency(b.open, true)}</td>}
+                {/* A settled bill shows an em-dash, not $0.00: nothing is owed,
+                    and a column of zeroes reads as an amount rather than as the
+                    absence of one. */}
+                <td className={b.open > 0 ? 'num cell-neg' : 'num'}>
+                  {b.open > 0 ? formatCurrency(b.open, true) : <span style={{ color: C.muted }}>—</span>}
+                </td>
                 <td>{statusTag(b.status, b.kind)}</td>
               </tr>
             ))}
-            {sorted.length === 0 && <tr><td colSpan={tone === 'open' ? 7 : 6} style={{ color: C.muted }}>No bills match.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={7} style={{ color: C.muted }}>No bills match.</td></tr>}
             {filtered.length > 0 && (
               <tr className="total-row">
                 <td>TOTAL</td>
                 <td>{filtered.length} bill{filtered.length === 1 ? '' : 's'}</td>
                 <td></td><td></td>
                 <td className="num">{formatCurrency(fTotal, true)}</td>
-                {tone === 'open' && <td className="num">{formatCurrency(fOpen, true)}</td>}
+                <td className="num">{formatCurrency(fOpen, true)}</td>
                 <td></td>
               </tr>
             )}
@@ -340,7 +382,7 @@ function BillTable({ title, sub, bills, tone, creditOffset = 0, creditCount = 0 
                 whole balance, not whichever subset of bills is on screen, so
                 netting it against a filtered total would be arithmetic nobody
                 could check. */}
-            {tone === 'open' && creditOffset > 0 && filtered.length === bills.length && (
+            {creditOffset > 0 && filtered.length === bills.length && (
               <>
                 <tr className="total-row">
                   <td colSpan={2} style={{ fontWeight: 600, color: C.muted }}>
@@ -423,8 +465,10 @@ export function ApSheetTab() {
   const isUnpaid = (b: Bill) => b.kind === 'bill'
     && (b.status === 'Unpaid'
       || ((b.status === 'Partially Paid' || b.status === 'Paid without Shipping') && b.open > 0));
-  const unpaidBills = useMemo(() => BILLS.filter(isUnpaid), [BILLS]);
-  const paidBills = useMemo(() => BILLS.filter((b) => !isUnpaid(b)), [BILLS]);
+  // `unpaidBills` / `paidBills` are gone with the two tables they fed. The
+  // register takes the whole of BILLS and splits it with `isUnpaid` inside its
+  // own segment control, so the predicate stays the single definition of "still
+  // owed" without a pair of pre-sliced arrays going stale beside it.
 
   // Headline aggregates: all derived from the one BILLS array so every tile ties.
   //
@@ -557,25 +601,39 @@ export function ApSheetTab() {
     // Spelled out and in caps. The drill's CSS uppercases headers anyway, but
     // the labels are written that way here so the words survive anywhere the
     // stylesheet does not reach — the PDF print sheet and the Excel export.
+    // INVOICE DATE sits beside DUE DATE. With only the due date on screen there
+    // was no way to tell a bill that is late from one raised on long terms —
+    // both read as a date in the past — and the register's own table carries
+    // both, so the drill was the odd one out.
     columns: [
       { key: 'n', label: 'INVOICE NUMBER' }, { key: 'v', label: 'VENDOR NAME' },
-      { key: 'due', label: 'DUE DATE' }, { key: 'o', label: 'OPEN BALANCES', num: true },
+      { key: 'd', label: 'INVOICE DATE' }, { key: 'due', label: 'DUE DATE' },
+      { key: 'o', label: 'OPEN BALANCES', num: true },
     ],
     // Vendor A→Z, then invoice sequence — the register's own order, so the
     // drill reads as a continuation of the tables rather than a reshuffle of
     // them. It used to lead with the largest balance, which scattered each
     // supplier's bills down the list.
     rows: BILLS.filter((b) => b.open > 0).sort(byLedgerThenSequence)
-      .map((b): Record<string, ReactNode> => ({ n: b.no, v: b.vendor, due: fmtDate(b.due), o: formatCurrency(b.open, true) }))
+      // An em-dash where the sheet carries no date, not a blank cell: HiDow's
+      // 83563 has neither an invoice date nor a due date, and an empty cell
+      // reads as a rendering fault rather than as a gap in the source.
+      .map((b): Record<string, ReactNode> => ({
+        n: b.no,
+        v: b.vendor,
+        d: b.date ? fmtDate(b.date) : <span style={{ color: C.muted }}>—</span>,
+        due: b.due ? fmtDate(b.due) : <span style={{ color: C.muted }}>—</span>,
+        o: formatCurrency(b.open, true),
+      }))
       // The credit notes, then the net — so the rows above add to the figure on
       // the tile rather than to $51.20 more than it.
       .concat((ledger?.totals?.creditNotes ?? 0) > 0 ? [
         {
           n: <span style={{ color: C.muted }}>less {ledger!.totals!.creditNotes} credit note{ledger!.totals!.creditNotes === 1 ? '' : 's'}</span>,
-          v: '', due: '', o: <span className="cell-pos">−{formatCurrency(ledger!.totals!.creditNoteAmount, true)}</span>,
+          v: '', d: '', due: '', o: <span className="cell-pos">−{formatCurrency(ledger!.totals!.creditNoteAmount, true)}</span>,
         },
         {
-          n: <strong>NET OUTSTANDING</strong>, v: '', due: '',
+          n: <strong>NET OUTSTANDING</strong>, v: '', d: '', due: '',
           o: <strong>{formatCurrency(agg.outstanding, true)}</strong>,
         },
       ] : []),
@@ -783,22 +841,20 @@ export function ApSheetTab() {
           })()}
         </div>
 
+        {/* ONE REGISTER. It was two cards — "Unpaid Bills" then "Paid Bills" —
+            which split every supplier's history in half: answering "what has
+            Doctors Medical billed us and where does it stand" meant reading one
+            table, scrolling past a second, and re-applying the same sub-ledger
+            filter. The segment inside keeps both worklists one click away. */}
         <BillTable
-          title="Unpaid Bills"
-          sub="Still owed · unpaid, part-paid and paid-without-shipping with a balance"
-          bills={unpaidBills}
-          tone="open"
+          title="Bill Register"
+          sub={adjustments.note
+            ? `Every bill, paid and unpaid · includes ${adjustments.note}, excluded from the total`
+            : 'Every bill, paid and unpaid'}
+          bills={BILLS}
+          isUnpaid={isUnpaid}
           creditOffset={ledger?.totals?.creditNoteAmount ?? 0}
           creditCount={ledger?.totals?.creditNotes ?? 0}
-        />
-
-        <BillTable
-          title="Paid Bills"
-          sub={adjustments.note
-            ? `Settled · nothing outstanding · includes ${adjustments.note}, excluded from the total`
-            : 'Settled · nothing outstanding'}
-          bills={paidBills}
-          tone="paid"
         />
       </div>
 

@@ -33,6 +33,11 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   reps: svg(<><circle cx="8.5" cy="8" r="3.2" /><path d="M2.6 20a5.9 5.9 0 0 1 11.8 0" /><path d="M17 14v6" /><path d="M20.5 10v10" /></>),
   repsorders: svg(<><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M3 4h2l2.4 11.4a1 1 0 0 0 1 .6h8.8a1 1 0 0 0 1-.8L20 8H6" /></>),
   repspipeline: svg(<><rect x="3" y="5" width="5" height="14" rx="1.4" /><rect x="9.5" y="5" width="5" height="9" rx="1.4" /><rect x="16" y="5" width="5" height="5" rx="1.4" /></>),
+  // VA pipeline: the same descending-bars pipeline mark as PI & PIP above, with
+  // a shield over it. The shape says "pipeline" so the two entries read as a
+  // pair; the shield is what says which programme — a service badge, not a
+  // second unrelated icon.
+  vapipeline: svg(<><rect x="2.5" y="7" width="4.5" height="12" rx="1.3" /><rect x="8.5" y="7" width="4.5" height="8" rx="1.3" /><path d="M18 2.7l4 1.5v3.6c0 2.6-1.6 4.7-4 5.5-2.4-.8-4-2.9-4-5.5V4.2z" /></>),
   repsroster: svg(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
   // Standings: a podium.
   standings: svg(<><rect x="9" y="4" width="6" height="16" /><rect x="3" y="10" width="6" height="10" /><rect x="15" y="13" width="6" height="7" /></>),
@@ -75,6 +80,10 @@ export const REPS_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'repsorders', label: 'Orders & Revenue' },
   { key: 'commission', label: 'Commission' },
   { key: 'repspipeline', label: 'PI & PIP' },
+  // Directly under PI & PIP: the two are the same page for different
+  // programmes, and VA is a pipeline in its own right rather than a third tab
+  // inside a page named for the other two.
+  { key: 'vapipeline', label: 'VA Pipeline' },
   // 'repsroster' ("Reps") is gone: it opened the Roster sub-view, which is now
   // a section of the Dashboard above. Two nav entries onto one page is exactly
   // the duplication the sub-tab strip already had.
@@ -96,6 +105,10 @@ export const REP_NAV: Array<{ key: ViewKey; label: string }> = [
   // nav uses, but the page IS the PI pipeline and naming the programme is what
   // was asked for. The manager's entry is labelled "PI & PIP".
   { key: 'repspipeline', label: 'PI Pipeline' },
+  // Named for the programme, like the entry above it. The server scopes the
+  // board to the rep's own orders, so a rep sees their VA book and no one
+  // else's — the same redaction the PI board already relies on.
+  { key: 'vapipeline', label: 'VA Pipeline' },
 ];
 
 /** Nav for a role. Until /api/me answers (role null) we show the rep nav: the

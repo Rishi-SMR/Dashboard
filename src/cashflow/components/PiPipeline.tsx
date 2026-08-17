@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchPiStages, type PiStages, type PiStageName, type PiStageOrder } from '../strivenApi';
+import { fetchPiStages, type PiStages, type PiStageName, type PiStageOrder, type PiBoard } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { DeviceChips } from './DeviceChips';
+import { TrackingCell } from './TrackingCell';
 import { ColumnFilter, SortHead } from './ColumnFilter';
 import { downloadXlsx, printToPdf, stamped, type Sheet } from '../export';
 
@@ -14,7 +15,7 @@ const STAGE_C: Record<string, string> = {
   // PI
   'Order received': '#64748B',
   'LOP requested': '#D97706',
-  'Dispensed & shipped': '#0A369F',
+  'Dispense/Shipped': '#0A369F',
   Delivered: '#0891B2',
   'Waiting for first payment': '#7C3AED',
   'Waiting for settlement': '#16A34A',
@@ -22,6 +23,13 @@ const STAGE_C: Record<string, string> = {
   // insurer and is either outstanding or settled.
   'Waiting on PIP Payment': '#7C3AED',
   'Bill settled': '#16A34A',
+  // VA — four stages. 'Order received' and 'Delivered' are shared with PI
+  // above; only the two that name the VA's own money need entries. The wait and
+  // the terminal stage take the same purple/green as their PI and PIP
+  // counterparts, so "waiting on the payer" and "money in" read identically
+  // whichever board you are on.
+  'Waiting on VA payment': '#7C3AED',
+  Paid: '#16A34A',
 };
 const stageColor = (s: string) => STAGE_C[s] || '#64748B';
 // Days in a stage past which a row is worth chasing.
@@ -43,24 +51,33 @@ const sourceOf = (s: string) => SOURCE_TEXT[s] ?? SOURCE_TEXT.default;
 // Sentinel option in the label filter for orders Striven has not tagged. The
 // parentheses keep it from colliding with a real label, which never has them.
 const NO_LABEL = '(no label)';
-type SortKey = 'ref' | 'account' | 'devices' | 'units' | 'revenue' | 'days';
+type SortKey = 'ref' | 'account' | 'devices' | 'units' | 'revenue' | 'days' | 'tracking';
 
-// ── Personal Injury pipeline ─────────────────────────────────────────────────
-// Striven only carries In Progress / Completed / Canceled / Incomplete, so these
-// five stages are tracked in the portal. Every move is recorded, which is what
-// makes "how long has this been sitting" a real measurement rather than a guess.
-export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
+// Which SIDEBAR ENTRY mounted this component, and therefore which programme's
+// boards it shows. One implementation, because the ageing, the label folding,
+// the drill table and the exports are identical across programmes — only the
+// stage list and the wording differ, and both of those come from the server.
+export type PipelineKind = 'PI' | 'VA';
+/** The boards each entry owns. 'REVIEW' is not a programme — see below. */
+const BOARDS_OF: Record<PipelineKind, PiBoard[]> = { PI: ['PI', 'PIP'], VA: ['VA'] };
+
+// ── Personal Injury / VA pipelines ───────────────────────────────────────────
+// Striven only carries In Progress / Completed / Canceled / Incomplete, so the
+// operational stages are derived from each order's Striven LABELS instead. Every
+// portal move is recorded, which is what makes "how long has this been sitting"
+// a real measurement rather than a guess.
+export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; kind?: PipelineKind }) {
   const [data, setData] = useState<PiStages | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<PiStageName | null>(null);
-  // Which pipeline is on screen. Defaults to PI; PIP is empty until Crystal's
-  // PIP order type exists in Striven.
-  // 'REVIEW' is not a pipeline: it is the queue of orders carrying a label this
-  // codebase does not recognise. It rides on the same switch because it is the
-  // same book seen a different way, and because a tab is where someone will
-  // actually look for it.
-  const [board, setBoard] = useState<'PI' | 'PIP' | 'REVIEW'>('PI');
+  // Which pipeline is on screen. The PI entry opens on PI and can switch to
+  // PIP; the VA entry has one board and opens on it.
+  // 'REVIEW' is not a pipeline: it is the queue of orders carrying a label that
+  // places them in no stage. It rides on the same switch because it is the same
+  // book seen a different way, and because a tab is where someone will actually
+  // look for it.
+  const [board, setBoard] = useState<PiBoard | 'REVIEW'>(kind === 'VA' ? 'VA' : 'PI');
   // A stage name from one board means nothing on the other, so switching boards
   // closes any open stage rather than leaving a drawer that matches nothing.
   useEffect(() => { setOpen(null); }, [board]);
@@ -81,16 +98,47 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
   }
   useEffect(() => { load(); }, [viewAs]);
 
-  // WHICH BOARD. PI and PIP are separate pipelines with different stages: a PIP
-  // order never reaches Lienstar, so it has no LOP and no settlement step.
-  // Selecting a board swaps both the stage cards and the orders behind them.
+  // WHICH BOARD. The three are separate pipelines with different stages: a PIP
+  // order never reaches Lienstar, so it has no LOP and no settlement step, and a
+  // VA order has neither of those nor an attorney but does have a terminal
+  // 'Paid'. Selecting a board swaps both the stage cards and the orders behind
+  // them.
   const pipCount = (data?.pipOrders ?? []).length;
-  const stages = board === 'PIP' ? (data?.pipStages ?? []) : (data?.stages ?? []);
-  const boardOrders = board === 'PIP' ? (data?.pipOrders ?? []) : (data?.orders ?? []);
+  const vaCount = (data?.vaOrders ?? []).length;
+  const stages = board === 'VA' ? (data?.vaStages ?? []) : board === 'PIP' ? (data?.pipStages ?? []) : (data?.stages ?? []);
+  const boardOrders = board === 'VA' ? (data?.vaOrders ?? []) : board === 'PIP' ? (data?.pipOrders ?? []) : (data?.orders ?? []);
+  // Every order this ENTRY is responsible for, across its boards. The review
+  // queue and the empty-state counts are scoped to it, so the VA page never
+  // reports a PI mapping gap as its own and vice versa.
+  const myBoards = BOARDS_OF[kind];
+  const myOrders = [...(data?.orders ?? []), ...(data?.pipOrders ?? []), ...(data?.vaOrders ?? [])]
+    .filter((o) => myBoards.includes(o.pipeline ?? 'PI'));
   // Server-side and admin-only: a rep receives empty arrays, so the tab never
   // appears for them rather than appearing and reading zero.
-  const reviewOrders = data?.reviewOrders ?? [];
-  const reviewLabels = data?.reviewLabels ?? [];
+  const reviewOrders = (data?.reviewOrders ?? []).filter((o) => myBoards.includes(o.pipeline ?? 'PI'));
+  // REBUILT from the scoped orders rather than filtered from the server's list.
+  // A label's server-side `count` spans every board it appears on — HOLD sits on
+  // both PI and VA — so filtering would keep the row and its whole-book number,
+  // and this page would claim orders it does not show.
+  const reviewLabels = (() => {
+    const m = new Map<string, { label: string; reason: 'flagged' | 'unknown'; count: number; boards: Set<PiBoard> }>();
+    const add = (label: string, reason: 'flagged' | 'unknown', b: PiBoard) => {
+      const k = label.trim().toLowerCase();
+      const e = m.get(k) ?? { label, reason, count: 0, boards: new Set<PiBoard>() };
+      e.count += 1; e.boards.add(b); m.set(k, e);
+    };
+    for (const o of reviewOrders) {
+      const b = o.pipeline ?? 'PI';
+      for (const l of o.flagged ?? []) add(l, 'flagged', b);
+      for (const l of o.unknown ?? []) add(l, 'unknown', b);
+    }
+    return [...m.values()]
+      .map((e) => ({ label: e.label, reason: e.reason, count: e.count, boards: [...e.boards].sort() }))
+      // Unmapped labels first: those are a defect. A flagged one is working as
+      // intended and is only a case to chase.
+      .sort((a, b) => (a.reason === b.reason ? 0 : a.reason === 'unknown' ? -1 : 1)
+        || b.count - a.count || a.label.localeCompare(b.label));
+  })();
   const canReview = Boolean(data && data.scopedToRep === null);
   // An unmapped label is a defect; a stalled case is expected work. The counts
   // are kept apart so the tab can say which it is rather than alarming on both.
@@ -152,15 +200,22 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
         // Labels are searchable too: typing one and not finding it would be a
         // fair reason to think the filter was broken.
         || (o.labels ?? []).some((l) => l.toLowerCase().includes(q))
+        // A pasted tracking number has to find its order: that is the lookup
+        // someone does when a carrier or a patient quotes one at them.
+        || (o.tracking ?? '').toLowerCase().includes(q)
         || o.devices.some((d) => d.item.toLowerCase().includes(q))));
     const { key, dir } = sort;
     const val = (o: PiStageOrder) =>
       key === 'account' ? o.account.toLowerCase()
         : key === 'ref' ? o.ref.toLowerCase()
-          : key === 'devices' ? o.devices.length
-            : key === 'units' ? o.units
-              : key === 'revenue' ? o.revenue
-                : (o.daysInStage ?? 0);
+          // TRACKED-OR-NOT, not the serial itself. Most rows are blank, and
+          // sorting alphabetically on a carrier's serial orders nothing anyone
+          // asks for; "which of these can I actually chase" does.
+          : key === 'tracking' ? (o.tracking ? 1 : 0)
+            : key === 'devices' ? o.devices.length
+              : key === 'units' ? o.units
+                : key === 'revenue' ? o.revenue
+                  : (o.daysInStage ?? 0);
     return [...rows].sort((x, y) => {
       const A = val(x), B = val(y);
       const c = typeof A === 'string' ? A.localeCompare(String(B)) : (A as number) - (B as number);
@@ -200,10 +255,18 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
         [],
         // Units/revenue stay NUMERIC so Excel can total them; formatCurrency
         // would ship "$1,599" as text and break every sum in the file.
-        ['Order', 'Patient (initial + surname)', 'Striven labels', 'Current stage', 'Listed at stages', 'Account', 'Devices', 'Units', 'Revenue', 'Days in stage', 'Ageing', 'Stage set by'],
+        ['Order', 'Patient (initial + surname)', 'Tracking #', 'Carrier', 'Striven labels', 'Current stage', 'Listed at stages', 'Account', 'Devices', 'Units', 'Revenue', 'Days in stage', 'Ageing', 'Stage set by'],
         ...openOrders.map((o) => [
           o.ref,
           o.patient || '',
+          // Text, not a number: a 22-digit USPS number would otherwise land in
+          // Excel as 9.33462E+21 and lose its last digits — unusable for the
+          // one thing anyone does with it, which is paste it into a carrier site.
+          o.tracking || '',
+          // Striven's own Ship Via, not a carrier guessed from the number: the
+          // file is read away from the portal, so a wrong carrier in it cannot
+          // be checked against anything.
+          o.shipVia || '',
           (o.labels ?? []).join(', '),
           // Both, because a row can appear in more than one stage's file: without
           // the current stage a reader cannot tell a live order from one that has
@@ -219,10 +282,11 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
           sourceOf(o.source).label,
         ]),
         [],
-        // Padded to the header's own column positions: Units is column 8 and
-        // Revenue column 9. It was short by two, so the totals landed under
-        // Account and Devices — a wrong number in a right-looking place.
-        ['Total', '', '', '', '', '', '',
+        // Padded to the header's own column positions. Units and Revenue are
+        // columns 10 and 11 since Tracking # and Carrier were inserted at 3-4;
+        // this row must be re-counted whenever a column is added, or the totals
+        // land under the wrong heading — a wrong number in a right-looking place.
+        ['Total', '', '', '', '', '', '', '', '',
           openOrders.reduce((s, o) => s + o.units, 0),
           money(openOrders.reduce((s, o) => s + o.revenue, 0))],
       ],
@@ -236,10 +300,19 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
       <div className="section-head" style={{ marginBottom: 10, alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h2 className="section-title">
-            {board === 'REVIEW' ? 'Labels to review' : board === 'PIP' ? 'PIP pipeline' : 'Personal Injury pipeline'}
+            {board === 'REVIEW' ? 'Labels to review'
+              : board === 'VA' ? 'VA pipeline'
+                : board === 'PIP' ? 'PIP pipeline' : 'Personal Injury pipeline'}
           </h2>
           <div className="section-sub">
-            {board === 'REVIEW' ? (
+            {board === 'VA' ? (
+              <>
+                {total} VA order{total === 1 ? '' : 's'}. Billed to the Department of Veterans Affairs and paid in full off the
+                invoice — no attorney, no lien and no settlement, so this board has none of the PI board's chasing stages. It does
+                have a terminal <b>Paid</b> stage, which PI does not: most of the VA book has already been paid, and a stage named
+                for waiting would be the wrong place to put it.
+              </>
+            ) : board === 'REVIEW' ? (
               <>
                 Orders whose labels place them in no stage. Two kinds: <b>exceptions</b> — HOLD, Attorney Denied, Case Dropped —
                 which say an order has stopped rather than progressed and are cases to chase; and <b>unrecognised</b> labels,
@@ -263,14 +336,24 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
           </div>
         </div>
         {/* Board switch. PIP shows its count even at zero, so the tab reads as
-            "built and empty" rather than as missing. */}
+            "built and empty" rather than as missing. The VA entry owns one
+            board, so it gets one tab — kept rather than dropped so the count and
+            the Review tab beside it sit where they do on the PI page. */}
         <div className="ins-qtabs">
-          <button className={`ins-qtab${board === 'PI' ? ' on' : ''}`} onClick={() => setBoard('PI')}>
-            PI · {(data?.orders ?? []).length}
-          </button>
-          <button className={`ins-qtab${board === 'PIP' ? ' on' : ''}`} onClick={() => setBoard('PIP')}>
-            PIP · {pipCount}
-          </button>
+          {kind === 'VA' ? (
+            <button className={`ins-qtab${board === 'VA' ? ' on' : ''}`} onClick={() => setBoard('VA')}>
+              VA · {vaCount}
+            </button>
+          ) : (
+            <>
+              <button className={`ins-qtab${board === 'PI' ? ' on' : ''}`} onClick={() => setBoard('PI')}>
+                PI · {(data?.orders ?? []).length}
+              </button>
+              <button className={`ins-qtab${board === 'PIP' ? ' on' : ''}`} onClick={() => setBoard('PIP')}>
+                PIP · {pipCount}
+              </button>
+            </>
+          )}
           {/* Shown at zero as well, deliberately: an empty queue is the useful
               answer ("nothing has drifted"), and a tab that only exists when
               something is wrong is a tab nobody knows to look for. Carries a
@@ -370,8 +453,8 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
             <div style={{ fontSize: 30, marginBottom: 6 }}>✓</div>
             <div style={{ fontWeight: 700, color: C.ink }}>Nothing to review.</div>
             <div className="section-sub" style={{ marginTop: 4 }}>
-              No order is on hold, denied or dropped, and all {new Set([...(data?.orders ?? []), ...(data?.pipOrders ?? [])].flatMap((o) => o.labels ?? [])).size} distinct
-              Striven labels across both boards resolve to a stage. Anything new will appear here.
+              No order is on hold, denied or dropped, and all {new Set(myOrders.flatMap((o) => o.labels ?? [])).size} distinct
+              Striven labels on {myBoards.join(' + ')} resolve to a stage. Anything new will appear here.
             </div>
           </div>
         ) : (
@@ -437,7 +520,13 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
                       // place it, so it is parked at stage 1 rather than being
                       // anywhere real. Worth saying, because the stage column
                       // otherwise reads as genuine progress.
-                      const parked = (o.stages ?? [o.stage]).length === 1 && o.stage === (data?.stageNames ?? [])[0]
+                      // Stage 1 of the order's OWN board — reading it off the PI
+                      // stage list would be a coincidence on VA and a bug the
+                      // day either list changes its first entry.
+                      const firstStage = ((o.pipeline === 'VA' ? data?.vaStageNames
+                        : o.pipeline === 'PIP' ? data?.pipStageNames
+                          : data?.stageNames) ?? [])[0];
+                      const parked = (o.stages ?? [o.stage]).length === 1 && o.stage === firstStage
                         && (o.labels ?? []).every((l) => bad.has(l.toLowerCase()) || flag.has(l.toLowerCase()));
                       return (
                         <tr key={`${o.pipeline}-${o.soId}`}>
@@ -476,8 +565,9 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
               </div>
               <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
                 🔒 Patient shown as first INITIAL + surname. An order still appears on its board wherever its other labels place it —
-                only its exception label carries no stage. Exceptions are listed in <b>REVIEW_LABELS</b>, mappings in <b>PI_LABEL_STAGE</b> /
-                <b> PIP_LABEL_STAGE</b>; a backend restart is needed after either changes.
+                only its exception label carries no stage. Exceptions are listed in <b>REVIEW_LABELS</b>, mappings in{' '}
+                {kind === 'VA' ? <b>VA_LABEL_STAGE</b> : <><b>PI_LABEL_STAGE</b> / <b>PIP_LABEL_STAGE</b></>};
+                a backend restart is needed after either changes.
               </div>
             </div>
           </>
@@ -501,7 +591,7 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
           <div className="no-print" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginLeft: 'auto' }}>
             <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
               <span aria-hidden="true" style={{ position: 'absolute', left: 9, fontSize: 12, color: C.muted, pointerEvents: 'none' }}>⌕</span>
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search order, label, account, device" aria-label="Search this stage"
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search order, tracking #, label, account, device" aria-label="Search this stage"
                 style={{ padding: '6px 26px 6px 24px', borderRadius: 8, border: `1px solid ${C.muted}44`, background: 'var(--panel-2)', color: C.ink, fontSize: 12.5, width: 230 }} />
               {query && (
                 <button onClick={() => setQuery('')} aria-label="Clear search" title="Clear"
@@ -527,6 +617,29 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
               <thead><tr>
                 <SortHead label="Order" col="ref" sort={sort} onSort={sortBy} />
                 <th>Patient</th>
+                {/* Sortable, and the sort deliberately puts the orders that
+                    HAVE a number first — most rows are blank, so the useful
+                    operation is "show me the ones I can chase", not alphabetical
+                    order on a carrier's serial.
+                    THE COUNT IS NOT DECORATION. The default sort is newest in
+                    stage first, and the newest orders are the least likely to
+                    have shipped — so the first screenful is usually all dashes
+                    and reads as a broken feed. Saying "6 of 64" states that the
+                    column is working and the numbers are simply not in Striven
+                    yet, and it doubles as a prompt to sort by this column. */}
+                <SortHead label="Tracking #" col="tracking" sort={sort} onSort={sortBy}>
+                  {(() => {
+                    const n = openOrders.filter((o) => (o.shipments ?? []).length > 0).length;
+                    return (
+                      <span title={n === 0
+                        ? 'No order shown here carries a tracking number in Striven'
+                        : `${n} of these ${openOrders.length} orders carry a tracking number. Click to bring them to the top.`}
+                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: C.muted, fontVariantNumeric: 'tabular-nums' }}>
+                        {n}/{openOrders.length}
+                      </span>
+                    );
+                  })()}
+                </SortHead>
                 {/* Not sortable — an order carries a SET of labels, so there is
                     no single value to order rows by. Filtering is the operation
                     that makes sense on it. */}
@@ -548,7 +661,7 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
                 <th style={{ whiteSpace: 'nowrap' }}>Stage set by</th>
               </tr></thead>
               <tbody>
-                {openOrders.length === 0 && <tr><td colSpan={9} style={{ color: C.muted }}>No orders at this stage.</td></tr>}
+                {openOrders.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders at this stage.</td></tr>}
                 {openOrders.map((o) => {
                   const stale = (o.daysInStage ?? 0) >= STALE_DAYS;
                   return (
@@ -570,6 +683,9 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
                           tell two patients with the same surname apart. Never a
                           full first name. */}
                       <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
+                      {/* Straight from Striven's own field on the sales order.
+                          Blank on most rows — see TrackingCell. */}
+                      <td><TrackingCell shipments={o.shipments} /></td>
                       {/* The EXACT labels Striven carries on this order, in its
                           own wording — this is what put the order in its stage,
                           so the reader can see the reasoning rather than trust
@@ -621,6 +737,10 @@ export function PiPipeline({ viewAs }: { viewAs?: string | null }) {
                 the portal. */}
             🔒 Patient shown as first INITIAL + surname — no full first name, date of birth or address. A download carries the same, so treat the file as PHI.
             Stages are read from Striven and cannot be set here; “in stage” is measured from the order date, so it is marked est.
+            {/* Stated outright, because a column of dashes otherwise reads as a
+                broken feed. It is not: Striven simply holds a number for a small
+                share of the book. */}
+            {' '}Tracking # is Striven's own field on the sales order — a dash means none has been entered there, not that the order has not shipped.
           </div>
         </div>
       )}

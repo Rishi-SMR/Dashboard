@@ -21,7 +21,7 @@ const TeamStandings = lazy(() => import('./components/RepsTab').then((m) => ({ d
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'arsheet' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'repsroster' | 'standings' | 'reports' | 'quickbooks';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'arsheet' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'vapipeline' | 'repsroster' | 'standings' | 'reports' | 'quickbooks';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -80,7 +80,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'repsroster', 'standings', 'reports', 'quickbooks'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsroster', 'standings', 'reports', 'quickbooks'];
 const readHash = (): ViewKey | null => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
   return VIEW_KEYS.includes(h) ? h : null;
@@ -161,6 +161,10 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     reps: <RepsTab initialSub="overview" />,
     repsorders: <RepsTab initialSub="orders" />,
     repspipeline: <RepsTab initialSub="pipeline" />,
+    // Same page, the other programme: VA orders are billed to the VA and carry
+    // no lien, so they have their own stages and their own entry rather than a
+    // third tab buried inside PI & PIP.
+    vapipeline: <RepsTab initialSub="vapipeline" />,
     // 'repsroster' opened the Roster sub-view, which no longer exists — the
     // roster is a section of the dashboard now. The key still resolves (an old
     // bookmark or #hash should not dead-end) but it lands on that dashboard,

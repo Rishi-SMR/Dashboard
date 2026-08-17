@@ -8,6 +8,8 @@ import { PiPipeline } from './PiPipeline';
 import { DashboardOverview } from './DashboardOverview';
 import { Leaderboard } from './Leaderboard';
 import { isKevinLogin } from '../viewProfile';
+import { Portal } from './Portal';
+import { ALL_TIME, MonthSelect, monthLabel, defaultMonth } from './MonthSelect';
 
 const money = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v));
 const n = (v: number | null | undefined) => (v == null ? '-' : String(v));
@@ -32,7 +34,7 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0
 // What is left is not a tab set: 'orders' and 'pipeline' are separate SIDEBAR
 // entries that happen to mount this component, so the in-page tab bar is gone
 // with them.
-type RepSub = 'overview' | 'orders' | 'pipeline';
+type RepSub = 'overview' | 'orders' | 'pipeline' | 'vapipeline';
 export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   const [data, setData] = useState<RepOverview | null>(null);
   const [me, setMe] = useState<Me | null>(null);
@@ -82,12 +84,29 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   // shows a way out of it. Switching back to Crystal restores the picker.
   useEffect(() => { if (isKevin && viewAs) setViewAs(null); }, [isKevin, viewAs]);
 
+  // THE PERIOD, HELD HERE rather than inside the panel that renders the control.
+  // Two panels answer to it — the leaderboard tile and The team table — and a
+  // selector that silently governed only its own card would leave the two
+  // disagreeing on screen about the same month. (The Rep × vertical table was
+  // the third; it has been removed, and its picker with it.)
+  //
+  // Set from the payload's month list once it arrives (see the effect below):
+  // the default is the CURRENT month, and it cannot be chosen before the list
+  // that says which months exist has loaded.
+  const [month, setMonth] = useState<string>(ALL_TIME);
+  useEffect(() => {
+    const list = data?.months ?? [];
+    if (!list.length) return;
+    // Current month, or the newest month with anything in it — see defaultMonth.
+    setMonth(defaultMonth(list));
+  }, [data?.months]);
+
   const isManager = data?.role === 'admin';
   // Which sub-view renders. Every remaining value is legal for both roles — the
   // team-only views are gone — but this still normalises anything unexpected
   // (a stale `sub`, an old `initialSub` from a bookmarked hash) back to the
   // overview rather than rendering nothing.
-  const REP_VIEWS: RepSub[] = ['overview', 'orders', 'pipeline'];
+  const REP_VIEWS: RepSub[] = ['overview', 'orders', 'pipeline', 'vapipeline'];
   const view: RepSub = REP_VIEWS.includes(sub) ? sub : 'overview';
   const reps = data?.reps ?? [];
   const t = data?.teamTotals;
@@ -162,8 +181,11 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
           dashboard, reached from the rep side and scoped to the caller. */}
       {view === 'orders' && <OrderDashboard viewAs={viewAs} />}
       {view === 'pipeline' && <div className="section chart-card"><PiPipeline viewAs={viewAs} /></div>}
+      {/* Same component, the VA programme. One implementation for every board:
+          the stages come from the server, so the two pages cannot drift. */}
+      {view === 'vapipeline' && <div className="section chart-card"><PiPipeline viewAs={viewAs} kind="VA" /></div>}
 
-      {data && view !== 'orders' && view !== 'pipeline' && (
+      {data && view !== 'orders' && view !== 'pipeline' && view !== 'vapipeline' && (
         <>
           {/* A REP LEADS WITH THE LEADERBOARD: their rank is the thing they
               open this page for, and the server sends peer rows (name and order
@@ -173,7 +195,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               designed against ~380px. A manager keeps OverviewPanel beside
               Units by device; they come here for the book, not for a rank. */}
           {view === 'overview' && !isManager && (
-            <Leaderboard reps={reps} viewAs={viewAs} />
+            <Leaderboard reps={reps} months={data.months} viewAs={viewAs} />
           )}
 
           {/* The house KPI card (KpiExec, shared from chartKit): the same
@@ -223,7 +245,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               reachable from My Orders and My Pipeline. */}
           {view === 'overview' && isManager && (
             <DashboardOverview reps={reps} viewAs={viewAs}
-              aside={<OverviewPanel reps={reps} onPickRep={setSel} />} />
+              aside={<OverviewPanel reps={reps} months={data.months} month={month} onMonth={setMonth} onPickRep={setSel} />} />
           )}
 
           {/* MANAGER ONLY. It ranks "top volume" and "top pay" across the
@@ -258,25 +280,46 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               is what the "Rep detail" tab did. */}
           {view === 'overview' && isManager && (
             <div className="section chart-card" style={{ marginBottom: 14 }}>
-              <div className="section-head"><div>
-                <h2 className="section-title">The team</h2>
-                <div className="section-sub">
-                  {isManager
-                    ? 'Every rep in full. Click a row for their vertical breakdown.'
-                    : 'Your row is shown in full. For everyone else you can see how much they booked, but not what they earned.'}
+              {/* THE SAME `month` the Rep × vertical card and the leaderboard
+                  tile answer to — see where it is declared. A third selector
+                  with its own state would let two tables on one page show
+                  different months while both said "the team". */}
+              <div className="section-head">
+                <div>
+                  <h2 className="section-title">The team</h2>
+                  <div className="section-sub">
+                    {isManager
+                      ? 'Every rep in full. Click a row for their vertical breakdown.'
+                      : 'Your row is shown in full. For everyone else you can see how much they booked, but not what they earned.'}
+                    {/* THE TWO BASES, STATED. Order columns are cut by the
+                        order's own date; pay is cut by the payout cycle, which
+                        is what the business settles on and what the Commission
+                        tab reports — so the two pages show the same figure for
+                        the same month. Naming both is the price of that. */}
+                    {' '}{month === ALL_TIME
+                      ? 'Showing the whole book.'
+                      : <>Showing <b>{monthLabel(month)}</b> — orders by order date, pay by payout cycle (matching Commission).</>}
+                  </div>
                 </div>
-              </div></div>
+                <MonthSelect months={data.months ?? []} month={month} onMonth={setMonth}
+                  title="Read the team one month at a time, or over the whole book" />
+              </div>
               <div className="table-wrap">
                 <table className="data-table">
                   <thead><tr>
                     <th style={{ width: 34 }}>#</th><th>Rep</th>
                     <th className="num">Orders</th><th className="num">Devices</th><th className="num" title="Distinct vendors billed. VA and TriCare are single-vendor programmes, so a rep working one of them shows one account however many orders they book.">Accounts</th>
                     <th className="num">Revenue</th><th className="num">Payable</th><th className="num">Waiting</th>
-                    <th className="num">Commission</th><th style={{ width: '16%' }}>Vertical mix</th>
+                    <th className="num">Commission</th><th style={{ width: '16%' }}>Orders by vertical</th>
                   </tr></thead>
                   <tbody>
                     {reps.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No reps.</td></tr>}
-                    {reps.map((r, i) => (
+                    {reps.map((r, i) => {
+                      // EVERY FIGURE ON THE ROW COMES FROM ONE PROJECTION, so a
+                      // month's orders can never sit beside an all-time dollar.
+                      // repInPeriod passes the row straight through on All time.
+                      const p = repInPeriod(r, month);
+                      return (
                       <tr key={r.rep} onClick={() => setSel(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}
                         title={r.own ? `Full detail for ${r.rep}` : `${r.rep}'s volume: their pay is confidential`}>
                         <td style={{ color: C.muted }}>{i + 1}</td>
@@ -284,114 +327,68 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                           {r.rep}
                           {r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
                         </td>
-                        <td className="num" style={{ fontWeight: 700 }}>{r.orders}</td>
-                        <td className="num">{n(r.units)}</td>
-                        <td className="num">{n(r.accounts)}</td>
-                        <td className="num">{r.own ? money(r.revenue) : <Confidential />}</td>
-                        <td className="num" style={{ color: r.own ? C.positive : undefined, fontWeight: 700 }}>{r.own ? money(r.payable) : <Confidential />}</td>
-                        <td className="num" style={{ color: r.own ? C.warning : undefined, fontWeight: 700 }}>{r.own ? money(r.waiting) : <Confidential />}</td>
-                        <td className="num" style={{ fontWeight: 800 }}>{r.own ? money(r.commission) : <Confidential />}</td>
-                        {/* Vertical mix, not a revenue bar: it works whether or
-                            not this row's money is visible, and says something
-                            the numeric columns don't. */}
-                        <td><MixBar parts={r.byVertical} total={r.orders} /></td>
+                        <td className="num" style={{ fontWeight: 700 }}>{p.orders}</td>
+                        <td className="num">{n(p.units)}</td>
+                        <td className="num">{n(p.accounts)}</td>
+                        <td className="num">{r.own ? money(p.revenue) : <Confidential />}</td>
+                        {/* The three money columns are the PAYOUT CYCLE's, so
+                            they read the same here as on the Commission tab. */}
+                        <td className="num" style={{ color: r.own ? C.positive : undefined, fontWeight: 700 }}>{r.own ? money(p.payable) : <Confidential />}</td>
+                        <td className="num" style={{ color: r.own ? C.warning : undefined, fontWeight: 700 }}>{r.own ? money(p.waiting) : <Confidential />}</td>
+                        <td className="num" style={{ fontWeight: 800 }}>{r.own ? money(p.earned) : <Confidential />}</td>
+                        {/* The COUNT per vertical, not a bar. Still the thing a
+                            revenue bar could not be — it works whether or not
+                            this row's money is visible — but it now answers
+                            "how many in each" instead of leaving the reader to
+                            estimate it off a segment width. */}
+                        <td><VerticalCounts parts={p.byVertical} total={p.orders} /></td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
-                  <tfoot><tr className="total-row">
-                    <td /><td>{isManager ? 'All reps' : 'Team'}</td>
-                    <td className="num">{t?.orders}</td><td className="num">{n(t?.units)}</td><td className="num">{n(t?.accounts)}</td>
-                    <td className="num" style={{ fontWeight: 800 }}>{money(t?.revenue)}</td>
-                    <td /><td />
-                    <td className="num" style={{ fontWeight: 800 }}>{money(t?.commission)}</td><td />
-                  </tr></tfoot>
+                  {/* THE FOOTER FOLLOWS THE PERIOD TOO, or the rows would sum to
+                      something the total contradicts.
+                      ACCOUNTS COMES FROM THE SERVER, not from adding the column
+                      above it: a distinct payer count cannot be summed across
+                      reps — two of them billing one law firm are one payer, and
+                      the rendered rows add to 60 against a true 57. Money and
+                      counts are re-summed here from the rows on screen. */}
+                  {(() => {
+                    const scoped = month !== ALL_TIME;
+                    const tm = scoped ? (data.teamByMonth ?? []).find((x) => x.month === month) : null;
+                    const proj = reps.map((r) => repInPeriod(r, month));
+                    const sum = (pick: (p: ReturnType<typeof repInPeriod>) => number | null | undefined) =>
+                      proj.reduce((s, p) => s + (Number(pick(p)) || 0), 0);
+                    return (
+                      <tfoot><tr className="total-row">
+                        <td /><td>{isManager ? 'All reps' : 'Team'}</td>
+                        <td className="num">{scoped ? (tm?.orders ?? 0) : t?.orders}</td>
+                        <td className="num">{scoped ? n(tm?.units ?? 0) : n(t?.units)}</td>
+                        <td className="num">{scoped ? n(tm?.accounts ?? 0) : n(t?.accounts)}</td>
+                        <td className="num" style={{ fontWeight: 800 }}>{money(scoped ? (tm?.revenue ?? 0) : t?.revenue)}</td>
+                        <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(sum((p) => p.payable))}</td>
+                        <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(sum((p) => p.waiting))}</td>
+                        <td className="num" style={{ fontWeight: 800 }}>{money(scoped ? sum((p) => p.earned) : t?.commission)}</td><td />
+                      </tr></tfoot>
+                    );
+                  })()}
                 </table>
               </div>
+              {/* The "a further $X belongs to no month" note is GONE, and that
+                  is the point of the change above rather than an oversight. It
+                  existed because commission was cut by the sales order's date
+                  and 127 signed-off lines tie to no live order, so that money
+                  fell out of every period. Payout cycles have no such hole —
+                  every line settles in some run — so the months now sum to the
+                  All time figure and there is nothing left to warn about. */}
             </div>
           )}
 
-          {/* REP × VERTICAL — was the "By vertical" tab. Manager-only for the
-              same reason as the roster above. */}
-          {view === 'overview' && isManager && (
-            // Plain house card, like every other section on this page. It used
-            // to carry a 3px accent rule and a deeper one-off shadow to "read as
-            // the subject of the page": but it is the only card in the app
-            // dressed that way, and now that it sits among the other sections
-            // rather than alone under a tab, it read as a different design
-            // rather than an emphasised one.
-            <div className="section chart-card">
-              <div className="section-head"><div>
-                <h2 className="section-title">Rep × vertical</h2>
-                <div className="section-sub">Orders and units per vertical for every rep. Revenue shows where you are allowed to see it.</div>
-              </div></div>
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead><tr>
-                    <th>Rep</th>
-                    {/* Each vertical column carries a faint tint of its own colour,
-                        so the four bands are distinguishable without rules. */}
-                    {(data.verticals || []).map((v) => (
-                      <th key={v} className="num" style={{ color: V_C[v], background: `${V_C[v]}0F`, borderBottom: `2px solid ${V_C[v]}55` }}>{v}</th>
-                    ))}
-                    <th className="num" style={{ borderLeft: `1px solid ${C.muted}33` }}>Total orders</th>
-                    <th className="num">Revenue</th>
-                  </tr></thead>
-                  <tbody>
-                    {reps.map((r, i) => (
-                      // Faint zebra banding: with three stacked figures per cell,
-                      // an unbanded row is easy to lose track of across the width.
-                      <tr key={r.rep} style={{ background: r.isSelf ? 'var(--panel-2)' : (i % 2 ? 'rgba(20,36,58,.02)' : undefined) }}>
-                        <td style={{ fontWeight: 700, color: C.brand, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}>
-                          {r.rep}{r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
-                        </td>
-                        {r.byVertical.map((v) => (
-                          <td key={v.vertical} className="num" style={{ background: `${V_C[v.vertical]}09` }}
-                            title={`${v.orders} order${v.orders === 1 ? '' : 's'}${v.units != null ? ` · ${v.units} units` : ''}${v.revenue != null ? ` · ${formatCurrency(v.revenue)}` : ''}`}>
-                            {v.orders ? (
-                              <>
-                                <div style={{ fontWeight: 700, fontSize: 14, fontVariantNumeric: 'tabular-nums', lineHeight: 1.3 }}>
-                                  {v.orders}
-                                  {v.units != null && <span style={{ fontSize: 11, fontWeight: 500, color: C.muted, marginLeft: 5 }}>{v.units}u</span>}
-                                </div>
-                                {v.revenue != null && (
-                                  <div style={{ fontSize: 11.5, color: C.sub, fontVariantNumeric: 'tabular-nums' }}>{formatCurrency(v.revenue)}</div>
-                                )}
-                              </>
-                            ) : <span style={{ color: `${C.muted}88` }}>–</span>}
-                          </td>
-                        ))}
-                        <td className="num" style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', borderLeft: `1px solid ${C.muted}22` }}>{r.orders}</td>
-                        <td className="num" style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{r.own ? money(r.revenue) : <Confidential />}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  {/* A table of parts should foot up to the whole. */}
-                  <tfoot><tr className="total-row">
-                    <td>Team</td>
-                    {/* No per-column tint here. The total row is a solid brand
-                        band with white text, and a pale tint on top of it left
-                        the order counts unreadable. It reads as one band. */}
-                    {(data.verticals || []).map((v) => {
-                      const ord = reps.reduce((s, r) => s + (r.byVertical.find((x) => x.vertical === v)?.orders ?? 0), 0);
-                      const rev = reps.reduce((s, r) => s + (r.byVertical.find((x) => x.vertical === v)?.revenue ?? 0), 0);
-                      return (
-                        <td key={v} className="num" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                          {ord ? (
-                            <>
-                              <div style={{ fontWeight: 800 }}>{ord}</div>
-                              {rev > 0 && <div style={{ fontSize: 11.5, fontWeight: 600, opacity: 0.85 }}>{formatCurrency(rev)}</div>}
-                            </>
-                          ) : <span style={{ opacity: 0.5 }}>–</span>}
-                        </td>
-                      );
-                    })}
-                    <td className="num" style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{t?.orders}</td>
-                    <td className="num" style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{money(t?.revenue)}</td>
-                  </tr></tfoot>
-                </table>
-              </div>
-            </div>
-          )}
+          {/* REP × VERTICAL lived here — the rep-by-vertical matrix with its
+              own Period picker. Removed on request. Nothing it showed is lost:
+              the orders-per-vertical breakdown is the "Orders by vertical"
+              column on The team above, that table now answers to the same
+              period selector, and the undated-commission note moved with it. */}
 
           {/* "Rep detail" was never a page of its own — it rendered a grid of
               rep cards whose only job was to open the modal below. Every rep on
@@ -476,6 +473,9 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
   const fmt = (v: number | null) => (v == null ? null : MONEY ? formatCurrency(v) : String(v));
 
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(720px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>
@@ -487,45 +487,47 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
         </div>
 
         <div style={{ padding: '16px 18px', overflowX: 'auto' }}>
-          <table className="data-table">
-            <thead><tr>
-              <th style={{ width: 34 }}>#</th><th>Rep</th>
-              <th className="num">{cfg.col}</th><th className="num">Share</th><th style={{ width: '32%' }} />
-            </tr></thead>
-            <tbody>
-              {rowsSorted.map((r, i) => {
-                const v = valOf(r);
-                return (
-                  <tr key={r.rep} onClick={() => onPickRep(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined }}
-                    title={`Open ${r.rep}'s detail`}>
-                    <td style={{ color: C.muted }}>{i + 1}</td>
-                    <td style={{ fontWeight: 700, color: C.brand }}>
-                      {r.rep}{r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
-                    </td>
-                    <td className="num" style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
-                      {v == null ? <Confidential /> : fmt(v)}
-                    </td>
-                    <td className="num" style={{ color: C.sub }}>
-                      {v != null && sum > 0 ? `${Math.round((v / sum) * 100)}%` : '-'}
-                    </td>
-                    <td>
-                      <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${v == null ? 0 : (v / max) * 100}%`, background: r.isSelf ? cfg.tint : `${cfg.tint}99`, borderRadius: 999 }} />
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot><tr className="total-row">
-              <td /><td>
-                {withheld ? `Visible to you (${rowsSorted.length - withheld} of ${rowsSorted.length})`
-                  : DISTINCT ? 'Sum of rep counts' : 'Total'}
-              </td>
-              <td className="num" style={{ fontWeight: 800 }}>{MONEY ? formatCurrency(sum) : sum}</td>
-              <td /><td />
-            </tr></tfoot>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr>
+                <th style={{ width: 34 }}>#</th><th>Rep</th>
+                <th className="num">{cfg.col}</th><th className="num">Share</th><th style={{ width: '32%' }} />
+              </tr></thead>
+              <tbody>
+                {rowsSorted.map((r, i) => {
+                  const v = valOf(r);
+                  return (
+                    <tr key={r.rep} onClick={() => onPickRep(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined }}
+                      title={`Open ${r.rep}'s detail`}>
+                      <td style={{ color: C.muted }}>{i + 1}</td>
+                      <td style={{ fontWeight: 700, color: C.brand }}>
+                        {r.rep}{r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
+                      </td>
+                      <td className="num" style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+                        {v == null ? <Confidential /> : fmt(v)}
+                      </td>
+                      <td className="num" style={{ color: C.sub }}>
+                        {v != null && sum > 0 ? `${Math.round((v / sum) * 100)}%` : '-'}
+                      </td>
+                      <td>
+                        <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${v == null ? 0 : (v / max) * 100}%`, background: r.isSelf ? cfg.tint : `${cfg.tint}99`, borderRadius: 999 }} />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot><tr className="total-row">
+                <td /><td>
+                  {withheld ? `Visible to you (${rowsSorted.length - withheld} of ${rowsSorted.length})`
+                    : DISTINCT ? 'Sum of rep counts' : 'Total'}
+                </td>
+                <td className="num" style={{ fontWeight: 800 }}>{MONEY ? formatCurrency(sum) : sum}</td>
+                <td /><td />
+              </tr></tfoot>
+            </table>
+          </div>
 
           {/* Distinct counts still need their explanation: the column sums to
               more than the real figure because reps share payers. This reads
@@ -545,6 +547,7 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -676,17 +679,106 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
  * manager's dashboard the roster table now sits further down the same page, and
  * a rep has no roster to go to.
  */
-function OverviewPanel({ reps, onPickRep }: {
-  reps: RepRow[]; onPickRep: (r: RepRow) => void;
+/**
+ * One rep's figures AS THEY READ IN THE SELECTED PERIOD.
+ *
+ * The whole point is that callers stay period-agnostic: they ask for orders,
+ * a vertical's commission and a total, and get the right answer whether a month
+ * is selected or not. Spreading a projected row into a RepRow (as the
+ * leaderboard does) works for order counts, but commission is a separate shape
+ * on the payload, so the two are resolved together here rather than in three
+ * places that would each have to remember the month.
+ *
+ * `commission` is null — not 0 — where the payload withheld it. A peer row on a
+ * rep's login carries no money at all, and rendering a zero there would state
+ * that nothing is owed to a colleague, which is a claim this page cannot make.
+ */
+function repInPeriod(r: RepRow, month: string) {
+  const allTime = month === ALL_TIME;
+  const m = allTime ? null : (r.byMonth ?? []).find((x) => x.month === month);
+  const due = r.commissionDue ?? null;
+  const cm = allTime ? null : (due?.byMonth ?? []).find((x) => x.month === month);
+  return {
+    orders: allTime ? r.orders : (m?.orders ?? 0),
+    byVertical: allTime ? r.byVertical : (m?.byVertical ?? []),
+    // VOLUME AND REVENUE, added so the team table can be read a month at a time
+    // rather than only in aggregate. `null` is preserved rather than coalesced
+    // to 0: the payload nulls these on a peer row, and a zero would state that a
+    // colleague booked nothing instead of that the figure is withheld.
+    units: allTime ? r.units : (m ? m.units : (r.units == null ? null : 0)),
+    revenue: allTime ? r.revenue : (m ? m.revenue : (r.revenue == null ? null : 0)),
+    accounts: allTime ? r.accounts : (m ? m.accounts : (r.accounts == null ? null : 0)),
+    /** Commission OWED on this vertical/month, from the order-date rollup. Kept
+     *  for `commissionOf` below, which is the only consumer left. */
+    commission: due == null ? null : (allTime ? due.total : (cm?.total ?? 0)),
+    // ── PAY: THE PAYOUT CYCLE, matching the Commission tab exactly ────────────
+    // These three come off `commissionByCycle`, which the server lifts straight
+    // from the commission payload. They used to be cut by the SALES ORDER's
+    // date, which put Jillian's July at $6,646 here against $21,946 on the
+    // Commission tab and lost $28,526 of hers to lines that tie to no live
+    // order and so belonged to no month.
+    ...(() => {
+      const cyc = r.commissionByCycle ?? null;
+      const c = allTime || !cyc ? null : cyc.find((x) => x.month === month);
+      return {
+        /** Payable / Due. */
+        payable: r.payable == null ? null : (allTime ? r.payable : (c?.payable ?? 0)),
+        /** Waiting. A cycle figure by nature, so it only HAS a value per cycle. */
+        waiting: r.waiting == null ? null : (allTime ? r.waiting : (c?.waiting ?? 0)),
+        /** The Commission column: paid plus payable for the cycle. */
+        earned: r.commission == null ? null : (allTime ? r.commission : (c?.total ?? 0)),
+      };
+    })(),
+    /** Commission due on one vertical, null where money is withheld. */
+    commissionOf: (v: string): number | null => {
+      if (due == null) return null;
+      return (allTime ? due.byVertical : (cm?.byVertical ?? {}))[v] ?? 0;
+    },
+    /** Owed commission tied to no live order, so it belongs to no month. Only
+     *  meaningful under a month filter, where it is the part NOT on screen. */
+    undated: due?.undated ?? 0,
+  };
+}
+
+function OverviewPanel({ reps, months, month, onMonth, onPickRep }: {
+  reps: RepRow[]; months?: string[];
+  /** CONTROLLED. The period is owned by RepsTab, because The team table answers
+   *  to the same selector — see the note where it is declared. */
+  month: string; onMonth: (m: string) => void;
+  onPickRep: (r: RepRow) => void;
 }) {
+  const available = months ?? [];
+  // The payload can change under the component — a rep preview swaps the whole
+  // roster — so a month that no longer exists must not strand the board on an
+  // empty period it cannot get out of.
+  const active = month === ALL_TIME || available.includes(month) ? month : ALL_TIME;
+
   // Only producers are ranked — the same rule (and the same server flag) that
   // getRepOverview applies. This panel used to rank the raw roster, so house,
   // ops and departed names sat on the landing page's leaderboard while the
   // server had already dropped them: two boards, one roster, different answers.
-  const ranked = [...reps]
+  //
+  // PROJECTED ONTO THE PERIOD FIRST, then ranked. `byMonth` carries the same
+  // fields the aggregate does, so everything downstream — the bars, the
+  // percentages, the drill — reads a normal RepRow and needs no notion of a
+  // period at all. A rep who booked nothing in the month drops off the board
+  // rather than sitting at the foot on zero: they are not last that month, they
+  // are absent from it, and a rank implies a race they did not enter.
+  const inPeriod: RepRow[] = active === ALL_TIME
+    ? [...reps]
+    : reps.map((r) => {
+      const m = (r.byMonth ?? []).find((x) => x.month === active);
+      return { ...r, orders: m?.orders ?? 0, units: m?.units ?? null, byVertical: m?.byVertical ?? [] };
+    }).filter((r) => r.orders > 0);
+
+  const ranked = inPeriod
     .filter((r) => !r.standingsExcluded || r.isSelf)
     .sort((a, b) => b.orders - a.orders);
-  if (!ranked.length) return null;
+
+  // NOT `!ranked.length` any more. An empty MONTH is a real answer and must say
+  // so; returning null would blank the card and leave the selector that caused
+  // it unreachable, so the only way back would be a page reload.
+  if (!reps.length) return null;
 
   // `own` is the server's word for "this row arrived unredacted" — true on every
   // row for a manager, true only on their own for a rep. Opening a peer's
@@ -694,69 +786,148 @@ function OverviewPanel({ reps, onPickRep }: {
   // and a column of nulls where the figures they may not see used to be.
   const canOpen = (r: RepRow) => Boolean(r.own);
   const openableCount = ranked.filter(canOpen).length;
-  // The bar scale's denominator: every bar is read against the leader's.
+  // The bar scale's denominator: every bar is read against the leader's — the
+  // leader IN THIS PERIOD, so a month's bars use the full track rather than
+  // being squashed against an all-time high nobody reached that month.
   const leader = ranked[0]?.orders ?? 0;
+  const totalOrders = ranked.reduce((s, r) => s + r.orders, 0);
+  const pct = (v: number) => (totalOrders ? Math.round((v / totalOrders) * 100) : 0);
 
   return (
-    <>
-      {/* marginBottom 0: the KPI strip below carries its own top gap, so the
-          default card margin was stacking two gaps into one seam. */}
-      <div className="section chart-card" style={{ marginBottom: 0 }}>
-        <div className="section-head" style={{ minHeight: 0, marginBottom: 6 }}>
-          <div>
-            <h2 className="section-title" style={{ fontSize: 15 }}>Leaderboard</h2>
-            <div className="section-sub">
-              {openableCount > 1
-                ? 'By orders booked. Click a rep for their full breakdown.'
-                : 'By orders booked. Click your own row for your full breakdown.'}
-            </div>
+    <BoardTile ranked={ranked} leader={leader} totalOrders={totalOrders} pct={pct}
+      canOpen={canOpen} openableCount={openableCount} onPickRep={onPickRep}
+      months={available} month={active} onMonth={onMonth} />
+  );
+}
+
+/**
+ * The leaderboard as a TILE, built to the same anatomy as Units by device
+ * (BarList in DashboardOverview) — the card it sits beside in `.chart-pair`.
+ * Matching it is the whole point: the two are one row, and a board with its own
+ * head height, row rhythm and bar geometry read as two unrelated panels that
+ * happened to land next to each other.
+ *
+ * Copied deliberately, element for element:
+ *   · `height: 100%` + column flex, so the pair ends level
+ *   · a 52px head, so both titles and subtitles sit on one baseline
+ *   · the 22px headline figure that swaps to the hovered row's own number
+ *   · rows on `minmax(0, 34%) 1fr 46px 38px` — name, bar, value, share
+ *   · a `marginTop: auto` footer, which is what makes a stretched card end
+ *     cleanly instead of trailing blank space
+ *
+ * The one thing NOT copied is the bar itself: each rep's is segmented by
+ * vertical (MixBar), because a rep's mix is information a device count has no
+ * equivalent of. It takes the device tile's 14px height and 4px radius so the
+ * two columns of bars still line up.
+ */
+function BoardTile({ ranked, leader, totalOrders, pct, canOpen, openableCount, onPickRep,
+  months, month, onMonth }: {
+  ranked: RepRow[]; leader: number; totalOrders: number; pct: (v: number) => number;
+  canOpen: (r: RepRow) => boolean; openableCount: number; onPickRep: (r: RepRow) => void;
+  months: string[]; month: string; onMonth: (m: string) => void;
+}) {
+  // Hovering a row lifts that rep's count into the headline, the way hovering a
+  // device row does. One control, read two ways.
+  const [hot, setHot] = useState<number | null>(null);
+
+  return (
+    <div className="section chart-card" style={{ marginTop: 0, marginBottom: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div className="section-head" style={{ minHeight: 52, alignItems: 'flex-start' }}>
+        <div>
+          <h2 className="section-title" style={{ fontSize: 15 }}>Leaderboard</h2>
+          <div className="section-sub">
+            {openableCount > 1
+              ? 'Reps by orders booked · click a rep for their full breakdown'
+              : 'Reps by orders booked · click your own row for your full breakdown'}
           </div>
         </div>
-        {/* THE BAR takes the slack, not the name.
-            The name column was `minmax(0, 1fr)`, so on a full-width card it
-            swallowed every spare pixel and shoved a 132px bar and the order
-            count to the far right — the void in the middle of each row. The
-            name is now bounded and the mix bar is the flexible column, so a row
-            fills its width instead of spanning it. MixBar is normalised to each
-            rep's own total, so stretching it changes nothing it means. */}
-        <div style={{ display: 'grid', gap: 2, padding: '2px 2px 0' }}>
-          {ranked.map((r, i) => (
-            <button key={r.rep} className="lb-row" onClick={canOpen(r) ? () => onPickRep(r) : undefined}
-              disabled={!canOpen(r)}
-              title={canOpen(r) ? `${r.rep}'s full breakdown` : `${r.rep}'s figures are confidential to them`}
+        <MonthSelect months={months} month={month} onMonth={onMonth} />
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 8 }}>
+        <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.4, fontVariantNumeric: 'tabular-nums', color: C.ink }}>
+          {(hot === null ? totalOrders : ranked[hot].orders).toLocaleString()}
+        </span>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: C.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {hot === null ? 'orders' : `${pct(ranked[hot].orders)}% · ${ranked[hot].rep}`}
+        </span>
+      </div>
+
+      {/* A month with no orders is a fact, not a failure. Said in words, because
+          the alternative is a card showing "0 orders" over nothing at all, which
+          reads as a load that went wrong rather than as a quiet month. */}
+      {ranked.length === 0 && (
+        <div style={{ padding: '18px 4px 22px', textAlign: 'center', fontSize: 13, color: C.muted }}>
+          No orders booked in {month === ALL_TIME ? 'the book' : monthLabel(month)}.
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gap: 1 }}>
+        {ranked.map((r, i) => {
+          const on = hot === i;
+          const open = canOpen(r);
+          return (
+            <button key={r.rep} className="lb-row"
+              onMouseEnter={() => setHot(i)} onMouseLeave={() => setHot(null)}
+              onFocus={() => setHot(i)} onBlur={() => setHot(null)}
+              onClick={open ? () => onPickRep(r) : undefined}
+              disabled={!open}
+              title={open ? `${r.rep}'s full breakdown` : `${r.rep}'s figures are confidential to them`}
               style={{
-                display: 'grid', gridTemplateColumns: '18px minmax(80px, 170px) minmax(0, 1fr) 84px',
-                gap: 10, alignItems: 'center',
-                textAlign: 'left', cursor: canOpen(r) ? 'pointer' : 'default', width: '100%',
-                background: r.isSelf ? 'var(--panel-2)' : 'transparent',
-                border: `1px solid ${r.isSelf ? `${C.brand}44` : 'transparent'}`,
-                borderRadius: 8, padding: '4px 8px',
+                display: 'grid', gridTemplateColumns: 'minmax(0, 34%) 1fr 46px 38px', gap: 10, alignItems: 'center',
+                fontSize: 12.5, padding: '4px 6px', margin: '0 -6px', borderRadius: 7, width: 'calc(100% + 12px)',
+                textAlign: 'left', border: 'none', cursor: open ? 'pointer' : 'default',
+                background: r.isSelf
+                  ? `color-mix(in srgb, ${C.brand} 12%, transparent)`
+                  : on ? 'var(--panel-2)' : 'transparent',
+                boxShadow: r.isSelf ? `inset 0 0 0 1px color-mix(in srgb, ${C.brand} 38%, transparent)` : 'none',
+                transition: 'background-color .16s ease',
                 // A disabled button greys its text by default; these rows are
                 // not unavailable, only unopenable, and must stay fully legible.
                 opacity: 1, color: 'inherit',
               }}>
-              <span style={{ fontSize: 11.5, fontWeight: 800, color: i === 0 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
-                {i === 0 ? '🥇' : i + 1}
-              </span>
+              {/* Rank and name share the name column, so the four columns are
+                  the device tile's four and the figures line up across the row. */}
               <span style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 12.5, fontWeight: 700, color: C.brand, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.rep}</span>
-                {r.isSelf && <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: C.positive }}>You</span>}
+                <span style={{ flex: 'none', width: 14, fontSize: 11.5, fontWeight: 800, color: i === 0 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
+                  {i === 0 ? '🥇' : i + 1}
+                </span>
+                <span style={{ fontWeight: on ? 700 : 600, color: on ? C.ink : C.brand, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color .16s ease' }}>{r.rep}</span>
+                {r.isSelf && <span style={{ flex: 'none', fontSize: 9.5, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: C.positive }}>You</span>}
               </span>
-              <MixBar parts={r.byVertical} total={r.orders} height={8} scale={leader ? r.orders / leader : 0} />
+              <MixBar parts={r.byVertical} total={r.orders} height={14} radius={4}
+                scale={leader ? r.orders / leader : 0} dim={hot !== null && !on} />
               {/* Orders only. The money column that sat here is gone: this
                   board ranks by volume, and the figure was each rep's own
                   commission — available in full on My Commission and on the
-                  rep's own drill-down, so nothing is lost by dropping it. The
-                  share-of-leader percentage went too; the bar already carries
-                  the comparison, and rank says who is ahead. */}
-              <span style={{ fontSize: 11.5, color: C.sub, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', textAlign: 'right' }}>
-                <b style={{ color: C.ink, fontSize: 13 }}>{r.orders}</b> orders
+                  rep's own drill-down, so nothing is lost by dropping it. */}
+              <span style={{ fontWeight: 700, color: C.ink, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}>{r.orders}</span>
+              <span style={{ color: on ? C.brand : C.muted, fontWeight: on ? 700 : 400, fontVariantNumeric: 'tabular-nums', textAlign: 'right', transition: 'color .16s ease' }}>
+                {pct(r.orders)}%
               </span>
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
-    </>
+
+      {/* Same footer shape as the device tile: what the card counts on the left,
+          how concentrated it is on the right. `marginTop: auto` pins it to the
+          foot, which is what lets the card stretch to its neighbour's height. */}
+      <div style={{
+        marginTop: 'auto', paddingTop: 10, display: 'flex', alignItems: 'baseline',
+        justifyContent: 'space-between', gap: 8, fontSize: 11,
+        borderTop: '1px solid var(--panel-2)', color: C.muted,
+      }}>
+        <span>{ranked.length} rep{ranked.length === 1 ? '' : 's'}</span>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+          {ranked.length <= 1 ? '-' : (() => {
+            const n = Math.min(3, ranked.length - 1);
+            const lead = ranked.slice(0, n).reduce((s, r) => s + r.orders, 0);
+            return <>Top {n} · <b style={{ color: C.sub, fontWeight: 700 }}>{pct(lead)}%</b></>;
+          })()}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -773,18 +944,57 @@ function OverviewPanel({ reps, onPickRep }: {
  * rep's OWN total, and four reps on 166 / 99 / 72 / 39 orders drew four
  * identical bars. The rank number was doing all the work.
  */
-function MixBar({ parts, total, height = 9, scale = 1 }: {
+/**
+ * Orders per vertical, spelled out: `VA-182` · `TriCare-65 / PI-36`.
+ *
+ * Replaces MixBar in "The team". The bar drew PROPORTION, which is the one
+ * thing the row could already be read for — Jillian's 99 orders next to a
+ * two-tone bar still left you estimating 65 and 36 off two segment widths. It
+ * also collapsed to a single solid block for the four reps working one vertical
+ * (Alle Ann, Christy, Cassie, Maylon), which says nothing at all.
+ *
+ * MixBar itself stays: the leaderboard tile below wants a shape, and there the
+ * bars are scaled against each other so the comparison is the point.
+ *
+ * Sorted by count, largest first, so the vertical a rep actually works leads.
+ * `total` is carried for the hover title only — the counts speak for
+ * themselves, but the row's own Orders figure is worth being able to check
+ * against without adding a column.
+ */
+function VerticalCounts({ parts, total }: { parts: RepVertical[]; total: number }) {
+  const shown = parts.filter((p) => p.orders > 0)
+    .slice().sort((a, b) => b.orders - a.orders || a.vertical.localeCompare(b.vertical));
+  if (!shown.length) return <span style={{ color: C.muted }}>-</span>;
+  return (
+    <span title={`${total} order${total === 1 ? '' : 's'} · ${shown.map((p) => `${p.vertical}: ${p.orders}`).join(' · ')}`}
+      style={{ whiteSpace: 'nowrap', fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+      {shown.map((p, i) => (
+        <span key={p.vertical} style={{ color: V_C[p.vertical] || C.sub }}>
+          {i > 0 && <span style={{ color: C.muted, fontWeight: 400 }}> / </span>}
+          {p.vertical}-{p.orders}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function MixBar({ parts, total, height = 9, scale = 1, radius = 999, dim = false }: {
   parts: RepVertical[]; total: number; height?: number; scale?: number;
+  /** Corner radius. 999 is the pill the tables use; the leaderboard tile passes
+   *  4 to match the square-ended bars on Units by device beside it. */
+  radius?: number;
+  /** Fades the bar while a SIBLING row is hovered, so the hovered one reads. */
+  dim?: boolean;
 }) {
   const shown = parts.filter((p) => p.orders > 0);
-  if (!shown.length || !total) return <div style={{ height, borderRadius: 999, background: 'var(--panel-2)' }} />;
+  if (!shown.length || !total) return <div style={{ height, borderRadius: radius, background: 'var(--panel-2)' }} />;
   const pct = Math.max(0, Math.min(1, scale)) * 100;
   return (
     <div title={`${total} order${total === 1 ? '' : 's'} · ${shown.map((p) => `${p.vertical}: ${p.orders}`).join(' · ')}`}
-      style={{ height, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)' }}>
+      style={{ height, borderRadius: radius, overflow: 'hidden', background: 'var(--panel-2)' }}>
       {/* Outer track is the leader's length; this fill is this rep's share of
           it, and the segments inside divide THAT by vertical. */}
-      <div className="mix-fill" style={{ display: 'flex', height: '100%', width: `${pct}%`, borderRadius: 999, overflow: 'hidden', transition: 'width .35s cubic-bezier(.22,.75,.3,1), filter .15s ease' }}>
+      <div className="mix-fill" style={{ display: 'flex', height: '100%', width: `${pct}%`, borderRadius: radius, overflow: 'hidden', opacity: dim ? 0.55 : 1, transition: 'width .35s cubic-bezier(.22,.75,.3,1), opacity .16s ease, filter .15s ease' }}>
         {shown.map((p) => (
           <div key={p.vertical} style={{ width: `${(p.orders / total) * 100}%`, background: V_C[p.vertical] || C.muted }} />
         ))}
@@ -896,30 +1106,32 @@ function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
       </div>
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By vertical</div>
-      <table className="data-table">
-        <thead><tr><th>Vertical</th><th className="num">Orders</th><th className="num">Devices</th>{showVertRevenue && <th className="num">Revenue</th>}<th className="num">Share of orders</th><th style={{ width: '24%' }} /></tr></thead>
-        <tbody>
-          {rep.byVertical.map((v) => (
-            <tr key={v.vertical}>
-              <td style={{ fontWeight: 700, color: V_C[v.vertical] }}>
-                <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, background: V_C[v.vertical], marginRight: 8 }} />
-                {v.vertical}
-              </td>
-              <td className="num" style={{ fontWeight: 700 }}>{v.orders || '-'}</td>
-              <td className="num">{n(v.units)}</td>
-              {showVertRevenue && (
-                <td className="num" style={{ fontWeight: 800 }}>{v.revenue != null ? (v.revenue ? formatCurrency(v.revenue) : '-') : <Confidential />}</td>
-              )}
-              <td className="num">{v.orders ? `${Math.round((v.orders / totalOrders) * 100)}%` : '-'}</td>
-              <td>
-                <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${(v.orders / totalOrders) * 100}%`, background: V_C[v.vertical], borderRadius: 999 }} />
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead><tr><th>Vertical</th><th className="num">Orders</th><th className="num">Devices</th>{showVertRevenue && <th className="num">Revenue</th>}<th className="num">Share of orders</th><th style={{ width: '24%' }} /></tr></thead>
+          <tbody>
+            {rep.byVertical.map((v) => (
+              <tr key={v.vertical}>
+                <td style={{ fontWeight: 700, color: V_C[v.vertical] }}>
+                  <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, background: V_C[v.vertical], marginRight: 8 }} />
+                  {v.vertical}
+                </td>
+                <td className="num" style={{ fontWeight: 700 }}>{v.orders || '-'}</td>
+                <td className="num">{n(v.units)}</td>
+                {showVertRevenue && (
+                  <td className="num" style={{ fontWeight: 800 }}>{v.revenue != null ? (v.revenue ? formatCurrency(v.revenue) : '-') : <Confidential />}</td>
+                )}
+                <td className="num">{v.orders ? `${Math.round((v.orders / totalOrders) * 100)}%` : '-'}</td>
+                <td>
+                  <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${(v.orders / totalOrders) * 100}%`, background: V_C[v.vertical], borderRadius: 999 }} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
         🔒 No patient names. Commission = units × per-device rate; cancelled and $0-value orders earn nothing.
 
@@ -945,6 +1157,9 @@ function RepModal({ rep, onClose }: { rep: RepRow; onClose: () => void }) {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(820px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${rep.own ? C.brand : C.muted}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>
@@ -972,5 +1187,6 @@ function RepModal({ rep, onClose }: { rep: RepRow; onClose: () => void }) {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }

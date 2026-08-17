@@ -239,7 +239,11 @@ const server = http.createServer(async (req, res) => {
   // the redaction needs the caller, and ROUTES handlers take no arguments.
   if (pathname === '/api/commission') {
     try {
-      const out = await getCommissionFor(viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
+      // ?fresh=1 re-reads the reconciliation sheet — see getCommissionFor().
+      const out = await getCommissionFor(
+        viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')),
+        { fresh: reqUrl.searchParams.get('fresh') === '1' },
+      );
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(out));
     } catch (e) {

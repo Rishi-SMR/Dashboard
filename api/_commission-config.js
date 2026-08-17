@@ -56,6 +56,72 @@ export const COMMISSION_RATES = {
 // entry above and fall through to the vertical fallback below.
 export const FALLBACK_VERTICAL_RATES = { VA: 425, TriCare: 369.78, PI: 0, DOL: 0 };
 
+// ── AR EXPECTED ──────────────────────────────────────────────────────────────
+// What the business expects to RECEIVE on an invoice, as against what it billed.
+//
+//   PI      15% of billed. A PI order is billed at the full device price but is
+//           a LIEN: the claim settles out of the patient's award and only a
+//           fraction of the face value ever comes back, so a PI invoice carried
+//           at its full value overstates the receivable nearly sevenfold.
+//   other   billed. Not a guess and not a placeholder: an invoice with no rule
+//           of its own is expected in full, and treating one as expecting
+//           nothing would quietly write off real billed work — the failure
+//           that is hardest to notice, because the total merely looks smaller.
+//
+// DELIBERATELY PI-ONLY FOR NOW. Two further rules are known but not applied,
+// and are left OUT rather than half-built, because config that exists and is
+// not used reads as a rule that IS in force:
+//   VA       billed less a 15% deduction towards POD
+//   TriCare  per unit, off the invoice's own line items — Striven already
+//            prices them (4 Stim $425, garment $75, back brace $150), so the
+//            figure should be read from the invoice rather than from a rate
+//            table here that would drift from it
+// Both are a small change to arExpectedFor() when the business confirms them.
+export const PI_AR_RATE = 0.15;
+
+/**
+ * One invoice's expected receipt.
+ *
+ * @param {{vertical?:string, billed:number}} p
+ * @returns {{amount:number, basis:string}}
+ *
+ * `basis` names the rule that produced the number, so the UI can say WHY a row
+ * reads what it does rather than presenting every figure as equally derived.
+ *
+ * The rate is taken from the PROGRAMME, never from the payer text: the payer on
+ * a PI invoice is the individual law firm and there are dozens of them, while
+ * the vertical is the one field that says which rule applies.
+ */
+export function arExpectedFor({ vertical, billed }) {
+  const amount = Number(billed) || 0;
+  const isPi = String(vertical ?? '') === 'PI';
+  return {
+    amount: Math.round(amount * (isPi ? PI_AR_RATE : 1) * 100) / 100,
+    basis: isPi ? 'pi-15' : 'billed',
+  };
+}
+
+/**
+ * The reconciliation sheet's Vertical column → the three programme names the
+ * rest of the portal is keyed by.
+ *
+ * The sheet is typed by hand and spells it loosely — "VA Order", "va",
+ * "Tri-Care", "Personal Injury" — so a raw string comparison misses most of it.
+ * Extracted here because TWO readers now fold it (the paid/owed split and the
+ * rep × vertical commission rollup), and a second copy would drift the moment
+ * one of them learns a new spelling.
+ *
+ * Returns '' for anything unrecognised, so an unfoldable line is visibly
+ * unassigned rather than quietly banked into one of the three.
+ */
+export function verticalOfCommissionLine(prog) {
+  const s = String(prog ?? '');
+  if (/tri.?care/i.test(s)) return 'TriCare';
+  if (/\bva\b|veteran/i.test(s)) return 'VA';
+  if (/\bpi\b|personal injury/i.test(s)) return 'PI';
+  return '';
+}
+
 // ── Order label rules ────────────────────────────────────────────────────────
 // Matched against the Striven order status text. `hold` is checked first and
 // wins, because an excluded order must never be counted as payable.
@@ -96,13 +162,39 @@ export const ORDER_LABEL_RULES = {
 export const PI_STAGES = [
   'Order received',
   'LOP requested',
-  'Dispensed & shipped',
+  'Dispense/Shipped',
   'Delivered',
   'Waiting for first payment',
   'Waiting for settlement',
 ];
 /** Custom field on the sales order that mirrors the Striven tag. */
 export const STRIVEN_STAGE_FIELD = 'Stage';
+
+/**
+ * Stage names that have been RENAMED, old → new.
+ *
+ * A stage name is not only a caption: it is the literal string written into
+ * places this file does not control, and those outlive the rename —
+ *   · the portal's own stage store (Supabase `pi_stages`), holding whatever
+ *     string was current when someone moved the order by hand
+ *   · the Striven `Stage` custom field, typed by staff in Striven
+ * Both are matched against the stage list, so without this map a renamed stage
+ * stops matching and every order resting on one silently falls back to stage 1
+ * — a wrong board with no error anywhere to say so.
+ *
+ * Keys are matched case-insensitively after trimming, like the label maps.
+ * Renamed 2026-08-12: 'Dispensed & shipped' → 'Dispense/Shipped'.
+ */
+export const STAGE_RENAMES = {
+  'dispensed & shipped': 'Dispense/Shipped',
+};
+
+/** The current name for a stage string from any source. Unknown names pass
+ *  through untouched, so this never invents a stage. */
+export function canonicalStage(s) {
+  const raw = String(s ?? '').trim();
+  return STAGE_RENAMES[raw.toLowerCase()] ?? raw;
+}
 
 // ── PIP: its own pipeline ────────────────────────────────────────────────────
 // A PIP order NEVER goes to Lienstar. It is billed through the customer to the
@@ -222,6 +314,115 @@ export const PIP_LABEL_STAGE = {
   'tricare paid': 'Bill settled',
 };
 
+// ── VA: its own pipeline ─────────────────────────────────────────────────────
+// A VA order is billed to the Department of Veterans Affairs and paid in full
+// off the invoice. No attorney, no lien, no Lienstar, no settlement — so the PI
+// stages describe none of it, exactly as they describe none of PIP.
+//
+// The routing decision here is simpler than PIP's: VA is already its own
+// VERTICAL (soClass → 'VA'), so no identifying label is needed and none is
+// guessed at. Every order with vertical 'VA' is on this board and nothing else
+// is.
+//
+// FIVE STAGES, and they are the ones the labels on the VA book actually attest
+// to: Paid (204), HOLD (45), Waiting for Reimbursement (12), Shipped (10), POD
+// Sent (1), Delivered (1), and 2 orders with no label at all.
+//
+//   - there IS a dispatch stage. This board first shipped with four stages and
+//     'Shipped' folded into 'Order received', copying PIP's "no dispatch stage"
+//     reasoning. That was wrong, and wrong from a bad census: the count was
+//     taken from the VA-only labels report, which covers 216 of the 264 VA
+//     orders and happens to omit every one of the newest shipped ones. The
+//     visible symptom was 10 orders sitting under 'Order received' tagged
+//     "Shipped, Waiting for Reimbursement" — plainly not orders that had merely
+//     been received.
+//   - 'Paid' IS a stage here, which PI deliberately does not have. On PI that
+//     was a fair call ("past the end of this pipeline"); on VA it would put 204
+//     of 264 orders — 77% of the book — in a stage named for waiting. The
+//     terminal state is the whole shape of this board.
+//   - there is still no LOP and no settlement stage: those are Lienstar steps a
+//     VA order can never reach.
+export const VA_STAGES = [
+  'Order received',
+  'Dispense/Shipped',
+  'Delivered',
+  'Waiting on VA payment',
+  'Paid',
+];
+
+// Same three rules as PI_LABEL_STAGE below: label → stage (or stages), listed
+// at every stage attested, furthest along is the current position. Keys are
+// matched case-insensitively after trimming.
+//
+// Every label in the Striven vocabulary appears here, including the ones that
+// resolve to stage 1 — an unlisted label and a mapped-to-stage-1 label are
+// indistinguishable at runtime, and only the explicit list shows a reader that
+// the label was considered rather than forgotten.
+export const VA_LABEL_STAGE = {
+  // → 1. Order received. Where an order sits until a label says otherwise. Only
+  // the two genuinely pre-dispatch states resolve here.
+  'cancelled': 'Order received',
+  // 'hold' and 'case dropped' are NOT here: see REVIEW_LABELS above. They say
+  // the order has stopped, not how far it got, so they carry no stage. This is
+  // where 11 of the 216 VA rows go.
+  //
+  // LOP / Lienstar / settlement / PIP labels CANNOT legitimately apply to a VA
+  // order — there is no attorney and no auto insurer in this programme. They
+  // are mapped rather than left out so the behaviour is deterministic, but an
+  // order carrying one is a mislabel in Striven, and leaving it in stage 1 is
+  // what makes that visible instead of promoting it on a false signal.
+  'waiting for lop': 'Order received',
+  '1st lop request': 'Order received',
+  '2nd lop request': 'Order received',
+  '3rd lop request': 'Order received',
+  'enter into lienstar': 'Order received',
+  'hold for settlement': 'Order received',
+  'negotiating': 'Order received',
+  'waiting on pip payment': 'Order received',
+  'waiting for pip payment': 'Order received',
+
+  // → 2. Dispense/Shipped. Dispensing IS shipping here, exactly as on PI.
+  // Every one of the 10 orders carrying 'Shipped' also carries 'Waiting for
+  // Reimbursement', so in practice this card lists them and the payment card
+  // holds them — which is the point: whoever works dispatch still sees them.
+  'shipped': 'Dispense/Shipped',
+  'dispense': 'Dispense/Shipped',
+
+  // → 3. BOTH 'Delivered' and 'Waiting on VA payment', on the same reasoning PI
+  // uses for this label: delivery is a milestone of its own AND the event that
+  // puts the claim in front of the payer. Mapping it to the wait alone would
+  // leave the Delivered card permanently empty; mapping it to Delivered alone
+  // would hide the money that is now outstanding.
+  'delivered': ['Delivered', 'Waiting on VA payment'],
+
+  // → 4. Waiting on VA payment. The claim is with the VA.
+  //
+  // 'POD Sent' USED TO ALSO LIST AT 'Delivered', on the reading that proof of
+  // delivery evidences delivery. It does not go there any more: the Delivered
+  // card then held an order whose labels were "Paid, POD Sent" — a row carrying
+  // no Delivered label at all, on a card named for that label. Inferring a
+  // milestone from a document is a claim this data does not make.
+  //
+  // Sending the POD is a BILLING action anyway: it is what submits the claim to
+  // the VA, so the wait is the honest place for it. PI still maps 'pod sent' to
+  // its own Delivered stage; no PI order currently carries the label, and
+  // changing a board nobody has questioned is not this fix's business.
+  'pod sent': 'Waiting on VA payment',
+  'waiting for first payment': 'Waiting on VA payment',
+  'waiting for final payment': 'Waiting on VA payment',
+  'waiting for reimbursement': 'Waiting on VA payment',
+  // Says the claim went out, whoever it names. The programme wording is wrong
+  // on a VA order, but the fact it states about the claim is not.
+  'tricare order submitted': 'Waiting on VA payment',
+
+  // → 4. Paid. The VA pays in full off the invoice, in one go: 'Paid' is the
+  // end of this pipeline, not a step past it. 'TriCare Paid' is the same
+  // statement about the money under the wrong programme's name, and hiding
+  // received money in stage 1 over a mislabel would be the worse error.
+  'paid': 'Paid',
+  'tricare paid': 'Paid',
+};
+
 // ── Striven LABEL → PI stage ─────────────────────────────────────────────────
 // Striven tags a sales order with LABELS, and an order can carry several at
 // once ("Waiting for first payment, Shipped"). Three rules turn a label SET
@@ -255,9 +456,9 @@ export const PI_LABEL_STAGE = {
   '2nd lop request': 'LOP requested',
   '3rd lop request': 'LOP requested',
 
-  // → Dispensed & shipped. Dispensing IS shipping here.
-  'shipped': 'Dispensed & shipped',
-  'dispense': 'Dispensed & shipped',
+  // → Dispense/Shipped. Dispensing IS shipping here.
+  'shipped': 'Dispense/Shipped',
+  'dispense': 'Dispense/Shipped',
 
   // → BOTH 'Delivered' and 'Waiting for first payment'.
   //
@@ -295,12 +496,40 @@ export const PI_LABEL_STAGE = {
   // if the business wants completed orders shown separately.
   'paid': 'Waiting for settlement',
   'tricare paid': 'Waiting for settlement',
-  'tricare order submitted': 'Dispensed & shipped',
+  'tricare order submitted': 'Dispense/Shipped',
   // 'CANCELLED' is here for completeness only: cancelled orders never reach
   // this pipeline — getOrderAnalytics drops them before it is built.
   // 'case dropped' is NOT here: a dropped case has stopped, not progressed, so
   // it carries no stage and goes to the review queue. See REVIEW_LABELS above.
   'cancelled': 'Order received',
+};
+
+// ── Commission already PAID OUT ──────────────────────────────────────────────
+// Vertical → the LAST MONTH whose commission has actually been paid, inclusive.
+// Everything at or before it reads Paid; everything after stays Payable / Due.
+//
+// This exists because "Payable / Due" was overstating what is owed. The
+// reconciliation sheet signs a cycle off, and the portal was still calling that
+// money payable months after it left the bank — so a rep's board showed
+// everything they had ever earned as though it were all still coming.
+//
+// A MONTH, not a date, because commission settles per payout cycle: the run on
+// the 15th pays the previous month whole, so a month is either paid or it is
+// not. Compared as a string, which sorts correctly for YYYY-MM.
+//
+// PER VERTICAL, because the programmes settle independently — the VA book is
+// reconciled and paid on a different rhythm from TriCare and PI. A vertical
+// absent from this map has nothing marked paid, which is the safe default: it
+// keeps money in Payable / Due rather than quietly declaring it settled.
+//
+// KEEP THIS CURRENT. Override with the app_config key COMMISSION_PAID_THROUGH
+// (the same JSON shape) so it can be advanced the moment a run goes out,
+// without a redeploy. Left to rot it does not go wrong loudly — it simply keeps
+// reporting the newest paid month as still owed.
+export const COMMISSION_PAID_THROUGH = {
+  // Set by instruction: every VA commission before July 2026 is paid. July
+  // itself is not — the sheet still calls that cycle "Payable 15 Aug 26 (due)".
+  VA: '2026-06',
 };
 
 // ── Standings masking ────────────────────────────────────────────────────────
@@ -317,6 +546,22 @@ export const STANDINGS_ORDERS_ONLY = true;
 
 // Names that carry orders in Striven but must NOT appear on the leaderboard.
 //
+// EMPTY NOW, AND THAT IS THE POINT. Every name below was removed from REP_NAMES
+// when the roster was narrowed to the five producing reps, so there is no longer
+// a roster row for this list to hide: the roster IS producers only, and a name
+// off it never reaches a leaderboard to be excluded from one.
+//
+// Kept as an empty export rather than deleted. It is the mechanism for "a rep
+// who is not ranked" — a real distinction from EXCLUDED_REPS below — and the
+// next non-producer to need a roster row will need it back. Re-adding a name
+// here is also the ONLY correct way to unrank someone: dropping them from
+// REP_NAMES instead moves their orders to off-roster volume and zeroes their
+// commission row, which is a different decision.
+//
+// The former contents, all six now off-roster entirely: Crystal Chambers,
+// Angel Santiago, Kinley Shepherd, Zach Shank, House Account, Santiago Family
+// Chiropractic. The reasoning that put them here is preserved below.
+//
 // They are real Sales Rep values, so they stay in REP_NAMES and keep earning
 // their commission rows; they are simply not producers being ranked against
 // each other. Crystal's own orders are demos, Zach has left, and Angel and
@@ -325,23 +570,16 @@ export const STANDINGS_ORDERS_ONLY = true;
 // Denise Zavala is deliberately NOT here: she folds into Maylon Sanders in
 // commRep(), so her orders rank under Maylon rather than disappearing.
 //
-// Cassie is no longer here either, for the opposite reason: she is not merely
-// unranked but gone entirely — see EXCLUDED_REPS below. Listing a name in both
-// places would be misleading, because this list promises a commission row that
-// EXCLUDED_REPS has already taken away.
+// Cassie is deliberately NOT here either, and that is a change: she used to be
+// excluded outright. She is a producing rep again — a login, a roster row and
+// 20 current TriCare orders — so she is ranked like any other producer rather
+// than carried as an unranked exception.
 //
 // 'House Account' (a house bucket, not a person) and 'Santiago Family
 // Chiropractic' (a practice, not a rep) were previously left ON the board — the
 // meeting had covered both ways. Both have since been named explicitly for
 // removal, so the board is now producers only.
-export const STANDINGS_EXCLUDE = [
-  'Crystal Chambers',
-  'Angel Santiago',
-  'Kinley Shepherd',
-  'Zach Shank',
-  'House Account',
-  'Santiago Family Chiropractic',
-];
+export const STANDINGS_EXCLUDE = [];
 
 // ── Hard exclusions: not reps at all ─────────────────────────────────────────
 // NOT THE SAME THING AS STANDINGS_EXCLUDE, and the difference is the whole
@@ -352,27 +590,106 @@ export const STANDINGS_EXCLUDE = [
 //
 // Excluded by instruction ("do not consider them in reps or anywhere in the
 // dashboard"):
-//   · Cassie        — departed. Was in REP_NAMES, STANDINGS_EXCLUDE and
-//                     REP_DIRECTORY; removed from all three.
 //   · CMC (direct)  — a direct-sales channel, not a person. It never reached
 //                     REP_NAMES; it was minted by reconRep() in _striven.js
 //                     from the reconciliation sheet's own "CMC" rows and
-//                     appended to striven.byRep as a payee.
+//                     appended to striven.byRep as a payee. Its rows also sit
+//                     in a different layout in the source workbook (the
+//                     3/15/2026 tab: no rep column, a claim value where the
+//                     commission belongs), so there is no rep figure to report
+//                     even if it were wanted.
 //
-// THIS DROPS MONEY FROM THE HEADLINE. Their reconciliation-sheet rows are
-// skipped at the reader, so Commission Due no longer includes what the sheet
-// signs off for them (Cassie $21,555.00 across 57 lines, CMC (direct) $930.00
-// at the time of the change). That is the intended reading of "anywhere": a
-// name that is not considered cannot be owed a visible balance either.
+// CASSIE IS NO LONGER EXCLUDED — reinstated by instruction ("include Cassie as
+// well since it's there in Commission sheet"). She is a signed-off payee in the
+// reconciliation workbooks ($20,255.00 across 58 lines: Jun $7,025.00, May
+// $350.00, Apr $1,200.00, Mar $11,680.00) and dropping her meant the dashboard
+// total silently disagreed with the sheet it is supposed to reconcile to.
+//
+// She is a SHEET-ONLY PAYEE: deliberately still absent from REP_NAMES, so no
+// Striven order is commissioned to her by the engine and her figure is exactly
+// what the sheet signs off. She has no REP_DIRECTORY entry either, so she has
+// no login — her row is visible to admins on the Commission tab, and there is
+// nobody to sign in as her. Add an entry there if she needs her own view.
+//
+// THIS ADDS MONEY TO THE HEADLINE, which is the point: Commission Due now
+// includes every name the sheet pays.
 //
 // Matched case-insensitively against the FOLDED name — the value commRep() and
 // reconRep() produce, not the raw Striven / sheet spelling. Both folds are kept
 // deliberately so every variant ("Maverick Medical- Cassie Wates", "CMC",
 // "cmc direct") lands on one canonical string for this list to catch.
 export const EXCLUDED_REPS = [
-  'Cassie',
   'CMC (direct)',
 ];
+
+// ── Who works under whom ─────────────────────────────────────────────────────
+// SUPERVISOR → THE REPS UNDER THEM, by canonical name. One declaration, because
+// the relationship drives two opposite-facing rules and they must not drift:
+//
+//   · the supervisor's login MARKS the sub-rep's row as theirs (display only —
+//     no figure moves, and they get no more of that rep's data than of any
+//     other peer's)
+//   · the sub-rep's login cannot see the supervisor AT ALL — see blindspotsFor
+//
+// Declaring the pair in two places is how one of those gets added and the other
+// forgotten, which on the second rule means a silent disclosure.
+//
+// NOT THE SAME AS commRep()'s SUB-REP FOLD. Denise Zavala is folded INTO Maylon
+// Sanders: she has no roster row, no login, and her orders are his because he is
+// paid on them. Jillian is a rep in her own right — her own roster entry, her
+// own login, her own $57,234 — who happens to work under Alle. Nothing rolls up.
+export const REP_SUB_REPS = {
+  'Alle Ann': ['Jillian'],
+};
+
+// ── Per-rep blind spots ──────────────────────────────────────────────────────
+// EXTRA pairs, beyond what the hierarchy above already implies. Keyed by the
+// VIEWER's canonical name; the values are names their login must show nothing
+// about — no row, no order count, no mention anywhere in the payload.
+//
+// Empty because the only live case (Jillian must not see Alle) is derived from
+// REP_SUB_REPS. This stays as the escape hatch for a pair that is NOT a
+// reporting line — two reps who simply must not see each other.
+//
+// NOT the same as the two exclusion lists above, and the difference is the
+// direction. STANDINGS_EXCLUDE and EXCLUDED_REPS are properties of the rep being
+// hidden: nobody sees them, including an admin in the second case. This is a
+// property of the PAIR — Alle is a normal rep with a full row on every other
+// login, and on her own; she is withheld from Jillian specifically.
+export const REP_BLINDSPOTS = {};
+
+const normRep = (s) => String(s ?? '').trim().toLowerCase();
+
+/**
+ * Every rep this viewer must not see, as a set of lower-cased canonical names.
+ *
+ * The union of the reporting lines (a sub-rep does not see the rep they work
+ * under) and any explicit REP_BLINDSPOTS pair. Resolved here rather than at the
+ * call site so the server and its tests cannot disagree about the rule.
+ *
+ * ADMINS ARE NEVER BLINDED — the caller checks that. An admin's "view as"
+ * preview IS blinded, because viewerFor() resolves it to a rep viewer and the
+ * point of the preview is to show what that rep sees.
+ */
+export function blindspotsFor(viewer, subReps = REP_SUB_REPS, extra = REP_BLINDSPOTS) {
+  const v = normRep(viewer);
+  const out = new Set();
+  if (!v) return out;
+  for (const [boss, subs] of Object.entries(subReps || {})) {
+    if ((subs || []).some((s) => normRep(s) === v)) out.add(normRep(boss));
+  }
+  const key = Object.keys(extra || {}).find((k) => normRep(k) === v);
+  for (const n of (key ? extra[key] : [])) out.add(normRep(n));
+  return out;
+}
+
+/** The rep `sub` works under, in canonical spelling, or null. */
+export function supervisorOf(sub, subReps = REP_SUB_REPS) {
+  const s = normRep(sub);
+  if (!s) return null;
+  const hit = Object.entries(subReps || {}).find(([, subs]) => (subs || []).some((x) => normRep(x) === s));
+  return hit ? hit[0] : null;
+}
 
 // The sheet verification gate is gone with the sheet feed: MIN_MATCH_RATE had
 // no meaning once Striven became the single source.
@@ -403,34 +720,56 @@ export const EXCLUDED_REPS = [
  * Order counts below are from the live book at the time of the change
  * (413 non-cancelled, non-demo orders totalling $1,339,961).
  *
- * THREE OF THESE ARE NOT INDIVIDUAL PEOPLE — kept because they are real values
- * in Striven's Sales Rep field, but flag them if commission should not accrue:
- *   · House Account                  (10 orders) — a house bucket, not a person.
- *     Note repIsUnassigned() in _striven.js still treats this string as
- *     unassigned for the ORDER-BOOK view, so the two views disagree by design.
- *   · Santiago Family Chiropractic   (17 orders) — a practice, not a rep.
- *   · Crystal Chambers               ( 2 orders) — finance/admin, not a sales
- *     rep. She also holds an admin login in REP_DIRECTORY. Distinct from the
- *     rep "Christy" (Christy Tan).
+ * NARROWED TO THE FIVE PRODUCING REPS, by instruction. The list had widened to
+ * eleven to cover every distinct "Sales Rep" value in Striven, and six of those
+ * were never people being paid:
  *
- * Rishi Arora is excluded by instruction (1 order, $0).
+ *   · House Account                — a house bucket, not a person
+ *   · Santiago Family Chiropractic — a practice, not a rep
+ *   · Angel Santiago               — books under the house account
+ *   · Crystal Chambers             — finance/admin, and an admin login. NOT the
+ *                                    rep "Christy" (Christy Tan)
+ *   · Kinley Shepherd, Zach Shank  — non-producers
+ *
+ * NOBODY LOSES A PENNY. All six were already at $0: the reconciliation sheet
+ * signs off nothing for any of them, and the merge zeroes a rep the sheet does
+ * not carry. What they had was an engine-computed `strivenPayable` ($1,479,
+ * $1,275 and $740 for Kinley, House Account and Crystal; $0 for the rest) that
+ * was never payable.
+ *
+ * THEIR ORDERS ARE NOT DELETED. 77 of them stay in the book and are counted as
+ * off-roster volume (`striven.offRoster`), so every order total on every screen
+ * is unchanged — the attribution moves, the business does not.
+ *
+ * This also collapses the 5-vs-11 split that made "Reps" mean one thing on My
+ * Dashboard (producers, via STANDINGS_EXCLUDE) and another on Commission (the
+ * whole list). One roster now, so the two cannot disagree.
+ *
+ * Rishi Arora and Kevin Parker are off-roster for the same reason (admins with
+ * an order apiece).
  */
 export const REP_NAMES = [
   'Alle Ann',                       // 156 orders — Maverick Medical - Alle Ann Dubberley
   'Jillian',                        //  95 orders — Maverick Medical- Jillian Colin
   'Christy',                        //  67 orders — CVT Medical - Christy Tan
   'Maylon Sanders',                 //  35 orders
-  'Santiago Family Chiropractic',   //  17 orders
-  'Angel Santiago',                 //  14 orders — House Account- Angel Santiago
-  'House Account',                  //  10 orders
-  // 'Cassie' removed: EXCLUDED_REPS above. Her 10 orders stay in the company
-  // book and are reported as off-roster volume, exactly as any other non-rep's
-  // are — the orders are not deleted, the REP is.
-  'Kinley Shepherd',                //   3 orders
-  'Crystal Chambers',               //   2 orders
-  // 'Denise Zavala' removed: she is Maylon's sub-rep and commRep() folds her
-  // orders into 'Maylon Sanders', who is the one actually paid on them.
-  'Zach Shank',                     //   1 order
+  // REINSTATED. She was removed while EXCLUDED_REPS held her, and she is back
+  // for the same reason she is back on the commission sheet: she is a working
+  // rep with a login (cassie@, provisioned in app_config REP_DIRECTORY) and 20
+  // TriCare orders dated 15 Jul – 5 Aug 2026 — current, not historic.
+  //
+  // THE ROSTER IS WHAT MAKES A LOGIN USABLE, which is why this is not optional
+  // once an account exists. Her commission resolved fine without it, because
+  // that comes off the reconciliation sheet — but getRepOverview builds its
+  // rows from REP_NAMES, so she had no row on My Dashboard: the page she lands
+  // on, empty, while her own orders sat in the book.
+  //
+  // It does NOT change what she is paid. The reconciliation merge overwrites
+  // payableTotal with the sheet's figure for every rep, so being on the roster
+  // gives her volume columns and a Striven comparison, not extra money.
+  // 'Denise Zavala' is not here for a different reason: she is Maylon's sub-rep
+  // and commRep() folds her orders into 'Maylon Sanders', who is paid on them.
+  'Cassie',                         //  20 orders — Maverick Medical- Cassie Wates
 ];
 
 // email → repName → role. The ONLY place accounts are provisioned; there is
@@ -458,12 +797,19 @@ export const REP_DIRECTORY = [
   // Rep logins. repName must stay exactly as spelled in REP_NAMES above.
   { email: 'alle@sportsmedrecovery.com', repName: 'Alle Ann', role: 'rep' },
   { email: 'jillian@sportsmedrecovery.com', repName: 'Jillian', role: 'rep' },
-  // cassie@ removed with her roster entry (EXCLUDED_REPS). NOTHING FURTHER IS
-  // OUTSTANDING: the live `dashboard_users` table was checked and holds no row
-  // for her, so there is no credential left to revoke. An earlier note here
-  // assumed the account still existed and asked for it to be deleted; it does
-  // not, and repeating that would send the next reader looking for a row that
-  // was never there.
+  // RESTORED, and the note that used to sit here was wrong twice over: it said
+  // cassie@ had been removed with her roster entry and that `dashboard_users`
+  // held no row for her, so there was nothing to revoke. Both were checked
+  // against the live tables and both are false — she has a `dashboard_users`
+  // login AND a row in the app_config REP_DIRECTORY override, and she is back
+  // on the roster above.
+  //
+  // The override is why the error was invisible: app_config wins over this
+  // list, so she signed in fine while the checked-in fallback said she did not
+  // exist. That drift only shows up the day the override is cleared or a fresh
+  // environment comes up without it — at which point she authenticates, matches
+  // no rep row, and lands on an empty dashboard. Exactly Maylon's failure below.
+  { email: 'cassie@sportsmedrecovery.com', repName: 'Cassie', role: 'rep' },
   { email: 'christy@sportsmedrecovery.com', repName: 'Christy', role: 'rep' },
   // Added after the fact: the dashboard_users login existed but this row did
   // not, so Maylon authenticated successfully and then matched no rep row —

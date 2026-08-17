@@ -14,7 +14,9 @@ import { C, VERTICAL_COLORS as V_C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 import { PiPipeline } from './PiPipeline';
 import { DeviceChips, deviceVertical, shortDeviceName } from './DeviceChips';
+import { TrackingCell } from './TrackingCell';
 import { ColumnFilter, SortHead } from './ColumnFilter';
+import { Portal } from './Portal';
 
 // The order the client asked for: PI and VA are active, DOL is live-but-empty,
 // TriCare is legacy and kept for historical data.
@@ -232,11 +234,16 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
     const orders: Sheet = {
       name: 'Orders',
       rows: [
-        ['SO ref', 'Date', 'Vertical', 'Account', 'Rep', 'Status', 'Invoice status', 'Units', 'Revenue', 'Devices'],
+        ['SO ref', 'Date', 'Vertical', 'Account', 'Rep', 'Status', 'Invoice status', 'Units', 'Revenue', 'Devices', 'Tracking #', 'Carrier'],
         ...rows.map((o) => [
           o.ref, o.date ? o.date.slice(0, 10) : '', o.vertical, o.account, o.rep,
           o.status, o.invStatus, o.units, o.revenue,
           (o.devices || []).map((d) => `${shortDeviceName(d.item)} x${d.qty}`).join('; '),
+          // Appended rather than inserted: this sheet has no totals row keyed to
+          // column positions, but anyone with a saved filter or lookup against
+          // the file does, and moving Revenue would silently break it.
+          // Text — a 22-digit USPS number becomes 9.33462E+21 as a number.
+          o.tracking || '', o.shipVia || '',
         ]),
       ],
     };
@@ -579,10 +586,23 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
           </div>
         </div>
         <div className="table-wrap dg-scroll">
-          <table className={`data-table${isRep ? ' tbl-fit' : ''}`}>
+          {/* `tbl-fit` UNCONDITIONALLY, not just for a rep. It is the rule that
+              shares the width evenly and centres each figure under its own
+              header, and the admin view needed it more than the rep view did:
+              the app-wide `.num { width: 1% }` collapses every numeric column
+              to its content and hands ALL the slack to the one text column, so
+              Account took ~60% of the table — mostly empty — while Verticals
+              through Revenue were pushed into a huddle against the right edge,
+              a third of a screen from the names they describe. */}
+          <table className="data-table tbl-fit">
             <thead><tr>
               <th style={{ width: 34 }}>#</th>
-              <th style={{ whiteSpace: 'nowrap' }} aria-sort={acctSort.key === 'account' ? (acctSort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+              {/* Declared, because `table-layout: fixed` splits the remaining
+                  width EQUALLY between undeclared columns — six of them here,
+                  which would have left the names ~16% and ellipsised most of
+                  them. Account carries the longest content in the table and is
+                  the column a reader scans, so it takes the larger share. */}
+              <th style={{ whiteSpace: 'nowrap', width: '30%' }} aria-sort={acctSort.key === 'account' ? (acctSort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                 <span onClick={() => sortBy('account')} title="Sort by account" style={{ cursor: 'pointer', userSelect: 'none' }}>
                   Account
                   <span style={{ marginLeft: 5, opacity: acctSort.key === 'account' ? 1 : 0.25, fontSize: 10 }}>
@@ -591,7 +611,10 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                 </span>
                 <ColumnFilter label="Account" options={byAccount.map((a) => ({ value: a.account, count: a.orders }))} picked={acctPick} onChange={setAcctPick} />
               </th>
-              <th>Verticals</th>
+              {/* Centred by hand: `tbl-fit` centres `.num`, and this column is
+                  chips rather than a figure, so it would have been the one item
+                  still hugging the left edge of its share. */}
+              <th style={{ textAlign: 'center' }}>Verticals</th>
               <SortHead label="Orders" col="orders" sort={acctSort} onSort={sortBy} num />
               <SortHead label="Devices" col="units" sort={acctSort} onSort={sortBy} num />
               {/* "Device types" was the widest cell in the table — the header,
@@ -599,15 +622,19 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                   column off the right edge of a half-width card. */}
               <SortHead label={isRep ? 'Types' : 'Device types'} col="types" sort={acctSort} onSort={sortBy} num />
               {!isRep && <SortHead label="Revenue" col="revenue" sort={acctSort} onSort={sortBy} num />}
-              {/* The bar is scaled to REVENUE, which the server nulls for a rep:
-                  it rendered as an empty 20% column, and that 20% is what forced
-                  this table to scroll sideways in its half-width card. */}
-              {!isRep && <th style={{ width: '20%' }} />}
+              {/* The revenue sparkbar column is GONE, for the admin view too.
+                  It was already dropped for a rep (the server nulls their
+                  revenue, so it rendered as an empty 20% column that forced a
+                  sideways scroll). The same 20% is dead weight here: the table
+                  is sorted by revenue, so the bar restated the row order, and
+                  the distribution is too skewed for it to say anything else —
+                  Abuhamdan at $78,939 against $25,980 at the bottom of the
+                  page, with Veterans Affairs off the top of the scale. */}
             </tr></thead>
             <tbody>
-              {byAccount.length === 0 && <tr><td colSpan={isRep ? 6 : 8} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+              {byAccount.length === 0 && <tr><td colSpan={isRep ? 6 : 7} style={{ color: C.muted }}>No orders in this period.</td></tr>}
               {byAccount.length > 0 && accountRows.length === 0 && (
-                <tr><td colSpan={isRep ? 6 : 8} style={{ color: C.muted }}>
+                <tr><td colSpan={isRep ? 6 : 7} style={{ color: C.muted }}>
                   No account matches {acctQ && <>“<b>{acctQ}</b>”</>}{acctQ && acctMin > 0 ? ' with ' : ''}{acctMin > 0 && <>{acctMin}+ orders</>}.
                   {' '}<button className="btn ghost" style={{ fontSize: 12.5 }} onClick={() => { setAcctQ(''); setAcctMin(0); setAcctPick(new Set()); }}>Reset filters</button>
                 </td></tr>
@@ -619,22 +646,21 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                       Goldschmidt Attorneys, PLLC" wrapped and dragged its row
                       to twice the height of the ones around it. */}
                   <td style={{ fontWeight: 700, color: C.brand, ...ELLIPSIS }} title={a.account}>{a.account}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    {[...a.verticals].map((v) => (
-                      <span key={v} style={{ fontSize: 10.5, fontWeight: 700, color: V_C[v] || C.sub, background: 'var(--panel-2)', borderRadius: 999, padding: '2px 7px', marginRight: 4 }}>{v}</span>
-                    ))}
+                  {/* `marginRight` became `gap`: the old margin hung off the
+                      last chip, so a centred cell sat 4px left of true centre
+                      and a single-chip row looked misaligned against the header
+                      above it. */}
+                  <td style={{ whiteSpace: 'nowrap', textAlign: 'center' }}>
+                    <span style={{ display: 'inline-flex', gap: 4, justifyContent: 'center' }}>
+                      {[...a.verticals].map((v) => (
+                        <span key={v} style={{ fontSize: 10.5, fontWeight: 700, color: V_C[v] || C.sub, background: 'var(--panel-2)', borderRadius: 999, padding: '2px 7px' }}>{v}</span>
+                      ))}
+                    </span>
                   </td>
                   <td className="num">{a.orders}</td>
                   <td className="num">{a.units || '-'}</td>
                   <td className="num">{a.devices.size || '-'}</td>
                   {!isRep && <td className="num" style={{ fontWeight: 800 }}>{formatCurrency(a.revenue)}</td>}
-                  {!isRep && (
-                    <td>
-                      <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${(a.revenue / maxAcct) * 100}%`, background: C.brand, borderRadius: 999 }} />
-                      </div>
-                    </td>
-                  )}
                 </tr>
               ))}
             </tbody>
@@ -1062,37 +1088,43 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
   const units = set.reduce((s, o) => s + o.units, 0);
   const showList = metric === 'orders' || metric === 'pending' || metric === 'delivered';
 
-  // `money` is opt-OUT rather than global: this same table renders the Revenue
-  // drill, where the revenue column and its bar are the entire point. Only the
-  // device views turn them off.
-  const Ranked = ({ rows, unit, onPick, money = true }: {
+  // NO SPARKBAR COLUMN. Every ranked view here is sorted by the very quantity
+  // the bar encoded, so the bar re-stated the row order and nothing else —
+  // while taking 26% of the width from the names, which is the column that
+  // actually needed it ("Deon S Goldschmidt Attorneys, PLLC" was wrapping to
+  // three lines beside a 4px stub).
+  //
+  // It also could not do the one job a bar is for. These distributions are
+  // long-tailed: PI is $1,010,160 against TriCare's $24,025, and Veterans
+  // Affairs is 5.5× the next account. Scaled to the leader, every row below
+  // second place rendered as the same indistinguishable nub, so the comparison
+  // it offered was one the numbers already made better.
+  //
+  // `money` is opt-OUT rather than global: the device views turn the Revenue
+  // column off, everything else keeps it. `unit` went with the bar — it only
+  // ever chose which quantity to scale by.
+  const Ranked = ({ rows, onPick, money = true }: {
     rows: { name: string; orders: number; units: number; revenue: number }[];
-    unit: 'revenue' | 'units'; onPick?: (n: string) => void; money?: boolean;
+    onPick?: (n: string) => void; money?: boolean;
   }) => {
-    const max = Math.max(1, ...rows.map((r) => (unit === 'revenue' ? r.revenue : r.units)));
     const showMoney = money && !isRep;
     return (
-      <table className="data-table">
-        <thead><tr><th style={{ width: 34 }}>#</th><th>Name</th><th className="num">Orders</th><th className="num">Units</th>{showMoney && <th className="num">Revenue</th>}{money && <th style={{ width: '26%' }} />}</tr></thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={r.name} onClick={() => onPick?.(r.name)} style={{ cursor: onPick ? 'pointer' : 'default' }} title={onPick ? `Open ${r.name}` : undefined}>
-              <td style={{ color: C.muted }}>{i + 1}</td>
-              <td style={{ fontWeight: 600, color: onPick ? C.brand : C.ink }}>{r.name}</td>
-              <td className="num">{r.orders}</td>
-              <td className="num">{r.units || '-'}</td>
-              {showMoney && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(r.revenue)}</td>}
-              {money && (
-                <td>
-                  <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${((unit === 'revenue' ? r.revenue : r.units) / max) * 100}%`, background: cfg.tint, borderRadius: 999 }} />
-                  </div>
-                </td>
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead><tr><th style={{ width: 34 }}>#</th><th>Name</th><th className="num">Orders</th><th className="num">Units</th>{showMoney && <th className="num">Revenue</th>}</tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.name} onClick={() => onPick?.(r.name)} style={{ cursor: onPick ? 'pointer' : 'default' }} title={onPick ? `Open ${r.name}` : undefined}>
+                <td style={{ color: C.muted }}>{i + 1}</td>
+                <td style={{ fontWeight: 600, color: onPick ? C.brand : C.ink }}>{r.name}</td>
+                <td className="num">{r.orders}</td>
+                <td className="num">{r.units || '-'}</td>
+                {showMoney && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(r.revenue)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     );
   };
 
@@ -1103,6 +1135,9 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
   // than the table has anything to put in it.
   const wide = showList || metric === 'revenue';
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: `min(${wide ? 940 : 560}px, 100%)`, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '14px 16px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
@@ -1129,41 +1164,47 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
               <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>
                 Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· newest first</span>
               </div>
-              <table className="data-table">
-                <thead><tr>
-                  <th>Order</th><th>Patient</th><th>Date</th><th>Account</th><th>Vertical</th><th>Devices</th>
-                  <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th>
-                </tr></thead>
-                <tbody>
-                  {set.length === 0 && <tr><td colSpan={9} style={{ color: C.muted }}>No orders here.</td></tr>}
-                  {set.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
-                    <tr key={o.soId}>
-                      <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
-                      <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
-                      <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
-                      <td style={{ fontSize: 12.5 }}>{o.account}</td>
-                      <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
-                      <td><DeviceChips devices={o.devices} showVertical /></td>
-                      <td className="num">{o.units || '-'}</td>
-                      {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>}
-                      <td style={{ fontSize: 12.5, color: statusTint(o.status), fontWeight: 600 }}>{o.status || '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr>
+                    <th>Order</th><th>Patient</th><th>Tracking #</th><th>Date</th><th>Account</th><th>Vertical</th><th>Devices</th>
+                    <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th>
+                  </tr></thead>
+                  <tbody>
+                    {set.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders here.</td></tr>}
+                    {set.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
+                      <tr key={o.soId}>
+                        <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                        <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
+                        {/* compact: this table already carries nine columns inside
+                            a 940px modal, so the carrier chip is dropped and the
+                            carrier is left to the link's own title. */}
+                        <td><TrackingCell shipments={o.shipments} compact /></td>
+                        <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
+                        <td style={{ fontSize: 12.5 }}>{o.account}</td>
+                        <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
+                        <td><DeviceChips devices={o.devices} showVertical /></td>
+                        <td className="num">{o.units || '-'}</td>
+                        {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>}
+                        <td style={{ fontSize: 12.5, color: statusTint(o.status), fontWeight: 600 }}>{o.status || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           ) : metric === 'devices' ? (
             <><div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By device type <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· click for detail</span></div>
-              <Ranked rows={byDev} unit="units" onPick={onPickDevice} money={false} /></>
+              <Ranked rows={byDev} onPick={onPickDevice} money={false} /></>
           ) : metric === 'accounts' ? (
             <><div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By account <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· click for detail</span></div>
-              <Ranked rows={byAcct} unit="revenue" onPick={onPickAccount} /></>
+              <Ranked rows={byAcct} onPick={onPickAccount} /></>
           ) : (
             <>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By vertical</div>
-              <Ranked rows={byVert} unit="revenue" />
+              <Ranked rows={byVert} />
               <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>By account <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· click for detail</span></div>
-              <Ranked rows={byAcct.slice(0, 15)} unit="revenue" onPick={onPickAccount} />
+              <Ranked rows={byAcct.slice(0, 15)} onPick={onPickAccount} />
             </>
           )}
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
@@ -1172,6 +1213,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -1236,6 +1278,9 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
   const tint = V_C[deviceVertical(device)] || C.brand;
 
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(900px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${tint}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
@@ -1275,53 +1320,59 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>
             Which accounts ordered it <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {byAccount.length}</span>
           </div>
-          <table className="data-table">
-            <thead><tr><th>Account</th><th className="num">Units</th><th className="num">Orders</th><th style={{ width: '28%' }} /></tr></thead>
-            <tbody>
-              {byAccount.map((a) => (
-                <tr key={a.account}>
-                  <td style={{ fontWeight: 600 }}>{a.account}</td>
-                  <td className="num" style={{ fontWeight: 700 }}>{a.units}</td>
-                  <td className="num">{a.orders}</td>
-                  <td>
-                    <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${(a.units / maxAcct) * 100}%`, background: tint, borderRadius: 999 }} />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr><th>Account</th><th className="num">Units</th><th className="num">Orders</th><th style={{ width: '28%' }} /></tr></thead>
+              <tbody>
+                {byAccount.map((a) => (
+                  <tr key={a.account}>
+                    <td style={{ fontWeight: 600 }}>{a.account}</td>
+                    <td className="num" style={{ fontWeight: 700 }}>{a.units}</td>
+                    <td className="num">{a.orders}</td>
+                    <td>
+                      <div style={{ height: 8, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${(a.units / maxAcct) * 100}%`, background: tint, borderRadius: 999 }} />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>
             Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {orders.length}</span>
           </div>
-          <table className="data-table">
-            <thead><tr>
-              <th>Order</th><th>Patient</th><th>Date</th><th>Account</th><th>Vertical</th>
-              <th className="num">Units</th><th>Status</th><th className="num">Age</th>
-            </tr></thead>
-            <tbody>
-              {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
-                <tr key={o.soId}>
-                  <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
-                  <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
-                  <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
-                  <td style={{ fontSize: 12.5 }}>{o.account}</td>
-                  <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
-                  <td className="num" style={{ fontWeight: 700 }}>{qtyOn(o)}</td>
-                  <td style={{ fontSize: 12.5, color: statusTint(o.status), fontWeight: 600 }}>{o.status || '-'}</td>
-                  <td className="num" style={{ color: (o.ageDays ?? 0) > 60 ? C.negative : C.sub }}>{o.ageDays == null ? '-' : `${o.ageDays}d`}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr>
+                <th>Order</th><th>Patient</th><th>Tracking #</th><th>Date</th><th>Account</th><th>Vertical</th>
+                <th className="num">Units</th><th>Status</th><th className="num">Age</th>
+              </tr></thead>
+              <tbody>
+                {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
+                  <tr key={o.soId}>
+                    <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                    <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
+                    <td><TrackingCell shipments={o.shipments} compact /></td>
+                    <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
+                    <td style={{ fontSize: 12.5 }}>{o.account}</td>
+                    <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
+                    <td className="num" style={{ fontWeight: 700 }}>{qtyOn(o)}</td>
+                    <td style={{ fontSize: 12.5, color: statusTint(o.status), fontWeight: 600 }}>{o.status || '-'}</td>
+                    <td className="num" style={{ color: (o.ageDays ?? 0) > 60 ? C.negative : C.sub }}>{o.ageDays == null ? '-' : `${o.ageDays}d`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
             🔒 Patient SURNAME only — never a first name, date of birth or address. Units are this device's own count on each order, not the order's total.
           </div>
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -1343,6 +1394,9 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
   const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '-');
 
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(880px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${C.brand}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
@@ -1368,34 +1422,38 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
           </div>
 
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>Orders</div>
-          <table className="data-table">
-            <thead><tr>
-              <th>Order</th><th>Patient</th><th>Date</th><th>Vertical</th><th>Devices</th>
-              <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th><th className="num">Age</th>
-            </tr></thead>
-            <tbody>
-              {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
-                <tr key={o.soId}>
-                  <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
-                  <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
-                  <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
-                  <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
-                  <td><DeviceChips devices={o.devices} showVertical /></td>
-                  <td className="num">{o.units || '-'}</td>
-                  {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>}
-                  <td style={{ fontSize: 12.5 }}>{o.status || '-'}</td>
-                  <td className="num" style={{ color: (o.ageDays ?? 0) > 60 ? C.negative : C.sub }}>
-                    {o.ageDays == null ? '-' : `${o.ageDays}d`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr>
+                <th>Order</th><th>Patient</th><th>Tracking #</th><th>Date</th><th>Vertical</th><th>Devices</th>
+                <th className="num">Units</th>{!isRep && <th className="num">Revenue</th>}<th>Status</th><th className="num">Age</th>
+              </tr></thead>
+              <tbody>
+                {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
+                  <tr key={o.soId}>
+                    <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                    <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
+                    <td><TrackingCell shipments={o.shipments} compact /></td>
+                    <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
+                    <td style={{ fontWeight: 600, color: V_C[o.vertical] || C.ink }}>{o.vertical}</td>
+                    <td><DeviceChips devices={o.devices} showVertical /></td>
+                    <td className="num">{o.units || '-'}</td>
+                    {!isRep && <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.revenue)}</td>}
+                    <td style={{ fontSize: 12.5 }}>{o.status || '-'}</td>
+                    <td className="num" style={{ color: (o.ageDays ?? 0) > 60 ? C.negative : C.sub }}>
+                      {o.ageDays == null ? '-' : `${o.ageDays}d`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
             🔒 Patient SURNAME only — never a first name, date of birth or address. "Account" is the vendor billed on the order.
           </div>
         </div>
       </div>
     </div>
+    </Portal>
   );
 }

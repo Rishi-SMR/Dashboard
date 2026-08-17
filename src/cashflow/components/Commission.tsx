@@ -5,9 +5,11 @@ import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 import { isKevinLogin } from '../viewProfile';
+import { Portal } from './Portal';
 
 const PROG_C: Record<string, string> = { TriCare: '#0D9488', PI: '#0A369F', VA: '#16A34A', DOL: '#7C3AED' };
-const REP_C = ['#0A369F', '#16A34A', '#D97706', '#7C3AED', '#DB2777', '#0891B2'];
+// REP_C (the per-rep bar palette) went with the sparkbar column — it coloured
+// nothing else. PROG_C stays: the vertical tiles and the drill panels use it.
 
 // A dollar field is `null` when it belongs to another rep: the server strips it
 // before serialization, so there is nothing here to un-hide. Render the absence
@@ -19,6 +21,24 @@ const monthLabel = (m: string) => {
   const [y, mo] = m.split('-');
   const N = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return `${N[+mo] || mo} ${y}`;
+};
+// The sales-order date on a commission line. The same "Sep 4, 2026" shape the
+// AR/AP registers use, so a date means the same thing wherever it is read.
+// A line that ties to no Striven order genuinely has no date; '-' says so
+// rather than borrowing the payout cycle's.
+const orderDate = (s: string | null | undefined) => {
+  if (!s) return '-';
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+/** The payout run that settles a month: the 15th of the month after it. This is
+ *  the rule the reconciliation sheet's own cycle names follow ("Payable 15 Aug
+ *  26" pays July), so the page states the date rather than leaving a reader to
+ *  work out when they are paid. */
+const payRunFor = (month: string) => {
+  const [y, mo] = month.split('-').map(Number);
+  const d = new Date(y, mo, 15);                 // mo is 1-based, so this is the NEXT month
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 const segStyle = (active: boolean): React.CSSProperties => ({
   border: 'none', borderRadius: 6, padding: '5px 12px', fontSize: 13, fontWeight: 700,
@@ -40,7 +60,9 @@ export function CommissionTab() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [me, setMe] = useState<Me | null>(null);
-  const [month, setMonth] = useState<string>('all');
+  // WHICH MONTH IS ON SCREEN. `null` means the reader has not chosen one, which
+  // is NOT the same as choosing All — see the derivation below.
+  const [monthPick, setMonthPick] = useState<string | null>(null);
   const [repSel, setRepSel] = useState<StrivenCommRep | null>(null);
   const [drill, setDrill] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI'>(null);
   const [peer, setPeer] = useState<StrivenCommRep | null>(null);
@@ -49,7 +71,11 @@ export function CommissionTab() {
 
   async function load(silent = false, as: string | null = viewAs) {
     if (!silent) { setLoading(true); setError(null); }
-    try { setData(await fetchCommission(as)); setLastSync(Date.now()); }
+    // A page load and the Refresh button re-read the reconciliation SHEET; the
+    // silent 2-minute poll serves the server's cache. So editing the sheet and
+    // reloading always shows the new figure, without every open tab re-fetching
+    // Google on a timer. See getCommissionFor() for the reasoning.
+    try { setData(await fetchCommission(as, !silent)); setLastSync(Date.now()); }
     catch (e) { if (!silent) setError(e instanceof Error ? e.message : 'Failed to load commission.'); }
     finally { if (!silent) setLoading(false); }
   }
@@ -74,7 +100,38 @@ export function CommissionTab() {
   // redacted to exactly what that person would receive.
   const myRep = viewAs ?? me?.repName ?? null;
   const s = data?.striven;
-  const sel = month === 'all' ? null : s?.months.find((m) => m.month === month) ?? null;
+  // ── THE PAGE OPENS ON THE PREVIOUS MONTH ───────────────────────────────────
+  // Commission is earned and paid monthly, so "which month" is the question
+  // this page exists to answer. It used to default to All, which is a lifetime
+  // running total — a figure nobody is paid and which only grows, so it says
+  // nothing about whether a month was good.
+  //
+  // THE PREVIOUS CALENDAR MONTH, not the current one, and this is the payout
+  // rule rather than a UI preference: a month's commission is settled and made
+  // visible to reps by the 15th of the month after it. The current month is
+  // still being booked, so opening on it would show a rep a part-formed figure
+  // as if it were their pay.
+  //
+  // DERIVED, not defaulted in an effect: an effect would render one frame with
+  // no month selected before correcting itself, and would fight the reader's
+  // own choice every time the 2-minute poll returns.
+  const months = s?.months ?? [];
+  const prevMonth = (() => {
+    const d = new Date();
+    d.setDate(1);                 // the 31st of a 31-day month would skip a 30-day one
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  // Falls back to the newest month the payload actually has. That covers a
+  // brand-new tenant, a previewed rep who booked nothing last month, and the
+  // gap before the first order of a month lands.
+  const defaultMonth = months.some((m) => m.month === prevMonth) ? prevMonth : (months[0]?.month ?? 'all');
+  // A pick that no longer exists in the payload (the previewed rep has no
+  // orders that month) falls back rather than silently showing an empty board
+  // with a month name on it.
+  const pickIsReal = monthPick === 'all' || months.some((m) => m.month === monthPick);
+  const month = monthPick && pickIsReal ? monthPick : defaultMonth;
+  const sel = month === 'all' ? null : months.find((m) => m.month === month) ?? null;
   const allReps: StrivenCommRep[] = sel ? sel.reps : (s?.byRep ?? []);
   // PRODUCERS ONLY, from the server's `roster` — the same four names the Reps
   // dashboard lists. `roster` is empty for a rep (it is an admin control and a
@@ -82,9 +139,12 @@ export function CommissionTab() {
   // their own row alone, so this is a no-op on their view.
   const rosterSet = new Set(data?.roster ?? []);
   const reps = rosterSet.size ? allReps.filter((r) => rosterSet.has(r.rep)) : allReps;
-  const trimmed = reps.length !== allReps.length;
+  // `trimmed` (rows.length !== allReps.length) is gone: it existed only to pick
+  // between re-summing the rendered rows and trusting a server aggregate, and
+  // every total re-sums the rows now, so there is no branch left for it to
+  // choose. Keeping it would preserve the fork that caused the bug below.
   const own = myRep ? reps.find((r) => r.rep === myRep) ?? null : null;
-  const maxRep = Math.max(1, ...reps.map((r) => num(r.total)));
+  // `maxRep` (the sparkbar's scale) went with the bar column it scaled.
 
   // Totals for the scope on screen, summed off the rendered rows so the footer
   // can never drift from the table.
@@ -97,18 +157,37 @@ export function CommissionTab() {
     TriCare: a.TriCare + num(r.nTricare), VA: a.VA + num(r.nVa), PI: a.PI + num(r.nPi),
     orders: a.orders + num(r.orders), units: a.units + num(r.units),
   }), { TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0 });
-  // When rows were trimmed the SERVER aggregates no longer describe what is on
-  // screen — grandTotal still counts every name in the roster. Re-summing the
-  // rendered rows is the same rule `vt` above already follows: the headline can
-  // never disagree with the table beneath it.
+  // The SERVER aggregates describe the whole book. Whenever this page shows
+  // less than that — a month, or a trimmed roster — they stop describing what is
+  // on screen, so nothing reads them. Re-summing the rendered rows is the rule
+  // `vt` above already follows: the headline cannot disagree with the table
+  // beneath it, whatever the scope.
   const sumOf = (pick: (r: StrivenCommRep) => number | null | undefined) =>
     reps.reduce((a, r) => a + num(pick(r)), 0);
-  const bp = trimmed
-    ? { TriCare: sumOf((r) => r.tricare), VA: sumOf((r) => r.va), PI: sumOf((r) => r.pi) }
-    : sel
-      ? { TriCare: sel.TriCare, VA: sel.VA, PI: sel.PI }
-      : (s?.byProgram ?? { TriCare: null, VA: null, PI: null });
-  const total = trimmed ? sumOf((r) => r.total) : (sel ? sel.total : (s?.grandTotal ?? null));
+
+  // EVERY TOTAL IS SUMMED FROM THE RENDERED ROWS. No exceptions, and that is the
+  // fix: the rule above was applied only on the `trimmed` branch, so with a
+  // MONTH selected the server's all-time aggregates were used instead.
+  //
+  // Payable and Waiting were the two that showed it. On "Jul 2026 · by rep" the
+  // five rows summed to $75,320 payable and $0 waiting, while the Total line
+  // read $133,729 and $28,768 — the whole book's figures, printed under a month
+  // heading, and $28,768 of Waiting against five rows that all said $0.
+  //
+  // The counts (`vt`) never had the bug because they were always re-summed.
+  // Deriving the money the same way makes the footer equal the table by
+  // construction rather than by the two happening to agree.
+  const canSeeMoney = Boolean(own) || isAdmin;
+  const m0 = (v: number) => (canSeeMoney ? v : null);
+  const bp = {
+    TriCare: m0(sumOf((r) => r.tricare)),
+    VA: m0(sumOf((r) => r.va)),
+    PI: m0(sumOf((r) => r.pi)),
+  };
+  const total = m0(sumOf((r) => r.total));
+  const payableSum = m0(sumOf((r) => r.payableTotal));
+  const waitingSum = m0(sumOf((r) => r.waitingTotal));
+  const paidSum = m0(sumOf((r) => r.paidTotal));
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -165,15 +244,37 @@ export function CommissionTab() {
               now that empty verticals no longer take a tile. */}
           <div className="comm-head-pair">
           {/* Payable/Due vs Waiting: the caller's own state, or the producing
-              reps for an admin. Re-summed when rows were trimmed, for the same
-              reason the headline above is: s.payableTotal counts every name in
-              the roster, which is no longer what this page reports. */}
+              reps for an admin. Straight off the shared sums now — these three
+              carried the same all-time-under-a-month-heading bug the footer did,
+              because they only re-summed on the `trimmed` branch. */}
           <StateSplit
             who={own ? own.rep : (isAdmin ? 'All reps' : null)}
-            payable={own ? own.payableTotal : (isAdmin ? (trimmed ? sumOf((r) => r.payableTotal) : s.payableTotal) : null)}
-            waiting={own ? own.waitingTotal : (isAdmin ? (trimmed ? sumOf((r) => r.waitingTotal) : s.waitingTotal) : null)}
-            held={s.heldOrders}
-            zeroValue={s.zeroValueOrders}
+            payable={payableSum}
+            waiting={waitingSum}
+            // Already out the door. Shown beside the other two rather than
+            // folded into either: dropping it into Payable would say a rep is
+            // owed money they have had, and leaving it out entirely would make
+            // their total shrink on payday.
+            paid={paidSum}
+            paidThrough={s.paidThrough}
+            scope={sel ? monthLabel(sel.month) : 'All months'}
+            // Why a month reads the way it does. A settled month's figure is
+            // the payout run's, not this portal's arithmetic; an unsettled one
+            // has no payable figure at all yet, and saying so is the difference
+            // between "you are owed nothing" and "it has not been run".
+            note={sel
+              ? (sel.reconciled === false
+                ? `${monthLabel(sel.month)} is still being booked. Commission settles in the ${payRunFor(sel.month)} payout run, so nothing is payable yet — what is shown is earned and pending.`
+                : `Signed off in the ${payRunFor(sel.month)} payout run, from the reconciliation sheet.`)
+              : undefined}
+            // The money above IS month-scoped: `own` comes from the selected
+            // month's rep rows. These two counts are NOT — the server reports
+            // held and $0-value orders for the whole book only, because both
+            // are excluded before an order ever reaches a month bucket. So they
+            // show on All months and are withheld on a month, rather than being
+            // printed inside a month card while describing the book.
+            held={sel ? undefined : s.heldOrders}
+            zeroValue={sel ? undefined : s.zeroValueOrders}
           />
 
           {/* Only verticals the caller ACTUALLY has orders in. A rep working VA
@@ -228,12 +329,18 @@ export function CommissionTab() {
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, alignItems: 'center' }}>
             <span style={{ fontSize: 12.5, color: C.muted, fontWeight: 600, marginRight: 4 }}>Month:</span>
-            <button className="btn ghost" style={segStyle(month === 'all')} onClick={() => setMonth('all')}>All</button>
-            {s.months.map((m) => (
-              <button key={m.month} className="btn ghost" style={segStyle(month === m.month)} onClick={() => setMonth(m.month)}>
+            {/* Months first, newest first, because one of them is always the
+                selection. 'All' has moved to the END: it is the wider view you
+                step out to, not the place you start. */}
+            {months.map((m) => (
+              <button key={m.month} className="btn ghost" style={segStyle(month === m.month)} onClick={() => setMonthPick(m.month)}>
                 {monthLabel(m.month)}
               </button>
             ))}
+            <button className="btn ghost" style={segStyle(month === 'all')} onClick={() => setMonthPick('all')}
+              title="Every month added together — a running lifetime total, not a pay period">
+              All months
+            </button>
           </div>
 
           <div className="section chart-card">
@@ -264,10 +371,14 @@ export function CommissionTab() {
                   <th className="num">Orders</th><th className="num">Units</th>
                   <th className="num">Payable / Due</th><th className="num">Waiting</th>
                   <th className="num">Commission</th>
-                  <th style={{ width: '18%' }} />
+                  {/* The 18% sparkbar column is gone. It was scaled to the top
+                      rep, so with Alle Ann at $63,025 and Maylon at $4,490 the
+                      bottom of the table rendered as a stub — and the table is
+                      already sorted by that same figure, so the bar restated
+                      the row order and took a fifth of the width to do it. */}
                 </tr></thead>
                 <tbody>
-                  {reps.length === 0 && <tr><td colSpan={11} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+                  {reps.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders in this period.</td></tr>}
                   {reps.map((r, i) => {
                     const mine = myRep === r.rep;
                     const open = isAdmin || mine;
@@ -293,13 +404,6 @@ export function CommissionTab() {
                               </span>
                             : money(r.total)}
                         </td>
-                        <td>
-                          {r.total == null
-                            ? <VerticalBar parts={[{ n: num(r.nTricare), c: PROG_C.TriCare, label: 'TriCare' }, { n: num(r.nVa), c: PROG_C.VA, label: 'VA' }, { n: num(r.nPi), c: PROG_C.PI, label: 'PI' }]} />
-                            : <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                                <div style={{ height: '100%', width: `${(num(r.total) / maxRep) * 100}%`, background: REP_C[i % REP_C.length], borderRadius: 999 }} />
-                              </div>}
-                        </td>
                       </tr>
                     );
                   })}
@@ -315,9 +419,13 @@ export function CommissionTab() {
                     <td className="num">{vt.TriCare}</td><td className="num">{vt.VA}</td><td className="num">{vt.PI}</td>
                     <td className="num">{vt.orders}</td><td className="num">{vt.units}</td>
                     {/* Same population as the Commission cell beside it. */}
-                    <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(own ? own.payableTotal : (isAdmin ? (trimmed ? sumOf((r) => r.payableTotal) : s.payableTotal) : null))}</td>
-                    <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(own ? own.waitingTotal : (isAdmin ? (trimmed ? sumOf((r) => r.waitingTotal) : s.waitingTotal) : null))}</td>
-                    <td className="num" style={{ fontWeight: 800 }}>{money(total)}</td><td />
+                    {/* The two cells that showed the bug: under "Jul 2026" they
+                        printed the whole book's $133,729 and $28,768 over five
+                        rows summing to $75,320 and $0. Same sums as the card
+                        above now, so the two cannot drift apart either. */}
+                    <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(payableSum)}</td>
+                    <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(waitingSum)}</td>
+                    <td className="num" style={{ fontWeight: 800 }}>{money(total)}</td>
                   </tr></tfoot>
                 )}
               </table>
@@ -421,28 +529,30 @@ function PeerModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void 
       </div>
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>Orders by vertical</div>
-      <table className="data-table">
-        <thead><tr><th>Vertical</th><th className="num">Orders</th><th className="num">Units</th><th className="num">Share</th><th style={{ width: '34%' }} /></tr></thead>
-        <tbody>
-          {rows.map(([name, n, u, c]) => (
-            <tr key={name}>
-              <td><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, background: c, marginRight: 8 }} />{name}</td>
-              <td className="num" style={{ fontWeight: 700 }}>{n || '-'}</td>
-              <td className="num">{u || '-'}</td>
-              <td className="num">{tot > 0 && n > 0 ? `${Math.round((n / tot) * 100)}%` : '-'}</td>
-              <td>
-                <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${tot ? (n / tot) * 100 : 0}%`, background: c, borderRadius: 999 }} />
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot><tr className="total-row">
-          <td>Total</td><td className="num" style={{ fontWeight: 800 }}>{tot}</td>
-          <td className="num">{num(rep.units)}</td><td /><td />
-        </tr></tfoot>
-      </table>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead><tr><th>Vertical</th><th className="num">Orders</th><th className="num">Units</th><th className="num">Share</th><th style={{ width: '34%' }} /></tr></thead>
+          <tbody>
+            {rows.map(([name, n, u, c]) => (
+              <tr key={name}>
+                <td><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, background: c, marginRight: 8 }} />{name}</td>
+                <td className="num" style={{ fontWeight: 700 }}>{n || '-'}</td>
+                <td className="num">{u || '-'}</td>
+                <td className="num">{tot > 0 && n > 0 ? `${Math.round((n / tot) * 100)}%` : '-'}</td>
+                <td>
+                  <div style={{ height: 9, borderRadius: 999, background: 'var(--panel-2)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${tot ? (n / tot) * 100 : 0}%`, background: c, borderRadius: 999 }} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr className="total-row">
+            <td>Total</td><td className="num" style={{ fontWeight: 800 }}>{tot}</td>
+            <td className="num">{num(rep.units)}</td><td /><td />
+          </tr></tfoot>
+        </table>
+      </div>
       <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
         🔒 No patient names. Order counts are operational data and are shared across the team; commission is not.
       </div>
@@ -462,50 +572,69 @@ function OrderCountCells({ t, v, p }: { t: number; v: number; p: number }) {
   return <>{cell(t, 't')}{cell(v, 'v')}{cell(p, 'p')}</>;
 }
 
-// Payable/Due vs Waiting. `waiting for reimbursement` orders are in the total but
-// are not yet payable; `hold` orders are excluded upstream and appear in neither.
-function StateSplit({ payable, waiting, held, zeroValue, who }: { payable?: number | null; waiting?: number | null; held?: number; zeroValue?: number; who?: string | null }) {
+// Paid / Payable-Due / Waiting.
+//
+// TOTAL IS PAID + PAYABLE, and Waiting sits OUTSIDE it. That is the server's
+// own rule (striven.grandTotal), and this card used to add all three, so it
+// printed a Total $29,507 above the headline on the same screen. Waiting is the
+// in-flight payout cycle — a month with no run yet, estimated from the order
+// book rather than signed off — so adding it to a signed-off total would mix an
+// estimate into the figure the business pays on.
+function StateSplit({ payable, waiting, held, zeroValue, who, scope, note, paid, paidThrough }: { payable?: number | null; waiting?: number | null; held?: number; zeroValue?: number; who?: string | null; scope?: string; note?: string; paid?: number | null; paidThrough?: Record<string, string> }) {
   if (payable == null && waiting == null) return null;
-  const p = payable ?? 0, w = waiting ?? 0, tot = p + w;
+  const p = payable ?? 0, w = waiting ?? 0, d = paid ?? 0, tot = p + d;
+  // Which programmes are settled, and through when — so "Paid" is a statement
+  // with a date on it rather than a number the reader has to take on trust.
+  const through = Object.entries(paidThrough ?? {})
+    .map(([v, m]) => `${v} through ${monthLabel(m)}`).join(', ');
   return (
     // No bottom margin: it sits in .comm-head-pair now, and that grid owns the
     // gap. Its own margin would have stacked a second one under the card.
     <div className="section chart-card" style={{ marginBottom: 0 }}>
       <div className="section-head"><div>
-        <h2 className="section-title">{who ? `${who}: commission state` : 'Commission state'}</h2>
+        {/* The period is part of the heading, not decoration: this card opens
+            on a month now, so a figure with no period on it would read as the
+            lifetime total it used to be. */}
+        <h2 className="section-title">
+          {who ? `${who}: commission state` : 'Commission state'}
+          {scope && <span style={{ fontWeight: 600, color: C.muted }}> · {scope}</span>}
+        </h2>
         <div className="section-sub">
-          Payable/Due is fillable &amp; reimbursed. Waiting is awaiting reimbursement: counted in the total, not yet payable.
-          {held ? ` ${held} order${held === 1 ? '' : 's'} on hold are excluded from the calculation entirely.` : ''}
+          {note && <div style={{ marginBottom: 4 }}>{note}</div>}
+          Paid has already gone out — still counted in the total, no longer owed{through ? ` (${through})` : ''}.
+          {' '}Payable/Due is signed off and owed. Total is Paid + Payable: the whole signed-off figure.
+          {w ? ' Waiting is the current cycle, which has no payout run yet — estimated from the order book, not signed off, and NOT in the total.' : ''}
+          {held ? ` ${held} order${held === 1 ? '' : 's'} on hold are not payable.` : ''}
           {zeroValue ? ` ${zeroValue} order${zeroValue === 1 ? '' : 's'} with $0 order value earn no commission and are excluded too.` : ''}
         </div>
       </div></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, padding: '4px 2px 2px' }}>
+      {/* Paid leads: it is the settled half of the story and reads left-to-right
+          as money moving — paid, then due, then still waiting, then the sum. */}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${d > 0 ? 4 : 3}, 1fr)`, gap: 12, padding: '4px 2px 2px' }}>
+        {d > 0 && <Stat label="Paid" value={money(d)} tint={C.muted} />}
         <Stat label="Payable / Due" value={money(p)} tint={C.positive} />
-        <Stat label="Waiting for reimbursement" value={money(w)} tint={C.warning} />
+        {/* Not "waiting for reimbursement" any more — that named a label on an
+            order, and this figure is now the unsettled CYCLE. */}
+        <Stat label="Waiting · current cycle" value={money(w)} tint={C.warning} />
         <Stat label="Total" value={money(tot)} tint={C.brand} />
       </div>
+      {/* The bar is the TOTAL broken down, so only what the total contains is in
+          it. Waiting used to take a third segment, which drew it as a share of
+          a figure it is not part of. */}
       <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)', margin: '12px 2px 2px' }}
-        title={`Payable ${money(p)} · Waiting ${money(w)}`}>
+        title={`Paid ${money(d)} · Payable ${money(p)}${w ? ` · Waiting ${money(w)}, outside the total` : ''}`}>
+        {d > 0 && <div style={{ width: `${(d / (tot || 1)) * 100}%`, background: C.muted }} />}
         {p > 0 && <div style={{ width: `${(p / (tot || 1)) * 100}%`, background: C.positive }} />}
-        {w > 0 && <div style={{ width: `${(w / (tot || 1)) * 100}%`, background: C.warning }} />}
       </div>
     </div>
   );
 }
 
-// Stacked share bar: used for reps whose dollars are withheld, so the row still
-// says something useful about their mix.
-function VerticalBar({ parts, height = 9 }: { parts: { n: number; c: string; label: string }[]; height?: number }) {
-  const shown = parts.filter((p) => p.n > 0);
-  const tot = shown.reduce((s, p) => s + p.n, 0);
-  if (!tot) return <div style={{ height, borderRadius: 999, background: 'var(--panel-2)' }} />;
-  return (
-    <div title={shown.map((p) => `${p.label}: ${p.n}`).join(' · ')}
-      style={{ display: 'flex', height, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)' }}>
-      {shown.map((p) => <div key={p.label} style={{ width: `${(p.n / tot) * 100}%`, background: p.c }} />)}
-    </div>
-  );
-}
+// VerticalBar lived here — a stacked share bar for reps whose dollars were
+// withheld, so a "Confidential" row still said something about their mix. It
+// had one call site, the sparkbar column above, and went with it. Note it was
+// already unreachable: peer rows are DROPPED for a rep now rather than blanked
+// (see redactCommissionPayload), so no row with a null total ever renders.
 
 // UnmatchedTable lived here — the "No sales order" panel. It went with the
 // section above; the data behind it is untouched on the server.
@@ -524,6 +653,9 @@ function Modal({ title, sub, accent, onClose, children, width = 760 }: {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
   return (
+    // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+    // transform on an ancestor silently redefines that. See Portal.tsx.
+    <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: `min(${width}px, 100%)`, maxHeight: '90vh', overflowY: 'auto', overflowX: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${accent || C.brand}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '14px 16px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
@@ -536,6 +668,7 @@ function Modal({ title, sub, accent, onClose, children, width = 760 }: {
         <div style={{ padding: '12px 16px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>{children}</div>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -609,44 +742,62 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>
             Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {lines.length} orders</span>
           </div>
-          <table className="data-table">
-            {/* Patient surname, not the sales order number: reps keep their own
-                record of orders and cannot reconcile an SO ref against it.
-                Order value is gone too, per the same review: it is company
-                money and not the rep's to see. */}
-            <thead><tr>
-              <th>Patient</th><th>Device</th><th>Vertical</th><th className="num">Units</th>
-              <th className="num">Commission</th><th>State</th>
-            </tr></thead>
-            <tbody>
-              {lines.map((ln, i) => (
-                <tr key={i}>
-                  {/* Falls back to the SO ref when the report cache has no
-                      patient row, so the line is never unidentifiable. */}
-                  <td style={{ fontWeight: 600, color: ln.patient ? C.ink : C.muted }}>
-                    {ln.patient || ln.ref || 'no SO'}
-                  </td>
-                  <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.item || '-'}</td>
-                  <td>{ln.prog}</td>
-                  <td className="num">{ln.units}</td>
-                  <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
-                  {/* The remark rides the EXISTING rightmost column rather than
-                      adding one. An unmatched row is still paid — the sheet is
-                      the base — so this reports the missing Striven match, it
-                      does not withhold the line. */}
-                  <td>
-                    {ln.unmatched
-                      ? <span style={{ color: C.warning, fontWeight: 600, whiteSpace: 'nowrap' }}>Unmatched from Striven</span>
-                      : ln.state === 'waiting'
-                        ? <span style={{ color: C.warning, fontWeight: 600 }}>Waiting</span>
-                        : <span style={{ color: C.positive, fontWeight: 600 }}>Payable</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              {/* Patient surname, not the sales order number: reps keep their own
+                  record of orders and cannot reconcile an SO ref against it.
+                  Order value is gone too, per the same review: it is company
+                  money and not the rep's to see. */}
+              <thead><tr>
+                <th>Order date</th>
+                <th>Patient</th><th>Device</th><th>Vertical</th><th className="num">Units</th>
+                <th className="num">Commission</th><th>State</th>
+              </tr></thead>
+              <tbody>
+                {lines.map((ln, i) => (
+                  <tr key={i}>
+                    {/* WHEN THE ORDER WAS RAISED, beside the patient, because a
+                        surname alone does not identify a line for a rep who has
+                        sold to the same patient twice. Blank on a row that ties to
+                        no Striven order — see the note under the table. */}
+                    <td style={{ whiteSpace: 'nowrap', color: ln.date ? C.sub : C.muted, fontSize: 12.5 }}>
+                      {orderDate(ln.date)}
+                    </td>
+                    {/* Falls back to the SO ref when the report cache has no
+                        patient row, so the line is never unidentifiable. */}
+                    <td style={{ fontWeight: 600, color: ln.patient ? C.ink : C.muted }}>
+                      {ln.patient || ln.ref || 'no SO'}
+                    </td>
+                    <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.item || '-'}</td>
+                    <td>{ln.prog}</td>
+                    <td className="num">{ln.units}</td>
+                    <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
+                    {/* The remark rides the EXISTING rightmost column rather than
+                        adding one. An unmatched row is still paid — the sheet is
+                        the base — so this reports the missing Striven match, it
+                        does not withhold the line. */}
+                    <td>
+                      {/* PAID BEATS UNMATCHED. A missing Striven tie is a remark
+                          about how a row was evidenced; once the money has gone
+                          out, what it is doing now is the more useful fact, and
+                          "Unmatched" beside a settled line reads as a problem
+                          with a payment that already cleared. */}
+                      {ln.state === 'paid'
+                        ? <span style={{ color: C.muted, fontWeight: 600 }}>Paid</span>
+                        : ln.unmatched
+                          ? <span style={{ color: C.warning, fontWeight: 600, whiteSpace: 'nowrap' }}>Unmatched from Striven</span>
+                          : ln.state === 'waiting'
+                            ? <span style={{ color: C.warning, fontWeight: 600 }}>Waiting</span>
+                            : <span style={{ color: C.positive, fontWeight: 600 }}>Payable</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            🔒 Shown by SO reference, no patient names. Commission = units × per-device rate. Orders on hold are excluded and do not appear here.
+            🔒 Patient shown as first initial + surname, on your own orders only. Commission = units × per-device rate. Orders on hold are excluded and do not appear here.
+            {' '}The date is when the <b>sales order</b> was raised, not the payout cycle — it reads “-” on a row the sheet could not tie to a Striven order.
           </div>
         </>
       )}
@@ -678,23 +829,25 @@ function KpiDrill({ title, sub, accent, rows, onClose }: {
   // the figures sat marooned at opposite edges of the card.
   return (
     <Modal title={title} sub={sub} accent={accent} onClose={onClose} width={460}>
-      <table className="data-table">
-        <thead><tr>
-          <th style={{ width: 28 }}>#</th><th>Rep</th><th className="num">Orders</th>
-          <th className="num">Commission</th>
-        </tr></thead>
-        <tbody>
-          {sorted.length === 0 && <tr><td colSpan={4} style={{ color: C.muted }}>No data.</td></tr>}
-          {sorted.map((r, i) => (
-            <tr key={r.name}>
-              <td style={{ color: C.muted }}>{i + 1}</td>
-              <td style={{ fontWeight: 700 }}>{r.name}</td>
-              <td className="num" style={{ fontWeight: 700 }}>{r.orders || '-'}</td>
-              <td className="num" style={{ fontWeight: 800 }}>{money(r.value)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead><tr>
+            <th style={{ width: 28 }}>#</th><th>Rep</th><th className="num">Orders</th>
+            <th className="num">Commission</th>
+          </tr></thead>
+          <tbody>
+            {sorted.length === 0 && <tr><td colSpan={4} style={{ color: C.muted }}>No data.</td></tr>}
+            {sorted.map((r, i) => (
+              <tr key={r.name}>
+                <td style={{ color: C.muted }}>{i + 1}</td>
+                <td style={{ fontWeight: 700 }}>{r.name}</td>
+                <td className="num" style={{ fontWeight: 700 }}>{r.orders || '-'}</td>
+                <td className="num" style={{ fontWeight: 800 }}>{money(r.value)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Modal>
   );
 }

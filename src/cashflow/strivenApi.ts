@@ -38,7 +38,12 @@ export type SoResult = {
 };
 
 export type PoRecent = { id: number; ref: string; vendor: string; total: number; date: string | null; status?: string; so?: string };
-export type PoResult = { count: number; totalValue: number; byVendor: { vendor: string; total: number }[]; recent: PoRecent[]; cancelledCount?: number; cancelledValue?: number; pendingCount?: number; pendingValue?: number; totalCount?: number; phiMasked: boolean };
+/** `demoCount` / `demoValue` are POs raised against a DEMO sales order. They are
+ *  excluded from every other figure here — a PO bought for a demonstration is
+ *  not vendor spend — and reported so the exclusion can be stated rather than
+ *  looking like a shrinking book. A PO with no sales order behind it is NOT
+ *  demo: nothing identifies it as one, so it stays counted. */
+export type PoResult = { count: number; totalValue: number; byVendor: { vendor: string; total: number }[]; recent: PoRecent[]; cancelledCount?: number; cancelledValue?: number; pendingCount?: number; pendingValue?: number; demoCount?: number; demoValue?: number; totalCount?: number; phiMasked: boolean };
 
 export type Customer = { id: number; ref: string; name: string; status: string; since: string | null };
 export type CustomersResult = { count: number; customers: Customer[]; phiMasked: boolean };
@@ -148,9 +153,14 @@ export type ApLedgerGroup = {
    *  check against, which is different from one that checks out. */
   sheetOpen: number | null; openGap: number | null;
 };
+/** One payment out of the ledger's DEBIT column. The sheet gives a payment row
+ *  no invoice number — that absence is what marks it as a payment rather than a
+ *  bill — and no bank account, so a vendor, a date and an amount is the whole of
+ *  what exists. */
+export type ApLedgerPayment = { subLedger: string; date: string; amount: number };
 export type ApLedger = {
   ok: boolean; configured: boolean; note?: string;
-  bills: ApLedgerBill[]; subLedgers: ApLedgerGroup[];
+  bills: ApLedgerBill[]; payments?: ApLedgerPayment[]; subLedgers: ApLedgerGroup[];
   totals?: {
     bills: number; billed: number; open: number; openBills: number;
     creditNotes: number; creditNoteAmount: number;
@@ -176,9 +186,20 @@ export const fetchApLedger = () => get<ApLedger>('/api/ap-ledger');
 export type ArRegisterInvoice = {
   no: string; date: string; dueDate: string;
   patient: string; payer: string; memo: string; gl: string;
+  /** The PROGRAMME that billed it — PI / VA / TriCare. An invoice carries no
+   *  vertical of its own; the server joins it to the sales order behind it, and
+   *  falls back to the patient. Empty when neither join reaches it. */
+  vertical?: string;
   /** Face value, what has been settled, and what is still outstanding. `open` is
    *  NET of unapplied customer credits — the same rule the AR tab reports on. */
   total: number; paid: number; open: number;
+  /** What is expected to be RECEIVED, as against `total` which is what was
+   *  billed. PI settles out of a lien at 15% of face value; every other
+   *  programme is expected in full. Computed server-side so the rule lives in
+   *  one place — see arExpectedFor() in _commission-config.js. */
+  arExpected?: number;
+  /** Which rule produced `arExpected`: 'pi-15' | 'billed'. */
+  arBasis?: string;
   /** How `paid` was actually settled. `cashPaid + creditApplied + open === total`
    *  on every row: cash banked against this invoice, an unapplied customer
    *  credit covering the rest, and what is still owed. */
@@ -198,6 +219,10 @@ export type ArRegister = {
   aging: Record<string, number>;
   totals?: {
     invoices: number; billed: number; outstanding: number; openInvoices: number;
+    /** Register-wide expected receipt, `arDiscount` is what the PI rule takes
+     *  off `billed`, and `arDiscounted` counts the rows it applied to. Summed
+     *  from the same per-row figures the table renders. */
+    arExpected?: number; arDiscount?: number; arDiscounted?: number;
     collected: number; collectedInvoices: number;
     credited: number; creditedAmount: number; unappliedCredits: number;
     /** `cashCollected + creditCollected === collected`, by construction. */
@@ -215,7 +240,12 @@ export const fetchArRegister = () => get<ArRegister>('/api/ar-register');
  *  the Striven HOLD label, which is the only place a hold survives: the
  *  commission engine drops a held order entirely, so it reports none.
  *  Admin-only server-side; a rep receives an empty list. */
-export type DeviceMixRow = { device: string; vertical: string; units: number; orders: number; heldUnits: number; heldOrders: number };
+export type DeviceMixRow = { device: string; vertical: string; units: number; orders: number; heldUnits: number; heldOrders: number;
+  /** Units and orders per calendar month ('2026-07'), so the board can scope
+   *  this to a period. Orders the `so` cache has no date for appear in NO month,
+   *  so the months can sum to less than `units` — the difference is undated
+   *  work, never a month's figure quietly absorbing it. */
+  byMonth?: Record<string, { units: number; orders: number }> };
 export type DeviceMix = { ok: boolean; scoped: boolean; devices: DeviceMixRow[] };
 export const fetchDeviceMix = (as?: string | null) =>
   get<DeviceMix>(`/api/device-mix${as ? `?as=${encodeURIComponent(as)}` : ''}`);
@@ -392,11 +422,17 @@ export type ReconcileRep = { rep: string; sheet: number | null; striven: number 
 export type CommissionReconcile = { reps: ReconcileRep[]; totals: { sheet: number | null; striven: number | null; diff: number | null } };
 // Commission computed FROM Striven (rate card): sheet-shaped (monthly + program).
 /** Commission state for one order, from the label rules. `hold` never appears: *  held orders are excluded from the calculation and produce no line. */
-export type CommState = 'payable' | 'waiting';
+/** `paid` is money that has already gone out — still the rep's, still in their
+ *  total, no longer owed. Which months count as paid is COMMISSION_PAID_THROUGH,
+ *  per vertical, on the server. */
+export type CommState = 'payable' | 'waiting' | 'paid';
 /** `patient` is the SURNAME only, and only on the rep's own orders: the one
  *  place PHI is deliberately surfaced, so a rep can reconcile a line against
  *  their own records. Empty when the report cache has no row for the order. */
 export type StrivenOrderLine = { ref: string; patient?: string; item: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; value: number; units: number; comm: number; state: CommState;
+  /** When the SALES ORDER was raised — not the payout cycle. null on a row that
+   *  ties to no live Striven order, which has no date to show. */
+  date?: string | null;
   /** Set when the reconciliation sheet could not tie this row to a Striven
    *  record. The line is still paid; the remark says the match is missing. */
   unmatched?: boolean };
@@ -409,14 +445,27 @@ export type StrivenCommRep = {
   commOrders?: number; commUnits?: number;
   rep: string; tricare: number | null; va: number | null; pi: number | null; total: number | null;
   payableTotal: number | null; waitingTotal: number | null;
+  /** Already paid out. Part of `total`, deliberately NOT part of `payableTotal`
+   *  — a rep is not owed money they have already had. */
+  paidTotal?: number | null;
   orders: number; units: number; value: number | null;
   nTricare?: number; nVa?: number; nPi?: number; uTricare?: number; uVa?: number; uPi?: number;
   lines?: StrivenOrderLine[]; redacted?: boolean;
 };
-export type StrivenCommMonth = { month: string; total: number | null; TriCare: number | null; VA: number | null; PI: number | null; orders: number; units: number; value: number | null; oTriCare?: number; oVA?: number; oPI?: number; payableTotal?: number | null; waitingTotal?: number | null; reps: StrivenCommRep[] };
+/** A month here is a PAYOUT CYCLE: the commission the 15th-of-next-month run
+ *  signed off for that month, straight off the reconciliation sheet. Volume
+ *  (`orders`, `units`) still comes from the order book — a different question
+ *  from what is owed, and deliberately not conflated with it.
+ *
+ *  `reconciled` false means the month has no payout run yet: it is still being
+ *  booked, nothing in it is payable, and its earnings sit in `waitingTotal`. */
+export type StrivenCommMonth = { month: string; total: number | null; TriCare: number | null; VA: number | null; PI: number | null; orders: number; units: number; value: number | null; oTriCare?: number; oVA?: number; oPI?: number; payableTotal?: number | null; waitingTotal?: number | null; paidTotal?: number | null; reconciled?: boolean; reps: StrivenCommRep[] };
 export type StrivenCommission = {
   available: boolean; grandTotal: number | null;
   payableTotal?: number | null; waitingTotal?: number | null; heldOrders?: number;
+  /** Commission already paid out, and the per-vertical cut-off that decided it
+   *  (vertical → last paid month, inclusive). */
+  paidTotal?: number | null; paidThrough?: Record<string, string>;
   zeroValueOrders?: number;                              // $0 order value → earns nothing
   byProgram: { TriCare: number | null; VA: number | null; PI: number | null };
   byProgramOrders?: { TriCare: number; VA: number; PI: number };
@@ -458,8 +507,17 @@ export type CommissionResult = {
 };
 /** `as` is an ADMIN-ONLY preview of one rep's view. It can only narrow what the
  *  server returns: a rep-role session passing it is ignored. */
-export const fetchCommission = (as?: string | null) =>
-  get<CommissionResult>(`/api/commission${as ? `?as=${encodeURIComponent(as)}` : ''}`);
+/** `fresh` forces a re-read of the reconciliation sheet rather than serving the
+ *  server's cached copy. Pass it on a page load and on an explicit Refresh, so
+ *  an edit to the sheet is on screen as soon as someone reloads; leave it off
+ *  for the background poll, which would otherwise re-fetch Google every two
+ *  minutes per open tab to catch an edit nobody made. */
+export const fetchCommission = (as?: string | null, fresh = false) => {
+  const q = new URLSearchParams();
+  if (as) q.set('as', as);
+  if (fresh) q.set('fresh', '1');
+  return get<CommissionResult>(`/api/commission${q.toString() ? `?${q}` : ''}`);
+};
 
 // ── Order analytics (revenue / accounts / devices) ──────────────────────────
 /** One PHI-safe row per order. `account` is the PAYER: Veterans Affairs,
@@ -476,6 +534,19 @@ export type AnalyticsOrder = {
   patient: string;
   revenue: number; units: number; devices: AnalyticsDevice[];
   status: string; invStatus: string;
+  /** Carrier tracking number(s) from Striven, as the RAW string it holds —
+   *  which is a comma-separated list when an order shipped in more than one
+   *  parcel. Use `shipments` to render; this is for search and exports.
+   *  EMPTY ON MOST ORDERS, so every reader has to handle the blank case. Not
+   *  redacted for a rep: it is operational, not financial. */
+  tracking?: string;
+  /** One entry per parcel. `carrier` comes from Striven's own Ship Via, falling
+   *  back to the number's format, and carries a deep link to that carrier's
+   *  tracking page. Null when neither names a carrier — the number still shows,
+   *  unlinked, rather than pointing at a guess. */
+  shipments?: { tn: string; carrier: { code: string; name: string; url: string } | null }[];
+  /** Striven's own "Ship Via" text on the order, e.g. "UPS" / "Fed Ex". */
+  shipVia?: string;
   daysSinceUpdate: number | null;   // interim ageing proxy
   ageDays: number | null;
 };
@@ -507,6 +578,18 @@ export type RepRow = {
   rep: string; isSelf: boolean; own: boolean;
   /** House/ops/departed names: they carry orders but are not ranked. */
   standingsExcluded?: boolean;
+  /** Position on the all-time board by order count, 1-based, stamped over the
+   *  WHOLE producing field BEFORE any row is withheld. A viewer who may not see
+   *  a rep (REP_BLINDSPOTS) therefore gets a gap in the numbering rather than
+   *  everyone below being promoted: Jillian reads 2nd with no 1st on screen,
+   *  instead of being told she leads a board Alle is missing from. */
+  rank?: number;
+  /** Set to the supervisor's name when this rep works under the VIEWER — so
+   *  Alle's login can mark Jillian's row as hers. Display only: the row carries
+   *  no more than any other peer's, and nothing rolls up into the supervisor's
+   *  own figures. Null for everyone else, including on other reps' logins, so
+   *  the reporting line is not broadcast to the rest of the team. */
+  subRepOf?: string | null;
   /** `orders` is the one metric always shared: it drives Team Standings.
    *  units/accounts/devices are null for other reps when STANDINGS_ORDERS_ONLY. */
   /** Distinct payers billed: the law firm on a PI order, Veterans Affairs on a
@@ -516,14 +599,55 @@ export type RepRow = {
   verticals: number | null;
   lastOrder: string | null;
   byVertical: RepVertical[];
+  /** The same row cut by calendar month ('2026-08'), oldest first, for the
+   *  leaderboard's period selector. Only months this rep booked in appear.
+   *  Derived from the same orders the aggregate counts, so a month can never
+   *  disagree with the total it sums into. `units` follows the same redaction
+   *  as the aggregate — null on a peer row under STANDINGS_ORDERS_ONLY. */
+  /** `rank` here is the position IN THAT MONTH, stamped over the whole
+   *  producing field just as the row-level one is — so a period selector cannot
+   *  fall back to array position and promote a rep over a row the viewer was
+   *  not sent. Only months the rep booked in carry one. */
+  byMonth?: { month: string; orders: number; units: number | null; revenue: number | null; accounts: number | null; rank?: number; byVertical: RepVertical[] }[];
+  /** COMMISSION DUE — signed-off and not yet paid — split by vertical and by
+   *  month. Cut by the SALES ORDER's date so it shares a basis with the order
+   *  counts beside it; `undated` is the part that ties to no live order and so
+   *  belongs to no month, reported rather than absorbed. Money, so it is null
+   *  on a peer row exactly as `commission` is. */
+  commissionDue?: {
+    total: number; undated: number;
+    /** Paid commission that ties to no live order, so it belongs to no month. */
+    paidUndated?: number;
+    byVertical: Record<string, number>;
+    /** `total` is OWED. `paid` has already gone out and `earned` is the two
+     *  together — the month equivalent of the row's `commission`, which is why
+     *  a month view can show Commission and Payable on the same basis. */
+    byMonth: { month: string; total: number; paid?: number; earned?: number; byVertical: Record<string, number> }[];
+  } | null;
+  /** PAY, BY PAYOUT CYCLE — the exact rows the Commission tab renders, so the
+   *  two pages report the same figure for the same month. Cut by the cycle the
+   *  money goes out in, NOT by the sales order's date: the same lines bucketed
+   *  by order date gave Jillian $6,646 for July against the Commission tab's
+   *  $21,946, and stranded $28,526 of hers in no month at all. `null` on a peer
+   *  row, exactly as the aggregates below are. */
+  commissionByCycle?: { month: string; paid: number; payable: number; waiting: number; total: number }[] | null;
   revenue: number | null; commission: number | null; payable: number | null; waiting: number | null;
   matchRate: number | null; verified: boolean;
 };
 export type RepOverview = {
   ok: boolean; role: 'admin' | 'rep'; me: string | null; verticals: string[];
+  /** Every month the shown book touches ('2026-04' … ), oldest first. Built from
+   *  the rows, so it never offers a period with nothing to rank. */
+  months?: string[];
   reps: RepRow[];
   /** All four figures describe the same set of orders: the rep-attributed book. */
   teamTotals: { reps: number; orders: number; units: number | null; accounts: number | null; revenue: number | null; commission: number | null };
+  /** The same totals cut by month, for the team table's period selector. Needed
+   *  on the server rather than summed on the client because `accounts` is a
+   *  DISTINCT payer count — two reps billing one law firm are one payer, and
+   *  adding their row figures counts it twice. Commission is not here: money
+   *  sums cleanly, so the footer adds the rendered rows. */
+  teamByMonth?: { month: string; orders: number; units: number; revenue: number | null; accounts: number | null }[];
   /** Orders booked in Striven to someone who is not a rep. Reported separately so
    *  the gap against the full order book is explained rather than puzzling. */
   /** The rest of the book: booked to someone off the rep roster. `units` is
@@ -546,6 +670,10 @@ export const fetchRepOverview = (as?: string | null) =>
  * union that used to live here had already drifted from the real stages.
  */
 export type PiStageName = string;
+/** The three pipelines this payload carries. PI and PIP split the PI vertical
+ *  between them; VA is a vertical of its own, so the three books are disjoint
+ *  and no order appears on two boards. */
+export type PiBoard = 'PI' | 'PIP' | 'VA';
 export type PiStageOrder = AnalyticsOrder & {
   /** Its CURRENT position: one stage, the furthest its labels reach. */
   stage: PiStageName;
@@ -565,7 +693,7 @@ export type PiStageOrder = AnalyticsOrder & {
    *  order is a stalled case to chase, not a mapping bug. */
   flagged?: string[];
   /** Which board this order belongs to. */
-  pipeline?: 'PI' | 'PIP';
+  pipeline?: PiBoard;
   /** Where the stage came from, most authoritative first:
    *  'labels'  — derived from this order's Striven labels. NOT movable from the
    *              portal: the label is re-read on every load and would overwrite
@@ -594,13 +722,17 @@ export type PiStages = {
    *  stage list (no LOP, no settlement). Empty until the PIP order type exists
    *  in Striven, so the UI can render it unconditionally. */
   pipStageNames?: PiStageName[]; pipStages?: PiStageBucket[]; pipOrders?: PiStageOrder[];
-  /** REVIEW QUEUE — orders whose labels place them in no stage, across both
-   *  boards, and the distinct labels behind them. Two reasons: 'flagged' (a
+  /** VA is a SEPARATE pipeline too, off the VA vertical rather than a label: no
+   *  attorney, no lien, no settlement, and — unlike PI — a terminal 'Paid'
+   *  stage, because that is where most of the VA book sits. */
+  vaStageNames?: PiStageName[]; vaStages?: PiStageBucket[]; vaOrders?: PiStageOrder[];
+  /** REVIEW QUEUE — orders whose labels place them in no stage, across every
+   *  board, and the distinct labels behind them. Two reasons: 'flagged' (a
    *  known exception — HOLD, Attorney Denied, Case Dropped) and 'unknown' (a
    *  label nobody has mapped yet). ADMIN ONLY: acting on either means editing
    *  Striven, which is Crystal's call, so this is always empty for a rep. */
   reviewOrders?: PiStageOrder[];
-  reviewLabels?: { label: string; reason: 'flagged' | 'unknown'; count: number; boards: ('PI' | 'PIP')[] }[];
+  reviewLabels?: { label: string; reason: 'flagged' | 'unknown'; count: number; boards: PiBoard[] }[];
   trackedCount: number; autoFromTracking: boolean;
 };
 export const fetchPiStages = (as?: string | null) =>

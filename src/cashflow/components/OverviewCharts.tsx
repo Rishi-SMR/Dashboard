@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   fetchStrivenAR, fetchStrivenAP, fetchStrivenPL, fetchStrivenSO, fetchStrivenPO,
   fetchStrivenTrends, fetchStrivenPayments, fetchStrivenBillPayments,
-  fetchStrivenOrders, fetchStrivenExceptions, fetchCommission,
+  fetchStrivenOrders, fetchStrivenExceptions, fetchCommission, fetchApLedger,
   type ArResult, type ApResult, type PlResult, type SoResult, type PoResult,
   type TrendsResult, type PaymentsResult, type BillPaymentsResult,
-  type OrdersResult, type ExceptionsResult, type CommissionResult,
+  type OrdersResult, type ExceptionsResult, type CommissionResult, type ApLedger,
 } from '../strivenApi';
 import { formatCurrency, clickableProps, isCancelledStatus, isCompletedStatus } from '../format';
 import { C, SERIES, CAT6, VERTICAL_COLORS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
@@ -80,6 +80,8 @@ const INS_TONES: Record<string, { bg: string; fg: string }> = {
 export function OverviewCharts() {
   const [ar, setAr] = useState<ArResult | null>(null);
   const [ap, setAp] = useState<ApResult | null>(null);
+  // The AP ledger sheet — the real payables book. See `apOpenF` below.
+  const [apLedger, setApLedger] = useState<ApLedger | null>(null);
   const [pl, setPl] = useState<PlResult | null>(null);
   const [so, setSo] = useState<SoResult | null>(null);
   const [po, setPo] = useState<PoResult | null>(null);
@@ -99,16 +101,32 @@ export function OverviewCharts() {
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
     try {
-      const [a, b, p, s, o, t, pay, bp, ord, ex] = await Promise.all([
+      // COMMISSION STARTS FIRST, and is deliberately NOT awaited here.
+      //
+      // It is the slowest thing on the board by a wide margin — it downloads two
+      // Google Sheets workbooks and the reconciliation sheet — and it used to be
+      // kicked off AFTER the Promise.all below resolved, despite the comment
+      // claiming it loaded "beside the rest". That put its several seconds END
+      // TO END with the other ten calls instead of overlapping them, so the
+      // Commission tile appeared seconds after everything around it had settled.
+      //
+      // Started here, it runs while the ten below are in flight and fills its
+      // tile whenever it lands. Not awaited, so a slow or failed commission
+      // derivation can never hold up the rest of the board.
+      fetchCommission().then(setComm).catch(() => setComm(null));
+      const [a, b, p, s, o, t, pay, bp, ord, ex, apl] = await Promise.all([
         fetchStrivenAR(), fetchStrivenAP(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
         fetchStrivenTrends(), fetchStrivenPayments(), fetchStrivenBillPayments().catch(() => null),
         fetchStrivenOrders().catch(() => null), fetchStrivenExceptions().catch(() => null),
+        // THE AP BOOK, for the same reason the Payables tab reads it: vendor
+        // bills are tracked by hand in this sheet and only a handful ever reach
+        // Striven, so Striven's four open bills are not the payable. Never
+        // fails the board — the AP figure falls back to Striven if it is
+        // unreachable, which is a smaller number but not a broken page.
+        fetchApLedger().catch(() => null),
       ]);
-      // Commission is its own derivation and can be slow, so it loads beside the
-      // rest and simply leaves its tile blank if Striven is unavailable.
-      fetchCommission().then(setComm).catch(() => setComm(null));
       setAr(a); setAp(b); setPl(p); setSo(s); setPo(o); setTrends(t); setPayments(pay);
-      setBillpay(bp); setOrders(ord); setExc(ex);
+      setBillpay(bp); setOrders(ord); setExc(ex); setApLedger(apl);
       setLastSync(Date.now());
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : 'Failed to load Striven data.');
@@ -138,46 +156,21 @@ export function OverviewCharts() {
   // removed itself and took the only route out with it.
   const kevinBoard = isKevinLogin(meEmail);
 
-  // COMMISSION DUE, scoped to the PRODUCING REPS — the same population the
-  // Commission tab shows when this tile is clicked.
-  //
-  // It read `striven.payableTotal`, which is the whole roster: it counted
-  // Kinley Shepherd and House Account, neither of whom appears on the
-  // Commission tab any more. The tile said $218,116 and the page it opened said
-  // $209,815 — an $8,301 gap between a figure and the breakdown behind it.
-  // (Cassie was in that gap too; she is now dropped server-side entirely, so
-  // she is no longer part of what this scoping has to correct for.)
-  //
-  // `roster` is the server's producer list, empty for a non-admin; this board
-  // is admin-only, but the fallback keeps it honest if that ever changes.
-  const commDue = (() => {
-    const s = comm?.striven;
-    if (!s) return { payable: comm?.payableTotal ?? 0, waiting: 0, offRoster: 0 };
-    const roster = new Set(comm?.roster ?? []);
-    const rows = roster.size ? (s.byRep ?? []).filter((r) => roster.has(r.rep)) : null;
-    if (!rows) return { payable: s.payableTotal ?? 0, waiting: s.waitingTotal ?? 0, offRoster: 0 };
-    const sum = (k: 'payableTotal' | 'waitingTotal') =>
-      Math.round(rows.reduce((a, r) => a + (r[k] ?? 0), 0) * 100) / 100;
-    // What the roster filter LEAVES OUT. Non-producing reps are off the Reps
-    // dashboard by request, but their commission is still owed — reporting the
-    // tile without it would quietly understate the liability.
-    const offRoster = Math.round(((s.byRep ?? [])
-      .filter((r) => !roster.has(r.rep))
-      .reduce((a, r) => a + (r.payableTotal ?? 0), 0)) * 100) / 100;
-    return { payable: sum('payableTotal'), waiting: sum('waitingTotal'), offRoster };
-  })();
-
   // ---- FY + Program + As-of scope (the header filters actually re-slice the data) ----
   const [fyPick, setFyPick] = useState<string | null>(null);
-  // PERIOD DEFAULTS TO THE FISCAL YEAR.
+  // PERIOD DEFAULTS TO THE AS-OF MONTH — "how are we doing right now".
   //
-  // It used to default to the As-of MONTH, on the reasoning that an owner reads
-  // "how are we doing right now". In practice that opened the board on a month
+  // It defaulted to the FISCAL YEAR for a while, and the reason is worth keeping
+  // even though the default has gone: the month view opened the board on a month
   // with no invoices yet — early August showed Revenue $0, Cash Received $0 and
-  // two empty charts, while the snapshot cards beside them showed real money.
-  // The zeroes were correct and read as breakage. A year-to-date figure is
-  // always populated, so the board opens saying something; the month view is
-  // one click away in the Period filter.
+  // two empty charts beside snapshot cards full of real money. The zeroes were
+  // correct and read as breakage.
+  //
+  // A year-to-date default hid that, at the cost of answering a question nobody
+  // asked on open. The empty month is handled directly instead, by the effect
+  // below: if the as-of month carries nothing, the board opens on the newest
+  // month that does. Same protection, without a whole-year default.
+  //
   // 'month'  the as-of month · 'fy' the fiscal year · 'pick' one named month
   // · 'custom' a from→to range.
   //
@@ -185,7 +178,7 @@ export function OverviewCharts() {
   // board comes from a monthly series (trends, payments), so a day-level range
   // could not be honoured — it would silently round to whole months while
   // showing exact dates. Month inputs say what the data can actually answer.
-  const [scope, setScope] = useState<'month' | 'fy' | 'pick' | 'custom'>('fy');
+  const [scope, setScope] = useState<'month' | 'fy' | 'pick' | 'custom'>('month');
   const [pickMonth, setPickMonth] = useState('');
   const [fromYm, setFromYm] = useState('');
   const [toYm, setToYm] = useState('');
@@ -215,6 +208,24 @@ export function OverviewCharts() {
   const monthName = (m: string) => (m
     ? new Date(`${m}-01T00:00:00`).toLocaleString(undefined, { month: 'long', year: 'numeric' })
     : '');
+  // THE EMPTY-MONTH GUARD, and the reason the fiscal-year default could go.
+  //
+  // Runs ONCE, and only while the board is still on its default: `touched` is
+  // set by the Period control itself, so a month a person chose is never
+  // second-guessed — picking an empty month deliberately is a legitimate thing
+  // to do, and silently moving them off it would be worse than showing zeroes.
+  //
+  // Waits for the series to arrive (`dataMonths.length`), because before that
+  // every month looks empty and this would fire on nothing.
+  const touchedPeriod = useRef(false);
+  useEffect(() => {
+    if (touchedPeriod.current || !dataMonths.length) return;
+    touchedPeriod.current = true;               // decide once, then leave it alone
+    if (dataMonths.includes(asOfYm)) return;    // the current month has data: stay
+    setPickMonth(dataMonths[0]);                // dataMonths is newest-first
+    setScope('pick');
+  }, [dataMonths, asOfYm]);
+
   const inFy = (m: string) => {
     if (scope === 'month') return m === asOfYm;
     if (scope === 'pick') return m === pickMonth;
@@ -222,6 +233,96 @@ export function OverviewCharts() {
     if (scope === 'custom') return (!fromYm || m >= fromYm) && (!toYm || m <= toYm);
     return m.startsWith(fy) && m <= asOfYm;
   };
+  /**
+   * The period test for a BALANCE row, which carries a due date rather than a
+   * month key.
+   *
+   * A missing date is IN every period. Every open AR invoice and AP bill in the
+   * book currently has one, so this branch is a no-op today — it exists so that
+   * a row arriving without a due date is never silently dropped from a
+   * liability. Under-reporting what is owed is the worse way for a money card
+   * to be wrong.
+   *
+   * NOT used for commission. Owed commission has 127 lines that tie to no live
+   * sales order and so carry no date at all; letting those fall into every
+   * period would count $52,381 five times over, and would make this board
+   * disagree with the Rep × vertical table, which excludes them and says so.
+   * See `commDue`.
+   */
+  const inPeriodDate = (d: string | null | undefined) => {
+    const s = String(d ?? '').slice(0, 7);
+    return !s || inFy(s);
+  };
+  /**
+   * WHETHER THE BOARD IS SCOPED TO A SLICE AT ALL.
+   *
+   * The balance cards below read "as of today" when the whole book is in view
+   * and "due in <period>" when it is not, so each of them has to know which
+   * sentence it is telling. `fy` covers a whole year up to the as-of month,
+   * which is the closest thing this board has to "everything".
+   */
+  const periodScoped = scope === 'month' || scope === 'pick' || scope === 'custom';
+
+  // COMMISSION DUE, scoped to the PRODUCING REPS — the same population the
+  // Commission tab shows when this tile is clicked.
+  //
+  // It read `striven.payableTotal`, which is the whole roster: it counted
+  // Kinley Shepherd and House Account, neither of whom appears on the
+  // Commission tab any more. The tile said $218,116 and the page it opened said
+  // $209,815 — an $8,301 gap between a figure and the breakdown behind it.
+  // (Cassie was in that gap too; she is now dropped server-side entirely, so
+  // she is no longer part of what this scoping has to correct for.)
+  //
+  // `roster` is the server's producer list, empty for a non-admin; this board
+  // is admin-only, but the fallback keeps it honest if that ever changes.
+  // MUST STAY BELOW inPeriodDate(). It is a const arrow, so reading it from an
+  // IIFE placed earlier in the render is a temporal-dead-zone crash, not a
+  // hoisted call — this block used to sit above the period scope and was moved
+  // down wholesale when it started following the filter.
+  const commDue = (() => {
+    const s = comm?.striven;
+    if (!s) return { payable: comm?.payableTotal ?? 0, waiting: 0, offRoster: 0 };
+    const roster = new Set(comm?.roster ?? []);
+    const rows = roster.size ? (s.byRep ?? []).filter((r) => roster.has(r.rep)) : null;
+    if (!rows) return { payable: s.payableTotal ?? 0, waiting: s.waitingTotal ?? 0, offRoster: 0 };
+    // SCOPED BY THE SALES ORDER'S DATE, off the signed-off lines.
+    //
+    // A rep's `payableTotal` is a single all-time figure, so the period has to
+    // be taken from the lines beneath it. Owed only — a 'paid' line has left the
+    // bank and is not due — which is exactly the split that makes the line sum
+    // equal `payableTotal` when nothing is filtered.
+    //
+    // AN UNDATED LINE IS IN NO PERIOD, and that is deliberate. 127 of them tie
+    // to no live sales order, so they have no month; counting them in every
+    // period put $52,381 into each one, made the months sum to more than the
+    // all-time figure, and made this tile read $107,526 for July against the Rep
+    // × vertical table's $55,145 — the same metric, two boards, two answers.
+    // They are reported separately instead, exactly as that table does.
+    type Line = { comm: number; state: string; date?: string | null };
+    const owedLines = (r: { lines?: Line[] }) => (r.lines ?? []).filter((l) => l.state !== 'paid');
+    const inScope = (l: Line) => !periodScoped || (Boolean(l.date) && inFy(String(l.date).slice(0, 7)));
+    const owed = (r: { lines?: Line[]; payableTotal?: number }) => {
+      const lines = owedLines(r);
+      if (!(r.lines ?? []).length) return r.payableTotal ?? 0;   // no lines: nothing to scope by
+      return lines.filter(inScope).reduce((a, l) => a + (l.comm ?? 0), 0);
+    };
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    // What the roster filter LEAVES OUT. Non-producing reps are off the Reps
+    // dashboard by request, but their commission is still owed — reporting the
+    // tile without it would quietly understate the liability.
+    const offRoster = r2((s.byRep ?? []).filter((r) => !roster.has(r.rep)).reduce((a, r) => a + owed(r), 0));
+    // Owed, but belonging to no month — only meaningful while a period is on.
+    const undated = periodScoped
+      ? r2(rows.reduce((a, r) => a + owedLines(r).filter((l) => !l.date).reduce((b, l) => b + (l.comm ?? 0), 0), 0))
+      : 0;
+    return {
+      payable: r2(rows.reduce((a, r) => a + owed(r), 0)),
+      waiting: r2(rows.reduce((a, r) => a + (r.waitingTotal ?? 0), 0)),
+      offRoster,
+      undated,
+    };
+  })();
+
 
   // ---- derived views (real data only, FY-scoped where the data is monthly) ----
   const revSeries = (trends?.series ?? []).filter((s) => inFy(s.month)).map((s) => ({ month: s.month, value: s.revenue }));
@@ -238,6 +339,16 @@ export function OverviewCharts() {
           ? `${fromYm ? monthName(fromYm) : 'start'} → ${toYm ? monthName(toYm) : 'now'}`
           : 'Custom range')
         : `FY${fy}`;
+
+  /**
+   * What a BALANCE card is describing, in words.
+   *
+   * These cards hold current open balances filtered by DUE DATE, so under a
+   * period they answer "still open today, and it fell due in this window" —
+   * never "the balance as it stood then". The distinction is the whole reason
+   * this string exists: the figure is honest, the default reading of it is not.
+   */
+  const balanceScopeLabel = periodScoped ? `due in ${periodLabel}` : 'as of today';
   // COUNTS IN THE ACTIVE PERIOD, not FY-wide. `pl.invoiceCount` is the whole
   // year and `payments.count` is every payment ever taken; either sitting under
   // a month-scoped figure contradicts it outright ("$0 this month · 165
@@ -259,9 +370,25 @@ export function OverviewCharts() {
   const cashFY = cashSeries.reduce((s, p) => s + p.value, 0);
 
   // Cash flow: customer payments in vs vendor bill payments out, by month (FY-scoped).
+  //
+  // CASH OUT COMES FROM THE AP LEDGER, not Striven's bill-payment records.
+  // Striven holds ONE payment — $840 to HiDow, 30 Apr — while the ledger's
+  // Debit column holds all 51, $76,026.06. Charting the one made vendor cash
+  // out look like a rounding error against six figures of cash in, and the net
+  // line was overstated by $75,186.06 every month it drew.
+  //
+  // Falls back to Striven's list if the sheet is unreachable: a small cash-out
+  // line is wrong, but an empty chart is worse and hides that anything is off.
+  const vendorCashOut: { date: string | null; amount: number }[] =
+    apLedger?.ok && (apLedger.payments?.length ?? 0) > 0
+      ? apLedger.payments!.map((p) => ({ date: p.date, amount: p.amount }))
+      : (billpay?.recent ?? []).map((r) => ({ date: r.date, amount: r.amount }));
   const cashOutBy: Record<string, number> = {};
-  for (const r of billpay?.recent ?? []) {
+  for (const r of vendorCashOut) {
     const m = String(r.date ?? '').slice(0, 7);
+    // An undated payment cannot be placed in a month. One row on the ledger has
+    // no date ($303.67); it is left out of the monthly series rather than
+    // dumped into an arbitrary bucket, exactly as before.
     if (m) cashOutBy[m] = (cashOutBy[m] || 0) + r.amount;
   }
   const inBy: Record<string, number> = Object.fromEntries((payments?.byMonth ?? []).map((m) => [m.month, m.amount]));
@@ -279,8 +406,62 @@ export function OverviewCharts() {
   const margin = fRev > 0 ? Math.round(((fRev - fExp) / fRev) * 1000) / 10 : 0;
 
   // Program-scoped AR: payer (law firm / VA / TriCare) classifies each invoice.
-  const arInv = (ar?.invoices ?? []).filter((i) => i.open > 0 && (prog === 'All' || programOfPayer(i.payer) === prog));
+  //
+  // PERIOD-SCOPED ON THE DUE DATE, which is the only date these rows carry.
+  //
+  // That makes a filtered figure "receivables STILL OPEN TODAY that fell due in
+  // this period" — not "AR as it stood at the end of it". The second is not
+  // computable from this payload and never was: `ArInvoice` holds a current
+  // balance and a due date, and nothing anywhere stores what was outstanding on
+  // a past date. The card titles say "due in <period>" so the number cannot be
+  // read as a historical position.
+  //
+  // An invoice with no due date stays IN every period — see inPeriodDate. These
+  // are liabilities and receivables; dropping an undated one would quietly
+  // shrink the figure, which is the wrong way for a money card to be wrong.
+  const arInv = (ar?.invoices ?? []).filter((i) => i.open > 0
+    && (prog === 'All' || programOfPayer(i.payer) === prog)
+    && inPeriodDate(i.dueDate));
   const arOpenF = arInv.reduce((s, i) => s + i.open, 0);
+  // THE AP TWIN OF arOpenF, and the reason it has to exist: every balance card
+  // below pairs the two, and they were reading `apOpenF` — the server's
+  // whole-book figure — against a period-scoped AR. Netting a filtered
+  // receivable against an unfiltered payable produces a "net position" that is
+  // not a position at all, and it is the kind of wrong that looks plausible.
+  //
+  // OFF THE AP LEDGER SHEET, not Striven, and that is a $19,032.83 correction.
+  // Striven holds four open vendor bills; the ledger holds forty-six, because
+  // vendor bills are tracked by hand in that sheet and only a handful are ever
+  // entered into Striven. This card read the four, so the dashboard's "we owe
+  // out" — and the net position derived from it — understated payables by more
+  // than the figure it printed.
+  //
+  // The Payables tab and the AP Register both read the sheet; leaving this on
+  // Striven would have moved the contradiction from inside one tab to between
+  // three of them, which is harder to notice and no more correct.
+  //
+  // `Math.abs(open) > 0` rather than `> 0`: a credit note carries a negative
+  // balance and is money off the payable. The AP Register sums it the same way,
+  // so the two agree by construction rather than by coincidence.
+  // ONE LIST, normalised, used by every AP figure on this board. Five call sites
+  // read the bills — this total, the AP Due vendor list, the aging rail, the
+  // Action Center's "due soon", and the card's own bill count — and patching
+  // them one at a time is how a card ends up printing "$30,455.00 across 4
+  // unpaid bills". Whichever book is in play, they now read the same array.
+  const apLedgerBills = (apLedger?.ok ? apLedger.bills : null) ?? null;
+  const apBook = apLedgerBills
+    ? apLedgerBills
+      .filter((b) => Math.abs(b.open) > 0.005)
+      .map((b) => ({ number: String(b.no), vendor: b.subLedger || '-', dueDate: b.due || null, open: b.open }))
+    : (ap?.bills ?? [])
+      .filter((b) => b.open > 0)
+      .map((b) => ({ number: String(b.number), vendor: b.vendor || '-', dueDate: b.dueDate, open: b.open }));
+  const apBookScoped = apBook.filter((b) => inPeriodDate(b.dueDate));
+  const apOpenF = apBookScoped.reduce((s, b) => s + b.open, 0);
+  // A credit note is money off the payable but nobody works it off a worklist,
+  // so it counts toward the TOTAL and not toward the COUNT — the same split the
+  // AP Register makes, which is why the two agree.
+  const apBillCount = apBookScoped.filter((b) => b.open > 0).length;
   // Aging always client-bucketed so Program + As-of both apply.
   // The aging buckets are gone from this board: both summaries are now AR Due /
   // AP Due, which list the parties rather than the age bands. `emptyAging`,
@@ -313,8 +494,10 @@ export function OverviewCharts() {
   // Ordered by amount: the biggest cheque is the first decision.
   const apDue = (() => {
     const m = new Map<string, { id: string; vendor: string; number: string; open: number; dueDate: string | null; days: number }>();
-    for (const b of ap?.bills ?? []) {
-      if (!(b.open > 0)) continue;
+    for (const b of apBook) {
+      // Same due-date scoping as AR above, and for the same reason: a bill
+      // carries no date but the one it falls due on.
+      if (!(b.open > 0) || !inPeriodDate(b.dueDate)) continue;
       const v = b.vendor || '-';
       const days = b.dueDate ? Math.floor((refMs - new Date(b.dueDate).getTime()) / 86_400_000) : 0;
       const e = m.get(v) ?? { id: v, vendor: v, number: b.number, open: 0, dueDate: b.dueDate, days: 0 };
@@ -345,12 +528,28 @@ export function OverviewCharts() {
     const m = new Map<string, DeviceMixRow>();
     for (const d of devMix) {
       if (prog !== 'All' && d.vertical !== prog) continue;
-      const name = shortDeviceName(d.device) || d.device;
-      const k = name.toLowerCase();
+      // SCOPED TO THE PERIOD off the per-month counts the server now sends.
+      // Units are the one figure here with no date of its own — the device
+      // report is keyed by sales order — so the months are joined server-side
+      // and the row is rebuilt from just the ones in range.
+      //
+      // `held` is NOT re-scoped: the hold is a label on the order as it stands
+      // today, with no month attached, so a month's share of it cannot be known.
+      // Carried whole rather than apportioned, and the card reads it as a
+      // whole-book caveat, which is what it is.
+      let row: DeviceMixRow = { ...d, device: shortDeviceName(d.device) || d.device };
+      if (periodScoped) {
+        const inRange = Object.entries(d.byMonth ?? {}).filter(([mo]) => inFy(mo));
+        const units = inRange.reduce((a, [, v]) => a + v.units, 0);
+        const orders = inRange.reduce((a, [, v]) => a + v.orders, 0);
+        if (units <= 0) continue;                 // nothing dispensed this period
+        row = { ...row, units, orders };
+      }
+      const k = row.device.toLowerCase();
       const e = m.get(k);
-      if (!e) { m.set(k, { ...d, device: name }); continue; }
-      e.units += d.units; e.orders += d.orders;
-      e.heldUnits += d.heldUnits; e.heldOrders += d.heldOrders;
+      if (!e) { m.set(k, row); continue; }
+      e.units += row.units; e.orders += row.orders;
+      e.heldUnits += row.heldUnits; e.heldOrders += row.heldOrders;
     }
     return [...m.values()].filter((d) => d.units > 0);
   })();
@@ -369,7 +568,7 @@ export function OverviewCharts() {
   // data, and it makes the ring look broken.
   const donutSlices = [
     { name: 'AR Expected', value: arOpenF, color: HUE.ar.to },
-    { name: 'AP Due', value: ap?.totalOpen ?? 0, color: HUE.ap.to },
+    { name: 'AP Due', value: apOpenF, color: HUE.ap.to },
     { name: 'Commission Due', value: commDue.payable, color: HUE.po.to },
   ].filter((s) => s.value > 0);
 
@@ -415,7 +614,7 @@ export function OverviewCharts() {
   // against each other: what we are owed and what we owe, aged alike.
   const apDetail = (() => {
     const day = 86_400_000;
-    const bills = (ap?.bills ?? []).filter((b) => (b.open ?? 0) > 0);
+    const bills = apBookScoped.filter((b) => (b.open ?? 0) > 0);
     const age = (b: { dueDate?: string | null }) => (b.dueDate
       ? Math.floor((refMs - new Date(b.dueDate).getTime()) / day) : 0);
     const k = { current: 0, d30: 0, d60: 0, d90: 0 };
@@ -461,19 +660,35 @@ export function OverviewCharts() {
 
   // Rows for the interactive commission card. `onRoster` marks the producing
   // four; the rest are carried so their money is reported rather than dropped.
+  // THE ROWS UNDER THE HEADLINE, on the same basis as the headline.
+  //
+  // `payable` and `lines` are both cut to the period here. They have to move
+  // together with commDue.payable above, or the tile shows a total the list
+  // beneath it does not add up to — and the list is what someone checks the
+  // total against. Same rule throughout: owed only, and an undated line belongs
+  // to no month.
   const commRows = (() => {
     const roster = new Set(comm?.roster ?? []);
-    return (comm?.striven?.byRep ?? []).map((r) => ({
-      rep: r.rep,
-      payable: r.payableTotal ?? 0,
-      orders: r.orders ?? 0,
-      units: r.units ?? 0,
-      pi: r.pi ?? 0, va: r.va ?? 0, tricare: r.tricare ?? 0,
-      onRoster: roster.size ? roster.has(r.rep) : true,
-      lines: (r.lines ?? []).map((l) => ({
-        ref: l.ref, patient: l.patient ?? '', item: l.item ?? '', prog: l.prog ?? '', comm: l.comm ?? 0,
-      })),
-    })).filter((r) => r.payable > 0);
+    const inScope = (l: { date?: string | null }) =>
+      !periodScoped || (Boolean(l.date) && inFy(String(l.date).slice(0, 7)));
+    return (comm?.striven?.byRep ?? []).map((r) => {
+      const owed = (r.lines ?? []).filter((l) => l.state !== 'paid' && inScope(l));
+      return {
+        rep: r.rep,
+        payable: (r.lines ?? []).length
+          ? Math.round(owed.reduce((a, l) => a + (l.comm ?? 0), 0) * 100) / 100
+          : (r.payableTotal ?? 0),
+        orders: r.orders ?? 0,
+        units: r.units ?? 0,
+        pi: r.pi ?? 0, va: r.va ?? 0, tricare: r.tricare ?? 0,
+        onRoster: roster.size ? roster.has(r.rep) : true,
+        // The drill lists the SAME lines the figure was built from, so opening a
+        // rep can never show orders from outside the period on screen.
+        lines: owed.map((l) => ({
+          ref: l.ref, patient: l.patient ?? '', item: l.item ?? '', prog: l.prog ?? '', comm: l.comm ?? 0,
+        })),
+      };
+    }).filter((r) => r.payable > 0);
   })();
 
   // ── THE OTHER TWO RINGS ────────────────────────────────────────────────────
@@ -506,6 +721,10 @@ export function OverviewCharts() {
   const [labelVert, setLabelVert] = useState<'All' | 'PI' | 'VA' | 'TriCare'>('All');
   const vertPick: string = prog !== 'All' ? prog : labelVert;
   const LABEL_VERTS = ['All', 'PI', 'VA', 'TriCare'] as const;
+  /** Sentinel for "Striven has tagged this order with nothing". The parentheses
+   *  keep it from colliding with a real label, which never has them — the same
+   *  sentinel the pipeline's label filter uses, for the same reason. */
+  const NO_LABEL = '(no label)';
   const labelStats = (() => {
     const src = (so?.recent ?? [])
       .filter((o) => !isCancelledStatus(o.status))
@@ -513,9 +732,13 @@ export function OverviewCharts() {
       .filter((o) => (labelScope === 'done' ? isCompletedStatus(o.status) : true));
     const m = new Map<string, { label: string; n: number; value: number; done: number; byVert: Map<string, number> }>();
     let untagged = 0;
+    let untaggedValue = 0;
     for (const o of src) {
       const ls = o.labels ?? [];
-      if (!ls.length) { untagged += 1; continue; }
+      // The VALUE of the untagged orders as well as the count. A bare "37
+      // orders" says how many are unclassified but not how much rides on them,
+      // which is the thing that decides whether it is worth chasing.
+      if (!ls.length) { untagged += 1; untaggedValue += o.value || 0; continue; }
       for (const l of ls) {
         const e = m.get(l) ?? { label: l, n: 0, value: 0, done: 0, byVert: new Map<string, number>() };
         e.n += 1;
@@ -533,21 +756,31 @@ export function OverviewCharts() {
     return {
       orders: src.length,
       untagged,
+      untaggedValue,
       verts: LABEL_VERTS.filter((v) => v === 'All' || live.has(v)),
       rows: [...m.values()].sort((a, b) => b.n - a.n || a.label.localeCompare(b.label)),
     };
   })();
   // Drill: every order carrying the clicked label, in Striven's own wording.
+  //
+  // NO_LABEL is not a label. It is the sentinel for the orders Striven has
+  // tagged with nothing — they were counted in the note under this card and
+  // reachable from nowhere, so the one group that most needs working through was
+  // the only one you could not open. The parentheses keep it from ever colliding
+  // with a real label, which never has them; the same sentinel and the same
+  // reasoning are already used by the pipeline's label filter.
   const drillLabel = (label: string) => {
+    const untaggedDrill = label === NO_LABEL;
     const list = (so?.recent ?? [])
       .filter((o) => !isCancelledStatus(o.status))
       .filter((o) => (vertPick === 'All' ? true : o.type === vertPick))
       .filter((o) => (labelScope === 'done' ? isCompletedStatus(o.status) : true))
-      .filter((o) => (o.labels ?? []).includes(label))
+      .filter((o) => (untaggedDrill ? (o.labels ?? []).length === 0 : (o.labels ?? []).includes(label)))
       .sort((a, b) => (b.value || 0) - (a.value || 0));
     setDrill({
-      title: label,
-      sub: `${list.length} order${list.length === 1 ? '' : 's'} · ${formatCurrency(list.reduce((s, o) => s + (o.value || 0), 0))}`,
+      title: untaggedDrill ? 'Orders with no Striven label' : label,
+      sub: `${list.length} order${list.length === 1 ? '' : 's'} · ${formatCurrency(list.reduce((s, o) => s + (o.value || 0), 0))}${
+        untaggedDrill ? ' · nothing tagged in Striven, so they sit at stage 1 on every pipeline' : ''}`,
       columns: [
         { key: 'ref', label: 'Order #' }, { key: 'patient', label: 'Patient' },
         { key: 'type', label: 'Programme' },
@@ -565,7 +798,12 @@ export function OverviewCharts() {
         type: o.type,
         rep: o.rep || '-',
         status: o.status,
-        labels: (o.labels ?? []).join(', '),
+        // An em dash, not an empty cell: on the no-label drill every row would
+        // otherwise be blank here and read as a rendering fault rather than as
+        // the very fact the drill was opened to show.
+        labels: (o.labels ?? []).length
+          ? (o.labels ?? []).join(', ')
+          : <span style={{ color: C.muted }}>—</span>,
         value: formatCurrency(o.value || 0),
       })),
     });
@@ -638,7 +876,7 @@ export function OverviewCharts() {
   const soon = refMs + 7 * 86_400_000;
   const overdue = arInv.filter((i) => i.dueDate && new Date(i.dueDate).getTime() < refMs);
   const overdueSum = overdue.reduce((s, i) => s + i.open, 0);
-  const billsDue = (ap?.bills ?? []).filter((b) => b.open > 0 && b.dueDate && new Date(b.dueDate).getTime() <= soon);
+  const billsDue = apBook.filter((b) => b.open > 0 && b.dueDate && new Date(b.dueDate).getTime() <= soon);
   const billsDueSum = billsDue.reduce((s, b) => s + b.open, 0);
   const waitingPo = (orders?.orders ?? []).filter((o) =>
     (prog === 'All' || o.pi === prog) && o.pos.length === 0 && !/cancel|void|complete|closed/i.test(o.status));
@@ -844,6 +1082,9 @@ export function OverviewCharts() {
         <label className="ov-filter"><span className="fl">Period</span>
           <select value={scope === 'pick' ? `m:${pickMonth}` : scope}
             onChange={(e) => {
+              // A deliberate choice. Stops the empty-month guard above from ever
+              // overriding it, including the choice of an empty month.
+              touchedPeriod.current = true;
               const v = e.target.value;
               if (v.startsWith('m:')) { setPickMonth(v.slice(2)); setScope('pick'); return; }
               if (v === 'custom') {
@@ -876,8 +1117,23 @@ export function OverviewCharts() {
             <input type="month" value={toYm} min={fromYm || undefined} onChange={(e) => setToYm(e.target.value)} />
           </label>
         )}
+        {/* FISCAL YEAR IS ACTIONABLE ON ITS OWN.
+            It used to be `disabled` unless Period was already set to "Fiscal
+            year", which made it a control that is visible, populated, and inert
+            — with nothing on screen saying why. Picking a year now SELECTS that
+            fiscal year, switching Period to it, which is the only thing choosing
+            a year could reasonably mean.
+            It is still disabled in one case, and an honest one: when the data
+            covers a single year there is no other year to move to, and a live
+            dropdown with one option invites a click that cannot do anything. The
+            title says which case you are in. */}
         <label className="ov-filter"><span className="fl">Fiscal Year</span>
-          <select value={fy} onChange={(e) => setFyPick(e.target.value)} disabled={scope !== 'fy'}>
+          <select value={fy}
+            disabled={years.length < 2}
+            title={years.length < 2
+              ? `The data covers ${fy} only — there is no other fiscal year to switch to.`
+              : 'Scope the board to this fiscal year'}
+            onChange={(e) => { setFyPick(e.target.value); setScope('fy'); }}>
             {(years.length ? years : [fy]).map((y) => <option key={y} value={y}>FY{y}</option>)}
           </select>
         </label>
@@ -926,13 +1182,25 @@ export function OverviewCharts() {
                 orders behind it. The tile above is gone — two copies of the
                 same number would only invite them to disagree. */}
             {commRows.length > 0 && (
-              <ChartCard className="g12-3" title="Commission Due" sub="Click a rep for their programme split and top orders">
+              <ChartCard className="g12-3" title="Commission Due"
+                sub={`Click a rep for their programme split and top orders${periodScoped ? ` · orders booked in ${periodLabel}` : ''}`}>
                 <CommissionBreakdown reps={commRows} onOpen={go('commission')} />
+                {/* The owed commission that belongs to NO month, named wherever
+                    a period is on. Without it this tile's months sum to less
+                    than its own all-time figure and nothing on screen says why —
+                    the same note the Rep × vertical table carries, so the two
+                    boards explain the gap identically. */}
+                {commDue.undated > 0 && (
+                  <div className="lbl-note">
+                    A further <b>{formatCurrency(commDue.undated)}</b> is owed on lines that tie to no live sales order,
+                    so they belong to no month and are not counted above.
+                  </div>
+                )}
               </ChartCard>
             )}
             {donutSlices.length > 0 && (
               <ChartCard className="g12-3" title="Open balances"
-                sub={`${formatCurrency(arOpenF)} owed to us · ${formatCurrency(ap.totalOpen + commDue.payable)} owed out`}>
+                sub={`${formatCurrency(arOpenF)} owed to us · ${formatCurrency(apOpenF + commDue.payable)} owed out`}>
                 <DonutList data={donutSlices} totalLabel="Total outstanding"
                   onSelect={(n) => { location.hash = n === 'AR Expected' ? 'receivables' : n === 'AP Due' ? 'payables' : 'commission'; }} />
               </ChartCard>
@@ -943,16 +1211,16 @@ export function OverviewCharts() {
                 sum of two opposite things. This says which way each runs and
                 what is left, which is the question the ring raises. */}
             {donutSlices.length > 0 && (
-              <ChartCard className="g12-3" title="Position summary" sub="Open balances, netted · as of today">
+              <ChartCard className="g12-3" title="Position summary" sub={`Open balances, netted · ${balanceScopeLabel}`}>
                 <div className="pos">
                   <div className="pos-cap">Net position</div>
-                  <div className={`pos-net ${arOpenF - (ap.totalOpen + commDue.payable) < 0 ? 'neg' : 'pos'}`}>
-                    <AnimatedNumber value={arOpenF - (ap.totalOpen + commDue.payable)} format={formatCurrency} duration={700} />
+                  <div className={`pos-net ${arOpenF - (apOpenF + commDue.payable) < 0 ? 'neg' : 'pos'}`}>
+                    <AnimatedNumber value={arOpenF - (apOpenF + commDue.payable)} format={formatCurrency} duration={700} />
                   </div>
                   <div className="pos-sub">
-                    {arOpenF >= ap.totalOpen + commDue.payable
+                    {arOpenF >= apOpenF + commDue.payable
                       ? 'More is owed to us than we owe out.'
-                      : `We owe ${((ap.totalOpen + commDue.payable) / Math.max(1, arOpenF)).toFixed(1)}× what we are owed.`}
+                      : `We owe ${((apOpenF + commDue.payable) / Math.max(1, arOpenF)).toFixed(1)}× what we are owed.`}
                   </div>
 
                   {/* Both bars share ONE scale — the larger side is full width —
@@ -961,20 +1229,20 @@ export function OverviewCharts() {
                   <div className="pos-side">
                     <div className="pos-lab"><span className="t">Owed to us</span><span className="v">{formatCurrency(arOpenF)}</span></div>
                     <div className="pos-track">
-                      <span className="seg" style={{ width: `${(arOpenF / Math.max(arOpenF, ap.totalOpen + commDue.payable, 1)) * 100}%`, background: C.positive }} />
+                      <span className="seg" style={{ width: `${(arOpenF / Math.max(arOpenF, apOpenF + commDue.payable, 1)) * 100}%`, background: C.positive }} />
                     </div>
                     <div className="pos-key"><span className="k"><span className="d" style={{ background: C.positive }} />AR from {arInv.length} unpaid invoice{arInv.length === 1 ? '' : 's'}</span></div>
                   </div>
 
                   <div className="pos-side">
-                    <div className="pos-lab"><span className="t">We owe out</span><span className="v">{formatCurrency(ap.totalOpen + commDue.payable)}</span></div>
+                    <div className="pos-lab"><span className="t">We owe out</span><span className="v">{formatCurrency(apOpenF + commDue.payable)}</span></div>
                     <div className="pos-track">
-                      <span className="seg" style={{ width: `${(commDue.payable / Math.max(arOpenF, ap.totalOpen + commDue.payable, 1)) * 100}%`, background: HUE.po.to }} />
-                      <span className="seg" style={{ width: `${(ap.totalOpen / Math.max(arOpenF, ap.totalOpen + commDue.payable, 1)) * 100}%`, background: HUE.ap.to, animationDelay: '.08s' }} />
+                      <span className="seg" style={{ width: `${(commDue.payable / Math.max(arOpenF, apOpenF + commDue.payable, 1)) * 100}%`, background: HUE.po.to }} />
+                      <span className="seg" style={{ width: `${(apOpenF / Math.max(arOpenF, apOpenF + commDue.payable, 1)) * 100}%`, background: HUE.ap.to, animationDelay: '.08s' }} />
                     </div>
                     <div className="pos-key">
                       <span className="k"><span className="d" style={{ background: HUE.po.to }} />Commission <b>{formatCurrency(commDue.payable)}</b></span>
-                      <span className="k"><span className="d" style={{ background: HUE.ap.to }} />Bills <b>{formatCurrency(ap.totalOpen)}</b></span>
+                      <span className="k"><span className="d" style={{ background: HUE.ap.to }} />Bills <b>{formatCurrency(apOpenF)}</b></span>
                     </div>
                   </div>
 
@@ -1010,7 +1278,7 @@ export function OverviewCharts() {
                 credits. */}
             {arInv.length > 0 && (
               <ChartCard className="g12-4" title="AR Expected"
-                sub={`Open receivables · ${PROG_LABEL[prog]}${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}`}>
+                sub={`Open receivables · ${PROG_LABEL[prog]} · ${balanceScopeLabel}`}>
                 <div className="ard">
                   <div className="ard-top"><AnimatedNumber value={arOpenF} format={formatCurrency} duration={700} /></div>
                   <div className="ard-sub">
@@ -1087,7 +1355,7 @@ export function OverviewCharts() {
             <div className="section chart-card g12-4">
               <div className="section-head"><div>
                 <h2 className="section-title">AR Due</h2>
-                <div className="section-sub">Open receivables · {PROG_LABEL[prog]}{asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}</div>
+                <div className="section-sub">Open receivables · {PROG_LABEL[prog]} · {balanceScopeLabel}</div>
               </div></div>
               <div className="rank-list">
                 {arDue.map((r) => (
@@ -1114,21 +1382,24 @@ export function OverviewCharts() {
 
             {/* AP DUE — same bands as AR, so "what we are owed" and "what we
                 owe" can be read against each other rather than in isolation. */}
-            {(ap?.count ?? 0) > 0 && (
+            {apBillCount > 0 && (
               <ChartCard className="g12-4" title="AP Due"
-                sub={`Open bills · snapshot${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}`}>
+                sub={`Open bills · ${balanceScopeLabel}${apLedgerBills ? ' · AP ledger' : ''}`}>
+                {/* apBillCount, not ap.count: the value is the ledger's, and
+                    pairing it with Striven's four made this card contradict
+                    itself inside a single sentence. */}
                 <MetricDetail
-                  value={ap.totalOpen} format={formatCurrency}
-                  sub={<>across {ap.count} unpaid bill{ap.count === 1 ? '' : 's'}
+                  value={apOpenF} format={formatCurrency}
+                  sub={<>across {apBillCount} unpaid bill{apBillCount === 1 ? '' : 's'}
                     {apDetail.overdue > 0 && <> · <b style={{ color: C.warning }}>{formatCurrency(apDetail.overdue)}</b> already overdue</>}</>}
                   rail={apDetail.rail}
                   facts={[
                     { label: 'Oldest', value: apDetail.oldest > 0 ? `${apDetail.oldest}d` : '—', note: 'past due', warn: apDetail.oldest > 30 },
                     ...(apDetail.top ? [{
                       label: 'Top vendor',
-                      value: `${Math.round((apDetail.top.value / Math.max(1, ap.totalOpen)) * 100)}%`,
+                      value: `${Math.round((apDetail.top.value / Math.max(1, apOpenF)) * 100)}%`,
                       note: trunc(apDetail.top.name, 18), title: apDetail.top.name,
-                      warn: (apDetail.top.value / Math.max(1, ap.totalOpen)) > 0.5,
+                      warn: (apDetail.top.value / Math.max(1, apOpenF)) > 0.5,
                     }] : []),
                     { label: 'Vendors', value: String(apDetail.vendors), note: 'owed now' },
                   ]}
@@ -1400,7 +1671,21 @@ export function OverviewCharts() {
                 {/* Both caveats stated rather than left to be discovered: an
                     order can hold several labels, and some hold none. */}
                 An order can carry more than one label, so the counts above sum to more than {labelStats.orders.toLocaleString()}.
-                {labelStats.untagged > 0 && <> <b>{labelStats.untagged.toLocaleString()}</b> order{labelStats.untagged === 1 ? '' : 's'} carr{labelStats.untagged === 1 ? 'ies' : 'y'} no label at all.</>}
+                {/* THE UNTAGGED ORDERS ARE OPENABLE. This was a bare sentence —
+                    a count of the one group that actually needs working through,
+                    with no way to see which orders it meant. Every other number
+                    on this card opens its list; so does this one now. */}
+                {labelStats.untagged > 0 && (
+                  <>
+                    {' '}
+                    <button type="button" className="lbl-untagged" onClick={() => drillLabel(NO_LABEL)}
+                      title="List these orders — they carry no Striven label, so no pipeline can place them past stage 1">
+                      <b>{labelStats.untagged.toLocaleString()}</b> order{labelStats.untagged === 1 ? '' : 's'}
+                      {' '}({formatCurrency(labelStats.untaggedValue)}) carr{labelStats.untagged === 1 ? 'ies' : 'y'} no label at all
+                    </button>
+                    {' — click to see them.'}
+                  </>
+                )}
               </div>
             </ChartCard>
           )}

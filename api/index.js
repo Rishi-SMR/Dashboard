@@ -124,7 +124,11 @@ export default async function handler(req, res) {
   // because the redaction needs the caller, and ROUTES handlers take no args. ----
   if (pathname === '/api/commission') {
     try {
-      return res.status(200).json(await getCommissionFor(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as'))));
+      // ?fresh=1 re-reads the reconciliation sheet — see getCommissionFor().
+      return res.status(200).json(await getCommissionFor(
+        viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as')),
+        { fresh: url.searchParams.get('fresh') === '1' },
+      ));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 

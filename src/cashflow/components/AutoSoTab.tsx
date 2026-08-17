@@ -3,6 +3,7 @@ import { fetchAutoSoCandidates, autoSoCreate, type AutoSoResult, type AutoSoCand
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
+import { Portal } from './Portal';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
@@ -135,14 +136,16 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
                     {open === c.patient && c.items.length > 0 && (
                       <tr><td colSpan={8} style={{ padding: '0 0 8px 0', background: 'var(--accent-soft-2)' }}>
                         <div style={{ margin: '2px 0 4px 28px', fontSize: 11.5, color: C.muted, fontWeight: 600 }}>Draft resupply: items from the last order</div>
-                        <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
-                          <thead><tr><th>Item</th><th className="num">Qty</th></tr></thead>
-                          <tbody>
-                            {c.items.map((it, j) => (
-                              <tr key={j}><td style={{ fontWeight: 600 }}>{it.item}</td><td className="num">{it.qty}</td></tr>
-                            ))}
-                          </tbody>
-                        </table>
+                        <div className="table-scroll">
+                          <table className="data-table" style={{ margin: '0 0 0 28px', width: 'calc(100% - 28px)' }}>
+                            <thead><tr><th>Item</th><th className="num">Qty</th></tr></thead>
+                            <tbody>
+                              {c.items.map((it, j) => (
+                                <tr key={j}><td style={{ fontWeight: 600 }}>{it.item}</td><td className="num">{it.qty}</td></tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </td></tr>
                     )}
                   </Fragment>
@@ -154,6 +157,9 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
       )}
 
       {sel && (
+        // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
+        // transform on an ancestor silently redefines that. See Portal.tsx.
+        <Portal>
         <div className="drill-backdrop" onClick={() => !busy && setSel(null)}>
           <div className="drill" style={{ width: 'min(560px, 100%)' }} onClick={(e) => e.stopPropagation()}>
             <div className="drill-head">
@@ -188,6 +194,7 @@ export function AutoSoTab({ embedded = false }: { embedded?: boolean } = {}) {
             </div>
           </div>
         </div>
+        </Portal>
       )}
     </div>
   );
