@@ -39,19 +39,29 @@ export function UnitsByDevice({ rows, subtitle, onOpen }: {
   const [pinned, setPinned] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
 
+  // IDENTITY IS NAME + DEMO, never the name alone. A demo device shortens to
+  // the same label as its real counterpart ("DEMO ManaRay Lumbar" → "ManaRay
+  // Lumbar"), so keying rows on the name would collide two different rows into
+  // one React key and make pinning one highlight the other.
+  const rowId = (d: DeviceMixRow) => (d.demo ? `demo:${d.device}` : d.device);
+
   // ZERO-UNIT DEVICES ARE HIDDEN, not drawn as zero-height bars: a bar with no
   // height is an axis tick pretending to be data.
+  //
+  // DEMO ROWS SORT LAST whatever the sort is. They are a footnote to the
+  // catalogue, and a sort that can float a test order above a real device
+  // invites exactly the comparison this card should not offer.
   const data = useMemo(() => {
     const live = rows.filter((d) => d.units > 0);
-    return [...live].sort((a, b) => (sort === 'az'
+    return [...live].sort((a, b) => (Number(a.demo ?? false) - Number(b.demo ?? false)) || (sort === 'az'
       ? a.device.localeCompare(b.device)
       : b.units - a.units || a.device.localeCompare(b.device)));
   }, [rows, sort]);
 
   // The leader by UNITS regardless of the active sort — it stays the solid bar
   // under A–Z too, or the highlight would move for a reason that is not about
-  // the data.
-  const leader = useMemo(() => data.reduce<DeviceMixRow | null>(
+  // the data. Real devices only: a demo can never be "the leader".
+  const leader = useMemo(() => data.filter((d) => !d.demo).reduce<DeviceMixRow | null>(
     (m, d) => (!m || d.units > m.units ? d : m), null), [data]);
 
   const max = Math.max(1, ...data.map((d) => d.units));
@@ -61,11 +71,11 @@ export function UnitsByDevice({ rows, subtitle, onOpen }: {
   const horizontal = data.length > 10 || (narrow && data.length > 6);
 
   const pin = (name: string) => setPinned((p) => (p === name ? null : name));
-  const detail = pinned ? data.find((d) => d.device === pinned) ?? null : null;
+  const detail = pinned ? data.find((d) => rowId(d) === pinned) ?? null : null;
 
   const tip = (d: DeviceMixRow) => [
     d.device,
-    d.vertical,
+    d.demo ? 'DEMO / test — not sold, no commission' : d.vertical,
     `${d.units} unit${d.units === 1 ? '' : 's'}`,
     `${d.orders} order${d.orders === 1 ? '' : 's'}`,
     d.heldUnits > 0 ? `${d.heldUnits} unit${d.heldUnits === 1 ? '' : 's'} on hold` : '',
@@ -96,16 +106,16 @@ export function UnitsByDevice({ rows, subtitle, onOpen }: {
         // ── HORIZONTAL: name left, bar and count right, scrolled ────────────
         <div className="ubd-hlist" role="list">
           {data.map((d, i) => {
-            const on = pinned === d.device;
+            const on = pinned === rowId(d);
             return (
-              <div key={d.device} role="listitem"
-                className={`ubd-hrow${on ? ' pinned' : ''}${pinned && !on ? ' dim' : ''}`}
-                title={tip(d)} onClick={() => pin(d.device)}
-                onMouseEnter={() => setHover(d.device)} onMouseLeave={() => setHover(null)}
-                tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(d.device); } }}>
-                <span className="nm">{d.device}</span>
+              <div key={rowId(d)} role="listitem"
+                className={`ubd-hrow${on ? ' pinned' : ''}${pinned && !on ? ' dim' : ''}${d.demo ? ' demo' : ''}`}
+                title={tip(d)} onClick={() => pin(rowId(d))}
+                onMouseEnter={() => setHover(rowId(d))} onMouseLeave={() => setHover(null)}
+                tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(rowId(d)); } }}>
+                <span className="nm">{d.device}{d.demo && <span className="ubd-demo">demo</span>}</span>
                 <span className="track">
-                  <i className={leader && d.device === leader.device ? 'solid' : undefined}
+                  <i className={leader && rowId(d) === rowId(leader) ? 'solid' : undefined}
                     style={{ width: `${Math.max(2, (d.units / max) * 100)}%`, animationDelay: REDUCED ? undefined : `${Math.min(i, 12) * 0.03}s` }} />
                   {d.heldUnits > 0 && <span className="hold" title={`${d.heldUnits} on hold`} />}
                 </span>
@@ -123,16 +133,16 @@ export function UnitsByDevice({ rows, subtitle, onOpen }: {
           <span className="ubd-grid" style={{ bottom: 0 }} />
           <div className="ubd-bars">
             {data.map((d, i) => {
-              const on = pinned === d.device;
+              const on = pinned === rowId(d);
               const [l1, l2] = twoLine(d.device);
               return (
-                <div key={d.device}
-                  className={`ubd-b${on ? ' pinned' : ''}${pinned && !on ? ' dim' : ''}`}
-                  title={tip(d)} onClick={() => pin(d.device)}
-                  onMouseEnter={() => setHover(d.device)} onMouseLeave={() => setHover(null)}
-                  tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(d.device); } }}>
-                  <span className={`ct${hover === d.device || on ? ' up' : ''}`}>{d.units}</span>
-                  <span className={`col${leader && d.device === leader.device ? ' solid' : ''}`}
+                <div key={rowId(d)}
+                  className={`ubd-b${on ? ' pinned' : ''}${pinned && !on ? ' dim' : ''}${d.demo ? ' demo' : ''}`}
+                  title={tip(d)} onClick={() => pin(rowId(d))}
+                  onMouseEnter={() => setHover(rowId(d))} onMouseLeave={() => setHover(null)}
+                  tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(rowId(d)); } }}>
+                  <span className={`ct${hover === rowId(d) || on ? ' up' : ''}`}>{d.units}</span>
+                  <span className={`col${leader && rowId(d) === rowId(leader) ? ' solid' : ''}`}
                     style={{ height: `${Math.max(3, (d.units / max) * 100)}%`, animationDelay: REDUCED ? undefined : `${Math.min(i, 12) * 0.04}s` }}>
                     {/* Amber dot: units on this device sit on a held order. */}
                     {d.heldUnits > 0 && <span className="hold" title={`${d.heldUnits} unit${d.heldUnits === 1 ? '' : 's'} on hold`} />}

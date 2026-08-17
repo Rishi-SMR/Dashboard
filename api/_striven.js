@@ -650,6 +650,15 @@ async function refreshAll() {
       : 'skipped: out of time, next cycle';
   } catch (e) { out.report_patient_items = `FAIL ${e.message}`; }
 
+  // The DEMO orders' device lines, in a cache of their own. Same cycle, last,
+  // and the least important of the three — a stale demo count is a cosmetic
+  // problem where a stale real one is a wrong number.
+  try {
+    out.report_demo_items = leftMs() > 2_000
+      ? await refreshDemoItems({ budgetMs: Math.min(12_000, leftMs()) })
+      : 'skipped: out of time, next cycle';
+  } catch (e) { out.report_demo_items = `FAIL ${e.message}`; }
+
   return out;
 }
 // ── Derived caches ───────────────────────────────────────────────────────────
@@ -878,6 +887,90 @@ export async function refreshReportItems({ budgetMs = 20_000, maxOrders = 400, l
     skippedDemo, skippedCancelled,
     // A failure is retryable, so it stays outstanding; a walked-and-filtered
     // order does not.
+    remaining: Math.max(0, todo.length - walked + failed),
+    complete: walked >= todo.length && failed === 0,
+    orderCount: orders.length,
+    ms: Date.now() - started,
+  };
+}
+
+// ── report_demo_items: the DEMO orders' device lines ─────────────────────────
+// A SEPARATE CACHE, and the separation is the whole design.
+//
+// `report_patient_items` deliberately drops demo orders, and TEN things read it
+// — the rep leaderboard's unit counts, the tracking board, the Reports tab, the
+// vertical map, the zero-value check, the device mix. Putting demo rows in there
+// behind a flag would mean every one of those had to filter it out, and missing
+// a single site would put test orders into a commission or leaderboard figure
+// without anything on screen saying so. That is not a risk worth taking to fill
+// in one card.
+//
+// So the demo lines live under their own key that ONLY getDeviceMix reads.
+// Nothing existing can regress, because nothing existing looks here.
+//
+// Incremental and budgeted, exactly like refreshReportItems: one Striven detail
+// call per order it has not seen, stopping on a wall clock so a backlog makes
+// progress across runs instead of timing out and writing nothing.
+//
+// HIPAA: no patient identifier is stored at all. The real report keeps a last
+// name because a rep has to identify their own order; nobody needs to identify
+// a demo, so this holds the sales order id, its type and its device lines and
+// nothing else.
+export async function refreshDemoItems({ budgetMs = 12_000, maxOrders = 200, log } = {}) {
+  const started = Date.now();
+  const prev = (await sbCacheRead('report_demo_items'))?.data ?? { orders: [] };
+  const orders = [...(prev.orders || [])];
+  const have = new Set(orders.map((o) => String(o.soId)));
+
+  const soRows = (await sbCacheRead('so'))?.data || [];
+  const detail = (await sbCacheRead('so_detail'))?.data || {};
+  // The mirror image of refreshReportItems' filter: this one keeps ONLY what
+  // that one skips. Cancelled is dropped by both — a cancelled demo is not a
+  // demo that happened.
+  const todo = soRows.filter((so) => {
+    if (have.has(String(so.id))) return false;
+    const meta = detail[so.id] || {};
+    if (isCancelledStatus(meta.status)) return false;
+    return isDemoType(meta.type) || isDemoType(meta.status);
+  });
+
+  let added = 0, failed = 0, itemsAdded = 0, walked = 0;
+  for (const so of todo.slice(0, maxOrders)) {
+    if (Date.now() - started > budgetMs) break;
+    walked += 1;
+    let d = null;
+    for (let attempt = 0; attempt < 3 && !d; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      try { d = await striven('GET', `/v1/sales-orders/${so.id}`); } catch { /* retry */ }
+    }
+    if (!d) { failed += 1; log?.(`  FAIL  demo SO ${so.id}`); continue; }
+
+    const items = [];
+    for (const li of (d.lineItems || [])) {
+      const item = li.item?.name;
+      const qty = Number(li.qty ?? li.quantity ?? 0);
+      if (!item || !(qty > 0)) continue;
+      items.push({ item, qty });
+      itemsAdded += 1;
+    }
+    orders.push({
+      soId: so.id,
+      ref: safeRef('SO', so.id, d.soNumber ?? so.number),
+      type: detail[so.id]?.type || '',
+      items,
+    });
+    added += 1;
+  }
+
+  if (added > 0) {
+    orders.sort((a, b) => a.soId - b.soId);
+    await sbCacheWrite('report_demo_items', {
+      orders, orderCount: orders.length, generatedAt: new Date().toISOString(),
+      note: 'DEMO / test sales orders and their device lines. Read ONLY by the Units by Device card — deliberately absent from report_patient_items, which feeds commission and the leaderboard. No patient identifier is stored.',
+    });
+  }
+  return {
+    missingBefore: todo.length, added, failed, itemsAdded,
     remaining: Math.max(0, todo.length - walked + failed),
     complete: walked >= todo.length && failed === 0,
     orderCount: orders.length,
@@ -1841,11 +1934,60 @@ async function getExceptions() {
 
   const sos = await allSO(); const det = await soDetailMap();
   const demo = sos.filter((r) => isDemoType(det[r.id]?.type));
-  push({ key: 'demo_orders', severity: 'warn', title: 'DEMO / test sales orders', count: demo.length, value: round2(demo.reduce((s, r) => s + Number(det[r.id]?.total || 0), 0)), note: 'Test orders — excluded from sales totals. Should be archived in Striven.', columns: ['ref', 'type', 'value'], rows: demo.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '', value: round2(Number(det[r.id]?.total || 0)) })) });
+  // THE NOTE USED TO SAY "excluded from sales totals". That is false, and has
+  // been since DEMO was deliberately put back into the order book — these 29
+  // orders ARE in getSO's totalValue and in the vertical breakdown, under their
+  // own DEMO bucket. They are excluded from PO SPEND, from the reports feed and
+  // therefore from commission and the leaderboard. Stating the split accurately
+  // matters more here than anywhere: this row is what someone reads to decide
+  // whether a demo order is distorting a figure they are looking at.
+  push({ key: 'demo_orders', severity: 'warn', title: 'DEMO / test sales orders', count: demo.length, value: round2(demo.reduce((s, r) => s + Number(det[r.id]?.total || 0), 0)), note: 'Counted in the order book (volume, value and the DEMO vertical) so it matches Striven\'s own list; excluded from PO spend, commission and the rep leaderboard. Should be archived in Striven.', columns: ['ref', 'type', 'value'], rows: demo.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '', value: round2(Number(det[r.id]?.total || 0)) })) });
   const noRep = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && repIsUnassigned(det[r.id]?.rep); });
   push({ key: 'missing_rep', severity: 'warn', title: 'Sales orders with no sales rep', count: noRep.length, note: 'Rep is blank or "House Account" — needed for rep reporting.', columns: ['ref', 'rep', 'type'], rows: noRep.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, rep: cleanRep(det[r.id]?.rep) || '(none)', type: det[r.id]?.type || '' })) });
   const unclassified = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && soClass(t) === 'Other'; });
   push({ key: 'missing_pi_va', severity: 'warn', title: 'Sales orders not classified PI / VA / Tri-Care', count: unclassified.length, note: 'Order type does not map to PI, VA or Tri-Care.', columns: ['ref', 'type'], rows: unclassified.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '(none)' })) });
+
+  // ── SALES ORDERS PRICED AT NOTHING ──────────────────────────────────────────
+  // 38 live orders carry line items and a total of $0 — 36 of them TriCare, and
+  // 30 raised in a single batch on 12–13 May. They are not empty shells: every
+  // one has devices on it, and the same devices are priced on other orders.
+  //
+  // NOTHING IS IMPUTED HERE, deliberately. The list prices are stable but not
+  // unambiguous — "TriCare 4 Stim" bills at $425 on some orders and $500 on
+  // others, and the garments appear at both $75 and $0 on orders that are
+  // otherwise priced. So the real value of these 38 cannot be derived, only
+  // guessed at, and a revenue figure this page invented would be worse than the
+  // zero it replaced. What CAN be stated exactly is which orders they are and
+  // what is on them, which is what a person needs to go and price them.
+  //
+  // This is a different fault from `item_price` below: that one is about the
+  // ITEM master having no price, this is about ORDERS that priced to nothing
+  // regardless. An order can be $0 while every item on it has a list price.
+  // LINE ITEMS COME FROM THE SO-WISE REPORT CACHE, not `so_detail`, which
+  // carries an order's type, rep and total but no items at all. Reading
+  // `det[id].items` here found nothing and produced an empty group — a check
+  // that silently passes is worse than no check, so the source is named.
+  // That cache already excludes cancelled and demo orders, which is exactly the
+  // population this should be asking about.
+  const soRep = await sbCacheRead('report_patient_items').catch(() => null);
+  const zeroValueSos = (soRep?.data?.orders || [])
+    .filter((o) => (o.items?.length ?? 0) > 0 && !(Number(o.value || 0) > 0));
+  push({
+    key: 'zero_value_orders', severity: 'high',
+    title: 'Sales orders with line items but no value',
+    count: zeroValueSos.length,
+    note: 'Devices are on the order and the order totals $0, so it contributes nothing to revenue, commission or the order book. The value is NOT estimated here: the same devices bill at more than one price elsewhere (4 Stim at both $425 and $500, garments at both $75 and $0), so the real figure has to be set in Striven rather than guessed at.',
+    columns: ['ref', 'type', 'date', 'devices', 'units'],
+    // No patient. The cache carries an initial + surname and this list does not
+    // need it to be actionable — an SO reference is what someone opens.
+    rows: zeroValueSos.slice(0, 25).map((o) => ({
+      ref: String(o.so || `SO-${o.soId}`),
+      type: o.program || '',
+      date: String(o.date || '').slice(0, 10),
+      devices: (o.items || []).map((i) => i.item).join(', ').slice(0, 60),
+      units: (o.items || []).reduce((s, i) => s + Number(i.qty || 0), 0),
+    })),
+  });
 
   const items = await allItems();
   const noPrice = items.filter((i) => (i.active ?? false) && (Number(i.price || 0) === 0 || Number(i.cost || 0) === 0));
@@ -1962,10 +2104,40 @@ export async function getDeviceMix(viewer = null) {
       m.set(k, e);
     }
   }
+  // ── DEMO, from its own cache, as its own rows ───────────────────────────────
+  // Merged HERE and nowhere else: report_demo_items exists so exactly one card
+  // can show demo without any other figure on the site learning about it.
+  //
+  // NOT folded into the real device rows. "Genesys Lumbar" selling 25 real
+  // units and 2 demo units is two different facts, and adding them gives a
+  // number that is neither — so a demo device is its own row, flagged, and the
+  // caller decides whether to show or total it. `vertical: 'DEMO'` puts it
+  // outside every programme filter for free.
+  const demoBlob = await sbCacheRead('report_demo_items').catch(() => null);
+  const demoRows = new Map();
+  for (const o of (demoBlob?.data?.orders ?? [])) {
+    for (const it of o.items ?? []) {
+      const name = String(it.item ?? '').trim();
+      const units = Number(it.qty ?? 0);
+      if (!name || units <= 0) continue;
+      const k = name.toLowerCase();
+      const e = demoRows.get(k) ?? { device: name, vertical: 'DEMO', units: 0, orders: 0, heldUnits: 0, heldOrders: 0, byMonth: {}, demo: true };
+      e.units += units; e.orders += 1;
+      demoRows.set(k, e);
+    }
+  }
+
+  const bySize = (a, b) => b.units - a.units || a.device.localeCompare(b.device);
   return {
     ok: true,
     scoped: true,
-    devices: [...m.values()].sort((a, b) => b.units - a.units || a.device.localeCompare(b.device)),
+    // Real devices first, demo after — a sorted list that interleaved them would
+    // rank a demo above a real device on units, which is exactly the comparison
+    // this card must not invite.
+    devices: [...[...m.values()].sort(bySize), ...[...demoRows.values()].sort(bySize)],
+    demoUnits: [...demoRows.values()].reduce((s, d) => s + d.units, 0),
+    demoDevices: demoRows.size,
+    demoOrders: (demoBlob?.data?.orders ?? []).length,
   };
 }
 

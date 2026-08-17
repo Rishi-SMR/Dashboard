@@ -3162,3 +3162,20 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   /* The board's own head: title, then the period control beneath it. */
   .lbx .section-head { gap: 6px; }
 }
+
+/* ── UNITS BY DEVICE: the DEMO rows ──────────────────────────────────────────
+   Demo device lines come from `report_demo_items`, a cache nothing else reads,
+   so they can be listed without reaching commission or the leaderboard. On the
+   card they have to read as a footnote, not as product: muted bar, muted
+   figure, and a small tag on the name. Sorted last by the component, so the
+   colour is reinforcing an order the data already has rather than carrying the
+   distinction on its own. */
+.ubd-hrow.demo .nm, .ubd-b.demo .lb { color: var(--muted); }
+.ubd-hrow.demo .ct, .ubd-b.demo .ct { color: var(--muted); font-weight: 700; }
+.ubd-hrow.demo .track > i, .ubd-b.demo .col { background: var(--muted); opacity: .38; }
+.ubd-demo {
+  margin-left: 7px; padding: 1px 6px; border-radius: 999px;
+  background: var(--panel-2); color: var(--muted);
+  font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  vertical-align: middle;
+}

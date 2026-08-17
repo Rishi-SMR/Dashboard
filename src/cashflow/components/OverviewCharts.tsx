@@ -545,7 +545,13 @@ export function OverviewCharts() {
         if (units <= 0) continue;                 // nothing dispensed this period
         row = { ...row, units, orders };
       }
-      const k = row.device.toLowerCase();
+      // THE KEY HAS TO CARRY `demo`, or the two collapse into one row.
+      // shortDeviceName() strips the vertical prefix, so "DEMO ManaRay Lumbar"
+      // shortens to "ManaRay Lumbar" — the exact string a real ManaRay row
+      // already has. Keyed on the name alone, demo units would be added
+      // silently into the real device's count, which is the one outcome this
+      // whole separate-cache design exists to prevent.
+      const k = `${row.demo ? 'demo ' : ''}${row.device.toLowerCase()}`;
       const e = m.get(k);
       if (!e) { m.set(k, row); continue; }
       e.units += row.units; e.orders += row.orders;
@@ -553,12 +559,17 @@ export function OverviewCharts() {
     }
     return [...m.values()].filter((d) => d.units > 0);
   })();
-  const devMixTotal = devMixRows.reduce((s, d) => s + d.units, 0);
-  // DEMO orders sit outside every unit figure on this board. gen-reports.mjs
-  // drops them when it builds report_patient_items, so they carry no device
-  // lines — order-analytics reports them as 0 units, which is an absence rather
-  // than a measurement. They still count in the order book and its value, so
-  // the two cards that report UNITS have to say they are missing.
+  // TOTALLED SEPARATELY, because they are separate facts. The headline counts
+  // what the business dispensed; demo is reported beside it, never inside it.
+  const devMixTotal = devMixRows.filter((d) => !d.demo).reduce((s, d) => s + d.units, 0);
+  const devMixDemoUnits = devMixRows.filter((d) => d.demo).reduce((s, d) => s + d.units, 0);
+  const devMixRealRows = devMixRows.filter((d) => !d.demo).length;
+  // DEMO orders used to sit outside every unit figure on this board:
+  // gen-reports.mjs drops them from report_patient_items, so they carried no
+  // device lines at all and the card could only say they were missing. Their
+  // lines now come from `report_demo_items`, a cache nothing else reads — see
+  // refreshDemoItems() — so they can be shown without reaching commission, the
+  // leaderboard or any other figure.
   const demoOrders = so?.piva?.DEMO?.count ?? 0;
   const demoValue = so?.piva?.DEMO?.value ?? 0;
 
@@ -891,13 +902,30 @@ export function OverviewCharts() {
 
   // Sales orders by program (real classification off SO type). When a program
   // filter is active the other bars dim so the selection reads instantly.
+  //
+  // EVERY BUCKET THE SERVER SENDS, so the bars add up to the footer. PI + VA +
+  // Tri-Care came to 473 under a "Total Orders 502", because DEMO's 29 orders
+  // had no bar and nothing on the card said where they had gone — the reader is
+  // left to find a 29-order hole by subtracting. The server's own piva buckets
+  // sum to 502 exactly; drawing all of them is the whole fix.
+  //
+  // DEMO is drawn MUTED and is not clickable. It is a real Striven order type
+  // and belongs in the count, but it is not a programme anyone sells into, and
+  // colouring it like one would put test orders on the same footing as VA. The
+  // click handler below already ignores anything that is not PI / VA / TriCare,
+  // so the bar is inert by construction rather than by a second rule.
   const programBars = so ? ([
     { key: 'PI', name: 'PI', ...so.piva.PI, color: SERIES[0] },
     { key: 'VA', name: 'VA', ...so.piva.VA, color: SERIES[1] },
     { key: 'TriCare', name: 'Tri-Care', ...so.piva.TriCare, color: SERIES[2] },
-    ...(so.piva.Other.count > 0 ? [{ key: 'Other', name: 'Other', ...so.piva.Other, color: SERIES[3] }] : []),
+    ...(so.piva.Contract?.count > 0 ? [{ key: 'Contract', name: 'Contract', ...so.piva.Contract, color: SERIES[3] }] : []),
+    ...(so.piva.Other.count > 0 ? [{ key: 'Other', name: 'Other', ...so.piva.Other, color: SERIES[4] }] : []),
+    ...(so.piva.DEMO?.count > 0 ? [{ key: 'DEMO', name: 'DEMO / test', ...so.piva.DEMO, color: C.muted }] : []),
   ].filter((d) => d.count > 0).map((d) => ({
-    name: d.name, value: d.count, color: d.color, meta: `${d.count} orders`,
+    name: d.name, value: d.count, color: d.color,
+    // The demo row says what it is worth NOT counting, since that is the
+    // question it exists to answer.
+    meta: d.key === 'DEMO' ? `${d.count} orders · no commission, no PO spend` : `${d.count} orders`,
     dim: prog !== 'All' && d.key !== prog,
   }))) : [];
 
@@ -1254,19 +1282,20 @@ export function OverviewCharts() {
               </ChartCard>
             )}
 
-            {/* DEMO IS NOT IN THIS RING, and saying so matters: it covers
-                PI/VA/TriCare only, so "672 units" reads as the whole book unless
-                the exclusion is stated. The units source (report_patient_items)
-                drops demo orders at ingest, which is why they cannot simply be a
-                fourth slice — they carry no device lines at all, not zero. */}
+            {/* DEMO IS STILL NOT IN THIS RING, deliberately. The ring is a
+                share-of-programme chart, and demo is not a programme anyone
+                sells into — a fourth slice would put test orders in the same
+                comparison as VA. The note below carries the figure instead, and
+                the Units by Device card lists the devices themselves. */}
             {unitSlices.length > 0 && (
               <ChartCard className="g12-3" title="Units by programme"
-                sub={`${devMixTotal.toLocaleString()} units on the order book${demoOrders > 0 ? ` · ${demoOrders} DEMO orders excluded` : ''}`}>
+                sub={`${devMixTotal.toLocaleString()} units on the order book${devMixDemoUnits > 0 ? ` · ${devMixDemoUnits} demo units apart` : ''}`}>
                 <DonutList data={unitSlices} money={false} totalLabel="Total units" onSelect={go('orders')} />
                 {demoOrders > 0 && (
                   <div className="lbl-note">
-                    <b>{demoOrders} DEMO order{demoOrders === 1 ? '' : 's'}</b> ({formatCurrency(demoValue)}) are excluded — they carry no device lines
-                    in the units source and earn no commission, so their units cannot be counted here.
+                    <b>{demoOrders} DEMO order{demoOrders === 1 ? '' : 's'}</b> ({formatCurrency(demoValue)}){devMixDemoUnits > 0
+                      ? <> carry <b>{devMixDemoUnits} unit{devMixDemoUnits === 1 ? '' : 's'}</b>, listed separately on Units by Device. They are outside this ring and earn no commission.</>
+                      : <> are outside this ring and earn no commission.</>}
                   </div>
                 )}
               </ChartCard>
@@ -1534,7 +1563,11 @@ export function OverviewCharts() {
             </div>
             )}
 
-            <ChartCard className={hide('overview.topVendors') ? "g12-6" : "g12-4"} title="Sales Orders by Program" sub={`${so.count} orders · click a program to filter`}>
+            {/* The sub names the demo split rather than leaving a muted bar to
+                explain itself — it is the one row on this card that is in the
+                total but not in the business. */}
+            <ChartCard className={hide('overview.topVendors') ? "g12-6" : "g12-4"} title="Sales Orders by Program"
+              sub={`${so.count} orders · click a program to filter${(so.piva.DEMO?.count ?? 0) > 0 ? ` · includes ${so.piva.DEMO.count} DEMO / test` : ''}`}>
               <div className="card-body">
                 <BarList data={programBars} money={false}
                   onSelect={(name) => setProg((p) => {
@@ -1698,7 +1731,7 @@ export function OverviewCharts() {
             <ChartCard title="Units by device">
               <UnitsByDevice
                 rows={devMixRows}
-                subtitle={`${devMixTotal.toLocaleString()} units across ${devMixRows.length} device${devMixRows.length === 1 ? '' : 's'} · ${PROG_LABEL[prog]}${demoOrders > 0 ? ` · ${demoOrders} DEMO orders excluded` : ''}`}
+                subtitle={`${devMixTotal.toLocaleString()} units across ${devMixRealRows} device${devMixRealRows === 1 ? '' : 's'} · ${PROG_LABEL[prog]}${devMixDemoUnits > 0 ? ` · plus ${devMixDemoUnits} demo unit${devMixDemoUnits === 1 ? '' : 's'} across ${demoOrders} DEMO order${demoOrders === 1 ? '' : 's'}, listed separately` : ''}`}
                 onOpen={go('orders')}
               />
             </ChartCard>

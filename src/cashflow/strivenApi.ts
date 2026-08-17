@@ -245,8 +245,13 @@ export type DeviceMixRow = { device: string; vertical: string; units: number; or
    *  this to a period. Orders the `so` cache has no date for appear in NO month,
    *  so the months can sum to less than `units` — the difference is undated
    *  work, never a month's figure quietly absorbing it. */
-  byMonth?: Record<string, { units: number; orders: number }> };
-export type DeviceMix = { ok: boolean; scoped: boolean; devices: DeviceMixRow[] };
+  byMonth?: Record<string, { units: number; orders: number }>;
+  /** A DEMO / test order's device line, from the `report_demo_items` cache.
+   *  Kept as its own row rather than folded into the real device: 25 real units
+   *  plus 2 demo units is a number that is neither. */
+  demo?: boolean };
+export type DeviceMix = { ok: boolean; scoped: boolean; devices: DeviceMixRow[];
+  demoUnits?: number; demoDevices?: number; demoOrders?: number };
 export const fetchDeviceMix = (as?: string | null) =>
   get<DeviceMix>(`/api/device-mix${as ? `?as=${encodeURIComponent(as)}` : ''}`);
 export const fetchStrivenPO = () => get<PoResult>('/api/po');
