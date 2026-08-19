@@ -440,7 +440,13 @@ export type StrivenOrderLine = { ref: string; patient?: string; item: string; pr
   date?: string | null;
   /** Set when the reconciliation sheet could not tie this row to a Striven
    *  record. The line is still paid; the remark says the match is missing. */
-  unmatched?: boolean };
+  unmatched?: boolean;
+  /** A flat payment rather than units × a per-device rate — a bonus. Set by the
+   *  workbook reader on any line that carries no device, since a per-device rate
+   *  applied to no device is not a figure that exists. Such a line has no
+   *  patient and no sales order, and both of those are correct rather than
+   *  missing, which is the whole reason the flag has to travel with it. */
+  bonus?: boolean };
 /** nTricare/nVa/nPi are ORDERS per vertical; uTricare/… are units per vertical. */
 /** Volume fields (`orders`, `units`, `nTricare`/`nVa`/`nPi`) are the FULL order
  *  book from Striven. `commOrders`/`commUnits` are the subset the commission was
@@ -456,6 +462,18 @@ export type StrivenCommRep = {
   orders: number; units: number; value: number | null;
   nTricare?: number; nVa?: number; nPi?: number; uTricare?: number; uVa?: number; uPi?: number;
   lines?: StrivenOrderLine[]; redacted?: boolean;
+  /** Did the RECONCILIATION SHEET carry this rep at all?
+   *
+   *  The server has always computed it (a rep the sheet does not name is taken
+   *  to ZERO rather than falling back to the engine's own figure, because
+   *  mixing the two bases in one column makes the total reconcile to nothing) —
+   *  and then no client ever declared it, so it was computed, serialized and
+   *  dropped on the floor.
+   *
+   *  That is the difference between "this rep earned nothing" and "this rep is
+   *  not in the sheet the figures come from", and a bare $0 states the first
+   *  while meaning the second. Maylon Sanders is the live case. */
+  reconciled?: boolean;
 };
 /** A month here is a PAYOUT CYCLE: the commission the 15th-of-next-month run
  *  signed off for that month, straight off the reconciliation sheet. Volume

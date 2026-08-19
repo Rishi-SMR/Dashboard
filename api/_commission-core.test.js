@@ -6,6 +6,7 @@ import {
   rateForDevice, classifyOrderLabel, commissionForOrder, splitByState,
   resolveIdentity, redactCommissionPayload, isCancelledStatus, reconcileToWorkbook,
 } from './_commission-core.js';
+import { COMMISSION_PAID_THROUGH } from './_commission-config.js';
 
 // A self-contained rate card, so these tests never depend on the placeholder
 // config the client is still filling in.
@@ -561,4 +562,26 @@ test('patient names match regardless of case and spacing', () => {
   const out = reconcileToWorkbook(lines, [bookRow('r. hedstrom', 'L1833RT', 80)]);
   assert.equal(out.corrected.length, 1);
   assert.equal(lines[0].comm, 80);
+});
+
+// ── PAID-THROUGH ────────────────────────────────────────────────────────────
+// The July run has gone out and COMMISSION_PAID_THROUGH was advanced to say so.
+// These pin the two things about that setting that are easy to get wrong, both
+// of which move real money on a rep's screen.
+test('paid-through covers every vertical that can carry a commission line', () => {
+  // verticalOfCommissionLine folds a line to exactly these three. A vertical
+  // missing from the map has NOTHING marked paid — which is the safe default,
+  // but here it would mean a book still showing a settled balance as owed.
+  for (const v of ['VA', 'TriCare', 'PI']) {
+    assert.equal(COMMISSION_PAID_THROUGH[v], '2026-07', `${v} is paid through July`);
+  }
+});
+
+test('paid-through is a YYYY-MM month, because it is compared as a string', () => {
+  // isPaidLine() does `line.month <= through` on raw strings. That sorts
+  // correctly for YYYY-MM and for nothing else: "2026-7" would sort AFTER
+  // "2026-12" and quietly mark a year of commission paid.
+  for (const [v, through] of Object.entries(COMMISSION_PAID_THROUGH)) {
+    assert.match(String(through), /^\d{4}-(0[1-9]|1[0-2])$/, `${v} is a zero-padded YYYY-MM`);
+  }
 });

@@ -615,8 +615,11 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
           <span className="lbx-name-t">{r.rep}</span>
           {badge && <span className="lbx-badge" title={`${badge}+ orders`}>{badge}</span>}
           {/* Only ever set when the VIEWER is this rep's supervisor — see
-              subRepOf on the payload. Their figures are untouched by it. */}
-          {r.subRepOf && <span className="lbx-sub" title={`Works under ${r.subRepOf}`}>sub-rep</span>}
+              subRepOf on the payload. Their figures are untouched by it.
+              NAMES THE SUPERVISOR: "sub-rep" alone said that somebody is above
+              this rep without saying who, which left the reader with the half of
+              the fact they cannot use. */}
+          {r.subRepOf && <span className="lbx-sub" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>under {r.subRepOf}</span>}
           {isSelf && <span className="lbx-you">You</span>}
         </span>
         <MixPill parts={r.byVertical} total={r.orders} scale={leader ? r.orders / leader : 0} />
@@ -719,7 +722,7 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
             <span className="lbx-pod-rank">{MEDAL[rank - 1].label}</span>
             <span className="lbx-pod-name">
               {r.rep}
-              {r.subRepOf && <span className="lbx-sub" title={`Works under ${r.subRepOf}`}>sub-rep</span>}
+              {r.subRepOf && <span className="lbx-sub" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>under {r.subRepOf}</span>}
               {r.isSelf && <span className="lbx-you">You</span>}
             </span>
             <span className="lbx-pod-n">

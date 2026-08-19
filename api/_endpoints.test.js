@@ -57,11 +57,11 @@ test('every dev route is also served by the deployed handler', () => {
 // ── the ?as= lockdown — the escalation path that must not exist ──────────────
 test('viewerFor: a rep passing ?as= is ignored', () => {
   const rep = { email: 'r@x', repName: 'Cassie', role: 'rep' };
-  assert.deepEqual(viewerFor(rep, 'Jillian'), rep, 'a rep cannot adopt another identity');
+  assert.deepEqual(viewerFor(rep, 'Jillian Colin'), rep, 'a rep cannot adopt another identity');
   assert.deepEqual(viewerFor(rep, ''), rep);
   // An admin may narrow, never widen.
-  assert.equal(viewerFor(ADMIN, 'Jillian').role, 'rep');
-  assert.equal(viewerFor(ADMIN, 'Jillian').repName, 'Jillian');
+  assert.equal(viewerFor(ADMIN, 'Jillian Colin').role, 'rep');
+  assert.equal(viewerFor(ADMIN, 'Jillian Colin').repName, 'Jillian Colin');
   assert.deepEqual(viewerFor(ADMIN, null), ADMIN);
 });
 

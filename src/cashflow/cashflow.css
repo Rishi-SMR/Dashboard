@@ -2417,9 +2417,13 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
    Deliberately quieter than .lbx-badge — a milestone is an achievement and
    should catch the eye; a reporting line is context and should not compete with
    the order count beside it. */
-.lbx-sub { flex: none; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--muted-strong); background: var(--panel-2); border: 1px solid rgba(148,163,184,.35);
-  border-radius: 999px; padding: 1px 6px; white-space: nowrap; }
+/* Names the supervisor now. "sub-rep" on its own told a manager that SOMEBODY
+   is above this rep without saying who, which is the half of the fact that is
+   no use — and in --muted-strong on --panel-2 it read as a disabled control.
+   Amber, and carrying the name, it matches .lb-subline on the other boards. */
+.lbx-sub { flex: none; font-size: 9.5px; font-weight: 800; letter-spacing: .02em;
+  color: var(--warn); background: var(--warn-soft); border: 1px solid rgba(217,119,6,.32);
+  border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
 
 /* ── SUB-REP STRIP ───────────────────────────────────────────────────────────
    Lives INSIDE the viewer's own card, under the figures, and OPENS A DIALOG.
@@ -3178,4 +3182,95 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   background: var(--panel-2); color: var(--muted);
   font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
   vertical-align: middle;
+}
+
+/* ── THE REPORTING LINE ──────────────────────────────────────────────────────
+   Jillian books her own orders and keeps her own row and her own count. What
+   this says is where the MONEY goes: SMR pays Alle, Alle pays Jillian.
+
+   IT IS DRAWN AS NESTING, not as a caption. Two earlier attempts said it in
+   words beside the name — a grey "↳ Alle Ann" pill, then an amber "under Alle
+   Ann" line beneath it — and both had the same flaw: they left Jillian standing
+   in the list as a peer of everyone else and asked the reader to carry a
+   sentence to work out that she is not. The list order does it now. Jillian is
+   moved out of her ranked slot to sit on the line directly below Alle, indented,
+   with a stroke tying her name back up to Alle's (see nestSubReps for what that
+   does and does NOT move). Nothing has to be read for the relationship to land,
+   and no month can reshuffle the two apart. */
+
+/* THE TIE: the corner that turns out of the supervisor's line and into this
+   name. `margin-top` pulls the vertical stroke up into the gap between the two
+   rows so it appears to start under the name above rather than floating in this
+   one. A real border rather than the "↳" glyph, which renders at wildly
+   different weights across the fonts this runs on and sat off the baseline in
+   most of them. */
+.lb-tie {
+  flex: none; width: 7px; height: 9px; margin: -9px 1px 0 2px;
+  border-left: 1.5px solid var(--warn); border-bottom: 1.5px solid var(--warn);
+  border-bottom-left-radius: 3px; opacity: .55;
+}
+
+/* The word, beside the name. Small, because the indent is carrying the meaning
+   and this only has to remove the doubt — but amber, which is the only amber in
+   a column of ink and blue, so the row still announces itself at a glance. */
+.lb-subtag {
+  flex: none; padding: 0.5px 6px; border-radius: 999px;
+  background: var(--warn-soft); color: var(--warn);
+  font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* No tint and no left edge on the nested row, though both were tried. The rows
+   sit 1px apart in a grid, the self-row highlight and the hover state both paint
+   `background` INLINE (so a class could not have won anyway), and a coloured
+   plate under one line of a four-column board fights the mix bars beside it. The
+   elbow and the indent carry it; the row stays a row. */
+
+/* ── THE SAME RELATIONSHIP IN THE ROSTER TABLE ───────────────────────────────
+   The team table cannot reorder as freely as the board tile — it is sorted by
+   the payload and read column by column — so the nesting there is the indent
+   plus the full sentence, which the width of a table cell can afford. */
+.lb-subline {
+  display: flex; width: fit-content; align-items: center; gap: 4px;
+  margin-top: 3px; padding: 1.5px 8px 1.5px 6px; border-radius: 999px;
+  background: var(--warn-soft); color: var(--warn);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .01em; white-space: nowrap;
+}
+.lb-subline b { font-weight: 800; }
+.lb-subline-el {
+  flex: none; width: 6px; height: 7px; margin: -3px 2px 0 0;
+  border-left: 1.5px solid var(--warn); border-bottom: 1.5px solid var(--warn);
+  border-bottom-left-radius: 3px; opacity: .65;
+}
+
+/* The roster's nested row: the SAME move as the tile — indented under the rep it
+   hangs off — so one relationship looks like one thing on both surfaces. The
+   indent is on the Rep cell only; every figure column stays in its column, which
+   is the whole reason a manager can read down this table. */
+.tr-nested > td.rep-cell { padding-left: 22px; }
+/* The tie hangs in the indent the padding just opened, level with the name. */
+.tr-nested > td.rep-cell { position: relative; }
+.tr-nested > td.rep-cell .lb-tie {
+  position: absolute; left: 7px; top: 0; margin: 0; height: 13px; width: 8px;
+}
+
+/* ── "NOT IN THE SHEET" ──────────────────────────────────────────────────────
+   A rep the reconciliation sheet does not carry is taken to $0 rather than to
+   the engine's own figure, because mixing the two bases in one column makes the
+   total reconcile to nothing. This says which of the two a zero means. Amber,
+   not red: it is a gap in a source, not an error in a figure. */
+.cm-unrecon {
+  margin-left: 7px; padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+  background: var(--warn-soft); color: var(--warn);
+  font-size: 9.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+}
+
+/* ── BONUS LINE ──────────────────────────────────────────────────────────────
+   A flat payment sitting in a table of per-device commission. Chipped rather
+   than left as plain text in the Device column, because that column otherwise
+   names a physical thing that was shipped and a bare word reads as one. */
+.cm-bonus {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent-soft-2, rgba(10,54,159,.10)); color: var(--accent);
+  font-size: 10.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
 }

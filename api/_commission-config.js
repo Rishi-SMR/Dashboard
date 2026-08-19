@@ -527,9 +527,35 @@ export const PI_LABEL_STAGE = {
 // without a redeploy. Left to rot it does not go wrong loudly — it simply keeps
 // reporting the newest paid month as still owed.
 export const COMMISSION_PAID_THROUGH = {
-  // Set by instruction: every VA commission before July 2026 is paid. July
-  // itself is not — the sheet still calls that cycle "Payable 15 Aug 26 (due)".
-  VA: '2026-06',
+  // ADVANCED TO JULY by instruction: the July cycle has gone out. It settles in
+  // the 15 Aug 26 run, which is now behind us, so every VA line whose payout
+  // cycle resolves to 2026-07 or earlier reads Paid rather than Payable / Due.
+  //
+  // Previously '2026-06', with the note that July was still owed because the
+  // sheet called that cycle "Payable 15 Aug 26 (due)". The sheet may still say
+  // so until Crystal re-labels it; this key is the override that does not wait
+  // for that, which is exactly what it is for.
+  VA: '2026-07',
+  // TRICARE AND PI ARE NAMED TOO, by instruction ("mark paid for the commission
+  // of reps of July"), and what that does is worth stating because it is more
+  // than the words describe. Neither had a paid-through before, so neither had a
+  // single line marked paid. The comparison is `month <= through`, so setting
+  // them to July does not mark July alone — it marks the WHOLE of each book up
+  // to and including July as paid, earlier months included.
+  //
+  // That is the intended reading of "the amount that was payable for July is
+  // paid now": what stood in Payable / Due was the accumulated unpaid balance,
+  // not one month's slice, and settling it settles the lot. It was raised before
+  // it was applied, and confirmed.
+  //
+  // IF THAT IS EVER WRONG — a vertical genuinely behind on an earlier month —
+  // this is the line to correct, and the correction is to move that vertical
+  // BACK to its true last-paid month, not to remove it. An absent vertical means
+  // "nothing paid", which would swing the error the other way.
+  TriCare: '2026-07',
+  PI: '2026-07',
+  // No DOL key: verticalOfCommissionLine() folds a line to TriCare, VA or PI and
+  // nothing else, so a DOL entry here could never match a line.
 };
 
 // ── Standings masking ────────────────────────────────────────────────────────
@@ -570,10 +596,8 @@ export const STANDINGS_ORDERS_ONLY = true;
 // Denise Zavala is deliberately NOT here: she folds into Maylon Sanders in
 // commRep(), so her orders rank under Maylon rather than disappearing.
 //
-// Cassie is deliberately NOT here either, and that is a change: she used to be
-// excluded outright. She is a producing rep again — a login, a roster row and
-// 20 current TriCare orders — so she is ranked like any other producer rather
-// than carried as an unranked exception.
+// Cassie is not here because she is in EXCLUDED_REPS instead — a harder rule.
+// This list unranks a rep who still exists; she has been removed outright.
 //
 // 'House Account' (a house bucket, not a person) and 'Santiago Family
 // Chiropractic' (a practice, not a rep) were previously left ON the board — the
@@ -599,20 +623,29 @@ export const STANDINGS_EXCLUDE = [];
 //                     commission belongs), so there is no rep figure to report
 //                     even if it were wanted.
 //
-// CASSIE IS NO LONGER EXCLUDED — reinstated by instruction ("include Cassie as
-// well since it's there in Commission sheet"). She is a signed-off payee in the
-// reconciliation workbooks ($20,255.00 across 58 lines: Jun $7,025.00, May
-// $350.00, Apr $1,200.00, Mar $11,680.00) and dropping her meant the dashboard
-// total silently disagreed with the sheet it is supposed to reconcile to.
+//   · Cassie        — removed by instruction ("remove Cassie from Dashboard,
+//                     she is no longer needed"), with her credentials revoked
+//                     at the same time. Off the roster, off the leaderboard,
+//                     out of every total.
 //
-// She is a SHEET-ONLY PAYEE: deliberately still absent from REP_NAMES, so no
-// Striven order is commissioned to her by the engine and her figure is exactly
-// what the sheet signs off. She has no REP_DIRECTORY entry either, so she has
-// no login — her row is visible to admins on the Commission tab, and there is
-// nobody to sign in as her. Add an entry there if she needs her own view.
+// CASSIE HAS BEEN EXCLUDED, REINSTATED, AND EXCLUDED AGAIN. The middle step is
+// worth keeping because its reasoning has NOT gone away: she was reinstated
+// because dropping her made Commission Due disagree with the reconciliation
+// sheet, which still signs off $20,255.00 to her (Mar $11,680.00, Apr
+// $1,200.00, May $350.00, Jun $7,025.00) across 58 lines.
 //
-// THIS ADDS MONEY TO THE HEADLINE, which is the point: Commission Due now
-// includes every name the sheet pays.
+// THAT DISAGREEMENT IS BACK, DELIBERATELY. Commission Due is now $169,909.20
+// against a sheet that pays $190,164.20. She was also still producing when this
+// was done — 10 TriCare orders in August 2026, ranked 3rd that month — so those
+// orders become unattributed off-roster volume rather than disappearing.
+//
+// The sheet has to drop her too, or the two will not reconcile. Until it does,
+// the gap is exactly her figure and this paragraph is the explanation for it.
+//
+// TWO EARLIER NOTES HERE WERE WRONG and are deleted rather than corrected: they
+// said she was "deliberately still absent from REP_NAMES" and had "no
+// REP_DIRECTORY entry, so no login". She was on both. The removal above is what
+// makes those statements true.
 //
 // Matched case-insensitively against the FOLDED name — the value commRep() and
 // reconRep() produce, not the raw Striven / sheet spelling. Both folds are kept
@@ -620,6 +653,7 @@ export const STANDINGS_EXCLUDE = [];
 // "cmc direct") lands on one canonical string for this list to catch.
 export const EXCLUDED_REPS = [
   'CMC (direct)',
+  'Cassie',
 ];
 
 // ── Who works under whom ─────────────────────────────────────────────────────
@@ -639,7 +673,7 @@ export const EXCLUDED_REPS = [
 // paid on them. Jillian is a rep in her own right — her own roster entry, her
 // own login, her own $57,234 — who happens to work under Alle. Nothing rolls up.
 export const REP_SUB_REPS = {
-  'Alle Ann': ['Jillian'],
+  'Alle Ann Dubberley': ['Jillian Colin'],
 };
 
 // ── Per-rep blind spots ──────────────────────────────────────────────────────
@@ -748,28 +782,25 @@ export function supervisorOf(sub, subReps = REP_SUB_REPS) {
  * Rishi Arora and Kevin Parker are off-roster for the same reason (admins with
  * an order apiece).
  */
+// FULL NAMES, by instruction. These were short forms ("Alle Ann", "Christy",
+// "Jillian") and they are the identity key, not a label — so this array, the
+// logins below, REP_SUB_REPS above and commRep()'s returns in _striven.js all
+// carry the same four strings and must be edited together. commRep() is where
+// the raw Striven spellings are folded onto them; its comment explains why the
+// rename happens there rather than in a display layer.
 export const REP_NAMES = [
-  'Alle Ann',                       // 156 orders — Maverick Medical - Alle Ann Dubberley
-  'Jillian',                        //  95 orders — Maverick Medical- Jillian Colin
-  'Christy',                        //  67 orders — CVT Medical - Christy Tan
-  'Maylon Sanders',                 //  35 orders
-  // REINSTATED. She was removed while EXCLUDED_REPS held her, and she is back
-  // for the same reason she is back on the commission sheet: she is a working
-  // rep with a login (cassie@, provisioned in app_config REP_DIRECTORY) and 20
-  // TriCare orders dated 15 Jul – 5 Aug 2026 — current, not historic.
+  'Alle Ann Dubberley',             // 156 orders — Maverick Medical - Alle Ann Dubberley
+  'Jillian Colin',                  //  95 orders — Maverick Medical- Jillian Colin
+  'Christy Tan',                    //  67 orders — CVT Medical - Christy Tan
+  'Maylon Sanders',                 //  35 orders — already the full name
+  // CASSIE IS GONE FROM HERE, by instruction ("remove Cassie from Dashboard,
+  // she is no longer needed"), together with her login and her commission — see
+  // EXCLUDED_REPS above, which is what actually enforces it. Taking her off the
+  // roster alone would only have emptied her own dashboard while leaving her
+  // money in every company total.
   //
-  // THE ROSTER IS WHAT MAKES A LOGIN USABLE, which is why this is not optional
-  // once an account exists. Her commission resolved fine without it, because
-  // that comes off the reconciliation sheet — but getRepOverview builds its
-  // rows from REP_NAMES, so she had no row on My Dashboard: the page she lands
-  // on, empty, while her own orders sat in the book.
-  //
-  // It does NOT change what she is paid. The reconciliation merge overwrites
-  // payableTotal with the sheet's figure for every rep, so being on the roster
-  // gives her volume columns and a Striven comparison, not extra money.
   // 'Denise Zavala' is not here for a different reason: she is Maylon's sub-rep
   // and commRep() folds her orders into 'Maylon Sanders', who is paid on them.
-  'Cassie',                         //  20 orders — Maverick Medical- Cassie Wates
 ];
 
 // email → repName → role. The ONLY place accounts are provisioned; there is
@@ -795,8 +826,8 @@ export const REP_DIRECTORY = [
   // narrowing from everything; this is the latter, chosen deliberately.
   { email: 'kevin@sportsmedrecovery.com', repName: null, role: 'admin' },
   // Rep logins. repName must stay exactly as spelled in REP_NAMES above.
-  { email: 'alle@sportsmedrecovery.com', repName: 'Alle Ann', role: 'rep' },
-  { email: 'jillian@sportsmedrecovery.com', repName: 'Jillian', role: 'rep' },
+  { email: 'alle@sportsmedrecovery.com', repName: 'Alle Ann Dubberley', role: 'rep' },
+  { email: 'jillian@sportsmedrecovery.com', repName: 'Jillian Colin', role: 'rep' },
   // RESTORED, and the note that used to sit here was wrong twice over: it said
   // cassie@ had been removed with her roster entry and that `dashboard_users`
   // held no row for her, so there was nothing to revoke. Both were checked
@@ -809,8 +840,11 @@ export const REP_DIRECTORY = [
   // exist. That drift only shows up the day the override is cleared or a fresh
   // environment comes up without it — at which point she authenticates, matches
   // no rep row, and lands on an empty dashboard. Exactly Maylon's failure below.
-  { email: 'cassie@sportsmedrecovery.com', repName: 'Cassie', role: 'rep' },
-  { email: 'christy@sportsmedrecovery.com', repName: 'Christy', role: 'rep' },
+  // cassie@ REMOVED with the rest of her removal — see EXCLUDED_REPS. The
+  // app_config REP_DIRECTORY override must be cleared too, or she keeps the
+  // login this file no longer grants: that override WINS over this list, and
+  // it is the exact drift the note above warns about, in the other direction.
+  { email: 'christy@sportsmedrecovery.com', repName: 'Christy Tan', role: 'rep' },
   // Added after the fact: the dashboard_users login existed but this row did
   // not, so Maylon authenticated successfully and then matched no rep row —
   // an empty dashboard with every tile at zero. This is the failure the note

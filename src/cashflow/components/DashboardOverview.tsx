@@ -236,7 +236,7 @@ function BarList({ title, sub, slices, total, fmt = (n: number) => String(n), em
                     },
                   } : {})}
                   style={{
-                    display: 'grid', gridTemplateColumns: 'minmax(0, 34%) 1fr 46px 38px', gap: 10, alignItems: 'center',
+                    display: 'grid', gridTemplateColumns: 'minmax(0, 46%) 1fr 46px 38px', gap: 10, alignItems: 'center',
                     fontSize: 12.5, padding: '4px 6px', margin: '0 -6px', borderRadius: 7,
                     cursor: can || foldable ? 'pointer' : 'default',
                     background: selected
@@ -278,7 +278,7 @@ function BarList({ title, sub, slices, total, fmt = (n: number) => String(n), em
                 {foldable && openFold && s.members!.map((m) => (
                   <div key={`${s.name}::${m.name}`}
                     style={{
-                      display: 'grid', gridTemplateColumns: 'minmax(0, 34%) 1fr 46px 38px', gap: 10, alignItems: 'center',
+                      display: 'grid', gridTemplateColumns: 'minmax(0, 46%) 1fr 46px 38px', gap: 10, alignItems: 'center',
                       fontSize: 11.5, padding: '2px 6px', margin: '0 -6px', borderRadius: 7,
                       color: C.muted,
                     }}>

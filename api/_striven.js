@@ -2209,16 +2209,21 @@ export const isExcludedRep = (rep) => (EXCLUDED_REPS || [])
 // otherwise split her total across two rows. Names are folded onto the portal's
 // REP_DIRECTORY spelling here, at the boundary, so nothing downstream has to
 // know the sheet's variants.
+//
+// MUST TRACK commRep()'s RETURNS. These are the same four people arriving from a
+// second source, and if the two folds disagree by so much as a surname the rep
+// splits into two rows again — which is the exact bug this table was written to
+// fix. Both now land on the full name.
 const RECON_REP_ALIASES = [
-  [/^alle/i, 'Alle Ann'],
-  [/^jillian/i, 'Jillian'],
-  [/^christy/i, 'Christy'],
+  [/^alle/i, 'Alle Ann Dubberley'],
+  [/^jillian/i, 'Jillian Colin'],
+  [/^christy/i, 'Christy Tan'],
   [/^cassie/i, 'Cassie'],
   [/^maylon/i, 'Maylon Sanders'],
   [/^kinley/i, 'Kinley Shepherd'],
   [/cmc/i, 'CMC (direct)'],
 ];
-const reconRep = (raw) => {
+export const reconRep = (raw) => {
   const s = String(raw ?? '').trim();
   for (const [re, name] of RECON_REP_ALIASES) if (re.test(s)) return name;
   return s;
@@ -2633,12 +2638,34 @@ function commissionBookRows(buffer, defaultRep = '') {
       if (!patient || !(comm > 0)) continue;
       const repRaw = cols.rep >= 0 ? String(r[cols.rep] ?? '').trim() : String(defaultRep ?? '').trim();
       if (!repRaw) continue;                     // a row with no owner pays nobody
+      // ── A BONUS, not a device commission ────────────────────────────────
+      // Commission in this business is units × a PER-DEVICE rate, so a row
+      // with no device in it cannot be one. Maylon's book carries such a row —
+      // a flat $2,000 — and with no rule for it the line rendered as an
+      // ordinary order: a masked "patient", an empty device, and "Unmatched
+      // from Striven" in the state column, which reads as a broken record
+      // rather than as a payment that was never tied to an order in the first
+      // place.
+      //
+      // THE DEVICE COLUMN IS THE TEST, and it is a fact about the pay model
+      // rather than a guess about this one row: a per-device rate applied to no
+      // device is not a number that exists.
+      //
+      // THE "PATIENT" ON SUCH A ROW IS NOT A PATIENT — it is what the bonus was
+      // for, written in the patient column because the sheet has nowhere else
+      // to put it. It is DROPPED rather than shown, and that is deliberate: the
+      // raw cell is still un-masked at this point and if this rule ever misfires
+      // on a genuine patient row that merely lacks a device, printing it would
+      // publish a full legal name. Dropping a label can only cost a label.
+      const itemRaw = String(r[cols.item] ?? '').trim();
+      const bonus = !itemRaw;
       out.push({
         rep: reconRep(repRaw),
         cycle,
         month,
-        patient: commInitialLastDisp(patient),
-        item: String(r[cols.item] ?? '').trim(),
+        patient: bonus ? '' : commInitialLastDisp(patient),
+        item: bonus ? 'Bonus' : itemRaw,
+        bonus,
         comm: round2(comm),
       });
     }
@@ -2744,7 +2771,10 @@ export async function getCommissionWorkbooks() {
         // These workbooks carry no order number at all, so the patient is the
         // only join available; a name shared by two orders stays unresolved
         // rather than guessing which one paid.
-        const hit = soByPatient.get(row.patient.trim().toLowerCase());
+        // A bonus ties to no order by design, so it is not offered to the join
+        // — an empty key would match nothing anyway, and asking makes it look
+        // like a lookup that failed.
+        const hit = row.bonus ? null : soByPatient.get(row.patient.trim().toLowerCase());
         const so = hit && hit.length === 1 ? hit[0] : null;
 
         const e = byRep.get(row.rep) ?? { rep: row.rep, payableTotal: 0, lines: [] };
@@ -2762,7 +2792,13 @@ export async function getCommissionWorkbooks() {
           // match status of its own. A line that found no order is marked the
           // same way the sheet's unmatched rows are — it is still paid, the
           // remark just says the Striven tie is missing.
-          unmatched: !so,
+          //
+          // NEVER ON A BONUS. "Unmatched from Striven" is a remark about
+          // evidence that was expected and is missing; a bonus was never an
+          // order, so there is nothing absent to report and the warning would
+          // be inventing a defect.
+          unmatched: !so && !row.bonus,
+          bonus: Boolean(row.bonus),
           fromWorkbook: true,
         });
         e.payableTotal = round2(e.payableTotal + row.comm);
@@ -3560,22 +3596,34 @@ const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 // Folds a raw Striven "Sales Rep" value to the roster name used everywhere else.
 //
-// The four original reps are stored with company prefixes ("Maverick Medical -
-// Alle Ann Dubberley"), so they fold to short names. The remaining values are
-// listed explicitly rather than machine-stripped: "Maylon Sanders - Denise
-// Zavala" and "House Account- Angel Santiago" both put a PERSON after the
-// hyphen, but "Santiago Family Chiropractic" has no hyphen and is a practice,
-// so a generic prefix-strip would produce wrong names for some and right names
-// for others. Explicit beats clever here.
+// THE ROSTER NAME IS THE REP'S FULL NAME. It used to be a short form — "Alle
+// Ann", "Christy", "Jillian" — because Striven stores these with company
+// prefixes ("Maverick Medical - Alle Ann Dubberley") and the fold cut back to
+// the part that was unambiguous inside the company. Changed by instruction: the
+// portal now shows the name a person would put on a contract.
+//
+// RENAMED HERE AND NOWHERE ELSE, which is the reason this fold exists. The
+// string this returns IS the identity key: it is what REP_NAMES lists, what
+// REP_DIRECTORY maps a login to, what REP_SUB_REPS reports against, what
+// `isSelf` compares, and what every screen prints. Changing it here and in the
+// three config arrays that must agree with it renames the rep across every
+// dashboard, drill, export and PDF at once — there is no display-name layer to
+// keep in sync, and no component that spells a rep's name for itself.
+//
+// The remaining values are listed explicitly rather than machine-stripped:
+// "Maylon Sanders - Denise Zavala" and "House Account- Angel Santiago" both put
+// a PERSON after the hyphen, but "Santiago Family Chiropractic" has no hyphen
+// and is a practice, so a generic prefix-strip would produce wrong names for
+// some and right names for others. Explicit beats clever here.
 //
 // Order matters: the /christ/i test would also catch "Christy Tan", so the
 // specific folds run before the pass-through.
 export const commRep = (r) => {
   const s = String(r || '').trim();
   if (/cassie/i.test(s)) return 'Cassie';
-  if (/jillian/i.test(s)) return 'Jillian';
-  if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann';
-  if (/christ/i.test(s)) return 'Christy';
+  if (/jillian/i.test(s)) return 'Jillian Colin';
+  if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann Dubberley';
+  if (/christ/i.test(s)) return 'Christy Tan';
   // Added when the roster widened from the original four to every Sales Rep
   // value in Striven except Rishi Arora.
   //
