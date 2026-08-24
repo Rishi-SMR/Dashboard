@@ -2998,6 +2998,65 @@ export async function getCommissionWorkbooks() {
 // The workbook id lives in the environment, never in committed source, matching
 // how STRIVEN_LABELS_URL is handled.
 // Supabase app_config first, env second — see cfgValue().
+// ── AGREED PAYMENT TERMS, per vendor ────────────────────────────────────────
+// Net days as confirmed by the business, used ONLY to fill a blank cell.
+//
+// THE SHEET IS THE SOURCE AND STAYS THE SOURCE. Its Payment Terms column is
+// authoritative wherever it is filled in, and where it is filled in it agrees
+// with this table on every one of the 101 rows that carry a value — checked, not
+// assumed. What it is NOT is complete: 36 of 137 rows are blank, including ALL
+// FOUR EvoHealth bills, so a screen that only ever printed the cell would show
+// that vendor as having no terms at all when they are on Net 15.
+//
+// DISPLAY ONLY. Nothing here recomputes a due date or moves a bill between
+// ageing bands — those come from the sheet's own Due Date and Aging columns and
+// are untouched. This fills a gap in what is SHOWN, and `termsSource` says which
+// of the two answered, so a filled-in term is never mistaken for one the
+// accountant typed.
+//
+// A VENDOR NOT LISTED GETS NOTHING. Hi-Dow's twelve bills carry no term in the
+// sheet and none has been given for them, so they read as "not stated" rather
+// than inheriting a neighbour's Net 30.
+//
+// Keys are matched case-insensitively as a normalised substring, because the
+// three sources spell these companies differently ("ManaMed LLC", "WHOLESALE
+// MEDICAL DEVICES LLC", "Doctors Medical, LLC / A&O Medical, LLC"). Override
+// without a redeploy via the app_config key AP_VENDOR_TERMS — JSON of
+// { "<vendor name or fragment>": <net days> }.
+export const AP_VENDOR_TERMS = {
+  manamed: 30,
+  doctorsmed: 15,
+  wholesalemedicaldevices: 30,
+  trenddelco: 30,
+  evohealth: 15,
+};
+const apTermsMap = async () => {
+  const raw = String(await cfgValue('AP_VENDOR_TERMS', '')).trim();
+  let extra = {};
+  // A malformed override keeps the checked-in defaults rather than blanking
+  // every term — a typo in app_config must not empty the column.
+  if (raw) { try { const v = JSON.parse(raw); if (v && typeof v === 'object' && !Array.isArray(v)) extra = v; } catch { /* defaults stand */ } }
+  const m = new Map();
+  for (const [k, v] of Object.entries({ ...AP_VENDOR_TERMS, ...extra })) {
+    const key = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const n = Number(v);
+    if (key && Number.isFinite(n) && n >= 0) m.set(key, Math.round(n));
+  }
+  return m;
+};
+/** Agreed net days for a vendor spelling, or null. Longest fragment wins, so a
+ *  specific entry always beats a broader one that happens to contain it. */
+const apTermsFor = (map, name) => {
+  const v = String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!v) return null;
+  if (map.has(v)) return map.get(v);
+  let best = null; let len = 0;
+  for (const [k, days] of map) if (k.length > len && v.includes(k)) { best = days; len = k.length; }
+  return best;
+};
+/** The net-day count inside a sheet cell: "Net 30" -> 30. null when absent. */
+const netDaysOf = (t) => { const m = /(\d+)/.exec(String(t ?? '')); return m ? Number(m[1]) : null; };
+
 const AP_LEDGER_ID = () => cfgValue('AP_LEDGER_SHEET_ID');
 const AP_LEDGER_GID = () => cfgValue('AP_LEDGER_GID', '575084060');
 
@@ -3121,6 +3180,10 @@ export async function getApLedger() {
     // Reported so a mis-detected header is visible rather than inferred from a
     // total that looks odd. `headerFound` false means every column fell back.
     const headerFound = headerRow.length > 0;
+
+    // Agreed terms, resolved once: it fills only the cells the sheet leaves
+    // blank, and a per-row lookup would re-read app_config 137 times.
+    const agreedTerms = await apTermsMap();
 
     let droppedHeaders = 0;
     // THE SHEET CHECKS ITSELF, AND WE WERE THROWING THAT AWAY.
@@ -3256,7 +3319,22 @@ export async function getApLedger() {
         // on a blank status, which is what a credit note carries.
         kind: isCancelled ? 'cancelled' : isCreditNote ? 'credit-note' : 'bill',
         status,
+        // ── PAYMENT TERMS ────────────────────────────────────────────────
+        // `terms` stays EXACTLY what the sheet's cell says, including empty.
+        // `termsDays` is the number to show, taken from that cell where it has
+        // one and from the agreed table only where it does not; `termsSource`
+        // names which answered, so a filled-in term is never passed off as one
+        // the accountant typed. No due date or ageing band is derived from any
+        // of this — those remain the sheet's own columns.
         terms: String(r[COL.terms] ?? '').trim(),
+        // A CREDIT NOTE AND A CANCELLED BILL ARE NOT FILLED IN. Neither is
+        // payable, so neither has a payment term to be on — the sheet leaves
+        // both blank and that is the right answer, not a gap to paper over.
+        // Today that is TREND Delco's two CM rows.
+        termsDays: netDaysOf(r[COL.terms])
+          ?? (isCancelled || isCreditNote ? null : apTermsFor(agreedTerms, sub)),
+        termsSource: netDaysOf(r[COL.terms]) != null ? 'sheet'
+          : (!isCancelled && !isCreditNote && apTermsFor(agreedTerms, sub) != null) ? 'agreed' : 'none',
         dueDays: Number(String(r[COL.dueDays] ?? '').trim()) || 0,
         aging: String(r[COL.aging] ?? '').trim(),
         // A CREDIT NOTE CARRIES A NEGATIVE BALANCE, so it reduces what is owed.
@@ -3282,7 +3360,7 @@ export async function getApLedger() {
     // GROUPED BY SUB-LEDGER, as the register is read: one block per vendor.
     const bySub = new Map();
     for (const b of bills) {
-      const g = bySub.get(b.subLedger) ?? { subLedger: b.subLedger, bills: 0, billed: 0, open: 0, openBills: 0, oldestDays: 0, terms: '', creditNotes: 0, creditNoteAmount: 0 };
+      const g = bySub.get(b.subLedger) ?? { subLedger: b.subLedger, bills: 0, billed: 0, open: 0, openBills: 0, oldestDays: 0, terms: '', termsDays: null, termsSource: 'none', creditNotes: 0, creditNoteAmount: 0 };
       g.bills += 1;
       g.billed = round2(g.billed + b.total);
       g.open = round2(g.open + b.open);
@@ -3294,6 +3372,9 @@ export async function getApLedger() {
       if (b.kind === 'credit-note') { g.creditNotes += 1; g.creditNoteAmount = round2(g.creditNoteAmount + Math.abs(b.total)); }
       if (b.open > 0) { g.openBills += 1; g.oldestDays = Math.max(g.oldestDays, b.dueDays); }
       if (!g.terms && b.terms) g.terms = b.terms;
+      // The block's term, taken off its bills so the vendor row and its rows can
+      // never disagree about which term is in force.
+      if (g.termsDays == null && b.termsDays != null) { g.termsDays = b.termsDays; g.termsSource = b.termsSource; }
       bySub.set(b.subLedger, g);
     }
 
@@ -3359,6 +3440,12 @@ export async function getApLedger() {
         // a register that silently fell back to fixed positions is exactly the
         // failure this parse was rewritten to make visible.
         headerFound,
+        // How the terms column is being answered. `termsFilled` counts rows the
+        // sheet left blank that the agreed table supplied — the figure that says
+        // how much of the sheet still needs the accountant's attention.
+        termsFromSheet: bills.filter((b) => b.termsSource === 'sheet').length,
+        termsFilled: bills.filter((b) => b.termsSource === 'agreed').length,
+        termsMissing: bills.filter((b) => b.termsSource === 'none').length,
         cancelled: bills.filter((b) => b.kind === 'cancelled').length,
         cancelledAmount: round2(bills.filter((b) => b.kind === 'cancelled').reduce((s, b) => s + b.faceValue, 0)),
       },
