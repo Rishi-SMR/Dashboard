@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
 import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
@@ -176,6 +176,25 @@ export default async function handler(req, res) {
   }
 
   // ---- order analytics — identity-scoped like commission ----
+  // SALES-ORDER DETAIL, scoped to the caller — the order reference is a link on
+  // the rep boards, so this must answer per-viewer. Explicit here rather than in
+  // DYNAMIC below, because that table's handlers receive only the URL match and
+  // have no way to see who is asking. See getSODetailFor.
+  {
+    const m = pathname.match(/^\/api\/so\/(\d+)$/);
+    if (m) {
+      try {
+        const out = await getSODetailFor(m[1], viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(out));
+      } catch (e) {
+        const code = e.status || 500;
+        res.writeHead(code, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    }
+  }
+
   if (pathname === '/api/order-analytics') {
     try {
       return res.status(200).json(await getOrderAnalytics(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as'))));

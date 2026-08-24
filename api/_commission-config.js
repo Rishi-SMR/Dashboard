@@ -779,13 +779,21 @@ export function supervisorOf(sub, subReps = REP_SUB_REPS) {
  * Dashboard (producers, via STANDINGS_EXCLUDE) and another on Commission (the
  * whole list). One roster now, so the two cannot disagree.
  *
+ * SINCE WIDENED AGAIN, to six: Alek Sigman and Alyssa Parker were added by
+ * instruction. That is not a reversal of the narrowing above — the six names
+ * removed then were house accounts, practices and non-producers, while these two
+ * are people booking orders under their own name in Striven.
+ *
  * Rishi Arora and Kevin Parker are off-roster for the same reason (admins with
  * an order apiece).
  */
 // FULL NAMES, by instruction. These were short forms ("Alle Ann", "Christy",
 // "Jillian") and they are the identity key, not a label — so this array, the
 // logins below, REP_SUB_REPS above and commRep()'s returns in _striven.js all
-// carry the same four strings and must be edited together. commRep() is where
+// carry the same strings and must be edited together. There are SIX now: adding
+// a rep means adding them here AND teaching both fold tables (commRep and
+// RECON_REP_ALIASES) to produce the same spelling, or the roster row exists and
+// nothing ever lands on it. commRep() is where
 // the raw Striven spellings are folded onto them; its comment explains why the
 // rename happens there rather than in a display layer.
 export const REP_NAMES = [
@@ -793,6 +801,20 @@ export const REP_NAMES = [
   'Jillian Colin',                  //  95 orders — Maverick Medical- Jillian Colin
   'Christy Tan',                    //  67 orders — CVT Medical - Christy Tan
   'Maylon Sanders',                 //  35 orders — already the full name
+  // ── ADDED, by instruction ──────────────────────────────────────────────────
+  // Both were already booking orders in Striven's Sales Rep field while absent
+  // from this list, which is the one failure mode this file warns about
+  // everywhere: a name the fold produces but the roster does not carry sends
+  // that rep's whole book into `striven.offRoster` and their commission to
+  // nobody. SO-559's card showed "Alek Sigman" as its sales rep with no roster
+  // row behind him.
+  //
+  // NO ORDER COUNT IS QUOTED against these two, deliberately. Every count above
+  // was measured against the live book at the time it was written; inventing a
+  // number here would put a figure in the same column that nobody has counted.
+  // Run the Commission tab once these are live and the real volume shows there.
+  'Alek Sigman',
+  'Alyssa Parker',
   // CASSIE IS GONE FROM HERE, by instruction ("remove Cassie from Dashboard,
   // she is no longer needed"), together with her login and her commission — see
   // EXCLUDED_REPS above, which is what actually enforces it. Taking her off the

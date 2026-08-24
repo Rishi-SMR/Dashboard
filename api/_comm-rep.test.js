@@ -69,7 +69,13 @@ test('every name the fold produces for a rep is a name the roster carries', () =
   // belongs to, REP_NAMES decides who exists. A rename that touched one and not
   // the other would drop that rep's whole book into `unmatched` silently.
   for (const raw of ['Maverick Medical - Alle Ann Dubberley', 'Maverick Medical- Jillian Colin',
-    'CVT Medical - Christy Tan', 'Maylon Sanders', 'Christy', 'Jillian', 'Alle Ann']) {
+    'CVT Medical - Christy Tan', 'Maylon Sanders', 'Christy', 'Jillian', 'Alle Ann',
+    // Added with the roster. The group-prefixed forms are the point: Striven
+    // prefixes most reps, and a fold that only recognises the bare spelling
+    // drops the rep's book into `unmatched` the day someone sets a referral
+    // group on their orders.
+    'Alek Sigman', 'Maverick Medical - Alek Sigman',
+    'Alyssa Parker', 'CVT Medical- Alyssa Parker']) {
     assert.ok(REP_NAMES.includes(commRep(raw)), `${raw} folds to a roster name`);
   }
   // And every login must point at a rep who exists, for the same reason from
@@ -89,14 +95,16 @@ test('the source sheet can be rewritten to full names without breaking the fold'
   // safe in either direction: rows already rewritten and rows not yet rewritten
   // both land on the same roster entry, so the sheet can be edited a tab at a
   // time without splitting anyone across two rows mid-way.
-  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders']) {
+  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders',
+    'Alek Sigman', 'Alyssa Parker']) {
     assert.equal(commRep(full), full, `commRep keeps ${full}`);
     assert.ok(REP_NAMES.includes(commRep(full)), `${full} is on the roster`);
   }
   // The reconciliation file is a SECOND source with its own alias table. If it
   // folded differently the rep would split into two rows — the very bug that
   // table was written to fix.
-  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders']) {
+  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders',
+    'Alek Sigman', 'Alyssa Parker']) {
     assert.equal(reconRep(full), full, `reconRep keeps ${full}`);
   }
   // And the two folds must agree on the short forms as well, for as long as any
@@ -207,4 +215,24 @@ test('an unrecognised value passes through rather than vanishing', () => {
   assert.equal(commRep(''), 'Unknown');
   assert.equal(commRep(null), 'Unknown');
   assert.equal(commRep(undefined), 'Unknown');
+});
+
+// Adding a rep means editing three places that must agree — REP_NAMES and the
+// two fold tables. This asserts the whole roster at once rather than the two
+// new names, so the NEXT person to add a rep is caught by the same test rather
+// than having to remember the rule.
+test('every roster name folds to itself in both tables', () => {
+  for (const name of REP_NAMES) {
+    assert.equal(commRep(name), name, `commRep keeps ${name}`);
+    assert.equal(reconRep(name), name, `reconRep keeps ${name}`);
+  }
+});
+
+// A roster name nothing can ever produce is a row that stays at zero forever.
+test('the two reps added by instruction are on the roster and reachable', () => {
+  for (const name of ['Alek Sigman', 'Alyssa Parker']) {
+    assert.ok(REP_NAMES.includes(name), `${name} is on the roster`);
+    assert.ok(!isExcludedRep(name), `${name} is not hard-excluded`);
+    assert.ok(!STANDINGS_EXCLUDE.includes(name), `${name} is not hidden from the leaderboard`);
+  }
 });
