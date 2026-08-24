@@ -79,9 +79,12 @@ export type PoDetail = {
   isDropShip: boolean; isBlanket: boolean; isFixedCost: boolean; allowPartial: boolean; isRecurring: boolean; needsReview: boolean;
   total: number; lineItems: LineItem[];
 };
-export type SoLineItem = { item: string; description: string; qty: number; unit: number; amount: number; shipping: number; taxable: boolean; ordered: boolean | null };
+/** Money is NULL for a rep. getSODetailFor strips totals and line prices before
+ *  serialization — a rep may see their own commission and no other dollar — so
+ *  every consumer has to handle the absent case rather than printing $0. */
+export type SoLineItem = { item: string; description: string; qty: number; unit: number | null; amount: number | null; shipping: number | null; taxable: boolean; ordered: boolean | null };
 export type SoDetail = {
-  id: number; ref: string; customer: string; date: string | null; total: number; status: string; lineItemCount: number;
+  id: number; ref: string; customer: string; date: string | null; total: number | null; status: string; lineItemCount: number;
   type: string; program: string; invoiceStatus: string; rep: string; payer: string;
   orderDate: string | null; targetDate: string | null;
   createdDate: string | null; createdBy: string; lastUpdatedDate: string | null; lastUpdatedBy: string;
@@ -89,6 +92,8 @@ export type SoDetail = {
   salesTax: string; invoiceFormat: string; isChangeOrder: boolean; isRecurring: boolean;
   notesLogCount: number; attachmentCount: number;
   lineItems: SoLineItem[]; phiMasked: boolean;
+  /** True when the server withheld every dollar on this order (a rep). */
+  moneyMasked?: boolean;
 };
 
 export type Aging = { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
@@ -168,6 +173,9 @@ export type ApLedger = {
     paidRecorded: number; paymentRows: number; paidImplied: number;
     blocksChecked: number; blocksMatched: number; blockOpenTotal: number;
     blockMismatches: { subLedger: string; rows: number; sheet: number; gap: number }[];
+    /** Whether the sheet's header row was recognised. False means every column
+     *  fell back to a fixed position and the parse should be distrusted. */
+    headerFound: boolean;
   };
   droppedHeaderRows?: number; fetchedAt?: string;
 };
