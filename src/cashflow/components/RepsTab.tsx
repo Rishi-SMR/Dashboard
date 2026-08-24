@@ -9,9 +9,28 @@ import { DashboardOverview } from './DashboardOverview';
 import { Leaderboard } from './Leaderboard';
 import { isKevinLogin } from '../viewProfile';
 import { Portal } from './Portal';
+import { StatStrip } from './StatStrip';
+import { MonthOverMonth } from './MonthOverMonth';
 import { ALL_TIME, MonthSelect, monthLabel, defaultMonth } from './MonthSelect';
 
 const money = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v));
+/**
+ * COMMISSION AND PAY, to the cent.
+ *
+ * A second formatter rather than switching `money` outright, because this page
+ * carries two kinds of dollar and only one of them needs cents. Revenue is a
+ * board figure — a scale, where ".00" is noise. Commission, Payable and Waiting
+ * are what a rep is PAID, they are checked against Crystal's reconciliation
+ * sheet line by line, and the rates are not whole dollars (369.78 for a TriCare
+ * fallback; $2,489.86 signed off in Maylon's workbook), so rounding them loses
+ * real money from a column that is meant to add up.
+ *
+ * Matches the Commission tab exactly, which matters more than it looks: the
+ * pay figures here are cut by the same payout cycle that tab reports, so the
+ * two screens show the same number for the same month — and one of them
+ * rounding would have made the same number look like two.
+ */
+const pay = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v, true));
 const n = (v: number | null | undefined) => (v == null ? '-' : String(v));
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
@@ -237,6 +256,32 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               sub="units × device rate" chip={isManager ? 'SMR' : 'yours'} onClick={() => setDrill('commission')} />
           </div>
 
+          {/* WHICH WAY THEY ARE MOVING — directly under the tiles that say how
+              much, because that is the question the tiles leave open. Every
+              other figure on this landing page is a level: a rank, a count, a
+              running total. None of them can tell a rep whether this month is
+              better than the last one, which is the first thing they look for.
+
+              SCOPED TO THE LOGIN. A rep gets THEIR OWN row and nothing else —
+              `isSelf` is the server's mark for "this row arrived unredacted for
+              this caller", so the card cannot draw a peer's pay even by
+              accident. A manager gets `teamByMonth` for the counts and the
+              roster for the pay line, because teamByMonth carries revenue and
+              no commission (see the note in the component).
+
+              NOTE FOR ANYONE DEBUGGING A BLANK CARD: `isSelf` is false on every
+              row when the login's directory `repName` does not match the roster
+              spelling exactly, and this card then has no source and renders
+              nothing. That is a DIRECTORY fault, not a fault here — the same
+              mismatch zeroes the KPI tiles above it. See REP_NAMES. */}
+          {view === 'overview' && (
+            <MonthOverMonth
+              months={data.months ?? []}
+              rep={isManager ? null : (reps.find((r) => r.isSelf) ?? null)}
+              team={isManager ? data.teamByMonth : undefined}
+              reps={isManager ? reps : undefined} />
+          )}
+
           {/* MANAGER ONLY — the "minimal dashboard" for a rep is the tiles plus
               the leaderboard, and this deck is neither. It also carried a live
               bug for them: its readout sums `o.revenue`, which the server nulls
@@ -314,18 +359,54 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                   </tr></thead>
                   <tbody>
                     {reps.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No reps.</td></tr>}
-                    {reps.map((r, i) => {
+                    {/* NESTED, exactly as on the leaderboard tile: Jillian is
+                        drawn on the line under Alle rather than wherever the
+                        roster's own order puts her, so the one relationship in
+                        the team reads the same way on both surfaces. `#` stays
+                        the rep's own position — see nestSubReps. */}
+                    {nestSubReps(reps).map(({ r, rank, nested }) => {
                       // EVERY FIGURE ON THE ROW COMES FROM ONE PROJECTION, so a
                       // month's orders can never sit beside an all-time dollar.
                       // repInPeriod passes the row straight through on All time.
                       const p = repInPeriod(r, month);
                       return (
-                      <tr key={r.rep} onClick={() => setSel(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}
-                        title={r.own ? `Full detail for ${r.rep}` : `${r.rep}'s volume: their pay is confidential`}>
-                        <td style={{ color: C.muted }}>{i + 1}</td>
-                        <td style={{ fontWeight: 700, color: C.brand }}>
+                      <tr key={r.rep} className={nested ? 'tr-nested' : undefined} onClick={() => setSel(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}
+                        title={[
+                          r.own ? `Full detail for ${r.rep}` : `${r.rep}'s volume: their pay is confidential`,
+                          r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
+                        ].filter(Boolean).join(' · ')}>
+                        {/* Blank on a nested row, for the reason spelled out on
+                            the board tile's rank cell: she is drawn under Alle
+                            rather than in the standings, so there is no position
+                            here to state. */}
+                        <td style={{ color: C.muted }}>{nested ? '' : rank}</td>
+                        <td className="rep-cell" style={{ fontWeight: 700, color: C.brand }}>
+                          {/* The tie, in the indent — the table's version of the
+                              elbow the board tile draws. Only where the row was
+                              actually nested: a sub-rep whose supervisor is not
+                              in the list has no line above to point at. */}
+                          {nested && <span className="lb-tie" aria-hidden="true" />}
                           {r.rep}
                           {r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
+                          {/* THE REPORTING LINE, in the one table that lists the
+                              whole team. It is the reason this table needed it:
+                              a manager reading ten rows of Rep / Orders / Pay
+                              has no way to tell that two of those rows are one
+                              pay chain — SMR settles Jillian's commission with
+                              Alle, who settles with Jillian — and the leaderboard
+                              tile beside it cannot say so for a rep who happens
+                              to be scrolled past. `is-wide` takes the plated form
+                              because a table cell has the room the tile does not.
+
+                              Server-gated exactly as the tile's is: `subRepOf`
+                              only ever arrives on the supervisor's own payload
+                              and an admin's. */}
+                          {r.subRepOf && (
+                            <div className="lb-subline" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>
+                              <span className="lb-subline-el" aria-hidden="true" />
+                              Sub-rep of <b>{r.subRepOf}</b>
+                            </div>
+                          )}
                         </td>
                         <td className="num" style={{ fontWeight: 700 }}>{p.orders}</td>
                         <td className="num">{n(p.units)}</td>
@@ -333,9 +414,9 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                         <td className="num">{r.own ? money(p.revenue) : <Confidential />}</td>
                         {/* The three money columns are the PAYOUT CYCLE's, so
                             they read the same here as on the Commission tab. */}
-                        <td className="num" style={{ color: r.own ? C.positive : undefined, fontWeight: 700 }}>{r.own ? money(p.payable) : <Confidential />}</td>
-                        <td className="num" style={{ color: r.own ? C.warning : undefined, fontWeight: 700 }}>{r.own ? money(p.waiting) : <Confidential />}</td>
-                        <td className="num" style={{ fontWeight: 800 }}>{r.own ? money(p.earned) : <Confidential />}</td>
+                        <td className="num" style={{ color: r.own ? C.positive : undefined, fontWeight: 700 }}>{r.own ? pay(p.payable) : <Confidential />}</td>
+                        <td className="num" style={{ color: r.own ? C.warning : undefined, fontWeight: 700 }}>{r.own ? pay(p.waiting) : <Confidential />}</td>
+                        <td className="num" style={{ fontWeight: 800 }}>{r.own ? pay(p.earned) : <Confidential />}</td>
                         {/* The COUNT per vertical, not a bar. Still the thing a
                             revenue bar could not be — it works whether or not
                             this row's money is visible — but it now answers
@@ -366,9 +447,16 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                         <td className="num">{scoped ? n(tm?.units ?? 0) : n(t?.units)}</td>
                         <td className="num">{scoped ? n(tm?.accounts ?? 0) : n(t?.accounts)}</td>
                         <td className="num" style={{ fontWeight: 800 }}>{money(scoped ? (tm?.revenue ?? 0) : t?.revenue)}</td>
-                        <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(sum((p) => p.payable))}</td>
-                        <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(sum((p) => p.waiting))}</td>
-                        <td className="num" style={{ fontWeight: 800 }}>{money(scoped ? sum((p) => p.earned) : t?.commission)}</td><td />
+                        {/* THE FOOTER FOLLOWS THE ROWS. These three sum columns
+                            that now print cents; rounding the total while the
+                            rows above it carry decimals is the one way to make
+                            a correct column look wrong — it can be out by up to
+                            half a dollar per row with nothing on screen to say
+                            why. Revenue beside them keeps whole dollars,
+                            because its rows do. */}
+                        <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{pay(sum((p) => p.payable))}</td>
+                        <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{pay(sum((p) => p.waiting))}</td>
+                        <td className="num" style={{ fontWeight: 800 }}>{pay(scoped ? sum((p) => p.earned) : t?.commission)}</td><td />
                       </tr></tfoot>
                     );
                   })()}
@@ -477,7 +565,10 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
     // transform on an ancestor silently redefines that. See Portal.tsx.
     <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(720px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
+      {/* 620, down from 720. Four reps across five columns, three of them
+          `.num` and so collapsed to their content — the slack all landed
+          between the names and the figures. */}
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(620px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>{cfg.title}</div>
@@ -494,14 +585,33 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
                 <th className="num">{cfg.col}</th><th className="num">Share</th><th style={{ width: '32%' }} />
               </tr></thead>
               <tbody>
-                {rowsSorted.map((r, i) => {
+                {/* NESTED, exactly as on the leaderboard tile and The team
+                    table: Jillian is drawn under Alle and out of the numbering,
+                    so the one relationship in the roster reads the same way
+                    wherever this admin meets it. It matters most HERE, in fact —
+                    this drill sorts on the tapped metric, and on devices Jillian
+                    (215) outranks Alle (186), so the flat list handed her a 1st
+                    place over the rep SMR actually pays for her book. Ranking is
+                    unchanged for everyone else: `subRepOf` only arrives on the
+                    supervisor's payload and an admin's. */}
+                {nestSubReps(rowsSorted).map(({ r, rank, nested }) => {
                   const v = valOf(r);
                   return (
-                    <tr key={r.rep} onClick={() => onPickRep(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined }}
-                      title={`Open ${r.rep}'s detail`}>
-                      <td style={{ color: C.muted }}>{i + 1}</td>
-                      <td style={{ fontWeight: 700, color: C.brand }}>
+                    <tr key={r.rep} className={nested ? 'tr-nested' : undefined} onClick={() => onPickRep(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined }}
+                      title={[
+                        `Open ${r.rep}'s detail`,
+                        r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
+                      ].filter(Boolean).join(' · ')}>
+                      <td style={{ color: C.muted }}>{nested ? '' : rank}</td>
+                      <td className="rep-cell" style={{ fontWeight: 700, color: C.brand }}>
+                        {nested && <span className="lb-tie" aria-hidden="true" />}
                         {r.rep}{r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
+                        {r.subRepOf && (
+                          <div className="lb-subline" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>
+                            <span className="lb-subline-el" aria-hidden="true" />
+                            Sub-rep of <b>{r.subRepOf}</b>
+                          </div>
+                        )}
                       </td>
                       <td className="num" style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
                         {v == null ? <Confidential /> : fmt(v)}
@@ -585,9 +695,17 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
     .sort((a, b) => b.orders - a.orders);
   const leader = ranked[0]?.orders ?? 0;
   const mine = ranked.find((r) => r.isSelf) ?? null;
-  const myRank = mine ? ranked.findIndex((r) => r.isSelf) + 1 : null;
+  // Nested here too, so one relationship is drawn one way wherever it appears.
+  // On every rep's login but the supervisor's this is `ranked` untouched.
+  const rows = nestSubReps(ranked);
+  // OFF `rows`, not off an index into `ranked` — a nested row holds no place, so
+  // the viewer's own number and the size of the field it is out of both have to
+  // come from the list that was actually numbered, or the stat would disagree
+  // with the table three inches below it.
+  const standing = rows.filter((x) => !x.nested).length;
+  const myRank = mine ? (rows.find((x) => x.r.isSelf)?.rank ?? null) : null;
   const gap = mine ? leader - mine.orders : 0;
-  const medal = (i: number) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '');
+  const medal = (rank: number) => (rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '');
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -606,12 +724,12 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
       {mine && (
         <div className="section chart-card" style={{ marginBottom: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, padding: '4px 2px' }}>
-            <Stat label="Your rank" value={`#${myRank} of ${ranked.length}`} tint={C.brand} />
+            <Stat label="Your rank" value={`#${myRank} of ${standing}`} tint={C.brand} />
             <Stat label="Your orders" value={String(mine.orders)} />
             <Stat label={myRank === 1 ? 'Lead over 2nd' : 'Behind the leader'}
               value={myRank === 1 ? `+${mine.orders - (ranked[1]?.orders ?? 0)}` : `${gap} order${gap === 1 ? '' : 's'}`}
               tint={myRank === 1 ? C.positive : C.warning} />
-            <Stat label="Your commission" value={money(mine.commission)} tint={C.positive} />
+            <Stat label="Your commission" value={pay(mine.commission)} tint={C.positive} />
           </div>
         </div>
       )}
@@ -628,15 +746,26 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
               <th className="num">Orders</th><th style={{ width: '46%' }}>Progress to leader</th>
             </tr></thead>
             <tbody>
-              {ranked.length === 0 && !loading && <tr><td colSpan={4} style={{ color: C.muted }}>No reps yet.</td></tr>}
-              {ranked.map((r, i) => (
-                <tr key={r.rep} style={{ background: r.isSelf ? 'var(--panel-2)' : undefined, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}>
-                  <td style={{ fontWeight: 800, color: i < 3 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
-                    {medal(i)} {i + 1}
+              {rows.length === 0 && !loading && <tr><td colSpan={4} style={{ color: C.muted }}>No reps yet.</td></tr>}
+              {rows.map(({ r, rank, nested }) => (
+                <tr key={r.rep} className={nested ? 'tr-nested' : undefined} style={{ background: r.isSelf ? 'var(--panel-2)' : undefined, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}
+                  title={r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : undefined}>
+                  {/* Blank on a nested row — and no medal either: a 🥉 beside a
+                      rep who is not standing in the ranking would be handing out
+                      a place the numbering has just taken away. */}
+                  <td style={{ fontWeight: 800, color: !nested && rank <= 3 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
+                    {nested ? '' : <>{medal(rank)} {rank}</>}
                   </td>
-                  <td style={{ fontWeight: 700, color: r.isSelf ? C.brand : C.ink }}>
+                  <td className="rep-cell" style={{ fontWeight: 700, color: r.isSelf ? C.brand : C.ink }}>
+                    {nested && <span className="lb-tie" aria-hidden="true" />}
                     {r.rep}
                     {r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: C.positive }}>You</span>}
+                    {r.subRepOf && (
+                      <div className="lb-subline" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>
+                        <span className="lb-subline-el" aria-hidden="true" />
+                        Sub-rep of <b>{r.subRepOf}</b>
+                      </div>
+                    )}
                   </td>
                   <td className="num" style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{r.orders}</td>
                   <td>
@@ -679,6 +808,72 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
  * manager's dashboard the roster table now sits further down the same page, and
  * a rep has no roster to go to.
  */
+/** A row as it is DRAWN. `rank` is the position it holds ON THE BOARD, and is 0
+ *  on a nested row — see nestSubReps for why a sub-rep holds none. */
+type NestedRow = { r: RepRow; rank: number; nested: boolean };
+
+/**
+ * PUTS EACH SUB-REP DIRECTLY UNDER THE REP THEY WORK FOR, AND OUT OF THE
+ * RANKING.
+ *
+ * Jillian used to land wherever her order count put her, with a note saying she
+ * works under Alle. On the current book that happened to be the very next line,
+ * which made the note look redundant; in any month where Christy outbooks her it
+ * would have been three rows away, and the relationship then lived entirely in a
+ * caption the eye had to carry down the list. Nesting says it structurally — the
+ * row is indented, tied to the line above it, and cannot drift away from it
+ * however the month reshuffles the board.
+ *
+ * THE BOARD IS THEN NUMBERED OVER WHAT IS LEFT STANDING ON IT. A nested row
+ * carries no rank at all (0, which the renderers draw as a blank cell), and the
+ * reps above and below it close up: Alle 1, Jillian nested, Christy 2. The
+ * alternative — keeping Jillian's own 2 and leaving a hole where she used to
+ * stand — was tried first and is the more literal reading of the volumes, since
+ * she books 102 against Christy's 72. It was dropped by instruction, and the
+ * reasoning is sound: a rank is a position IN A LIST, and Jillian is no longer
+ * in this one. Numbering around a row that has been lifted out of the sequence
+ * leaves a gap that reads as a missing rep rather than as a deliberate absence.
+ *
+ * WHAT THIS COSTS, so it is not rediscovered as a bug: the numbers no longer
+ * answer "who booked the most" across the whole team — they answer it across the
+ * reps SMR pays directly. Christy's 2 sits above Jillian's 102 orders on the
+ * same screen. That is legible precisely because the two rows are adjacent and
+ * the nested one is visibly not competing; it would not be if the nesting were
+ * ever dropped while this numbering stayed.
+ *
+ * WHAT IS NOT TOUCHED: every figure. Jillian keeps her own orders, her own bar,
+ * her own share of the total, and nothing rolls up into Alle. Order and
+ * numbering are the whole of what this function does.
+ *
+ * `subRepOf` only ever arrives on the supervisor's payload and an admin's, so on
+ * every other rep's login this returns the list exactly as it was given, ranked
+ * 1..n as before.
+ *
+ * A sub-rep whose supervisor is NOT on the board KEEPS a real rank — Alle books
+ * nothing in a month and drops off it, and a Jillian nested under a row that is
+ * not there would be a branch with no trunk. She stands in the list in that
+ * case, so she is numbered like anyone else standing in it.
+ */
+function nestSubReps(ranked: RepRow[]): NestedRow[] {
+  const key = (n: string | null | undefined) => String(n ?? '').trim().toLowerCase();
+  const present = new Set(ranked.map((r) => key(r.rep)));
+  const nestedUnder = (boss: RepRow) => ranked
+    .filter((x) => key(x.subRepOf) === key(boss.rep))
+    .map((r) => ({ r, rank: 0, nested: true }));
+  const out: NestedRow[] = [];
+  // Counts only the rows that end up standing, which is what makes the sequence
+  // consecutive: it advances where a row is pushed, not where one is read.
+  let place = 0;
+  for (const r of ranked) {
+    // Skip it where it fell — it is emitted below its supervisor instead, and
+    // takes no number with it.
+    if (r.subRepOf && present.has(key(r.subRepOf))) continue;
+    out.push({ r, rank: ++place, nested: false });
+    out.push(...nestedUnder(r));
+  }
+  return out;
+}
+
 /**
  * One rep's figures AS THEY READ IN THE SELECTED PERIOD.
  *
@@ -764,12 +959,24 @@ function OverviewPanel({ reps, months, month, onMonth, onPickRep }: {
   // period at all. A rep who booked nothing in the month drops off the board
   // rather than sitting at the foot on zero: they are not last that month, they
   // are absent from it, and a rank implies a race they did not enter.
+  //
+  // EXCEPT A REP WHO HAS NEVER BOOKED AT ALL — the same exception the
+  // Leaderboard makes, and made here for the same reason: that rule reads
+  // correctly for an established producer having a quiet month and wrongly for
+  // someone just added to the roster, who is not absent from the month but has
+  // not started. Without it a new rep is invisible on every period, which looks
+  // exactly like the roster edit having failed.
+  //
+  // The two boards MUST agree. They rank the same field off the same payload,
+  // and a rep who appears on one and not the other is the "two boards, one
+  // roster, different answers" bug the note above records fixing once already.
   const inPeriod: RepRow[] = active === ALL_TIME
     ? [...reps]
     : reps.map((r) => {
       const m = (r.byMonth ?? []).find((x) => x.month === active);
-      return { ...r, orders: m?.orders ?? 0, units: m?.units ?? null, byVertical: m?.byVertical ?? [] };
-    }).filter((r) => r.orders > 0);
+      // `r.orders` is the LIFETIME count, read before the period overwrites it.
+      return { ...r, orders: m?.orders ?? 0, units: m?.units ?? null, byVertical: m?.byVertical ?? [], lifetimeOrders: r.orders };
+    }).filter((r) => r.orders > 0 || r.lifetimeOrders === 0);
 
   const ranked = inPeriod
     .filter((r) => !r.standingsExcluded || r.isSelf)
@@ -793,8 +1000,12 @@ function OverviewPanel({ reps, months, month, onMonth, onPickRep }: {
   const totalOrders = ranked.reduce((s, r) => s + r.orders, 0);
   const pct = (v: number) => (totalOrders ? Math.round((v / totalOrders) * 100) : 0);
 
+  // The RANKING is `ranked`; the DRAWING ORDER is this. Every figure above is
+  // computed off the ranking, so nesting cannot move a total or a percentage.
+  const rows = nestSubReps(ranked);
+
   return (
-    <BoardTile ranked={ranked} leader={leader} totalOrders={totalOrders} pct={pct}
+    <BoardTile rows={rows} leader={leader} totalOrders={totalOrders} pct={pct}
       canOpen={canOpen} openableCount={openableCount} onPickRep={onPickRep}
       months={available} month={active} onMonth={onMonth} />
   );
@@ -811,7 +1022,10 @@ function OverviewPanel({ reps, months, month, onMonth, onPickRep }: {
  *   · `height: 100%` + column flex, so the pair ends level
  *   · a 52px head, so both titles and subtitles sit on one baseline
  *   · the 22px headline figure that swaps to the hovered row's own number
- *   · rows on `minmax(0, 34%) 1fr 46px 38px` — name, bar, value, share
+ *   · rows on `minmax(0, 46%) 1fr 46px 38px` — name, bar, value, share
+ *     (was 34%; widened for the full rep names, and BarList was widened with it
+ *     — the two cards are one row, and a column split that matches on only one
+ *     of them is worse than either width)
  *   · a `marginTop: auto` footer, which is what makes a stretched card end
  *     cleanly instead of trailing blank space
  *
@@ -820,9 +1034,12 @@ function OverviewPanel({ reps, months, month, onMonth, onPickRep }: {
  * equivalent of. It takes the device tile's 14px height and 4px radius so the
  * two columns of bars still line up.
  */
-function BoardTile({ ranked, leader, totalOrders, pct, canOpen, openableCount, onPickRep,
+function BoardTile({ rows, leader, totalOrders, pct, canOpen, openableCount, onPickRep,
   months, month, onMonth }: {
-  ranked: RepRow[]; leader: number; totalOrders: number; pct: (v: number) => number;
+  /** DRAWING ORDER, each row carrying its own rank — a sub-rep is placed under
+   *  their supervisor rather than at the position their orders would put them.
+   *  See nestSubReps. */
+  rows: NestedRow[]; leader: number; totalOrders: number; pct: (v: number) => number;
   canOpen: (r: RepRow) => boolean; openableCount: number; onPickRep: (r: RepRow) => void;
   months: string[]; month: string; onMonth: (m: string) => void;
 }) {
@@ -846,35 +1063,46 @@ function BoardTile({ ranked, leader, totalOrders, pct, canOpen, openableCount, o
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 8 }}>
         <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.4, fontVariantNumeric: 'tabular-nums', color: C.ink }}>
-          {(hot === null ? totalOrders : ranked[hot].orders).toLocaleString()}
+          {(hot === null ? totalOrders : rows[hot].r.orders).toLocaleString()}
         </span>
         <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: C.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {hot === null ? 'orders' : `${pct(ranked[hot].orders)}% · ${ranked[hot].rep}`}
+          {hot === null ? 'orders' : `${pct(rows[hot].r.orders)}% · ${rows[hot].r.rep}`}
         </span>
       </div>
 
       {/* A month with no orders is a fact, not a failure. Said in words, because
           the alternative is a card showing "0 orders" over nothing at all, which
           reads as a load that went wrong rather than as a quiet month. */}
-      {ranked.length === 0 && (
+      {rows.length === 0 && (
         <div style={{ padding: '18px 4px 22px', textAlign: 'center', fontSize: 13, color: C.muted }}>
           No orders booked in {month === ALL_TIME ? 'the book' : monthLabel(month)}.
         </div>
       )}
 
       <div style={{ display: 'grid', gap: 1 }}>
-        {ranked.map((r, i) => {
+        {rows.map(({ r, rank, nested }, i) => {
           const on = hot === i;
           const open = canOpen(r);
           return (
-            <button key={r.rep} className="lb-row"
+            <button key={r.rep} className={`lb-row${nested ? ' is-nested' : ''}`}
               onMouseEnter={() => setHot(i)} onMouseLeave={() => setHot(null)}
               onFocus={() => setHot(i)} onBlur={() => setHot(null)}
               onClick={open ? () => onPickRep(r) : undefined}
               disabled={!open}
-              title={open ? `${r.rep}'s full breakdown` : `${r.rep}'s figures are confidential to them`}
+              title={[
+                open ? `${r.rep}'s full breakdown` : `${r.rep}'s figures are confidential to them`,
+                // The reporting line, spelled out where there is room for the
+                // whole sentence rather than the badge's two words.
+                r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
+              ].filter(Boolean).join(' · ')}
               style={{
-                display: 'grid', gridTemplateColumns: 'minmax(0, 34%) 1fr 46px 38px', gap: 10, alignItems: 'center',
+                // 46%, up from 34%. The names are full names now — "Alle Ann
+                // Dubberley" wants about 115px at 12.5px against the ~105px a
+                // 34% column left after the rank, the gaps and (on the nested
+                // row) the tie, so every rep was ellipsising. The mix bar gives
+                // up the difference: it is a SHAPE, and it still reads at the
+                // narrower width, whereas a truncated name does not.
+                display: 'grid', gridTemplateColumns: 'minmax(0, 46%) 1fr 46px 38px', gap: 10, alignItems: 'center',
                 fontSize: 12.5, padding: '4px 6px', margin: '0 -6px', borderRadius: 7, width: 'calc(100% + 12px)',
                 textAlign: 'left', border: 'none', cursor: open ? 'pointer' : 'default',
                 background: r.isSelf
@@ -889,11 +1117,47 @@ function BoardTile({ ranked, leader, totalOrders, pct, canOpen, openableCount, o
               {/* Rank and name share the name column, so the four columns are
                   the device tile's four and the figures line up across the row. */}
               <span style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ flex: 'none', width: 14, fontSize: 11.5, fontWeight: 800, color: i === 0 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
-                  {i === 0 ? '🥇' : i + 1}
+                {/* NOT `i + 1`. The drawn order has a nested row in it, which
+                    would put a number on Jillian and take one off everybody
+                    below her. `rank` is the position on the board, counted over
+                    the standing rows only, and it is 0 on a nested one — drawn
+                    as a blank so the cell still holds its 14px and the names
+                    below stay in one column. See nestSubReps. */}
+                <span style={{ flex: 'none', width: 14, fontSize: 11.5, fontWeight: 800, color: rank === 1 ? C.ink : C.muted, fontVariantNumeric: 'tabular-nums' }}>
+                  {nested ? '' : rank === 1 ? '🥇' : rank}
                 </span>
-                <span style={{ fontWeight: on ? 700 : 600, color: on ? C.ink : C.brand, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color .16s ease' }}>{r.rep}</span>
-                {r.isSelf && <span style={{ flex: 'none', fontSize: 9.5, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: C.positive }}>You</span>}
+                {/* THE TIE. A nested row is drawn AS a branch of the row above
+                    it: the elbow starts at the parent's baseline and turns into
+                    this name. It replaces the "under Alle Ann" caption that used
+                    to hang beneath the name — with Jillian sitting directly
+                    under Alle the relationship is in the layout, and the words
+                    were repeating what the indent already said. The tag beside
+                    the name keeps it unambiguous, and the row's tooltip still
+                    spells the whole pay chain out. */}
+                {nested && <span className="lb-tie" aria-hidden="true" />}
+                <span style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontWeight: on ? 700 : 600, color: on ? C.ink : C.brand, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color .16s ease' }}>{r.rep}</span>
+                  {/* THE REPORTING LINE. Jillian books her own orders and keeps
+                      her own row — the count is hers and nothing rolls up — but
+                      SMR pays Alle, who pays Jillian, so a board that lists them
+                      as two unrelated reps hides how the money reaches her.
+
+                      Only rendered where the server sent `subRepOf`, which is
+                      the supervisor's own login and an admin's. It stays off
+                      every other rep's screen, so the relationship is not
+                      broadcast to the team.
+
+                      NAMED when the row could NOT be nested — Alle booked
+                      nothing this month and is off the board, so there is no
+                      line above to point at and the tag has to carry the name
+                      itself. */}
+                  {r.subRepOf && (
+                    <span className="lb-subtag" title={`Sub-rep of ${r.subRepOf}`}>
+                      {nested ? 'sub-rep' : `under ${r.subRepOf}`}
+                    </span>
+                  )}
+                  {r.isSelf && <span style={{ flex: 'none', fontSize: 9.5, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: C.positive }}>You</span>}
+                </span>
               </span>
               <MixBar parts={r.byVertical} total={r.orders} height={14} radius={4}
                 scale={leader ? r.orders / leader : 0} dim={hot !== null && !on} />
@@ -918,11 +1182,18 @@ function BoardTile({ ranked, leader, totalOrders, pct, canOpen, openableCount, o
         justifyContent: 'space-between', gap: 8, fontSize: 11,
         borderTop: '1px solid var(--panel-2)', color: C.muted,
       }}>
-        <span>{ranked.length} rep{ranked.length === 1 ? '' : 's'}</span>
+        <span>{rows.length} rep{rows.length === 1 ? '' : 's'}</span>
         <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-          {ranked.length <= 1 ? '-' : (() => {
-            const n = Math.min(3, ranked.length - 1);
-            const lead = ranked.slice(0, n).reduce((s, r) => s + r.orders, 0);
+          {/* THE TOP THREE ON THE BOARD, so it counts the same three rows the
+              numbers 1-3 point at. Read off the drawn order it would have
+              counted whoever sits in the first three LINES, which a nested row
+              silently changes; `rank > 0` drops the nested rows, which hold none
+              and are not competing for a place. Their orders still count toward
+              the denominator, because the share is of everything on screen. */}
+          {rows.length <= 1 ? '-' : (() => {
+            const byRank = rows.filter((x) => x.rank > 0).sort((a, b) => a.rank - b.rank);
+            const n = Math.min(3, byRank.length - 1);
+            const lead = byRank.slice(0, n).reduce((s, x) => s + x.r.orders, 0);
             return <>Top {n} · <b style={{ color: C.sub, fontWeight: 700 }}>{pct(lead)}%</b></>;
           })()}
         </span>
@@ -1040,7 +1311,7 @@ function TeamShape({ reps }: { reps: RepRow[] }) {
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, padding: '2px 2px 0', fontSize: 13, color: C.sub }}>
         {topVolume && <span>Most orders <b style={{ color: C.ink }}>{topVolume.rep}</b> <span style={{ color: C.muted }}>({topVolume.orders})</span></span>}
-        {topPay && <span>Highest commission <b style={{ color: C.ink }}>{topPay.rep}</b> <span style={{ color: C.muted }}>({money(topPay.commission)})</span></span>}
+        {topPay && <span>Highest commission <b style={{ color: C.ink }}>{topPay.rep}</b> <span style={{ color: C.muted }}>({pay(topPay.commission)})</span></span>}
         {/* The "reconciled against the sheet" badge is gone with the sheet feed:
             Striven is the only source, so there is nothing to reconcile against
             and every figure here IS the computation. */}
@@ -1088,22 +1359,30 @@ function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
   const showRevenue = rep.revenue != null;
   const showAccounts = rep.accounts != null;
   const showVertRevenue = rep.byVertical.some((v) => v.revenue != null);
-  const cols = (n: number) => ({ display: 'grid', gridTemplateColumns: `repeat(${n}, 1fr)`, gap: 10 } as const);
   const body = (
     <>
-      <div className="cm-stat-grid" style={{ ...cols(showRevenue ? 4 : 3), marginBottom: 16 }}>
-        <Stat label="Commission" value={money(rep.commission)} tint={C.brand} />
-        <Stat label="Payable / due" value={money(rep.payable)} tint={C.positive} />
-        <Stat label="Waiting" value={money(rep.waiting)} tint={C.warning} />
-        {showRevenue && <Stat label="Revenue" value={money(rep.revenue)} />}
-      </div>
+      {/* TWO GRIDS OF FOUR CARDS BECAME ONE LINE. This was the heaviest header
+          in the portal: up to eight plates stacked two deep, ~150px of a dialog
+          that opens at 90vh, before a word of the breakdown the reader came for.
 
-      <div className="cm-stat-grid" style={{ ...cols(showAccounts ? 4 : 3), marginBottom: 18 }}>
-        <Stat label="Orders" value={String(rep.orders)} />
-        <Stat label="Devices" value={n(rep.units)} />
-        {showAccounts && <Stat label="Accounts" value={n(rep.accounts)} />}
-        <Stat label="Device types" value={n(rep.devices)} />
-      </div>
+          The money keeps its tints and stays first, then the counts — the same
+          two groups the two grids made, now read left to right instead of top to
+          bottom. Nothing is dropped and nothing is reordered. Revenue and
+          Accounts still come and go with the payload rather than with a role
+          flag, so a rep sees neither and a manager sees both, exactly as
+          before. */}
+      <StatStrip items={[
+        // Cents on the three pay figures; Revenue keeps whole dollars — it is
+        // a board number, not something anybody is paid.
+        { label: 'Commission', value: pay(rep.commission), tint: C.brand },
+        { label: 'Payable / due', value: pay(rep.payable), tint: C.positive },
+        { label: 'Waiting', value: pay(rep.waiting), tint: C.warning },
+        showRevenue && { label: 'Revenue', value: money(rep.revenue) },
+        { label: 'Orders', value: String(rep.orders) },
+        { label: 'Devices', value: n(rep.units) },
+        showAccounts && { label: 'Accounts', value: n(rep.accounts) },
+        { label: 'Device types', value: n(rep.devices) },
+      ]} />
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By vertical</div>
       <div className="table-scroll">
@@ -1165,14 +1444,16 @@ function RepModal({ rep, onClose }: { rep: RepRow; onClose: () => void }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>{rep.rep}</div>
-            {/* The accounts clause is dropped when there is no figure. It read
-                "98 orders · 206 devices · accounts" for a rep, because a null
-                renders as nothing and left its own label stranded. */}
-            <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>
-              {rep.orders} orders · {rep.units} devices
-              {rep.accounts != null && ` · ${rep.accounts} accounts`}
-              {!rep.own && ' · pay is confidential'}
-            </div>
+            {/* THE COUNTS CAME OUT. Orders, devices and accounts are all on the
+                strip a few lines below — RepDetail's — so the header was
+                announcing three figures the reader was about to be given
+                properly, and the old bug this comment used to describe (a null
+                accounts count leaving "· accounts" stranded) cannot happen in a
+                line that no longer prints it. What is left is the one thing the
+                strip cannot say, and only when it is true. */}
+            {!rep.own && (
+              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>Pay is confidential</div>
+            )}
           </div>
           <button className="btn ghost" onClick={onClose} aria-label="Close" style={{ flex: 'none' }}>✕</button>
         </div>

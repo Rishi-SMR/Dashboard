@@ -5,6 +5,8 @@ import { KpiR, ChartCard, RankBar, AgingBar, DrillModal, StatCards } from '../ch
 import { fetchApLedger, type ApLedger } from '../strivenApi';
 import { ColumnFilter } from './ColumnFilter';
 import { downloadXlsx, printToPdf, stamped } from '../export';
+import { Portal } from './Portal';
+import { SO_REF_STYLE } from '../soRef';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AP Register (Sheet): a manually-maintained accounts-payable register sourced
@@ -26,6 +28,15 @@ type Bill = {
   faceValue: number;
   kind: 'bill' | 'credit-note' | 'cancelled';
   status: string; aging: string; open: number;
+  /** The sheet's Payment Terms and Due Days columns. Read by the server all
+   *  along and dropped here, because nothing on screen had a use for them until
+   *  the invoice card. They are the two facts a row cannot show and a reader
+   *  most often wants: on what terms, and how far past them. */
+  terms: string; dueDays: number;
+  /** The term as net days, and who answered — the sheet's own cell or the
+   *  vendor agreement filling a blank. Display only: no due date or ageing
+   *  band is derived from it. */
+  termsDays: number | null; termsSource: 'sheet' | 'agreed' | 'none';
 };
 
 // The 71-row hardcoded snapshot that used to live here is GONE. The register
@@ -61,6 +72,136 @@ function statusTag(status: string, kind: Bill['kind'] = 'bill'): ReactNode {
   if (status === 'Partially Paid') return <span className="pill-tag tag-warn">Partial</span>;
   if (s.includes('cancel')) return <span className="pill-tag tag-muted">Cancelled</span>;
   return <span className="pill-tag tag-danger">Unpaid</span>;
+}
+
+/**
+ * THE INVOICE NUMBER, MADE OPENABLE — and what "open" can honestly mean here.
+ *
+ * THERE IS NO INVOICE DOCUMENT TO SHOW, and that is a fact about the data, not a
+ * shortcut. This register is the accountant's "AP Ledgers" sheet: twelve typed
+ * columns, no attachment, no URL, no Striven id. Striven's own bills are a
+ * different book entirely — eighteen of them, numbered 1..18, against this
+ * sheet's 137 vendor invoice numbers (INV225908, DM-29162), and not one number
+ * appears in both. So there is nothing to deep-link to and nothing to fetch.
+ *
+ * WHAT THE CARD SHOWS is everything the register knows about the row, which is
+ * more than the row itself can: the payment terms and due-day count the sheet
+ * carries but no table column prints, the payment status, the aging band, and
+ * face value against what actually counts toward the payable — the distinction
+ * that makes a cancelled bill read as $63.80 struck through and $0 owed.
+ *
+ * Styled with SO_REF_STYLE, the same declaration every sales-order reference
+ * uses, so a clickable reference looks identical wherever it appears.
+ */
+function BillLink({ bill }: { bill: Bill }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" style={SO_REF_STYLE} title={`Open ${bill.no}`}
+        onClick={(e) => { e.stopPropagation(); setOpen(true); }}>
+        {bill.no}
+      </button>
+      {open && <BillCard bill={bill} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function BillKV({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em', color: C.muted, fontWeight: 700, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 13, color: C.ink, fontWeight: 600 }}>{children}</div>
+    </div>
+  );
+}
+
+function BillCard({ bill, onClose }: { bill: Bill; onClose: () => void }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  // Past the DUE date, not past the invoice date — and only while something is
+  // still owed. A settled bill has no age worth printing.
+  const late = bill.open > 0 && bill.due
+    ? Math.floor((Date.now() - new Date(`${bill.due}T00:00:00Z`).getTime()) / 86_400_000)
+    : null;
+  return (
+    <Portal>
+      <div onClick={onClose} role="presentation"
+        style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
+        <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`Vendor invoice ${bill.no}`}
+          style={{ background: '#fff', borderRadius: 14, width: 'min(680px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${C.brand}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)' }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>{bill.no}</div>
+              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>Vendor invoice · {bill.vendor}</div>
+            </div>
+            <button className="btn ghost" onClick={onClose} aria-label="Close">✕</button>
+          </div>
+          <div style={{ padding: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 16 }}>
+              <BillKV label="Status">{statusTag(bill.status, bill.kind)}</BillKV>
+              <BillKV label="Invoice date">{bill.date ? fmtDate(bill.date) : <span style={{ color: C.muted }}>—</span>}</BillKV>
+              <BillKV label="Due date">{bill.due ? fmtDate(bill.due) : <span style={{ color: C.muted }}>—</span>}</BillKV>
+              {/* The two the sheet carries and no table column prints. */}
+              <BillKV label="Payment terms"><Terms days={bill.termsDays} source={bill.termsSource} /></BillKV>
+              <BillKV label="Aging">{bill.aging || <span style={{ color: C.muted }}>—</span>}</BillKV>
+              <BillKV label="Days past due">
+                {late == null ? <span style={{ color: C.muted }}>settled</span>
+                  : late > 0 ? <span style={{ color: C.negative }}>{late} days</span>
+                    : <span style={{ color: C.positive }}>not yet due</span>}
+              </BillKV>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
+              {/* FACE VALUE AND COUNTED VALUE ARE DIFFERENT NUMBERS on exactly two
+                  kinds of row, and the card says so rather than printing one and
+                  letting the other be discovered by addition. */}
+              <BillKV label="Invoice amount">{formatCurrency(bill.faceValue, true)}</BillKV>
+              <BillKV label="Counts toward payable">
+                {bill.kind === 'cancelled'
+                  ? <span style={{ color: C.muted }}>$0 — cancelled</span>
+                  : formatCurrency(bill.total, true)}
+              </BillKV>
+              <BillKV label="Open balance">
+                {bill.open > 0 ? <span style={{ color: C.negative }}>{formatCurrency(bill.open, true)}</span>
+                  : bill.open < 0 ? <span className="cell-pos">{formatCurrency(bill.open, true)}</span>
+                    : <span style={{ color: C.muted }}>nothing owed</span>}
+              </BillKV>
+            </div>
+            <div className="muted-note" style={{ marginTop: 16, lineHeight: 1.55 }}>
+              From the AP Ledgers sheet, which is where this register gets its rows. It carries no scan or
+              attachment, and these vendor invoice numbers have no matching record in Striven &mdash; so this is
+              everything known about {bill.no}, not a link to the document itself.
+            </div>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+/**
+ * A PAYMENT TERM, rendered once.
+ *
+ * "Net 30" where there is one, an em-dash where there is not — never a guess.
+ * A term the vendor agreement supplied for a cell the sheet left blank is
+ * marked with a degree ring and says so on hover, because a reader working the
+ * register needs to know which figures came off the sheet they maintain and
+ * which did not. Everything else prints plain.
+ */
+function Terms({ days, source }: { days: number | null; source: 'sheet' | 'agreed' | 'none' }) {
+  if (days == null) return <span style={{ color: C.muted }}>&mdash;</span>;
+  const label = days === 0 ? 'Due on receipt' : `Net ${days}`;
+  if (source === 'agreed') {
+    return (
+      <span style={{ whiteSpace: 'nowrap' }}
+        title="The sheet's Payment Terms cell is blank on this row; shown from the agreed vendor terms.">
+        {label}<span style={{ color: C.warning, marginLeft: 3, fontWeight: 700 }}>&deg;</span>
+      </span>
+    );
+  }
+  return <span style={{ whiteSpace: 'nowrap' }}>{label}</span>;
 }
 
 type SortKey = 'sub' | 'date' | 'due' | 'total' | 'open';
@@ -250,16 +391,20 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
       // value struck through while the totals exclude it. One column could only
       // carry one of those, and either choice would make the file disagree with
       // the page or fail to add up.
-      ['Invoice', 'Sub-Ledger', 'Invoice date', 'Due date', 'Face value', 'Counts toward total', 'Open', 'Status'],
+      ['Invoice', 'Sub-Ledger', 'Invoice date', 'Terms', 'Due date', 'Face value', 'Counts toward total', 'Open', 'Status'],
       ...sorted.map((b) => [
-        b.no, b.vendor, b.date, b.due, money(b.faceValue), money(b.total), money(b.open),
+        b.no, b.vendor, b.date,
+        // A ring marks a term the agreement supplied for a blank cell, exactly
+        // as on screen, so the workbook and the table cannot read differently.
+        b.termsDays == null ? '' : `Net ${b.termsDays}${b.termsSource === 'agreed' ? ' °' : ''}`,
+        b.due, money(b.faceValue), money(b.total), money(b.open),
         b.kind === 'cancelled' ? 'Cancelled — excluded' : b.kind === 'credit-note' ? 'Credit note' : b.status,
       ]),
       [],
       // Blank under "Face value": summing face values would re-add the very
       // cancellations this register takes out. The totals row belongs under the
       // column that counts.
-      ['Total', `${filtered.length} bills`, '', '', '', money(fTotal), money(fOpen), ''],
+      ['Total', `${filtered.length} bills`, '', '', '', '', money(fTotal), money(fOpen), ''],
     ];
     downloadXlsx([{ name: seg === 'all' ? 'Bills' : seg === 'unpaid' ? 'Unpaid bills' : 'Paid bills', rows }],
       stamped(`smr-ap-${seg}-bills`, 'xlsx'));
@@ -325,6 +470,10 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                   onChange={(next) => { setPickSub(next); setPage(1); }} />
               </th>
               <th className="sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setSortKey('date')}>Invoice date {sortInd('date')}</th>
+              {/* BETWEEN THE TWO DATES IT RELATES. Read left to right the row now
+                  states the whole arrangement: raised on this date, on these
+                  terms, due on that one. */}
+              <th style={{ whiteSpace: 'nowrap' }}>Terms</th>
               <th className="sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setSortKey('due')}>Due date {sortInd('due')}</th>
               <th className="num sortable" onClick={() => setSortKey('total')}>Total {sortInd('total')}</th>
               {/* The paid table has no balance to show, so the column would be a
@@ -344,9 +493,12 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
             {sorted.map((b, i) => (
               <tr key={b.no + b.date}
                 className={i >= (pageSafe - 1) * PAGE_SIZE && i < pageSafe * PAGE_SIZE ? undefined : 'pg-off'}>
-                <td><strong>{b.no}</strong></td>
+                {/* The row has no click of its own here, so the reference
+                    carries the whole affordance. */}
+                <td><BillLink bill={b} /></td>
                 <td>{b.vendor}</td>
                 <td>{fmtDate(b.date)}</td>
+                <td><Terms days={b.termsDays} source={b.termsSource} /></td>
                 <td>{fmtDate(b.due)}</td>
                 {/* A credit note prints as a negative and is tinted, so the row
                     reads as money coming OFF the account rather than another
@@ -367,12 +519,12 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                 <td>{statusTag(b.status, b.kind)}</td>
               </tr>
             ))}
-            {sorted.length === 0 && <tr><td colSpan={7} style={{ color: C.muted }}>No bills match.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No bills match.</td></tr>}
             {filtered.length > 0 && (
               <tr className="total-row">
                 <td>TOTAL</td>
                 <td>{filtered.length} bill{filtered.length === 1 ? '' : 's'}</td>
-                <td></td><td></td>
+                <td></td><td></td><td></td>
                 <td className="num">{formatCurrency(fTotal, true)}</td>
                 <td className="num">{formatCurrency(fOpen, true)}</td>
                 <td></td>
@@ -388,13 +540,13 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                   <td colSpan={2} style={{ fontWeight: 600, color: C.muted }}>
                     less {creditCount} credit note{creditCount === 1 ? '' : 's'}
                   </td>
-                  <td></td><td></td><td></td>
+                  <td></td><td></td><td></td><td></td>
                   <td className="num cell-pos">−{formatCurrency(creditOffset, true)}</td>
                   <td></td>
                 </tr>
                 <tr className="total-row">
                   <td>NET OUTSTANDING</td>
-                  <td></td><td></td><td></td><td></td>
+                  <td></td><td></td><td></td><td></td><td></td>
                   <td className="num">{formatCurrency(fOpen - creditOffset, true)}</td>
                   <td></td>
                 </tr>
@@ -444,6 +596,8 @@ export function ApSheetTab() {
       no: b.no, vendor: b.subLedger, date: b.date, due: b.due,
       total: b.total, faceValue: b.faceValue ?? b.total, kind: b.kind ?? 'bill',
       status: b.status, aging: b.aging, open: b.open,
+      terms: b.terms ?? '', dueDays: b.dueDays ?? 0,
+      termsDays: b.termsDays ?? null, termsSource: b.termsSource ?? 'none',
     })),
     [ledger],
   );
@@ -502,6 +656,8 @@ export function ApSheetTab() {
   const vendorRows = useMemo(() => (ledger?.subLedgers ?? [])
     .map((g) => ({
       vendor: g.subLedger,
+      termsDays: g.termsDays ?? null,
+      termsSource: g.termsSource ?? 'none',
       bills: g.bills,
       billed: g.billed,
       paid: g.paidRecorded ?? 0,
@@ -513,7 +669,35 @@ export function ApSheetTab() {
       // leave a "gap" of 1e-13, which would light up every row as a mismatch.
       check: Math.round((g.billed - (g.paidRecorded ?? 0) - g.open) * 100) / 100,
     }))
+    .map((v) => ({
+      ...v,
+      // ── BILLS REQUIRED ─────────────────────────────────────────────────────
+      // Money we have PAID that no invoice on the sheet accounts for.
+      //
+      // The identity is billed − paid = outstanding. When the Debit column runs
+      // ahead of the Credit column the difference is not a rounding problem and
+      // it is not an overpayment: it is a payment we made against an invoice the
+      // register has never been given. EvoHealth is the clearest case — $51,475
+      // paid against $22,625 of bills — and the $28,850 between them is simply
+      // invoices we are missing.
+      //
+      // Naming it turns a reconciliation complaint into a WORKLIST: this is the
+      // exact figure of paperwork to chase from each supplier, and once those
+      // invoices are entered the row ties on its own.
+      //
+      // DERIVED FROM `check`, not from the server's `paidGap`, so this column
+      // and the RECONCILES tag beside it can never tell different stories — they
+      // are two readings of one number. (They agree today on all six vendors;
+      // deriving both here is what keeps that true.)
+      billsRequired: v.check < -0.005 ? Math.round(-v.check * 100) / 100 : 0,
+    }))
     .sort((a, b) => b.billed - a.billed), [ledger]);
+
+  /** Total paperwork outstanding — the figure to chase, across every supplier. */
+  const billsRequiredTotal = useMemo(
+    () => Math.round(vendorRows.reduce((s, v) => s + v.billsRequired, 0) * 100) / 100,
+    [vendorRows],
+  );
 
   // Everything the register takes OUT of its own total, named — so the page can
   // say why it is smaller than the sheet's invoice column instead of leaving
@@ -551,6 +735,7 @@ export function ApSheetTab() {
     return { amt, cnt };
   }, [BILLS]);
 
+
   // Status mix for the small cards.
   const statusCards = useMemo(() => {
     // 'Credit note' is a row on this card because the percentages are taken
@@ -580,13 +765,20 @@ export function ApSheetTab() {
   // convention for glanceable figures, and the drill behind each tile is where
   // the exact number now lives.
   const vendorDrill = (name: string) => setDrill({
-    title: name, sub: `${BILLS.filter((b) => b.vendor === name).length} bills on record`,
+    title: name,
+    // One supplier, so the term is a property of the whole drill: repeating it
+    // down every row would say the same thing as many times as they have bills.
+    sub: (() => {
+      const n = BILLS.filter((b) => b.vendor === name).length;
+      const d = BILLS.find((b) => b.vendor === name && b.termsDays != null)?.termsDays ?? null;
+      return `${n} bills on record · ${d == null ? 'no payment terms stated' : d === 0 ? 'Due on receipt' : `Net ${d}`}`;
+    })(),
     columns: [{ key: 'n', label: 'Invoice' }, { key: 'd', label: 'Date' }, { key: 't', label: 'Total', num: true }, { key: 's', label: 'Status' }],
     // One vendor, so this is invoice sequence ascending — same order the
     // supplier's block runs in on the register below.
     rows: BILLS.filter((b) => b.vendor === name).sort(byLedgerThenSequence)
       .map((b) => ({
-        n: b.no,
+        n: <BillLink bill={b} />,
         d: fmtDate(b.date),
         // Face value, so a cancelled row still shows the document's amount —
         // the strike-through and the tag say it does not count.
@@ -607,7 +799,7 @@ export function ApSheetTab() {
     // both, so the drill was the odd one out.
     columns: [
       { key: 'n', label: 'INVOICE NUMBER' }, { key: 'v', label: 'VENDOR NAME' },
-      { key: 'd', label: 'INVOICE DATE' }, { key: 'due', label: 'DUE DATE' },
+      { key: 'd', label: 'INVOICE DATE' }, { key: 'tm', label: 'TERMS' }, { key: 'due', label: 'DUE DATE' },
       { key: 'o', label: 'OPEN BALANCES', num: true },
     ],
     // Vendor A→Z, then invoice sequence — the register's own order, so the
@@ -619,9 +811,13 @@ export function ApSheetTab() {
       // 83563 has neither an invoice date nor a due date, and an empty cell
       // reads as a rendering fault rather than as a gap in the source.
       .map((b): Record<string, ReactNode> => ({
-        n: b.no,
+        // Openable here too — this drill is where the outstanding rows are
+        // actually worked, so it is the likeliest place to want the terms and
+        // the days-past-due the row cannot print.
+        n: <BillLink bill={b} />,
         v: b.vendor,
         d: b.date ? fmtDate(b.date) : <span style={{ color: C.muted }}>—</span>,
+        tm: <Terms days={b.termsDays} source={b.termsSource} />,
         due: b.due ? fmtDate(b.due) : <span style={{ color: C.muted }}>—</span>,
         o: formatCurrency(b.open, true),
       }))
@@ -630,10 +826,10 @@ export function ApSheetTab() {
       .concat((ledger?.totals?.creditNotes ?? 0) > 0 ? [
         {
           n: <span style={{ color: C.muted }}>less {ledger!.totals!.creditNotes} credit note{ledger!.totals!.creditNotes === 1 ? '' : 's'}</span>,
-          v: '', d: '', due: '', o: <span className="cell-pos">−{formatCurrency(ledger!.totals!.creditNoteAmount, true)}</span>,
+          v: '', d: '', tm: '', due: '', o: <span className="cell-pos">−{formatCurrency(ledger!.totals!.creditNoteAmount, true)}</span>,
         },
         {
-          n: <strong>NET OUTSTANDING</strong>, v: '', d: '', due: '',
+          n: <strong>NET OUTSTANDING</strong>, v: '', d: '', tm: '', due: '',
           o: <strong>{formatCurrency(agg.outstanding, true)}</strong>,
         },
       ] : []),
@@ -777,11 +973,17 @@ export function ApSheetTab() {
               <thead>
                 <tr>
                   <th>SUB-LEDGER</th>
+                  {/* A property of the SUPPLIER, so it sits with their name
+                      rather than being read off one of their bills. */}
+                  <th>TERMS</th>
                   <th className="num">BILLS</th>
                   <th className="num">BILLED</th>
                   <th className="num">PAID</th>
                   <th className="num">PAYMENTS</th>
                   <th className="num">OUTSTANDING</th>
+                  {/* Paid with no invoice behind it — the paperwork to chase.
+                      See `billsRequired`. */}
+                  <th className="num" title="Payments with no invoice on the sheet to account for them. Obtain these bills and the row reconciles.">BILLS REQUIRED</th>
                   <th>RECONCILES</th>
                 </tr>
               </thead>
@@ -789,6 +991,7 @@ export function ApSheetTab() {
                 {vendorRows.map((v) => (
                   <tr key={v.vendor}>
                     <td><strong>{v.vendor}</strong></td>
+                    <td><Terms days={v.termsDays} source={v.termsSource} /></td>
                     <td className="num">{v.bills}</td>
                     <td className="num">{formatCurrency(v.billed, true)}</td>
                     <td className="num cell-pos">{formatCurrency(v.paid, true)}</td>
@@ -796,17 +999,24 @@ export function ApSheetTab() {
                     <td className={v.open > 0.005 ? 'num cell-neg' : 'num'}>
                       {v.open > 0.005 ? formatCurrency(v.open, true) : '-'}
                     </td>
+                    <td className="num" style={v.billsRequired > 0 ? { color: C.warning, fontWeight: 700 } : undefined}>
+                      {v.billsRequired > 0 ? formatCurrency(v.billsRequired, true) : '-'}
+                    </td>
                     <td>{reconcileTag(v.check, v.creditNoteAmount, v.creditNotes)}</td>
                   </tr>
                 ))}
                 {vendorRows.length > 0 && (
                   <tr className="total-row">
                     <td>TOTAL</td>
+                    <td />
                     <td className="num">{vendorRows.reduce((s, v) => s + v.bills, 0)}</td>
                     <td className="num">{formatCurrency(vendorRows.reduce((s, v) => s + v.billed, 0), true)}</td>
                     <td className="num">{formatCurrency(vendorRows.reduce((s, v) => s + v.paid, 0), true)}</td>
                     <td className="num">{vendorRows.reduce((s, v) => s + v.payments, 0)}</td>
                     <td className="num">{formatCurrency(vendorRows.reduce((s, v) => s + v.open, 0), true)}</td>
+                    <td className="num" style={billsRequiredTotal > 0 ? { color: C.warning, fontWeight: 800 } : undefined}>
+                      {billsRequiredTotal > 0 ? formatCurrency(billsRequiredTotal, true) : '-'}
+                    </td>
                     <td />
                   </tr>
                 )}
@@ -831,11 +1041,32 @@ export function ApSheetTab() {
                     {' '}<b>because of its credit note{explained[0].creditNotes === 1 ? '' : 's'}</b>: Billed here is net of them,
                     while the sheet's Outstanding column is not. That block otherwise reconciles exactly.</>
                 )}
-                {unexplained.length > 0 && (
-                  <> {unexplained.map((v) => `${v.vendor} ${formatCurrency(v.check, true)}`).join(', ')} —
-                    {' '}the sheet holds payments not applied to a bill, or bills whose balance has not been reduced
-                    for a payment already made.</>
-                )}
+                {unexplained.length > 0 && (() => {
+                  // TWO DIFFERENT FAULTS, and they were being reported as one
+                  // sentence. A NEGATIVE check means we paid more than the
+                  // invoices on file account for — the paperwork is missing, and
+                  // the fix is to obtain those bills. A POSITIVE one means the
+                  // opposite: a bill's balance was never reduced for a payment
+                  // already made, which is a correction to the sheet. Telling
+                  // someone to "chase invoices" for the second is wrong work.
+                  const missingBills = unexplained.filter((v) => v.billsRequired > 0);
+                  const unapplied = unexplained.filter((v) => v.billsRequired === 0);
+                  return (
+                    <>
+                      {missingBills.length > 0 && (
+                        <> <b>Bills required</b> — we have paid{' '}
+                          <b style={{ color: C.warning }}>{formatCurrency(billsRequiredTotal, true)}</b> that no invoice on this
+                          sheet accounts for: {missingBills.map((v) => `${v.vendor} ${formatCurrency(v.billsRequired, true)}`).join(', ')}.
+                          {' '}These are not overpayments — they are invoices we do not yet hold. Obtain them from the supplier,
+                          enter them in the sheet, and each block ties on its own.</>
+                      )}
+                      {unapplied.length > 0 && (
+                        <> {unapplied.map((v) => `${v.vendor} ${formatCurrency(v.check, true)}`).join(', ')} — a bill's balance
+                          has not been reduced for a payment already made; that is a correction to the sheet, not a missing invoice.</>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             );
           })()}

@@ -133,6 +133,16 @@ Striven spells the same person several ways (`Maverick Medical- Jillian Colin`,
 `CVT Medical - Christy Tan`), so `commRep()` folds every variant onto one
 canonical name and covers 100% of live rows with no `Unknown` bucket.
 
+**The canonical name is the rep's FULL name** — `Alle Ann Dubberley`,
+`Jillian Colin`, `Christy Tan`, `Maylon Sanders`. It is an identity key, not a
+label: `REP_NAMES`, `REP_DIRECTORY.repName`, `REP_SUB_REPS` and `commRep()`'s
+returns all carry the same string, and `isSelf`, the blindspots and every screen
+compare against it. There is no display-name layer, which is what makes a rename
+a four-line change — and what makes editing only three of the four places a
+silent bug, so `_comm-rep.test.js` asserts the four agree. The short forms
+(`Christy`, `Jillian`, `Alle Ann`) still fold, because the sheet and the recon
+file are still written that way.
+
 **Sub-reps fold into the rep who is paid.** `Maylon Sanders - Denise Zavala` is
 Maylon's order: Denise is her sub-rep and Maylon is paid on it, so `commRep()`
 returns `Maylon Sanders`. Denise is not a roster entry of her own.
@@ -141,8 +151,8 @@ Striven books orders under other people too (house/clinic accounts, ops staff).
 They are **not** reps: such an order earns no commission and is reported in
 `striven.unmatched`.
 
-**The roster is the five producing reps** — Alle Ann, Jillian, Christy, Maylon
-Sanders, Cassie. It had widened to eleven to cover every distinct Sales Rep value
+**The roster is the five producing reps** — Alle Ann Dubberley, Jillian Colin,
+Christy Tan, Maylon Sanders, Cassie. It had widened to eleven to cover every distinct Sales Rep value
 in Striven, which put a house bucket (`House Account`), a practice (`Santiago
 Family Chiropractic`), finance (`Crystal Chambers`) and three non-producers on
 the commission table. All six were at $0 — the sheet signs off nothing for them —
@@ -180,7 +190,7 @@ The **only** place accounts are provisioned. There is deliberately no signup flo
 ```json
 [
   { "email": "admin@sportsmedrecovery.com",   "repName": null,      "role": "admin" },
-  { "email": "jillian@sportsmedrecovery.com", "repName": "Jillian", "role": "rep"  }
+  { "email": "jillian@sportsmedrecovery.com", "repName": "Jillian Colin", "role": "rep" }
 ]
 ```
 
@@ -253,12 +263,12 @@ money. Reporting lines carve two exceptions out of that, both from **one**
 declaration:
 
 ```json
-{ "Alle Ann": ["Jillian"] }
+{ "Alle Ann Dubberley": ["Jillian Colin"] }
 ```
 
 | Direction | Effect |
 | --- | --- |
-| Looking **down** — Alle's login | Jillian's row is tagged `sub-rep`, and a roll-down under Alle's own name on the leaderboard opens her sub-reps' **volume** in full |
+| Looking **down** — Alle's login | Jillian's row is drawn nested directly under Alle's and out of the ranking (`nestSubReps`), and a roll-down under Alle's own name on the leaderboard opens her sub-reps' **volume** in full |
 | Looking **up** — Jillian's login | Alle is absent entirely: no row, no order count, no mention of the name anywhere in the payload |
 
 **The supervisor gets volume, never pay.** `supervised` opts a sub-rep's row out

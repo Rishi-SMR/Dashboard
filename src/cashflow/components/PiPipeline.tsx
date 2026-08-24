@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchPiStages, type PiStages, type PiStageName, type PiStageOrder, type PiBoard } from '../strivenApi';
+import { SoLink } from './SoLink';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { DeviceChips } from './DeviceChips';
@@ -530,7 +531,13 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                         && (o.labels ?? []).every((l) => bad.has(l.toLowerCase()) || flag.has(l.toLowerCase()));
                       return (
                         <tr key={`${o.pipeline}-${o.soId}`}>
-                          <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                          {/* Was brand-blue at weight 600 and inert — the exact
+                              "looks like a link, is not one" case SoLink was
+                              written for. `scopedToRep === null` is the admin
+                              view, the same test `canReview` uses: a rep has no
+                              Striven login, so the jump is offered to nobody
+                              else. */}
+                          <td><SoLink soId={o.soId} label={o.ref} canOpenInStriven={data?.scopedToRep === null} /></td>
                           <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                           <td>
                             <span className="pi-labels">
@@ -667,7 +674,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                   return (
                     <tr key={o.soId}>
                       <td style={{ fontWeight: 600, color: C.brand }}>
-                        {o.ref}
+                        <SoLink soId={o.soId} label={o.ref} canOpenInStriven={data?.scopedToRep === null} />
                         {/* This stage is in the order's past: it is listed here
                             because a label attests to it, but it has since moved
                             on. Saying where prevents the row reading as stuck. */}

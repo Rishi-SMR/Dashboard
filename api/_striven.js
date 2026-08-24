@@ -440,14 +440,42 @@ async function searchAll(endpoint, filter = {}, cap = 2000) {
 const CACHE_TTL = Number(process.env.CACHE_TTL_MS || 300_000);
 const _cache = new Map();
 const _inflight = new Map();
+/**
+ * STALE-WHILE-REVALIDATE: an expired copy is served immediately and the refresh
+ * runs BEHIND the user, not in front of them.
+ *
+ * The heavy derived keys carry a 60s TTL, and the work behind them is four
+ * Google Sheets downloads and two Striven report pulls — about 5 seconds. With a
+ * hard expiry that meant one unlucky request every single minute paid the full
+ * 5s while every other request that minute was instant. Whoever opened the
+ * dashboard on the wrong side of the tick simply waited, and reloading made it
+ * worse rather than better because the reload re-armed the same race.
+ *
+ * Only a COLD key — one with no copy at all — waits now. That is the first
+ * request after the process starts, and nothing after it.
+ *
+ * WHAT THIS COSTS, stated plainly: a reader can be served a copy that is up to
+ * one TTL old plus however long the background refresh takes. That is barely a
+ * change — the previous code already served a copy up to one TTL old, and the
+ * refresh it now overlaps is the same refresh the caller used to block on. It is
+ * NOT a way to hold data longer; the TTLs are untouched.
+ */
 function cached(key, fn, ttl = CACHE_TTL) {
   const hit = _cache.get(key);
   if (hit && Date.now() < hit.expiresAt) return Promise.resolve(hit.value);
-  if (_inflight.has(key)) return _inflight.get(key);
-  const p = Promise.resolve().then(fn)
-    .then((value) => { _cache.set(key, { value, expiresAt: Date.now() + ttl }); _inflight.delete(key); return value; })
-    .catch((e) => { _inflight.delete(key); if (hit) return hit.value; throw e; });
-  _inflight.set(key, p);
+  let p = _inflight.get(key);
+  if (!p) {
+    p = Promise.resolve().then(fn)
+      .then((value) => { _cache.set(key, { value, expiresAt: Date.now() + ttl }); _inflight.delete(key); return value; })
+      .catch((e) => { _inflight.delete(key); if (hit) return hit.value; throw e; });
+    _inflight.set(key, p);
+  }
+  if (hit) {
+    // The refresh is now nobody's blocker, so its rejection must not surface as
+    // an unhandled rejection and take the process down.
+    p.catch(() => {});
+    return Promise.resolve(hit.value);
+  }
   return p;
 }
 
@@ -556,19 +584,90 @@ export function scrubPhi(key, data, refMap = null) {
 // Shared, durable cache in the Supabase `striven_cache` table. Cold serverless
 // instances and Striven rate-limit/outage never break loading — we always fall
 // back to the last-known-good copy instead of hanging or erroring.
+/**
+ * ── ONE READ PER BLOB, NOT SIX ───────────────────────────────────────────────
+ *
+ * `persistentCached` memoises what IT reads, but most callers reach past it and
+ * call `sbCacheRead` directly — soDetailMap(), getOrderAnalytics(), getDeviceMix(),
+ * getPiStages() and a dozen others. Every one of those was a fresh HTTPS round
+ * trip for a blob that had already been downloaded moments earlier in the same
+ * request.
+ *
+ * MEASURED on one admin dashboard load, before this: 21 network calls, of which
+ * `so` was fetched SIX times and `report_patient_items` SIX times — ~2.9s and
+ * ~1.9MB spent re-downloading two blobs the process already had. That is most of
+ * the wait after login, and none of it bought fresher data: the table is
+ * refreshed out of band every 6 hours by the pg_cron job, so the second read of
+ * `so` is byte-identical to the first by construction.
+ *
+ * THE RESPONSE TEXT IS MEMOISED, NOT THE PARSED OBJECT, and every caller
+ * re-parses. That is deliberate and it is the whole safety argument: callers
+ * today receive a freshly-parsed structure they are free to mutate — line 921
+ * takes `report_demo_items` and builds on it — and handing them all one shared
+ * object would let one caller's edit surface in another's data. Re-parsing costs
+ * a few ms against a 200-500ms round trip and keeps the semantics identical.
+ *
+ * ALLOW-LIST, NOT DENY-LIST. Only the big out-of-band datasets are memoised. A
+ * key that is WRITTEN during normal operation must keep reading straight through
+ * or the writer would not see its own write: `pi_stages` (a rep dragging an order
+ * in the pipeline), `shipment_tracking`, and the QuickBooks OAuth rows, where a
+ * stale token read breaks the integration. Anything not listed keeps exactly the
+ * behaviour it has today, so a key added later is fresh-by-default rather than
+ * silently cached.
+ */
+const SB_MEMO_TTL = Number(process.env.SB_MEMO_TTL_MS || 60_000);
+const SB_MEMO_KEYS = new Set([
+  'so', 'so_detail', 'order_chain',
+  'report_patient_items', 'report_demo_items', 'report_vendor_items',
+  'invoices', 'bills', 'po', 'customers', 'vendors', 'items',
+  'payments', 'billpaycc', 'tasks', 'projects', 'gl',
+]);
+const _sbMemo = new Map();       // key → { text, expiresAt }
+const _sbMemoFlight = new Map(); // key → Promise<string|null>, collapses a burst
+
+/** The raw response text → the single row callers expect. Never throws. */
+const _sbRow = (text) => {
+  if (text == null) return null;
+  try {
+    const rows = JSON.parse(text);
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } catch { return null; }
+};
+
 export async function sbCacheRead(key) {
   const url = SB_URL(), sk = SB_KEY();
   if (!url || !sk) return null;
+  const memoable = SB_MEMO_KEYS.has(key);
+  if (memoable) {
+    const hit = _sbMemo.get(key);
+    if (hit && Date.now() < hit.expiresAt) return _sbRow(hit.text);
+    // Six callers firing at once share ONE request rather than racing.
+    const flight = _sbMemoFlight.get(key);
+    if (flight) return _sbRow(await flight);
+  }
+  const run = (async () => {
+    try {
+      const res = await fetch(`${url}/rest/v1/striven_cache?key=eq.${encodeURIComponent(key)}&select=data,updated_at`, { headers: { apikey: sk, Authorization: `Bearer ${sk}` } });
+      if (!res.ok) return null;
+      return await res.text();
+    } catch { return null; }
+  })();
+  if (!memoable) return _sbRow(await run);
+  _sbMemoFlight.set(key, run);
   try {
-    const res = await fetch(`${url}/rest/v1/striven_cache?key=eq.${encodeURIComponent(key)}&select=data,updated_at`, { headers: { apikey: sk, Authorization: `Bearer ${sk}` } });
-    if (!res.ok) return null;
-    const rows = await res.json();
-    return Array.isArray(rows) && rows[0] ? rows[0] : null;
-  } catch { return null; }
+    const text = await run;
+    // A miss is NOT memoised: a blob that is absent or unreachable must be
+    // retried, or one blip would blank a dataset for the whole TTL.
+    if (text != null) _sbMemo.set(key, { text, expiresAt: Date.now() + SB_MEMO_TTL });
+    return _sbRow(text);
+  } finally { _sbMemoFlight.delete(key); }
 }
 export function sbCacheWrite(key, data) {
   const url = SB_URL(), sk = SB_KEY();
   if (!url || !sk) return Promise.resolve();
+  // The writer must see its own write. refreshAll() rewrites these blobs every
+  // 6h and would otherwise serve the copy it just replaced for a further minute.
+  _sbMemo.delete(key);
   return fetch(`${url}/rest/v1/striven_cache`, {
     method: 'POST',
     headers: { apikey: sk, Authorization: `Bearer ${sk}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
@@ -1080,6 +1179,30 @@ function maskName(name, mask = MASK_PHI) {
   return '';
 }
 const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(rawNumber ?? '')) ? `${prefix}-${id}` : String(rawNumber));
+
+/**
+ * A document's customer, as it may be shown: the de-identified PT-<id>
+ * reference, never a name.
+ *
+ * maskName() on its own returns '' for a real name. That is right for a free
+ * text field, where the safe rendering of a name is nothing at all, and wrong
+ * for the CUSTOMER OF A DOCUMENT, where something has to identify the party or
+ * the record cannot be worked at all.
+ *
+ * Every CACHED dataset already carries `PT-<id>` in this position: scrubPhi()
+ * rewrites the name at write time and persistentCached() does the same on its
+ * bootstrap path, so the AR register, the order book and QuickBooks all show the
+ * reference. The two LIVE reads — getSODetail and getPODetail — go straight to
+ * Striven, get the real name back, and maskName() blanked it. The result was a
+ * customer shown as PT-1234 on every list and as "-" on the one card you open to
+ * look at that order in detail.
+ *
+ * THE ID IS NOT PHI. It is already published beside the name as `customerId` on
+ * the AR rows, it is the join key the whole cache is built on, and it resolves
+ * to a person only inside Striven — which is exactly the property that makes it
+ * the de-identified reference in the first place.
+ */
+export const customerRef = (c) => maskName(c?.name) || (c?.id ? `PT-${c.id}` : '');
 
 // Striven's salesRep field holds "Referral group- Person" (e.g.
 // "Maverick Medical- Jillian Colin", "CVT Medical - Christy Tan"). The actual
@@ -1798,7 +1921,7 @@ async function getPODetail(id) {
     requestedBy: nm(r.requestedBy), contact: nm(r.contact), createdBy: nm(r.createdBy), createdDate: r.dateCreated ?? null,
     approvedDate: r.approvedDate ?? null, reviewedDate: r.reviewedDate ?? null, acceptedBy: nm(r.acceptedByContact), lastUpdatedBy: nm(r.lastUpdatedBy),
     paymentTerm: nm(r.paymentTerm), account: nm(r.apglAccount),
-    dropShipCustomer: r.dropShipCustomer ? maskName(r.dropShipCustomer.name) : '',
+    dropShipCustomer: r.dropShipCustomer ? customerRef(r.dropShipCustomer) : '',
     // full operational detail (addresses/notes withheld under PHI)
     linkedSo: (await poToSoMap())[safeRef('PO', r.id, r.poNumber)] ?? '',
     shipVia: nm(r.shipVia), lastUpdatedDate: r.lastUpdatedDate ?? null,
@@ -1809,8 +1932,10 @@ async function getPODetail(id) {
   };
 }
 // FULL sales-order detail — every operational field Striven returns. Under
-// MASK_PHI: patient name → initials, addresses/notes/line descriptions dropped;
-// products, prices, dates, people-who-worked-it and logistics stay visible.
+// MASK_PHI: the patient name becomes its PT-<id> reference (NOT initials — this
+// comment used to say initials and maskName() has never produced any), and
+// addresses, notes and line descriptions are dropped; products, prices, dates,
+// people-who-worked-it and logistics stay visible.
 async function getSODetail(id) {
   const r = await cached(`so-${id}`, () => striven('GET', `/v1/sales-orders/${id}`));
   const nm = (o) => o?.name ?? '';
@@ -1829,7 +1954,11 @@ async function getSODetail(id) {
     ordered: orderedFlag(li),
   }));
   return {
-    id: r.id, ref: safeRef('SO', r.id, r.orderNumber ?? r.number), customer: maskName(r.customer?.name),
+    id: r.id, ref: safeRef('SO', r.id, r.orderNumber ?? r.number),
+    // LIVE from Striven, so this is a real name and maskName() alone would blank
+    // it. customerRef() falls back to the PT-<id> reference every cached screen
+    // already shows for the same customer.
+    customer: customerRef(r.customer),
     date: r.orderDate ?? r.dateCreated ?? null, total: Number(r.orderTotal ?? 0),
     status: r.status?.name ?? '', lineItemCount: lineItems.length,
     // full operational detail
@@ -1844,6 +1973,48 @@ async function getSODetail(id) {
     isChangeOrder: !!r.isChangeOrder, isRecurring: !!r.isRecurring,
     notesLogCount: Number(r.notesLogCount ?? 0), attachmentCount: Number(r.attachmentCount ?? 0),
     lineItems, phiMasked: MASK_PHI,
+  };
+}
+
+/**
+ * SALES-ORDER DETAIL, SCOPED TO THE CALLER.
+ *
+ * `getSODetail` above masks PHI but knows nothing about who is asking: it hands
+ * back the order total and every line's unit price to any authenticated caller,
+ * for any id. That was tolerable while the only way to reach it was the Orders
+ * tab, which sits on the company side of the nav and no rep can open. The order
+ * reference is a link on the REP boards now, so the endpoint has to answer the
+ * question the rest of this file already answers everywhere else: what may THIS
+ * viewer see?
+ *
+ * TWO RULES, both server-side, because a figure that reaches the browser is
+ * disclosed whatever the component does with it.
+ *
+ *   1. ONLY THEIR OWN ORDERS. Membership is tested against getOrderAnalytics for
+ *      the same viewer — the set the server already considers theirs — rather
+ *      than by comparing rep names here. Re-deriving ownership is how two
+ *      definitions of "mine" drift apart, and the sub-rep fold (Denise Zavala's
+ *      orders count as Maylon's) is exactly the kind of subtlety a second
+ *      implementation gets wrong.
+ *   2. NO MONEY. A rep may see their own COMMISSION and nothing else in dollars
+ *      — not revenue, not what the order billed. See getRepOverview, which nulls
+ *      revenue for a rep on their own verticals for this reason. Totals and line
+ *      prices are dropped; items, quantities, dates, status and logistics stay,
+ *      which is the operational detail they open the row for.
+ *
+ * A miss is 404, not 403: "you may not see this" confirms the order exists.
+ */
+export async function getSODetailFor(id, viewer = null) {
+  const detail = await getSODetail(id);
+  if (viewer?.role === 'admin') return detail;
+  const an = await getOrderAnalytics(viewer).catch(() => ({ orders: [] }));
+  const mine = (an.orders ?? []).some((o) => String(o.soId) === String(id));
+  if (!mine) { const e = new Error('Sales order not found'); e.status = 404; throw e; }
+  return {
+    ...detail,
+    total: null,
+    lineItems: (detail.lineItems ?? []).map((li) => ({ ...li, unit: null, amount: null, shipping: null })),
+    moneyMasked: true,
   };
 }
 async function getTrends() {
@@ -2209,16 +2380,26 @@ export const isExcludedRep = (rep) => (EXCLUDED_REPS || [])
 // otherwise split her total across two rows. Names are folded onto the portal's
 // REP_DIRECTORY spelling here, at the boundary, so nothing downstream has to
 // know the sheet's variants.
+//
+// MUST TRACK commRep()'s RETURNS. These are the same four people arriving from a
+// second source, and if the two folds disagree by so much as a surname the rep
+// splits into two rows again — which is the exact bug this table was written to
+// fix. Both now land on the full name.
 const RECON_REP_ALIASES = [
-  [/^alle/i, 'Alle Ann'],
-  [/^jillian/i, 'Jillian'],
-  [/^christy/i, 'Christy'],
+  [/^alle/i, 'Alle Ann Dubberley'],
+  [/^jillian/i, 'Jillian Colin'],
+  [/^christy/i, 'Christy Tan'],
   [/^cassie/i, 'Cassie'],
   [/^maylon/i, 'Maylon Sanders'],
   [/^kinley/i, 'Kinley Shepherd'],
   [/cmc/i, 'CMC (direct)'],
+  // Added with the roster. Neither collides with /^alle/i above — "alek" and
+  // "alyssa" both break at the third letter — but they are listed after it
+  // anyway, so the most specific existing fold keeps first refusal.
+  [/^alek/i, 'Alek Sigman'],
+  [/^alyssa/i, 'Alyssa Parker'],
 ];
-const reconRep = (raw) => {
+export const reconRep = (raw) => {
   const s = String(raw ?? '').trim();
   for (const [re, name] of RECON_REP_ALIASES) if (re.test(s)) return name;
   return s;
@@ -2633,12 +2814,34 @@ function commissionBookRows(buffer, defaultRep = '') {
       if (!patient || !(comm > 0)) continue;
       const repRaw = cols.rep >= 0 ? String(r[cols.rep] ?? '').trim() : String(defaultRep ?? '').trim();
       if (!repRaw) continue;                     // a row with no owner pays nobody
+      // ── A BONUS, not a device commission ────────────────────────────────
+      // Commission in this business is units × a PER-DEVICE rate, so a row
+      // with no device in it cannot be one. Maylon's book carries such a row —
+      // a flat $2,000 — and with no rule for it the line rendered as an
+      // ordinary order: a masked "patient", an empty device, and "Unmatched
+      // from Striven" in the state column, which reads as a broken record
+      // rather than as a payment that was never tied to an order in the first
+      // place.
+      //
+      // THE DEVICE COLUMN IS THE TEST, and it is a fact about the pay model
+      // rather than a guess about this one row: a per-device rate applied to no
+      // device is not a number that exists.
+      //
+      // THE "PATIENT" ON SUCH A ROW IS NOT A PATIENT — it is what the bonus was
+      // for, written in the patient column because the sheet has nowhere else
+      // to put it. It is DROPPED rather than shown, and that is deliberate: the
+      // raw cell is still un-masked at this point and if this rule ever misfires
+      // on a genuine patient row that merely lacks a device, printing it would
+      // publish a full legal name. Dropping a label can only cost a label.
+      const itemRaw = String(r[cols.item] ?? '').trim();
+      const bonus = !itemRaw;
       out.push({
         rep: reconRep(repRaw),
         cycle,
         month,
-        patient: commInitialLastDisp(patient),
-        item: String(r[cols.item] ?? '').trim(),
+        patient: bonus ? '' : commInitialLastDisp(patient),
+        item: bonus ? 'Bonus' : itemRaw,
+        bonus,
         comm: round2(comm),
       });
     }
@@ -2744,7 +2947,10 @@ export async function getCommissionWorkbooks() {
         // These workbooks carry no order number at all, so the patient is the
         // only join available; a name shared by two orders stays unresolved
         // rather than guessing which one paid.
-        const hit = soByPatient.get(row.patient.trim().toLowerCase());
+        // A bonus ties to no order by design, so it is not offered to the join
+        // — an empty key would match nothing anyway, and asking makes it look
+        // like a lookup that failed.
+        const hit = row.bonus ? null : soByPatient.get(row.patient.trim().toLowerCase());
         const so = hit && hit.length === 1 ? hit[0] : null;
 
         const e = byRep.get(row.rep) ?? { rep: row.rep, payableTotal: 0, lines: [] };
@@ -2762,7 +2968,13 @@ export async function getCommissionWorkbooks() {
           // match status of its own. A line that found no order is marked the
           // same way the sheet's unmatched rows are — it is still paid, the
           // remark just says the Striven tie is missing.
-          unmatched: !so,
+          //
+          // NEVER ON A BONUS. "Unmatched from Striven" is a remark about
+          // evidence that was expected and is missing; a bonus was never an
+          // order, so there is nothing absent to report and the warning would
+          // be inventing a defect.
+          unmatched: !so && !row.bonus,
+          bonus: Boolean(row.bonus),
           fromWorkbook: true,
         });
         e.payableTotal = round2(e.payableTotal + row.comm);
@@ -2786,6 +2998,65 @@ export async function getCommissionWorkbooks() {
 // The workbook id lives in the environment, never in committed source, matching
 // how STRIVEN_LABELS_URL is handled.
 // Supabase app_config first, env second — see cfgValue().
+// ── AGREED PAYMENT TERMS, per vendor ────────────────────────────────────────
+// Net days as confirmed by the business, used ONLY to fill a blank cell.
+//
+// THE SHEET IS THE SOURCE AND STAYS THE SOURCE. Its Payment Terms column is
+// authoritative wherever it is filled in, and where it is filled in it agrees
+// with this table on every one of the 101 rows that carry a value — checked, not
+// assumed. What it is NOT is complete: 36 of 137 rows are blank, including ALL
+// FOUR EvoHealth bills, so a screen that only ever printed the cell would show
+// that vendor as having no terms at all when they are on Net 15.
+//
+// DISPLAY ONLY. Nothing here recomputes a due date or moves a bill between
+// ageing bands — those come from the sheet's own Due Date and Aging columns and
+// are untouched. This fills a gap in what is SHOWN, and `termsSource` says which
+// of the two answered, so a filled-in term is never mistaken for one the
+// accountant typed.
+//
+// A VENDOR NOT LISTED GETS NOTHING. Hi-Dow's twelve bills carry no term in the
+// sheet and none has been given for them, so they read as "not stated" rather
+// than inheriting a neighbour's Net 30.
+//
+// Keys are matched case-insensitively as a normalised substring, because the
+// three sources spell these companies differently ("ManaMed LLC", "WHOLESALE
+// MEDICAL DEVICES LLC", "Doctors Medical, LLC / A&O Medical, LLC"). Override
+// without a redeploy via the app_config key AP_VENDOR_TERMS — JSON of
+// { "<vendor name or fragment>": <net days> }.
+export const AP_VENDOR_TERMS = {
+  manamed: 30,
+  doctorsmed: 15,
+  wholesalemedicaldevices: 30,
+  trenddelco: 30,
+  evohealth: 15,
+};
+const apTermsMap = async () => {
+  const raw = String(await cfgValue('AP_VENDOR_TERMS', '')).trim();
+  let extra = {};
+  // A malformed override keeps the checked-in defaults rather than blanking
+  // every term — a typo in app_config must not empty the column.
+  if (raw) { try { const v = JSON.parse(raw); if (v && typeof v === 'object' && !Array.isArray(v)) extra = v; } catch { /* defaults stand */ } }
+  const m = new Map();
+  for (const [k, v] of Object.entries({ ...AP_VENDOR_TERMS, ...extra })) {
+    const key = String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const n = Number(v);
+    if (key && Number.isFinite(n) && n >= 0) m.set(key, Math.round(n));
+  }
+  return m;
+};
+/** Agreed net days for a vendor spelling, or null. Longest fragment wins, so a
+ *  specific entry always beats a broader one that happens to contain it. */
+const apTermsFor = (map, name) => {
+  const v = String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!v) return null;
+  if (map.has(v)) return map.get(v);
+  let best = null; let len = 0;
+  for (const [k, days] of map) if (k.length > len && v.includes(k)) { best = days; len = k.length; }
+  return best;
+};
+/** The net-day count inside a sheet cell: "Net 30" -> 30. null when absent. */
+const netDaysOf = (t) => { const m = /(\d+)/.exec(String(t ?? '')); return m ? Number(m[1]) : null; };
+
 const AP_LEDGER_ID = () => cfgValue('AP_LEDGER_SHEET_ID');
 const AP_LEDGER_GID = () => cfgValue('AP_LEDGER_GID', '575084060');
 
@@ -2855,6 +3126,65 @@ export async function getApLedger() {
     // COLUMN, validated block by block against the per-vendor subtotal rows
     // below (blockTotals). Those are computed by the sheet and all six agree.
 
+    // ── COLUMNS ARE FOUND BY NAME, NOT BY POSITION ──────────────────────────
+    //
+    // THIS PARSER WAS INDEX-BASED AND THE SHEET BROKE IT. On 24 Aug 2026 an
+    // "Invoice Link" column was inserted at position 5, ahead of "Invoice No.",
+    // and every field after it shifted one to the right. Nothing errored. The
+    // register simply read the invoice NUMBER as the invoice AMOUNT and reported
+    // a payable of MINUS $6,138,061 across 44 of its 137 bills — a wrong answer
+    // delivered confidently, which is the worst failure this file can have.
+    //
+    // The sheet is hand-maintained by the accountant and will be edited again.
+    // Positions are therefore treated as unknown: the header row is located by
+    // its own labels and every column resolved through it, so inserting,
+    // reordering or renaming-with-a-synonym costs nothing. A column that cannot
+    // be found falls back to the position it held before the insertion, so a
+    // sheet whose header we fail to recognise degrades to the old behaviour
+    // rather than to zero rows.
+    //
+    // Matching is loose on purpose — lower-cased, punctuation and spaces
+    // stripped — because the labels carry stray trailing spaces already
+    // ("Sub-Ledger ", "Payment Status ") and "Invoice No." may lose its dot.
+    const normHdr = (v) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const AP_COLS = {
+      sub: { names: ['subledger'], fallback: 2 },
+      date: { names: ['invoicedate'], fallback: 3 },
+      due: { names: ['duedate'], fallback: 4 },
+      link: { names: ['invoicelink', 'invoiceurl', 'invoicefile', 'link'], fallback: -1 },
+      no: { names: ['invoiceno', 'invoicenumber'], fallback: 5 },
+      debit: { names: ['debit'], fallback: 6 },
+      credit: { names: ['credit'], fallback: 7 },
+      status: { names: ['paymentstatus', 'status'], fallback: 8 },
+      terms: { names: ['paymentterms', 'terms'], fallback: 9 },
+      dueDays: { names: ['duedays'], fallback: 10 },
+      aging: { names: ['agingcategory', 'aging'], fallback: 11 },
+      open: { names: ['outstandingamount', 'outstanding'], fallback: 12 },
+    };
+    // The header is whichever of the first rows carries BOTH anchors. Two are
+    // required because the pivot table off to the right repeats "Sub-Ledger" on
+    // its own, and matching that would map every column into the pivot.
+    //
+    // COLUMNS 14+ ARE THE PIVOT and must never be mapped: the search stops at
+    // the first match for each name, and the real table sits to the left of the
+    // pivot, so the left-most match is the right one.
+    const headerRow = (rows.slice(0, 8) ?? []).find((r) => {
+      const cells = (r ?? []).map(normHdr);
+      return cells.includes('invoiceno') || (cells.includes('subledger') && cells.includes('duedate'));
+    }) ?? [];
+    const COL = {};
+    for (const [key, spec] of Object.entries(AP_COLS)) {
+      const i = headerRow.findIndex((c) => spec.names.includes(normHdr(c)));
+      COL[key] = i >= 0 ? i : spec.fallback;
+    }
+    // Reported so a mis-detected header is visible rather than inferred from a
+    // total that looks odd. `headerFound` false means every column fell back.
+    const headerFound = headerRow.length > 0;
+
+    // Agreed terms, resolved once: it fills only the cells the sheet leaves
+    // blank, and a per-row lookup would re-read app_config 137 times.
+    const agreedTerms = await apTermsMap();
+
     let droppedHeaders = 0;
     // THE SHEET CHECKS ITSELF, AND WE WERE THROWING THAT AWAY.
     //
@@ -2894,17 +3224,22 @@ export async function getApLedger() {
     const payments = [];
     let blockVendor = null;
     for (const r of rows.slice(3) ?? []) {
-      const sub = String(r[2] ?? '').trim();
-      const no = String(r[5] ?? '').trim();
-      const debit = sheetMoney(r[6]);
-      const credit = sheetMoney(r[7]);
-      const dated = Boolean(String(r[3] ?? '').trim());
+      const sub = String(r[COL.sub] ?? '').trim();
+      const no = String(r[COL.no] ?? '').trim();
+      const debit = sheetMoney(r[COL.debit]);
+      const credit = sheetMoney(r[COL.credit]);
+      const dated = Boolean(String(r[COL.date] ?? '').trim());
       // THE SUBTOTAL TEST RUNS FIRST, before `blockVendor` is updated. ManaMed's
       // "Total Outstanding" label sits in the Sub-Ledger column, so advancing
       // the vendor first files that block's balance under a phantom supplier
       // called "Total Outstanding" and drops ManaMed's $13,635.76 check.
-      if ([1, 2, 3, 4, 5].some((c) => /^total outstanding$/i.test(String(r[c] ?? '').trim()))) {
-        if (blockVendor) blockTotals.set(blockVendor, round2(sheetMoney(r[12])));
+      // Scanned across the leading columns because the label's own column is not
+      // fixed — four blocks put it under Invoice Date, ManaMed's lands in
+      // Sub-Ledger. Bounded by the Invoice No. column so a widened sheet cannot
+      // push the scan into the pivot table.
+      if (Array.from({ length: Math.max(6, COL.no + 1) }, (_, i) => i)
+        .some((c) => /^total outstanding$/i.test(String(r[c] ?? '').trim()))) {
+        if (blockVendor) blockTotals.set(blockVendor, round2(sheetMoney(r[COL.open])));
         continue;
       }
       if (sub && !/^sub-ledger$/i.test(sub)) blockVendor = sub;
@@ -2927,17 +3262,17 @@ export async function getApLedger() {
         // sheet gives it no invoice number (that is what marks it as a payment
         // rather than a bill) and no bank account. The card shows the three
         // facts that exist rather than printing empty columns.
-        payments.push({ subLedger: blockVendor, date: sheetDate(r[3]), amount: round2(debit) });
+        payments.push({ subLedger: blockVendor, date: sheetDate(r[COL.date]), amount: round2(debit) });
       }
     }
 
     const bills = (rows.slice(3) ?? []).reduce((out, r) => {
-      const no = String(r[5] ?? '').trim();
-      const sub = String(r[2] ?? '').trim();
+      const no = String(r[COL.no] ?? '').trim();
+      const sub = String(r[COL.sub] ?? '').trim();
       if (!no) return out;
       if (/^invoice no\.?$/i.test(no) || /^sub-ledger$/i.test(sub) || !sub) { droppedHeaders += 1; return out; }
-      const credit = sheetMoney(r[7]);
-      const debit = sheetMoney(r[6]);
+      const credit = sheetMoney(r[COL.credit]);
+      const debit = sheetMoney(r[COL.debit]);
       // DEBIT AND CREDIT ARE OPPOSITE SIDES, NOT TWO PLACES TO FIND ONE NUMBER.
       //
       // This is a CREDITORS ledger, so a supplier bill is a CREDIT — it raises
@@ -2955,7 +3290,7 @@ export async function getApLedger() {
       // the fact that actually says which direction the money goes. `CM` is
       // asserted below as a cross-check, not used as the test.
       const isCreditNote = debit > 0 && credit === 0;
-      const status = String(r[8] ?? '').trim();
+      const status = String(r[COL.status] ?? '').trim();
       // A CANCELLED BILL WAS NEVER OWED. It is void, so it does not belong in
       // the payable at all — today that is INV228023, $63.80 against TREND
       // Delco, which was inflating that supplier's block and the register with
@@ -2967,8 +3302,8 @@ export async function getApLedger() {
       out.push({
         no,
         subLedger: sub,
-        date: sheetDate(r[3]),
-        due: sheetDate(r[4]),
+        date: sheetDate(r[COL.date]),
+        due: sheetDate(r[COL.due]),
         // TWO AMOUNTS, deliberately.
         //
         // `total` is what COUNTS toward the payable: signed, so a credit note
@@ -2984,9 +3319,24 @@ export async function getApLedger() {
         // on a blank status, which is what a credit note carries.
         kind: isCancelled ? 'cancelled' : isCreditNote ? 'credit-note' : 'bill',
         status,
-        terms: String(r[9] ?? '').trim(),
-        dueDays: Number(String(r[10] ?? '').trim()) || 0,
-        aging: String(r[11] ?? '').trim(),
+        // ── PAYMENT TERMS ────────────────────────────────────────────────
+        // `terms` stays EXACTLY what the sheet's cell says, including empty.
+        // `termsDays` is the number to show, taken from that cell where it has
+        // one and from the agreed table only where it does not; `termsSource`
+        // names which answered, so a filled-in term is never passed off as one
+        // the accountant typed. No due date or ageing band is derived from any
+        // of this — those remain the sheet's own columns.
+        terms: String(r[COL.terms] ?? '').trim(),
+        // A CREDIT NOTE AND A CANCELLED BILL ARE NOT FILLED IN. Neither is
+        // payable, so neither has a payment term to be on — the sheet leaves
+        // both blank and that is the right answer, not a gap to paper over.
+        // Today that is TREND Delco's two CM rows.
+        termsDays: netDaysOf(r[COL.terms])
+          ?? (isCancelled || isCreditNote ? null : apTermsFor(agreedTerms, sub)),
+        termsSource: netDaysOf(r[COL.terms]) != null ? 'sheet'
+          : (!isCancelled && !isCreditNote && apTermsFor(agreedTerms, sub) != null) ? 'agreed' : 'none',
+        dueDays: Number(String(r[COL.dueDays] ?? '').trim()) || 0,
+        aging: String(r[COL.aging] ?? '').trim(),
         // A CREDIT NOTE CARRIES A NEGATIVE BALANCE, so it reduces what is owed.
         //
         // The sheet leaves Outstanding blank on these rows — its column counts
@@ -3001,8 +3351,8 @@ export async function getApLedger() {
         //
         // Cancelled stays at zero: a void bill owes nothing and refunds nothing.
         open: isCancelled ? 0
-          : isCreditNote ? (sheetMoney(r[12]) ? -round2(sheetMoney(r[12])) : face)
-            : round2(sheetMoney(r[12])) || 0,
+          : isCreditNote ? (sheetMoney(r[COL.open]) ? -round2(sheetMoney(r[COL.open])) : face)
+            : round2(sheetMoney(r[COL.open])) || 0,
       });
       return out;
     }, []);
@@ -3010,7 +3360,7 @@ export async function getApLedger() {
     // GROUPED BY SUB-LEDGER, as the register is read: one block per vendor.
     const bySub = new Map();
     for (const b of bills) {
-      const g = bySub.get(b.subLedger) ?? { subLedger: b.subLedger, bills: 0, billed: 0, open: 0, openBills: 0, oldestDays: 0, terms: '', creditNotes: 0, creditNoteAmount: 0 };
+      const g = bySub.get(b.subLedger) ?? { subLedger: b.subLedger, bills: 0, billed: 0, open: 0, openBills: 0, oldestDays: 0, terms: '', termsDays: null, termsSource: 'none', creditNotes: 0, creditNoteAmount: 0 };
       g.bills += 1;
       g.billed = round2(g.billed + b.total);
       g.open = round2(g.open + b.open);
@@ -3022,6 +3372,9 @@ export async function getApLedger() {
       if (b.kind === 'credit-note') { g.creditNotes += 1; g.creditNoteAmount = round2(g.creditNoteAmount + Math.abs(b.total)); }
       if (b.open > 0) { g.openBills += 1; g.oldestDays = Math.max(g.oldestDays, b.dueDays); }
       if (!g.terms && b.terms) g.terms = b.terms;
+      // The block's term, taken off its bills so the vendor row and its rows can
+      // never disagree about which term is in force.
+      if (g.termsDays == null && b.termsDays != null) { g.termsDays = b.termsDays; g.termsSource = b.termsSource; }
       bySub.set(b.subLedger, g);
     }
 
@@ -3083,6 +3436,16 @@ export async function getApLedger() {
         // than just showing a total that is quietly smaller than the sheet's.
         creditNotes: bills.filter((b) => b.kind === 'credit-note').length,
         creditNoteAmount: round2(bills.filter((b) => b.kind === 'credit-note').reduce((s, b) => s + Math.abs(b.total), 0)),
+        // Whether the header row was recognised. Reported rather than inferred:
+        // a register that silently fell back to fixed positions is exactly the
+        // failure this parse was rewritten to make visible.
+        headerFound,
+        // How the terms column is being answered. `termsFilled` counts rows the
+        // sheet left blank that the agreed table supplied — the figure that says
+        // how much of the sheet still needs the accountant's attention.
+        termsFromSheet: bills.filter((b) => b.termsSource === 'sheet').length,
+        termsFilled: bills.filter((b) => b.termsSource === 'agreed').length,
+        termsMissing: bills.filter((b) => b.termsSource === 'none').length,
         cancelled: bills.filter((b) => b.kind === 'cancelled').length,
         cancelledAmount: round2(bills.filter((b) => b.kind === 'cancelled').reduce((s, b) => s + b.faceValue, 0)),
       },
@@ -3560,22 +3923,34 @@ const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 // Folds a raw Striven "Sales Rep" value to the roster name used everywhere else.
 //
-// The four original reps are stored with company prefixes ("Maverick Medical -
-// Alle Ann Dubberley"), so they fold to short names. The remaining values are
-// listed explicitly rather than machine-stripped: "Maylon Sanders - Denise
-// Zavala" and "House Account- Angel Santiago" both put a PERSON after the
-// hyphen, but "Santiago Family Chiropractic" has no hyphen and is a practice,
-// so a generic prefix-strip would produce wrong names for some and right names
-// for others. Explicit beats clever here.
+// THE ROSTER NAME IS THE REP'S FULL NAME. It used to be a short form — "Alle
+// Ann", "Christy", "Jillian" — because Striven stores these with company
+// prefixes ("Maverick Medical - Alle Ann Dubberley") and the fold cut back to
+// the part that was unambiguous inside the company. Changed by instruction: the
+// portal now shows the name a person would put on a contract.
+//
+// RENAMED HERE AND NOWHERE ELSE, which is the reason this fold exists. The
+// string this returns IS the identity key: it is what REP_NAMES lists, what
+// REP_DIRECTORY maps a login to, what REP_SUB_REPS reports against, what
+// `isSelf` compares, and what every screen prints. Changing it here and in the
+// three config arrays that must agree with it renames the rep across every
+// dashboard, drill, export and PDF at once — there is no display-name layer to
+// keep in sync, and no component that spells a rep's name for itself.
+//
+// The remaining values are listed explicitly rather than machine-stripped:
+// "Maylon Sanders - Denise Zavala" and "House Account- Angel Santiago" both put
+// a PERSON after the hyphen, but "Santiago Family Chiropractic" has no hyphen
+// and is a practice, so a generic prefix-strip would produce wrong names for
+// some and right names for others. Explicit beats clever here.
 //
 // Order matters: the /christ/i test would also catch "Christy Tan", so the
 // specific folds run before the pass-through.
 export const commRep = (r) => {
   const s = String(r || '').trim();
   if (/cassie/i.test(s)) return 'Cassie';
-  if (/jillian/i.test(s)) return 'Jillian';
-  if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann';
-  if (/christ/i.test(s)) return 'Christy';
+  if (/jillian/i.test(s)) return 'Jillian Colin';
+  if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann Dubberley';
+  if (/christ/i.test(s)) return 'Christy Tan';
   // Added when the roster widened from the original four to every Sales Rep
   // value in Striven except Rishi Arora.
   //
@@ -3594,6 +3969,20 @@ export const commRep = (r) => {
   if (/crystal\s+chambers/i.test(s)) return 'Crystal Chambers';
   if (/zach\s+shank/i.test(s)) return 'Zach Shank';
   if (/^house\s+account$/i.test(s)) return 'House Account';
+  // ── ADDED WITH THE ROSTER ──────────────────────────────────────────────────
+  // Explicit rather than left to the pass-through below. The pass-through only
+  // returns a roster name when Striven happens to spell it bare, and Striven
+  // routinely prefixes a referral group — "Maverick Medical - Alle Ann
+  // Dubberley", "CVT Medical - Christy Tan". An unprefixed spelling today is not
+  // a guarantee of one tomorrow, and the failure is silent: the raw string comes
+  // back, matches no roster entry, and the rep's orders land in `unmatched`.
+  //
+  // Neither pattern can be caught by a test above it: /all?e ?ann?e?/ needs
+  // "ale"/"alle" followed by "an", which "alek sigman" and "alyssa parker" both
+  // fail, and no other test mentions a Parker. Checked rather than assumed —
+  // see the ordering note at the head of this function.
+  if (/alek\s+sigman/i.test(s)) return 'Alek Sigman';
+  if (/alyssa\s+parker/i.test(s)) return 'Alyssa Parker';
   return s || 'Unknown';
 };
 // Patient last name from either "Last, First" or "FIRST LAST" — normalized for join.
@@ -3770,6 +4159,20 @@ export async function getCommission(viewer = null) {
   // first earning, so eight of the twelve never appeared at all — indistinguish-
   // able from not being a rep. A rep at $0 is information; a missing row is not.
   for (const rep of REP_NAMES) sByRep[rep] = zeroRepRow(rep);
+  // THE SAME SEED, PER MONTH — which the rule above never got applied to.
+  //
+  // The aggregate lists the whole team; each MONTH still created a rep row on
+  // first earning, so the monthly commission table showed earners only. That is
+  // the identical failure the note above records fixing, one level down: for any
+  // given month, "earned nothing" and "is not a rep" rendered the same.
+  //
+  // It surfaced when Alyssa Parker was added to the roster with no orders yet.
+  // She appeared in the all-time table, because of the seed above, and in no
+  // month at all — which reads as the roster edit not having taken.
+  //
+  // Zero rows change no total: every figure downstream re-sums these rows, and
+  // adding zeroes to a sum is a no-op. Only the row list grows.
+  const zeroMonthReps = () => Object.fromEntries(REP_NAMES.map((r) => [r, zeroRepRow(r)]));
 
   // Orders we could not tie to a sales order. They still carry a vertical and
   // real volume, so they are reported rather than dropped — an unattributable
@@ -3828,7 +4231,7 @@ export async function getCommission(viewer = null) {
       // `hold` and `waiting` are both earned-but-not-payable.
       if (res.state === 'waiting' || res.state === 'hold') t.waitingTotal += c; else t.payableTotal += c;
     };
-    const M = months[month] = months[month] || { month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, ...zeroState(), reps: {} };
+    const M = months[month] = months[month] || { month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, ...zeroState(), reps: zeroMonthReps() };
     M[program] += c; M.total += c; M.orders += 1; M.units += res.units; M.value += value;
     if (program !== 'DOL') M[`o${program}`] += 1;
     if (res.state === 'waiting' || res.state === 'hold') M.waitingTotal += c; else M.payableTotal += c;

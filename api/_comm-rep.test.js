@@ -7,7 +7,7 @@
 // is not enforcement.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { commRep, isExcludedRep } from './_striven.js';
+import { commRep, reconRep, isExcludedRep } from './_striven.js';
 import { REP_NAMES, STANDINGS_EXCLUDE, EXCLUDED_REPS, REP_DIRECTORY } from './_commission-config.js';
 
 test('sub-rep: Denise Zavala is paid to Maylon Sanders', () => {
@@ -45,14 +45,84 @@ test('a person after the hyphen is not mistaken for the account', () => {
   assert.equal(commRep('Santiago Family Chiropractic'), 'Santiago Family Chiropractic');
 });
 
-test('the original four still fold from their company-prefixed forms', () => {
-  assert.equal(commRep('Maverick Medical - Alle Ann Dubberley'), 'Alle Ann');
-  assert.equal(commRep('Maverick Medical- Jillian Colin'), 'Jillian');
-  assert.equal(commRep('CVT Medical - Christy Tan'), 'Christy');
+test('the original four fold from their company-prefixed forms to FULL names', () => {
+  // The roster name is the rep's full name. Striven stores these behind a
+  // company prefix, and the fold both strips the prefix and settles on one
+  // spelling — the sheet writes "Alle Anne", "Jillian", "Christy" and the
+  // portal must not end up with two rows for one person.
+  assert.equal(commRep('Maverick Medical - Alle Ann Dubberley'), 'Alle Ann Dubberley');
+  assert.equal(commRep('Maverick Medical- Jillian Colin'), 'Jillian Colin');
+  assert.equal(commRep('CVT Medical - Christy Tan'), 'Christy Tan');
   assert.equal(commRep('Cassie'), 'Cassie');
-  // Order matters in commRep: /christ/i would also catch "Christy Tan", so the
-  // specific folds must run before any pass-through.
-  assert.equal(commRep('Christy'), 'Christy');
+  // THE SHORT FORMS STILL FOLD, and this is the half that is easy to lose. The
+  // sheet, the recon file and Striven itself all still carry the old spellings;
+  // if a bare "Christy" stopped resolving, her orders would land in
+  // striven.unmatched and earn nobody anything.
+  assert.equal(commRep('Christy'), 'Christy Tan');
+  assert.equal(commRep('Jillian'), 'Jillian Colin');
+  assert.equal(commRep('Alle Ann'), 'Alle Ann Dubberley');
+  assert.equal(commRep('Alle Anne'), 'Alle Ann Dubberley');
+});
+
+test('every name the fold produces for a rep is a name the roster carries', () => {
+  // The two must agree or the rep is invisible: commRep decides who an order
+  // belongs to, REP_NAMES decides who exists. A rename that touched one and not
+  // the other would drop that rep's whole book into `unmatched` silently.
+  for (const raw of ['Maverick Medical - Alle Ann Dubberley', 'Maverick Medical- Jillian Colin',
+    'CVT Medical - Christy Tan', 'Maylon Sanders', 'Christy', 'Jillian', 'Alle Ann',
+    // Added with the roster. The group-prefixed forms are the point: Striven
+    // prefixes most reps, and a fold that only recognises the bare spelling
+    // drops the rep's book into `unmatched` the day someone sets a referral
+    // group on their orders.
+    'Alek Sigman', 'Maverick Medical - Alek Sigman',
+    'Alyssa Parker', 'CVT Medical- Alyssa Parker']) {
+    assert.ok(REP_NAMES.includes(commRep(raw)), `${raw} folds to a roster name`);
+  }
+  // And every login must point at a rep who exists, for the same reason from
+  // the other direction: a repName off the roster means an empty dashboard.
+  for (const d of REP_DIRECTORY.filter((x) => x.repName)) {
+    assert.ok(REP_NAMES.includes(d.repName), `${d.email} maps to a roster name`);
+  }
+});
+
+test('the source sheet can be rewritten to full names without breaking the fold', () => {
+  // THE SHEET IS BEING UPDATED to spell these reps in full. Both folds have to
+  // survive that: they were written against the SHORT forms, and a fold that
+  // stops recognising a name does not fail loudly — the rep's orders drop into
+  // `striven.unmatched` and their commission quietly becomes nobody's.
+  //
+  // Every name must fold to ITSELF. That is the property that makes the rewrite
+  // safe in either direction: rows already rewritten and rows not yet rewritten
+  // both land on the same roster entry, so the sheet can be edited a tab at a
+  // time without splitting anyone across two rows mid-way.
+  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders',
+    'Alek Sigman', 'Alyssa Parker']) {
+    assert.equal(commRep(full), full, `commRep keeps ${full}`);
+    assert.ok(REP_NAMES.includes(commRep(full)), `${full} is on the roster`);
+  }
+  // The reconciliation file is a SECOND source with its own alias table. If it
+  // folded differently the rep would split into two rows — the very bug that
+  // table was written to fix.
+  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders',
+    'Alek Sigman', 'Alyssa Parker']) {
+    assert.equal(reconRep(full), full, `reconRep keeps ${full}`);
+  }
+  // And the two folds must agree on the short forms as well, for as long as any
+  // un-rewritten row survives anywhere.
+  for (const short of ['Alle Ann', 'Jillian', 'Christy', 'Maylon Sanders']) {
+    assert.equal(reconRep(short), commRep(short), `both folds agree on ${short}`);
+  }
+});
+
+test('the rename cannot swallow Crystal or Denise', () => {
+  // Crystal Chambers is finance, not the rep Christy Tan, and the /christ/i test
+  // runs before her own. It does not match "Crystal" — but the two names are
+  // close enough that the next person to widen that pattern needs to be stopped
+  // by a test rather than by a comment.
+  assert.equal(commRep('Crystal Chambers'), 'Crystal Chambers');
+  assert.ok(!REP_NAMES.includes('Crystal Chambers'));
+  // Denise still folds to the rep who is PAID, full name or not.
+  assert.equal(commRep('Maylon Sanders - Denise Zavala'), 'Maylon Sanders');
 });
 
 // ── Hard exclusions ─────────────────────────────────────────────────────────
@@ -88,14 +158,15 @@ test('the fold still resolves excluded names, so the exclusion can catch them', 
 // reconciliation sheet ($21,555.00 across 57 lines) and excluding her made the
 // dashboard total disagree with the sheet it reconciles to.
 //
-// The fold that used to feed her name to the exclusion still has to work — it
-// is now what merges her sheet spellings onto ONE payee row instead of
-// splitting her money across two.
-test('Cassie folds to one name and is no longer excluded', () => {
+// THE FOLD IS WHAT MAKES THE EXCLUSION STICK. Her name reaches the code in more
+// than one spelling, and excluding only the canonical one would drop her row
+// while "Maverick Medical- Cassie Wates" walked straight past the filter as a
+// separate payee — the removal would look done and be half done.
+test('Cassie is excluded, in every spelling she arrives in', () => {
   assert.equal(commRep('Cassie'), 'Cassie');
   assert.equal(commRep('Maverick Medical- Cassie Wates'), 'Cassie');
-  assert.ok(!isExcludedRep('Cassie'), 'Cassie is a payee again');
-  assert.ok(!isExcludedRep(commRep('Maverick Medical- Cassie Wates')));
+  assert.ok(isExcludedRep('Cassie'), 'excluded by instruction');
+  assert.ok(isExcludedRep(commRep('Maverick Medical- Cassie Wates')), 'and by her sheet spelling');
 });
 
 // A LOGIN NEEDS A ROSTER ROW. Her commission resolved from the reconciliation
@@ -115,16 +186,17 @@ test('every rep who can log in has a roster row', () => {
   }
 });
 
-test('Cassie is on the roster, so her own pages have a row to render', () => {
-  assert.ok(REP_NAMES.includes('Cassie'), 'on the roster');
-  // Her PAY still comes from the sheet, not the engine: the reconciliation
-  // merge overwrites payableTotal for every rep, so a roster row buys her
-  // volume columns and a Striven comparison, never extra money.
-  //
-  // Her login itself is provisioned in app_config REP_DIRECTORY (the documented
-  // way to add an account without a redeploy), so the hardcoded array below is
-  // not where it lives and is deliberately not asserted on.
-  assert.ok(!isExcludedRep('Cassie'));
+// REMOVED ON ALL THREE FRONTS, because any one left behind undoes the others:
+// a roster row rebuilds her leaderboard entry, a directory row lets her sign in
+// to it, and without the exclusion her $20,255 stays in every company total.
+test('Cassie is off the roster, off the logins and excluded', () => {
+  assert.ok(!REP_NAMES.includes('Cassie'), 'no roster row');
+  assert.ok(!REP_DIRECTORY.some((d) => d.repName === 'Cassie'), 'no login');
+  assert.ok(isExcludedRep('Cassie'), 'no money reported against her');
+  // The app_config REP_DIRECTORY override WINS over the array above, so
+  // clearing this file is not on its own enough to revoke the account — that
+  // has to be done in Supabase too. Asserted here as the reminder, since this
+  // file is where someone will look.
 });
 
 test('the exclusion does not overreach', () => {
@@ -143,4 +215,24 @@ test('an unrecognised value passes through rather than vanishing', () => {
   assert.equal(commRep(''), 'Unknown');
   assert.equal(commRep(null), 'Unknown');
   assert.equal(commRep(undefined), 'Unknown');
+});
+
+// Adding a rep means editing three places that must agree — REP_NAMES and the
+// two fold tables. This asserts the whole roster at once rather than the two
+// new names, so the NEXT person to add a rep is caught by the same test rather
+// than having to remember the rule.
+test('every roster name folds to itself in both tables', () => {
+  for (const name of REP_NAMES) {
+    assert.equal(commRep(name), name, `commRep keeps ${name}`);
+    assert.equal(reconRep(name), name, `reconRep keeps ${name}`);
+  }
+});
+
+// A roster name nothing can ever produce is a row that stays at zero forever.
+test('the two reps added by instruction are on the roster and reachable', () => {
+  for (const name of ['Alek Sigman', 'Alyssa Parker']) {
+    assert.ok(REP_NAMES.includes(name), `${name} is on the roster`);
+    assert.ok(!isExcludedRep(name), `${name} is not hard-excluded`);
+    assert.ok(!STANDINGS_EXCLUDE.includes(name), `${name} is not hidden from the leaderboard`);
+  }
 });

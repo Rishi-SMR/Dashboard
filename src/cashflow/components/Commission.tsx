@@ -6,6 +6,7 @@ import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 import { isKevinLogin } from '../viewProfile';
 import { Portal } from './Portal';
+import { StatStrip } from './StatStrip';
 
 const PROG_C: Record<string, string> = { TriCare: '#0D9488', PI: '#0A369F', VA: '#16A34A', DOL: '#7C3AED' };
 // REP_C (the per-rep bar palette) went with the sparkbar column — it coloured
@@ -14,7 +15,26 @@ const PROG_C: Record<string, string> = { TriCare: '#0D9488', PI: '#0A369F', VA: 
 // A dollar field is `null` when it belongs to another rep: the server strips it
 // before serialization, so there is nothing here to un-hide. Render the absence
 // honestly rather than as $0, which would read as "earned nothing".
-const money = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v));
+/**
+ * CENTS, on this tab, on every figure.
+ *
+ * The rest of the portal rounds to whole dollars, which is right for a board:
+ * "$1,339,961" is a scale, and ".00" on it is noise. This page is not a board.
+ * It is what a rep is paid, and it is checked line by line against Crystal's
+ * reconciliation sheet — the one place in the app where a cent has to tie out.
+ *
+ * ROUNDING WAS ALSO MAKING THE COLUMNS LIE. The rates are not whole dollars
+ * (TriCare falls back to 369.78, and Maylon's workbook signs off $2,489.86), so
+ * a column of rounded rows did not add up to its own rounded total — each row
+ * lost up to half a dollar and the footer lost the sum of all of them. Whoever
+ * checked the arithmetic found it off by a few dollars with nothing on screen
+ * to explain the gap.
+ *
+ * TWO DECIMALS ALWAYS, not "cents only where they exist". A money column is
+ * read down, and $650 beside $2,489.86 breaks the decimal alignment that makes
+ * it readable — `.num` is tabular-nums precisely so the digits line up.
+ */
+const money = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v, true));
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const monthLabel = (m: string) => {
   if (!m || m === 'unknown') return 'Undated';
@@ -369,6 +389,15 @@ export function CommissionTab() {
                   <th className="num" title="Orders booked in VA">VA ord.</th>
                   <th className="num" title="Orders booked in PI">PI ord.</th>
                   <th className="num">Orders</th><th className="num">Units</th>
+                  {/* PAID, and it had to be added the moment July was marked
+                      settled. Without it the columns read "$0 payable · $0
+                      waiting · $17,975 commission" and the money simply went
+                      missing between the first figure and the last — the reader
+                      is left to work out that a zero here means SETTLED rather
+                      than EARNED NOTHING, which is the one distinction this
+                      table exists to make. `paidTotal` has always been on the
+                      payload; only the column was missing. */}
+                  <th className="num" title="Already paid out. Part of Commission, and deliberately not part of Payable / Due — a rep is not owed money they have had.">Paid</th>
                   <th className="num">Payable / Due</th><th className="num">Waiting</th>
                   <th className="num">Commission</th>
                   {/* The 18% sparkbar column is gone. It was scaled to the top
@@ -378,7 +407,7 @@ export function CommissionTab() {
                       the row order and took a fifth of the width to do it. */}
                 </tr></thead>
                 <tbody>
-                  {reps.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+                  {reps.length === 0 && <tr><td colSpan={11} style={{ color: C.muted }}>No orders in this period.</td></tr>}
                   {reps.map((r, i) => {
                     const mine = myRep === r.rep;
                     const open = isAdmin || mine;
@@ -390,10 +419,33 @@ export function CommissionTab() {
                         <td style={{ fontWeight: 700, color: C.brand }}>
                           {r.rep}
                           {mine && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
+                          {/* WHY THIS ROW READS $0. The server takes a rep the
+                              reconciliation sheet does not name to zero rather
+                              than falling back to the engine's own figure —
+                              mixing the two bases in one column would make the
+                              total reconcile to nothing. It has always sent
+                              `reconciled: false` to say so, and no client has
+                              ever read it, so the row showed a bare $0 that
+                              states "earned nothing" while meaning "not in the
+                              sheet these figures come from".
+
+                              Only drawn where there IS money to explain away:
+                              a rep with no orders and no pay is not a puzzle,
+                              and flagging every empty row would bury the one
+                              that matters. */}
+                          {r.reconciled === false && num(r.orders) > 0 && (
+                            <span className="cm-unrecon" title={`${r.rep} has ${num(r.orders)} orders in Striven but no rows in the reconciliation sheet, so nothing here is signed off. Their commission is paid from a workbook source — see COMMISSION_WORKBOOKS.`}>
+                              not in the sheet
+                            </span>
+                          )}
                         </td>
                         <OrderCountCells t={num(r.nTricare)} v={num(r.nVa)} p={num(r.nPi)} />
                         <td className="num">{num(r.orders)}</td>
                         <td className="num">{num(r.units)}</td>
+                        {/* Muted, not green: paid money is settled history, and
+                            colouring it like the owed column would have two
+                            figures competing to be the one that matters. */}
+                        <td className="num" style={{ color: C.muted, fontWeight: 700 }}>{money(r.paidTotal)}</td>
                         <td className="num" style={{ color: r.payableTotal == null ? C.muted : C.positive, fontWeight: 700 }}>{money(r.payableTotal)}</td>
                         <td className="num" style={{ color: r.waitingTotal == null ? C.muted : C.warning, fontWeight: 700 }}>{money(r.waitingTotal)}</td>
                         <td className="num" style={{ fontWeight: 800 }}>
@@ -423,6 +475,11 @@ export function CommissionTab() {
                         printed the whole book's $133,729 and $28,768 over five
                         rows summing to $75,320 and $0. Same sums as the card
                         above now, so the two cannot drift apart either. */}
+                    {/* `paidSum` was already computed for the card above and
+                        simply had no column to land in down here — so the foot
+                        summed to a Total the three columns beside it could not
+                        account for the moment anything was paid. */}
+                    <td className="num" style={{ color: C.muted, fontWeight: 700 }}>{money(paidSum)}</td>
                     <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(payableSum)}</td>
                     <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(waitingSum)}</td>
                     <td className="num" style={{ fontWeight: 800 }}>{money(total)}</td>
@@ -515,18 +572,25 @@ function PeerModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void 
     ['VA', v, num(rep.uVa), PROG_C.VA],
     ['Personal Injury', p, num(rep.uPi), PROG_C.PI],
   ];
+  // 560, not the 760 default. Three rows — TriCare, VA, PI — across five
+  // columns; the extra 200px went to the Vertical column and pushed the figures
+  // away from the names they belong to.
   return (
-    <Modal title={rep.rep} accent={C.muted} sub={`Order volume by vertical · ${tot} order${tot === 1 ? '' : 's'}`} onClose={onClose}>
+    <Modal title={rep.rep} accent={C.muted} sub="Order volume by vertical" onClose={onClose} width={560}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', background: 'var(--panel-2)', borderRadius: 10, padding: '11px 14px', marginBottom: 16, fontSize: 13, color: C.sub }}>
         <span style={{ fontSize: 15, lineHeight: 1.2 }}>🔒</span>
         <div><b style={{ color: C.ink }}>{rep.rep}'s commission is confidential.</b> You can see their order volume, not their pay: the dollar figures were removed on the server before this page loaded.</div>
       </div>
 
-      <div className="cm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 18 }}>
-        <Stat label="Orders" value={String(num(rep.orders))} tint={C.brand} />
-        <Stat label="Units" value={String(num(rep.units))} />
-        <Stat label="Commission" value="Confidential" tint={C.sub} />
-      </div>
+      <StatStrip items={[
+        { label: 'Orders', value: String(num(rep.orders)), tint: C.brand },
+        { label: 'Units', value: String(num(rep.units)) },
+        // The withheld figure is NOT dropped from the strip. A modal that simply
+        // omitted commission would read as a rep with none; naming it and saying
+        // "Confidential" is the boundary stated, which is what this dialog is
+        // for. The lock panel above says why.
+        { label: 'Commission', value: 'Confidential', tint: C.sub },
+      ]} />
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>Orders by vertical</div>
       <div className="table-scroll">
@@ -697,8 +761,11 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
   // needs no extra fetch or permission check of its own.
   const sheetRef = useRef<HTMLDivElement>(null);
 
+  // The order count came out of the subtitle: the strip below states it, and the
+  // two sat four lines apart saying the same number. The TOTAL stays — the strip
+  // carries Payable and Waiting, which do not add up to it.
   return (
-    <Modal title={rep.rep} sub={`Final commission ${money(rep.total)} · ${num(rep.orders)} orders · ${num(rep.units)} units`} onClose={onClose}>
+    <Modal title={rep.rep} sub={`Final commission ${money(rep.total)} · ${num(rep.units)} units`} onClose={onClose}>
       <div ref={sheetRef}>
       {/* Statement header: only on paper, where the modal's own title bar and
           the surrounding page are gone. */}
@@ -709,12 +776,17 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
         </div>
       </div>
 
-      <div className="cm-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-        <Stat label="Payable / Due" value={money(rep.payableTotal)} tint={C.positive} />
-        <Stat label="Waiting" value={money(rep.waitingTotal)} tint={C.warning} />
-        <Stat label="Orders" value={String(num(rep.orders))} />
-        <Stat label="Per order" value={money(cpo)} />
-      </div>
+      {/* PRINTS TOO — this block is inside `sheetRef`, so it is the figure line
+          on the PDF statement as well as in the dialog. That is fine on paper:
+          the print stylesheet already strips the plate's background (browsers
+          drop backgrounds unless told not to), so the cards were printing as
+          bare stacked text and the strip prints as one line of it. */}
+      <StatStrip items={[
+        { label: 'Payable / Due', value: money(rep.payableTotal), tint: C.positive },
+        { label: 'Waiting', value: money(rep.waitingTotal), tint: C.warning },
+        { label: 'Orders', value: String(num(rep.orders)) },
+        { label: 'Per order', value: money(cpo) },
+      ]} />
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>
         By vertical <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· commission and orders</span>
@@ -740,7 +812,16 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
       {lines.length > 0 && (
         <>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>
-            Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {lines.length} orders</span>
+            {/* "N orders" was wrong the moment a bonus could sit in this table:
+                it is a line, and counting it as an order overstates the book by
+                one against every other order count on the page. */}
+            Order by order <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>
+              · {(() => {
+                const b = lines.filter((l) => l.bonus).length;
+                const o = lines.length - b;
+                return `${o} order${o === 1 ? '' : 's'}${b ? ` · ${b} bonus` : ''}`;
+              })()}
+            </span>
           </div>
           <div className="table-scroll">
             <table className="data-table">
@@ -764,14 +845,37 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
                       {orderDate(ln.date)}
                     </td>
                     {/* Falls back to the SO ref when the report cache has no
-                        patient row, so the line is never unidentifiable. */}
+                        patient row, so the line is never unidentifiable.
+
+                        A BONUS HAS NO PATIENT, and that is not a gap to fill: it
+                        is a flat payment, not a device sold to somebody. Falling
+                        through to `ln.ref || 'no SO'` here would print "no SO"
+                        against it and state a missing record that was never
+                        expected to exist. */}
                     <td style={{ fontWeight: 600, color: ln.patient ? C.ink : C.muted }}>
-                      {ln.patient || ln.ref || 'no SO'}
+                      {ln.bonus ? '—' : (ln.patient || ln.ref || 'no SO')}
                     </td>
-                    <td style={{ color: C.sub, fontSize: 12.5 }}>{ln.item || '-'}</td>
-                    <td>{ln.prog}</td>
+                    <td style={{ color: C.sub, fontSize: 12.5 }}>
+                      {ln.bonus
+                        ? <span className="cm-bonus">Bonus</span>
+                        : (ln.item || '-')}
+                    </td>
+                    {/* NO VERTICAL ON A BONUS. It is a flat payment, not a
+                        device sold into a programme, so naming one beside it
+                        claims a categorisation the payment does not have.
+
+                        HIDDEN, NOT REMOVED — and the difference is load-bearing.
+                        `prog` is what isPaidLine() reads to decide whether a
+                        line falls before its vertical's paid-through month, so
+                        stripping it server-side would leave the bonus with no
+                        vertical to look up, no paid-through to compare against,
+                        and it would read Payable forever however many runs went
+                        out. It also keeps the by-vertical figures above summing
+                        to the rep's total, which they would stop doing if this
+                        one line belonged to nothing. */}
+                    <td style={{ color: ln.bonus ? C.muted : undefined }}>{ln.bonus ? '—' : ln.prog}</td>
                     <td className="num">{ln.units}</td>
-                    <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm)}</td>
+                    <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm, true)}</td>
                     {/* The remark rides the EXISTING rightmost column rather than
                         adding one. An unmatched row is still paid — the sheet is
                         the base — so this reports the missing Striven match, it
@@ -796,7 +900,7 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
             </table>
           </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            🔒 Patient shown as first initial + surname, on your own orders only. Commission = units × per-device rate. Orders on hold are excluded and do not appear here.
+            🔒 Patient shown as first initial + surname, on your own orders only. Commission = units × per-device rate — except a <b>Bonus</b>, which is a flat amount tied to no order, no patient and no programme. A bonus still counts toward the totals above, under the programme it was paid against. Orders on hold are excluded and do not appear here.
             {' '}The date is when the <b>sales order</b> was raised, not the payout cycle — it reads “-” on a row the sheet could not tie to a Striven order.
           </div>
         </>

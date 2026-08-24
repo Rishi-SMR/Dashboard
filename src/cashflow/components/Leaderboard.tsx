@@ -449,6 +449,21 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
   // nothing that month drops off rather than sitting last on zero — they are
   // absent from the month, not losing it.
   //
+  // WITH ONE EXCEPTION: A REP WHO HAS NEVER BOOKED AT ALL.
+  //
+  // The rule above was written for established producers, where "no orders this
+  // month" genuinely means absent from the month. It reads differently for a rep
+  // who has just been added to the roster: they are not absent from August, they
+  // have not started. Dropping them makes a newly-added rep invisible on every
+  // month, which is indistinguishable from the roster edit never having taken —
+  // and that is exactly how Alyssa Parker read after being added.
+  //
+  // `lifetimeOrders` is the aggregate count and is already carried beside the
+  // period count for the badges, so the two cases separate cleanly: zero this
+  // month but some ever → still drops off, unchanged; zero ever → shown at zero,
+  // until their first order puts them under the original rule with everyone
+  // else.
+  //
   // `orders` is overwritten but `lifetimeOrders` is kept beside it, because the
   // milestone badges and the confetti below MUST stay on the lifetime figure:
   // an achievement is not un-earned by a quiet month, and a board that took a
@@ -466,7 +481,8 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
         : r;
       return { ...row, lifetimeOrders: r.orders };
     })
-    .filter((r) => (!r.standingsExcluded || r.isSelf) && (!scoped || r.orders > 0))
+    .filter((r) => (!r.standingsExcluded || r.isSelf)
+      && (!scoped || r.orders > 0 || r.lifetimeOrders === 0))
     .sort((a, b) => b.orders - a.orders || a.rep.localeCompare(b.rep)), [reps, period, scoped]);
 
   // The reps who work under the viewer. `subRepOf` is only ever set by the
@@ -615,8 +631,11 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
           <span className="lbx-name-t">{r.rep}</span>
           {badge && <span className="lbx-badge" title={`${badge}+ orders`}>{badge}</span>}
           {/* Only ever set when the VIEWER is this rep's supervisor — see
-              subRepOf on the payload. Their figures are untouched by it. */}
-          {r.subRepOf && <span className="lbx-sub" title={`Works under ${r.subRepOf}`}>sub-rep</span>}
+              subRepOf on the payload. Their figures are untouched by it.
+              NAMES THE SUPERVISOR: "sub-rep" alone said that somebody is above
+              this rep without saying who, which left the reader with the half of
+              the fact they cannot use. */}
+          {r.subRepOf && <span className="lbx-sub" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>under {r.subRepOf}</span>}
           {isSelf && <span className="lbx-you">You</span>}
         </span>
         <MixPill parts={r.byVertical} total={r.orders} scale={leader ? r.orders / leader : 0} />
@@ -719,7 +738,7 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
             <span className="lbx-pod-rank">{MEDAL[rank - 1].label}</span>
             <span className="lbx-pod-name">
               {r.rep}
-              {r.subRepOf && <span className="lbx-sub" title={`Works under ${r.subRepOf}`}>sub-rep</span>}
+              {r.subRepOf && <span className="lbx-sub" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>under {r.subRepOf}</span>}
               {r.isSelf && <span className="lbx-you">You</span>}
             </span>
             <span className="lbx-pod-n">

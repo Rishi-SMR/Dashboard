@@ -14,6 +14,7 @@ import { shortDeviceName } from './DeviceChips';
 import { UnitsByDevice } from './UnitsByDevice';
 import { CommissionBreakdown } from './CommissionBreakdown';
 import { MetricDetail } from './MetricDetail';
+import { SoLink } from './SoLink';
 
 /**
  * Chip colour for a Striven label, by what the label MEANS — stopped, money in,
@@ -799,7 +800,11 @@ export function OverviewCharts() {
         { key: 'labels', label: 'All labels' }, { key: 'value', label: 'Value', num: true },
       ],
       rows: list.map((o) => ({
-        ref: <strong>{o.ref}</strong>,
+        // Openable, like every other order reference in the portal. This board
+        // is company-side and admin-only (COMPANY_NAV), so the Striven jump is
+        // offered — no rep can reach this drill to be shown a link they have no
+        // login for.
+        ref: <SoLink soId={o.id} label={o.ref} canOpenInStriven />,
         // First INITIAL + surname, as everywhere else this data appears. Placed
         // beside the order number because that is how staff recognise a row —
         // "SO-451" alone identifies nothing to a reader.

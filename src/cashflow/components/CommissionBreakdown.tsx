@@ -16,6 +16,8 @@ import { useMemo, useState } from 'react';
 import { AnimatedNumber } from '../chartKit';
 import { formatCurrency } from '../format';
 import { C, VERTICAL_COLORS } from '../chartTheme';
+import { SoLink } from './SoLink';
+import { soIdFromRef } from '../soRef';
 
 export type CommRep = {
   rep: string;
@@ -130,7 +132,9 @@ export function CommissionBreakdown({ reps, onOpen }: {
               <div className="lh">Top earning orders</div>
               {topLines.map((l) => (
                 <div key={l.ref} className="ln">
-                  <span className="r">{l.ref}</span>
+                  {/* Rendered only inside the company Overview, which no rep
+                      can reach, so the Striven jump is offered. */}
+                  <span className="r"><SoLink soId={soIdFromRef(l.ref)} label={l.ref} canOpenInStriven /></span>
                   {/* Surname only, as everywhere else this data appears. */}
                   <span className="p">{l.patient || '-'}</span>
                   <span className="i" title={l.item}>{l.item}</span>

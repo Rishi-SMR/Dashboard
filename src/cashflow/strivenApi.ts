@@ -79,9 +79,12 @@ export type PoDetail = {
   isDropShip: boolean; isBlanket: boolean; isFixedCost: boolean; allowPartial: boolean; isRecurring: boolean; needsReview: boolean;
   total: number; lineItems: LineItem[];
 };
-export type SoLineItem = { item: string; description: string; qty: number; unit: number; amount: number; shipping: number; taxable: boolean; ordered: boolean | null };
+/** Money is NULL for a rep. getSODetailFor strips totals and line prices before
+ *  serialization — a rep may see their own commission and no other dollar — so
+ *  every consumer has to handle the absent case rather than printing $0. */
+export type SoLineItem = { item: string; description: string; qty: number; unit: number | null; amount: number | null; shipping: number | null; taxable: boolean; ordered: boolean | null };
 export type SoDetail = {
-  id: number; ref: string; customer: string; date: string | null; total: number; status: string; lineItemCount: number;
+  id: number; ref: string; customer: string; date: string | null; total: number | null; status: string; lineItemCount: number;
   type: string; program: string; invoiceStatus: string; rep: string; payer: string;
   orderDate: string | null; targetDate: string | null;
   createdDate: string | null; createdBy: string; lastUpdatedDate: string | null; lastUpdatedBy: string;
@@ -89,6 +92,8 @@ export type SoDetail = {
   salesTax: string; invoiceFormat: string; isChangeOrder: boolean; isRecurring: boolean;
   notesLogCount: number; attachmentCount: number;
   lineItems: SoLineItem[]; phiMasked: boolean;
+  /** True when the server withheld every dollar on this order (a rep). */
+  moneyMasked?: boolean;
 };
 
 export type Aging = { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
@@ -135,9 +140,19 @@ export type ApLedgerBill = {
    *  apart from an unpaid one by its status alone. */
   kind: 'bill' | 'credit-note' | 'cancelled';
   status: string; terms: string; dueDays: number; aging: string; open: number;
+  /** The payment term as a NUMBER of net days, null where none applies.
+   *  `terms` above stays the sheet's raw cell; this is the figure to print.
+   *  `termsSource` says who answered: 'sheet' = the accountant typed it,
+   *  'agreed' = the cell was blank and the vendor agreement filled it in,
+   *  'none' = neither (an unlisted vendor, or a credit note, which has no term).
+   *  Nothing here affects a due date or an ageing band. */
+  termsDays: number | null; termsSource: 'sheet' | 'agreed' | 'none';
 };
 export type ApLedgerGroup = {
   subLedger: string; bills: number; billed: number; open: number; openBills: number; oldestDays: number; terms: string;
+  /** The block's agreed term in net days, and where it came from. Taken off the
+   *  block's bills, so a vendor row and its rows cannot disagree. */
+  termsDays: number | null; termsSource: 'sheet' | 'agreed' | 'none';
   /** Credit notes inside this block. Their amount is netted out of `billed`
    *  but NOT out of the sheet's Outstanding column, so it is exactly the gap
    *  between `billed - paid` and `open` — which lets an explained difference be
@@ -168,6 +183,13 @@ export type ApLedger = {
     paidRecorded: number; paymentRows: number; paidImplied: number;
     blocksChecked: number; blocksMatched: number; blockOpenTotal: number;
     blockMismatches: { subLedger: string; rows: number; sheet: number; gap: number }[];
+    /** Whether the sheet's header row was recognised. False means every column
+     *  fell back to a fixed position and the parse should be distrusted. */
+    headerFound: boolean;
+    /** How the Payment Terms column is being answered across the register.
+     *  `termsFilled` is the count the sheet left blank and the agreement
+     *  supplied — the figure that says how much still needs the accountant. */
+    termsFromSheet: number; termsFilled: number; termsMissing: number;
   };
   droppedHeaderRows?: number; fetchedAt?: string;
 };
@@ -440,7 +462,13 @@ export type StrivenOrderLine = { ref: string; patient?: string; item: string; pr
   date?: string | null;
   /** Set when the reconciliation sheet could not tie this row to a Striven
    *  record. The line is still paid; the remark says the match is missing. */
-  unmatched?: boolean };
+  unmatched?: boolean;
+  /** A flat payment rather than units × a per-device rate — a bonus. Set by the
+   *  workbook reader on any line that carries no device, since a per-device rate
+   *  applied to no device is not a figure that exists. Such a line has no
+   *  patient and no sales order, and both of those are correct rather than
+   *  missing, which is the whole reason the flag has to travel with it. */
+  bonus?: boolean };
 /** nTricare/nVa/nPi are ORDERS per vertical; uTricare/… are units per vertical. */
 /** Volume fields (`orders`, `units`, `nTricare`/`nVa`/`nPi`) are the FULL order
  *  book from Striven. `commOrders`/`commUnits` are the subset the commission was
@@ -456,6 +484,18 @@ export type StrivenCommRep = {
   orders: number; units: number; value: number | null;
   nTricare?: number; nVa?: number; nPi?: number; uTricare?: number; uVa?: number; uPi?: number;
   lines?: StrivenOrderLine[]; redacted?: boolean;
+  /** Did the RECONCILIATION SHEET carry this rep at all?
+   *
+   *  The server has always computed it (a rep the sheet does not name is taken
+   *  to ZERO rather than falling back to the engine's own figure, because
+   *  mixing the two bases in one column makes the total reconcile to nothing) —
+   *  and then no client ever declared it, so it was computed, serialized and
+   *  dropped on the floor.
+   *
+   *  That is the difference between "this rep earned nothing" and "this rep is
+   *  not in the sheet the figures come from", and a bare $0 states the first
+   *  while meaning the second. Maylon Sanders is the live case. */
+  reconciled?: boolean;
 };
 /** A month here is a PAYOUT CYCLE: the commission the 15th-of-next-month run
  *  signed off for that month, straight off the reconciliation sheet. Volume

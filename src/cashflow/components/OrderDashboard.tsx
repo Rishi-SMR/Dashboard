@@ -17,6 +17,8 @@ import { DeviceChips, deviceVertical, shortDeviceName } from './DeviceChips';
 import { TrackingCell } from './TrackingCell';
 import { ColumnFilter, SortHead } from './ColumnFilter';
 import { Portal } from './Portal';
+import { StatStrip } from './StatStrip';
+import { SoLink } from './SoLink';
 
 // The order the client asked for: PI and VA are active, DOL is live-but-empty,
 // TriCare is legacy and kept for historical data.
@@ -1021,6 +1023,10 @@ function DeviceBreakdown({ devices, dense = false }: { devices: [string, number]
 
 type TotalKey = 'orders' | 'revenue' | 'devices' | 'accounts' | 'pending' | 'delivered';
 
+/** How many accounts the Revenue drill lists before it stops and says so. The
+ *  full ranking is one tap away on the Accounts drill, which caps nothing. */
+const ACCT_CAP = 15;
+
 /**
  * What sits behind a headline tile.
  *
@@ -1133,13 +1139,21 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
   // at 940px the name column swallowed ~600px of slack — which is the gap. A
   // table is width:100%, so the only real fix is to stop the card being wider
   // than the table has anything to put in it.
-  const wide = showList || metric === 'revenue';
+  //
+  // REVENUE USED TO TAKE THE ORDER LIST'S 940 and had the same problem one step
+  // down: five columns, four of them `.num` and so collapsed to their own
+  // content, which sends every pixel of slack to the account name — and the
+  // longest name on the book ("Deon S Goldschmidt Attorneys, PLLC") wants about
+  // 220 of them. The rest was a blank corridor between the names and the
+  // figures, on both of its tables at once. 640 fits the longest name with room
+  // to spare and puts the numbers back within reading distance of it.
+  const width = showList ? 940 : metric === 'revenue' ? 640 : 560;
   return (
     // Portalled to <body>: a fixed backdrop must mean the VIEWPORT, and any
     // transform on an ancestor silently redefines that. See Portal.tsx.
     <Portal>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: `min(${wide ? 940 : 560}px, 100%)`, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: `min(${width}px, 100%)`, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${cfg.tint}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '14px 16px', borderBottom: '1px solid #EAEEF4', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 800, color: C.ink }}>{cfg.title}</div>
@@ -1149,15 +1163,15 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
         </div>
 
         <div style={{ padding: '12px 16px', overflowX: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginBottom: 12 }}>
-            <Stat label="Orders" value={String(set.length)} tint={cfg.tint} />
-            <Stat label="Devices" value={String(units)} />
-            <Stat label="Accounts" value={String(byAcct.length)} />
-            {/* Withheld on the DEVICES drill, where the table below carries no
-                money either — a lone revenue tile above a units-only table
-                invites the reader to tie the two together, and they don't. */}
-            {!isRep && metric !== 'devices' && <Stat label="Revenue" value={formatCurrency(revenue)} />}
-          </div>
+          <StatStrip items={[
+            { label: 'Orders', value: String(set.length), tint: cfg.tint },
+            { label: 'Devices', value: String(units) },
+            { label: 'Accounts', value: String(byAcct.length) },
+            // Withheld on the DEVICES drill, where the table below carries no
+            // money either — a lone revenue figure above a units-only table
+            // invites the reader to tie the two together, and they don't.
+            !isRep && metric !== 'devices' && { label: 'Revenue', value: formatCurrency(revenue) },
+          ]} />
 
           {showList ? (
             <>
@@ -1174,7 +1188,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
                     {set.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders here.</td></tr>}
                     {set.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                       <tr key={o.soId}>
-                        <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                        <td><SoLink soId={o.soId} label={o.ref} canOpenInStriven={!isRep} /></td>
                         <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                         {/* compact: this table already carries nine columns inside
                             a 940px modal, so the carrier chip is dropped and the
@@ -1203,12 +1217,30 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
             <>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>By vertical</div>
               <Ranked rows={byVert} />
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '18px 0 8px' }}>By account <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· click for detail</span></div>
-              <Ranked rows={byAcct.slice(0, 15)} onPick={onPickAccount} />
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, margin: '14px 0 8px' }}>By account <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· click for detail</span></div>
+              <Ranked rows={byAcct.slice(0, ACCT_CAP)} onPick={onPickAccount} />
+              {/* SAYS THAT IT IS CUT. The cap was silent: 15 rows under a
+                  heading reading "By account", in a modal whose own strip says
+                  82 accounts, invites the reader to take the column as the whole
+                  of the revenue — and it sums to a fraction of it. One line is
+                  cheaper than the wrong total. */}
+              {byAcct.length > ACCT_CAP && (
+                <div style={{ fontSize: 11.5, color: C.muted, marginTop: 7 }}>
+                  Top {ACCT_CAP} of {byAcct.length} accounts by revenue — the other{' '}
+                  {byAcct.length - ACCT_CAP} carry {formatCurrency(byAcct.slice(ACCT_CAP).reduce((t, a) => t + a.revenue, 0))} between them.
+                </div>
+              )}
             </>
           )}
+          {/* THE PRIVACY HALF ONLY WHERE THERE IS A PATIENT ON SCREEN. The
+              ranked views are accounts, verticals and device types — no patient
+              column, no patient anywhere — so promising that only surnames are
+              shown was answering a question this drill does not raise, in two
+              lines at the foot of it. The exclusions note applies to every
+              figure here and stays on all of them. */}
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
-            🔒 Patient SURNAME only — never a first name, date of birth or address. Cancelled orders are excluded from every figure.
+            {showList && '🔒 Patient SURNAME only — never a first name, date of birth or address. '}
+            Cancelled orders are excluded from every figure.
           </div>
         </div>
       </div>
@@ -1217,15 +1249,11 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
   );
 }
 
-/** Small figure tile used inside the drill-downs. */
-function Stat({ label, value, tint }: { label: string; value: string; tint?: string }) {
-  return (
-    <div style={{ background: 'var(--panel-2)', borderRadius: 10, padding: '10px 12px' }}>
-      <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: tint || C.ink, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
-    </div>
-  );
-}
+// `Stat` — the tile this file's drills used to head with — is GONE, not merely
+// unused: both callers now read StatStrip, and leaving the tile behind would
+// invite the next drill to reach for it and reintroduce the 74px header the
+// strip exists to remove. The page-level tiles are a different component and are
+// untouched.
 
 /**
  * One device type, everywhere it went: which accounts bought it, which verticals
@@ -1236,8 +1264,11 @@ function Stat({ label, value, tint }: { label: string; value: string; tint?: str
  * keeps the modal's total equal to the row you clicked.
  */
 function DeviceModal({ device, orders, onClose }: { device: string; orders: AnalyticsOrder[]; onClose: () => void }) {
-  // No `useIsRep()` here any more: it gated the revenue columns, and there are
-  // none left on this modal for either role.
+  // BACK, for a different reason than it left. This was dropped when the revenue
+  // columns went — nothing on the modal needed the role. The order reference is
+  // now openable, and only an admin is offered the jump into Striven, so the
+  // flag is read again. It still gates NOTHING about the data on screen.
+  const isRep = useIsRep();
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1294,14 +1325,15 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
         </div>
 
         <div style={{ padding: '16px 18px', overflowX: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 18 }}>
-            <Stat label="Units" value={String(units)} tint={tint} />
-            <Stat label="Orders" value={String(orders.length)} />
-            <Stat label="Accounts" value={String(byAccount.length)} />
-            {/* Revenue and Per unit are gone. Per unit went WITH revenue: it was
-                revenue ÷ units, so on its own it would have been a dollar figure
-                with nothing on the modal to derive it from. */}
-          </div>
+          {/* NO FIGURE STRIP HERE AT ALL. The three cards that stood here —
+              Units, Orders, Accounts — were the subtitle of this very modal
+              printed a second time, six lines lower and four times taller:
+              "215 units · 47 orders · 9 accounts" is already in the header. A
+              summary that summarises the line above it is not a summary.
+
+              (Revenue and Per unit went earlier, and for a different reason: per
+              unit was revenue ÷ units, so without revenue it was a dollar figure
+              with nothing on the modal to derive it from.) */}
 
           {byVertical.length > 1 && (
             <>
@@ -1352,7 +1384,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
               <tbody>
                 {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                   <tr key={o.soId}>
-                    <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                    <td><SoLink soId={o.soId} label={o.ref} canOpenInStriven={!isRep} /></td>
                     <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                     <td><TrackingCell shipments={o.shipments} compact /></td>
                     <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
@@ -1431,7 +1463,7 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
               <tbody>
                 {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                   <tr key={o.soId}>
-                    <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                    <td><SoLink soId={o.soId} label={o.ref} canOpenInStriven={!isRep} /></td>
                     <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                     <td><TrackingCell shipments={o.shipments} compact /></td>
                     <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
