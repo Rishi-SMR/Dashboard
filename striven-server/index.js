@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
 import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
@@ -211,6 +211,25 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Order analytics — identity-scoped like commission.
+  // SALES-ORDER DETAIL, scoped to the caller — the order reference is a link on
+  // the rep boards, so this must answer per-viewer. Explicit here rather than in
+  // DYNAMIC below, because that table's handlers receive only the URL match and
+  // have no way to see who is asking. See getSODetailFor.
+  {
+    const m = pathname.match(/^\/api\/so\/(\d+)$/);
+    if (m) {
+      try {
+        const out = await getSODetailFor(m[1], viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(out));
+      } catch (e) {
+        const code = e.status || 500;
+        res.writeHead(code, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    }
+  }
+
   if (pathname === '/api/order-analytics') {
     try {
       const out = await getOrderAnalytics(viewerFor(await getMe({ user: currentUser }), reqUrl.searchParams.get('as')));
@@ -300,4 +319,40 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`SMR ⇄ Striven local server on http://localhost:${PORT}`));
+/**
+ * WARM THE DERIVED CACHES ON BOOT, so the first person to sign in is not the one
+ * who pays for building them.
+ *
+ * With stale-while-revalidate in `cached()`, a key that HAS a copy never blocks
+ * anyone — but a key with no copy at all still does, and after a restart that is
+ * every key. That first dashboard load measured ~5.9s while it pulled four
+ * Google Sheets and two Striven reports; every load after it was ~0.2s. Doing
+ * that work at boot moves the wait to a moment when nobody is watching.
+ *
+ * These two calls are the whole dependency graph the dashboard needs:
+ * getOrderAnalytics fills `derived:so` and `derived:analytics:admin`,
+ * getCommissionFor fills `derived:commission:raw` and the workbook/recon caches
+ * under it. Everything the rep and admin boards render is downstream of them.
+ *
+ * DELIBERATELY NOT AWAITED and deliberately silent. The server must accept
+ * connections immediately — warming is an optimisation, not a startup
+ * dependency — and a warm-up that cannot reach Sheets or Striven must not print
+ * a scary error or, worse, stop the server booting. A failed warm just means the
+ * first request builds the cache the old way, which is exactly today's
+ * behaviour.
+ */
+function warmCaches() {
+  const ADMIN = { repName: null, role: 'admin' };
+  const t0 = Date.now();
+  Promise.allSettled([getOrderAnalytics(ADMIN), getCommissionFor(ADMIN)])
+    .then((r) => {
+      const failed = r.filter((x) => x.status === 'rejected').length;
+      console.log(`  caches warm in ${Date.now() - t0}ms${failed ? ` (${failed} of ${r.length} unavailable — first request will build them)` : ''}`);
+    })
+    .catch(() => { /* warming can never be fatal */ });
+}
+
+server.listen(PORT, () => {
+  console.log(`SMR ⇄ Striven local server on http://localhost:${PORT}`);
+  warmCaches();
+});
