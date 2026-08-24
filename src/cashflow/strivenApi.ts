@@ -140,9 +140,19 @@ export type ApLedgerBill = {
    *  apart from an unpaid one by its status alone. */
   kind: 'bill' | 'credit-note' | 'cancelled';
   status: string; terms: string; dueDays: number; aging: string; open: number;
+  /** The payment term as a NUMBER of net days, null where none applies.
+   *  `terms` above stays the sheet's raw cell; this is the figure to print.
+   *  `termsSource` says who answered: 'sheet' = the accountant typed it,
+   *  'agreed' = the cell was blank and the vendor agreement filled it in,
+   *  'none' = neither (an unlisted vendor, or a credit note, which has no term).
+   *  Nothing here affects a due date or an ageing band. */
+  termsDays: number | null; termsSource: 'sheet' | 'agreed' | 'none';
 };
 export type ApLedgerGroup = {
   subLedger: string; bills: number; billed: number; open: number; openBills: number; oldestDays: number; terms: string;
+  /** The block's agreed term in net days, and where it came from. Taken off the
+   *  block's bills, so a vendor row and its rows cannot disagree. */
+  termsDays: number | null; termsSource: 'sheet' | 'agreed' | 'none';
   /** Credit notes inside this block. Their amount is netted out of `billed`
    *  but NOT out of the sheet's Outstanding column, so it is exactly the gap
    *  between `billed - paid` and `open` — which lets an explained difference be
@@ -176,6 +186,10 @@ export type ApLedger = {
     /** Whether the sheet's header row was recognised. False means every column
      *  fell back to a fixed position and the parse should be distrusted. */
     headerFound: boolean;
+    /** How the Payment Terms column is being answered across the register.
+     *  `termsFilled` is the count the sheet left blank and the agreement
+     *  supplied — the figure that says how much still needs the accountant. */
+    termsFromSheet: number; termsFilled: number; termsMissing: number;
   };
   droppedHeaderRows?: number; fetchedAt?: string;
 };
