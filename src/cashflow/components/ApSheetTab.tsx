@@ -33,6 +33,10 @@ type Bill = {
    *  the invoice card. They are the two facts a row cannot show and a reader
    *  most often wants: on what terms, and how far past them. */
   terms: string; dueDays: number;
+  /** The term as net days, and who answered — the sheet's own cell or the
+   *  vendor agreement filling a blank. Display only: no due date or ageing
+   *  band is derived from it. */
+  termsDays: number | null; termsSource: 'sheet' | 'agreed' | 'none';
 };
 
 // The 71-row hardcoded snapshot that used to live here is GONE. The register
@@ -141,7 +145,7 @@ function BillCard({ bill, onClose }: { bill: Bill; onClose: () => void }) {
               <BillKV label="Invoice date">{bill.date ? fmtDate(bill.date) : <span style={{ color: C.muted }}>—</span>}</BillKV>
               <BillKV label="Due date">{bill.due ? fmtDate(bill.due) : <span style={{ color: C.muted }}>—</span>}</BillKV>
               {/* The two the sheet carries and no table column prints. */}
-              <BillKV label="Payment terms">{bill.terms || <span style={{ color: C.muted }}>not stated</span>}</BillKV>
+              <BillKV label="Payment terms"><Terms days={bill.termsDays} source={bill.termsSource} /></BillKV>
               <BillKV label="Aging">{bill.aging || <span style={{ color: C.muted }}>—</span>}</BillKV>
               <BillKV label="Days past due">
                 {late == null ? <span style={{ color: C.muted }}>settled</span>
@@ -175,6 +179,29 @@ function BillCard({ bill, onClose }: { bill: Bill; onClose: () => void }) {
       </div>
     </Portal>
   );
+}
+
+/**
+ * A PAYMENT TERM, rendered once.
+ *
+ * "Net 30" where there is one, an em-dash where there is not — never a guess.
+ * A term the vendor agreement supplied for a cell the sheet left blank is
+ * marked with a degree ring and says so on hover, because a reader working the
+ * register needs to know which figures came off the sheet they maintain and
+ * which did not. Everything else prints plain.
+ */
+function Terms({ days, source }: { days: number | null; source: 'sheet' | 'agreed' | 'none' }) {
+  if (days == null) return <span style={{ color: C.muted }}>&mdash;</span>;
+  const label = days === 0 ? 'Due on receipt' : `Net ${days}`;
+  if (source === 'agreed') {
+    return (
+      <span style={{ whiteSpace: 'nowrap' }}
+        title="The sheet's Payment Terms cell is blank on this row; shown from the agreed vendor terms.">
+        {label}<span style={{ color: C.warning, marginLeft: 3, fontWeight: 700 }}>&deg;</span>
+      </span>
+    );
+  }
+  return <span style={{ whiteSpace: 'nowrap' }}>{label}</span>;
 }
 
 type SortKey = 'sub' | 'date' | 'due' | 'total' | 'open';
@@ -364,16 +391,20 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
       // value struck through while the totals exclude it. One column could only
       // carry one of those, and either choice would make the file disagree with
       // the page or fail to add up.
-      ['Invoice', 'Sub-Ledger', 'Invoice date', 'Due date', 'Face value', 'Counts toward total', 'Open', 'Status'],
+      ['Invoice', 'Sub-Ledger', 'Invoice date', 'Terms', 'Due date', 'Face value', 'Counts toward total', 'Open', 'Status'],
       ...sorted.map((b) => [
-        b.no, b.vendor, b.date, b.due, money(b.faceValue), money(b.total), money(b.open),
+        b.no, b.vendor, b.date,
+        // A ring marks a term the agreement supplied for a blank cell, exactly
+        // as on screen, so the workbook and the table cannot read differently.
+        b.termsDays == null ? '' : `Net ${b.termsDays}${b.termsSource === 'agreed' ? ' °' : ''}`,
+        b.due, money(b.faceValue), money(b.total), money(b.open),
         b.kind === 'cancelled' ? 'Cancelled — excluded' : b.kind === 'credit-note' ? 'Credit note' : b.status,
       ]),
       [],
       // Blank under "Face value": summing face values would re-add the very
       // cancellations this register takes out. The totals row belongs under the
       // column that counts.
-      ['Total', `${filtered.length} bills`, '', '', '', money(fTotal), money(fOpen), ''],
+      ['Total', `${filtered.length} bills`, '', '', '', '', money(fTotal), money(fOpen), ''],
     ];
     downloadXlsx([{ name: seg === 'all' ? 'Bills' : seg === 'unpaid' ? 'Unpaid bills' : 'Paid bills', rows }],
       stamped(`smr-ap-${seg}-bills`, 'xlsx'));
@@ -439,6 +470,10 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                   onChange={(next) => { setPickSub(next); setPage(1); }} />
               </th>
               <th className="sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setSortKey('date')}>Invoice date {sortInd('date')}</th>
+              {/* BETWEEN THE TWO DATES IT RELATES. Read left to right the row now
+                  states the whole arrangement: raised on this date, on these
+                  terms, due on that one. */}
+              <th style={{ whiteSpace: 'nowrap' }}>Terms</th>
               <th className="sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setSortKey('due')}>Due date {sortInd('due')}</th>
               <th className="num sortable" onClick={() => setSortKey('total')}>Total {sortInd('total')}</th>
               {/* The paid table has no balance to show, so the column would be a
@@ -463,6 +498,7 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                 <td><BillLink bill={b} /></td>
                 <td>{b.vendor}</td>
                 <td>{fmtDate(b.date)}</td>
+                <td><Terms days={b.termsDays} source={b.termsSource} /></td>
                 <td>{fmtDate(b.due)}</td>
                 {/* A credit note prints as a negative and is tinted, so the row
                     reads as money coming OFF the account rather than another
@@ -483,12 +519,12 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                 <td>{statusTag(b.status, b.kind)}</td>
               </tr>
             ))}
-            {sorted.length === 0 && <tr><td colSpan={7} style={{ color: C.muted }}>No bills match.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No bills match.</td></tr>}
             {filtered.length > 0 && (
               <tr className="total-row">
                 <td>TOTAL</td>
                 <td>{filtered.length} bill{filtered.length === 1 ? '' : 's'}</td>
-                <td></td><td></td>
+                <td></td><td></td><td></td>
                 <td className="num">{formatCurrency(fTotal, true)}</td>
                 <td className="num">{formatCurrency(fOpen, true)}</td>
                 <td></td>
@@ -504,13 +540,13 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                   <td colSpan={2} style={{ fontWeight: 600, color: C.muted }}>
                     less {creditCount} credit note{creditCount === 1 ? '' : 's'}
                   </td>
-                  <td></td><td></td><td></td>
+                  <td></td><td></td><td></td><td></td>
                   <td className="num cell-pos">−{formatCurrency(creditOffset, true)}</td>
                   <td></td>
                 </tr>
                 <tr className="total-row">
                   <td>NET OUTSTANDING</td>
-                  <td></td><td></td><td></td><td></td>
+                  <td></td><td></td><td></td><td></td><td></td>
                   <td className="num">{formatCurrency(fOpen - creditOffset, true)}</td>
                   <td></td>
                 </tr>
@@ -561,6 +597,7 @@ export function ApSheetTab() {
       total: b.total, faceValue: b.faceValue ?? b.total, kind: b.kind ?? 'bill',
       status: b.status, aging: b.aging, open: b.open,
       terms: b.terms ?? '', dueDays: b.dueDays ?? 0,
+      termsDays: b.termsDays ?? null, termsSource: b.termsSource ?? 'none',
     })),
     [ledger],
   );
@@ -619,6 +656,8 @@ export function ApSheetTab() {
   const vendorRows = useMemo(() => (ledger?.subLedgers ?? [])
     .map((g) => ({
       vendor: g.subLedger,
+      termsDays: g.termsDays ?? null,
+      termsSource: g.termsSource ?? 'none',
       bills: g.bills,
       billed: g.billed,
       paid: g.paidRecorded ?? 0,
@@ -726,7 +765,14 @@ export function ApSheetTab() {
   // convention for glanceable figures, and the drill behind each tile is where
   // the exact number now lives.
   const vendorDrill = (name: string) => setDrill({
-    title: name, sub: `${BILLS.filter((b) => b.vendor === name).length} bills on record`,
+    title: name,
+    // One supplier, so the term is a property of the whole drill: repeating it
+    // down every row would say the same thing as many times as they have bills.
+    sub: (() => {
+      const n = BILLS.filter((b) => b.vendor === name).length;
+      const d = BILLS.find((b) => b.vendor === name && b.termsDays != null)?.termsDays ?? null;
+      return `${n} bills on record · ${d == null ? 'no payment terms stated' : d === 0 ? 'Due on receipt' : `Net ${d}`}`;
+    })(),
     columns: [{ key: 'n', label: 'Invoice' }, { key: 'd', label: 'Date' }, { key: 't', label: 'Total', num: true }, { key: 's', label: 'Status' }],
     // One vendor, so this is invoice sequence ascending — same order the
     // supplier's block runs in on the register below.
@@ -753,7 +799,7 @@ export function ApSheetTab() {
     // both, so the drill was the odd one out.
     columns: [
       { key: 'n', label: 'INVOICE NUMBER' }, { key: 'v', label: 'VENDOR NAME' },
-      { key: 'd', label: 'INVOICE DATE' }, { key: 'due', label: 'DUE DATE' },
+      { key: 'd', label: 'INVOICE DATE' }, { key: 'tm', label: 'TERMS' }, { key: 'due', label: 'DUE DATE' },
       { key: 'o', label: 'OPEN BALANCES', num: true },
     ],
     // Vendor A→Z, then invoice sequence — the register's own order, so the
@@ -771,6 +817,7 @@ export function ApSheetTab() {
         n: <BillLink bill={b} />,
         v: b.vendor,
         d: b.date ? fmtDate(b.date) : <span style={{ color: C.muted }}>—</span>,
+        tm: <Terms days={b.termsDays} source={b.termsSource} />,
         due: b.due ? fmtDate(b.due) : <span style={{ color: C.muted }}>—</span>,
         o: formatCurrency(b.open, true),
       }))
@@ -779,10 +826,10 @@ export function ApSheetTab() {
       .concat((ledger?.totals?.creditNotes ?? 0) > 0 ? [
         {
           n: <span style={{ color: C.muted }}>less {ledger!.totals!.creditNotes} credit note{ledger!.totals!.creditNotes === 1 ? '' : 's'}</span>,
-          v: '', d: '', due: '', o: <span className="cell-pos">−{formatCurrency(ledger!.totals!.creditNoteAmount, true)}</span>,
+          v: '', d: '', tm: '', due: '', o: <span className="cell-pos">−{formatCurrency(ledger!.totals!.creditNoteAmount, true)}</span>,
         },
         {
-          n: <strong>NET OUTSTANDING</strong>, v: '', d: '', due: '',
+          n: <strong>NET OUTSTANDING</strong>, v: '', d: '', tm: '', due: '',
           o: <strong>{formatCurrency(agg.outstanding, true)}</strong>,
         },
       ] : []),
@@ -926,6 +973,9 @@ export function ApSheetTab() {
               <thead>
                 <tr>
                   <th>SUB-LEDGER</th>
+                  {/* A property of the SUPPLIER, so it sits with their name
+                      rather than being read off one of their bills. */}
+                  <th>TERMS</th>
                   <th className="num">BILLS</th>
                   <th className="num">BILLED</th>
                   <th className="num">PAID</th>
@@ -941,6 +991,7 @@ export function ApSheetTab() {
                 {vendorRows.map((v) => (
                   <tr key={v.vendor}>
                     <td><strong>{v.vendor}</strong></td>
+                    <td><Terms days={v.termsDays} source={v.termsSource} /></td>
                     <td className="num">{v.bills}</td>
                     <td className="num">{formatCurrency(v.billed, true)}</td>
                     <td className="num cell-pos">{formatCurrency(v.paid, true)}</td>
@@ -957,6 +1008,7 @@ export function ApSheetTab() {
                 {vendorRows.length > 0 && (
                   <tr className="total-row">
                     <td>TOTAL</td>
+                    <td />
                     <td className="num">{vendorRows.reduce((s, v) => s + v.bills, 0)}</td>
                     <td className="num">{formatCurrency(vendorRows.reduce((s, v) => s + v.billed, 0), true)}</td>
                     <td className="num">{formatCurrency(vendorRows.reduce((s, v) => s + v.paid, 0), true)}</td>
