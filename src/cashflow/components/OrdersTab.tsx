@@ -15,7 +15,8 @@ import {
   type PoDetail,
 } from '../strivenApi';
 import { StatusPill } from './StatusPill';
-import { SO_REF_STYLE, SoLink, soIdFromRef } from './SoLink';
+import { SoLink } from './SoLink';
+import { SO_REF_STYLE, soIdFromRef } from '../soRef';
 import { OrderTrackingTab } from './OrderTrackingTab';
 
 type Mode = 'sales' | 'purchase' | 'tracking';

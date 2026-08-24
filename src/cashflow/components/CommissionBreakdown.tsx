@@ -16,7 +16,8 @@ import { useMemo, useState } from 'react';
 import { AnimatedNumber } from '../chartKit';
 import { formatCurrency } from '../format';
 import { C, VERTICAL_COLORS } from '../chartTheme';
-import { SoLink, soIdFromRef } from './SoLink';
+import { SoLink } from './SoLink';
+import { soIdFromRef } from '../soRef';
 
 export type CommRep = {
   rep: string;

@@ -6,7 +6,7 @@ import { fetchApLedger, type ApLedger } from '../strivenApi';
 import { ColumnFilter } from './ColumnFilter';
 import { downloadXlsx, printToPdf, stamped } from '../export';
 import { Portal } from './Portal';
-import { SO_REF_STYLE } from './SoLink';
+import { SO_REF_STYLE } from '../soRef';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AP Register (Sheet): a manually-maintained accounts-payable register sourced

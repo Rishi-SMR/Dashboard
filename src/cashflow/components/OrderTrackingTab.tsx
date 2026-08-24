@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetchStrivenOrders, type OrdersResult, type OrderRow } from '../strivenApi';
 import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
 import { StatusPill } from './StatusPill';
-import { SoLink, soIdFromRef } from './SoLink';
+import { SoLink } from './SoLink';
+import { soIdFromRef } from '../soRef';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 
