@@ -4741,6 +4741,20 @@ export async function getCommission(viewer = null) {
       nTricare: sv?.nTricare ?? 0, nVa: sv?.nVa ?? 0, nPi: sv?.nPi ?? 0,
       strivenOrders: sv?.orders ?? 0, strivenUnits: sv?.units ?? 0, strivenValue: round2(sv?.value ?? 0),
       orderCounts: { TriCare: sv?.nTricare || 0, VA: sv?.nVa || 0, PI: sv?.nPi || 0, DOL: 0 },
+      // PAID WAS COMPUTED AND THEN DROPPED ON THE FLOOR.
+      //
+      // splitPaid() sets `paidTotal` on every striven.byRep row further up, but
+      // this map — which builds the rows the Commission table actually renders —
+      // carried only payable and waiting. So `r.paidTotal` reached the browser
+      // as undefined and money() printed it as "-" for EVERY rep.
+      //
+      // Invisible while a rep still has money owed, because the Payable column
+      // carried the story. It is not invisible for a rep who has been paid in
+      // full: Maylon Sanders' whole $4,489.86 sits inside COMMISSION_PAID_THROUGH
+      // (PI through 2026-07), so his row read "-" under Paid and "$0.00" under
+      // Payable — a rep whose workbook had loaded perfectly, showing as though
+      // nothing had loaded at all.
+      paidTotal: round2(sv?.paidTotal ?? 0),
       payableTotal: round2(sv?.payableTotal ?? 0),
       waitingTotal: round2(sv?.waitingTotal ?? 0),
       commPerOrder: sv?.orders ? Math.round((sv.total || 0) / sv.orders) : null,
