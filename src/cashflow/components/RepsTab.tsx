@@ -959,12 +959,24 @@ function OverviewPanel({ reps, months, month, onMonth, onPickRep }: {
   // period at all. A rep who booked nothing in the month drops off the board
   // rather than sitting at the foot on zero: they are not last that month, they
   // are absent from it, and a rank implies a race they did not enter.
+  //
+  // EXCEPT A REP WHO HAS NEVER BOOKED AT ALL — the same exception the
+  // Leaderboard makes, and made here for the same reason: that rule reads
+  // correctly for an established producer having a quiet month and wrongly for
+  // someone just added to the roster, who is not absent from the month but has
+  // not started. Without it a new rep is invisible on every period, which looks
+  // exactly like the roster edit having failed.
+  //
+  // The two boards MUST agree. They rank the same field off the same payload,
+  // and a rep who appears on one and not the other is the "two boards, one
+  // roster, different answers" bug the note above records fixing once already.
   const inPeriod: RepRow[] = active === ALL_TIME
     ? [...reps]
     : reps.map((r) => {
       const m = (r.byMonth ?? []).find((x) => x.month === active);
-      return { ...r, orders: m?.orders ?? 0, units: m?.units ?? null, byVertical: m?.byVertical ?? [] };
-    }).filter((r) => r.orders > 0);
+      // `r.orders` is the LIFETIME count, read before the period overwrites it.
+      return { ...r, orders: m?.orders ?? 0, units: m?.units ?? null, byVertical: m?.byVertical ?? [], lifetimeOrders: r.orders };
+    }).filter((r) => r.orders > 0 || r.lifetimeOrders === 0);
 
   const ranked = inPeriod
     .filter((r) => !r.standingsExcluded || r.isSelf)

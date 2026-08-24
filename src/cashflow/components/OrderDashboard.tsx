@@ -18,6 +18,7 @@ import { TrackingCell } from './TrackingCell';
 import { ColumnFilter, SortHead } from './ColumnFilter';
 import { Portal } from './Portal';
 import { StatStrip } from './StatStrip';
+import { SoLink } from './SoLink';
 
 // The order the client asked for: PI and VA are active, DOL is live-but-empty,
 // TriCare is legacy and kept for historical data.
@@ -1187,7 +1188,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
                     {set.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders here.</td></tr>}
                     {set.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                       <tr key={o.soId}>
-                        <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                        <td><SoLink soId={o.soId} label={o.ref} canOpenInStriven={!isRep} /></td>
                         <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                         {/* compact: this table already carries nine columns inside
                             a 940px modal, so the carrier chip is dropped and the
@@ -1263,8 +1264,11 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
  * keeps the modal's total equal to the row you clicked.
  */
 function DeviceModal({ device, orders, onClose }: { device: string; orders: AnalyticsOrder[]; onClose: () => void }) {
-  // No `useIsRep()` here any more: it gated the revenue columns, and there are
-  // none left on this modal for either role.
+  // BACK, for a different reason than it left. This was dropped when the revenue
+  // columns went — nothing on the modal needed the role. The order reference is
+  // now openable, and only an admin is offered the jump into Striven, so the
+  // flag is read again. It still gates NOTHING about the data on screen.
+  const isRep = useIsRep();
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1380,7 +1384,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
               <tbody>
                 {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                   <tr key={o.soId}>
-                    <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                    <td><SoLink soId={o.soId} label={o.ref} canOpenInStriven={!isRep} /></td>
                     <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                     <td><TrackingCell shipments={o.shipments} compact /></td>
                     <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>
@@ -1459,7 +1463,7 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
               <tbody>
                 {orders.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map((o) => (
                   <tr key={o.soId}>
-                    <td style={{ fontWeight: 600, color: C.brand }}>{o.ref}</td>
+                    <td><SoLink soId={o.soId} label={o.ref} canOpenInStriven={!isRep} /></td>
                     <td style={{ fontWeight: 600 }}>{o.patient || <span style={{ color: C.muted, fontWeight: 400 }}>-</span>}</td>
                     <td><TrackingCell shipments={o.shipments} compact /></td>
                     <td style={{ fontSize: 12.5 }}>{fmtDate(o.date)}</td>

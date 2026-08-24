@@ -7,6 +7,7 @@ import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 import { DeviceChips } from './DeviceChips';
+import { SoLink } from './SoLink';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-';
@@ -345,7 +346,14 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
                       number sideways by the width of a glyph the moment a row
                       opened, and rows with no items shifted the other way. */}
                   <td style={{ fontWeight: 700 }}>
-                    <span className="so-caret" aria-hidden="true">{o.items.length ? (open === o.soId ? '▾' : '▸') : ''}</span>{o.so}
+                    <span className="so-caret" aria-hidden="true">{o.items.length ? (open === o.soId ? '▾' : '▸') : ''}</span>
+                    {/* The caret belongs to the ROW, which expands the order's
+                        items; the reference opens the order itself. Two actions
+                        in one cell, so the link stops the click from also
+                        toggling the drawer under it. */}
+                    <span onClick={(e) => e.stopPropagation()} role="presentation">
+                      <SoLink soId={o.soId} label={o.so} canOpenInStriven />
+                    </span>
                   </td>
                   <td style={{ fontWeight: 600 }} title={o.ref || undefined}>{o.ref || '-'}</td>
                   <td title={o.lastName || undefined}>{o.lastName || '-'}{o.incomplete && <span className="pill-tag tag-warn" style={{ marginLeft: 6, fontSize: 10 }}>incomplete</span>}</td>

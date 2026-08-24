@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetchStrivenOrders, type OrdersResult, type OrderRow } from '../strivenApi';
 import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
 import { StatusPill } from './StatusPill';
+import { SoLink, soIdFromRef } from './SoLink';
 import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 
@@ -215,7 +216,20 @@ function OrderRowView({ o, open, onToggle }: { o: OrderRow; open: boolean; onTog
   return (
     <>
       <tr onClick={onToggle} style={{ cursor: 'pointer' }}>
-        <td><strong>{open ? '▾ ' : '▸ '}{o.ref}</strong></td>
+        {/* The caret still belongs to the ROW — it toggles the POs and
+            invoices below — while the reference itself opens the order. Two
+            actions in one cell, so the link stops the click from also
+            toggling the drawer under it.
+
+            `soIdFromRef` because this payload carries the reference and no
+            numeric id; every SO-<n> in the portal is built as `SO-${so.id}`
+            from the same Striven id, so the digits ARE the id. */}
+        <td>
+          <strong>{open ? '▾ ' : '▸ '}</strong>
+          <span onClick={(e) => e.stopPropagation()} role="presentation">
+            <SoLink soId={soIdFromRef(o.ref)} label={o.ref} canOpenInStriven />
+          </span>
+        </td>
         <td style={{ fontWeight: 600 }}>{o.lastName || '-'}</td>
         <td title={o.itemCount > 1 ? `${o.itemCount} items` : undefined}>{o.item || '-'}{o.itemCount > 1 ? ` +${o.itemCount - 1}` : ''}</td>
         <td><StatusPill status={o.pi} /></td>

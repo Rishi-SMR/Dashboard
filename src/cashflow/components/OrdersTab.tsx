@@ -15,6 +15,7 @@ import {
   type PoDetail,
 } from '../strivenApi';
 import { StatusPill } from './StatusPill';
+import { SO_REF_STYLE, SoLink, soIdFromRef } from './SoLink';
 import { OrderTrackingTab } from './OrderTrackingTab';
 
 type Mode = 'sales' | 'purchase' | 'tracking';
@@ -348,7 +349,11 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
         { key: 'inv', label: 'Invoiced' },
       ],
       rows: list.map((o) => ({
-        ref: <strong>{o.ref}</strong>,
+        // A SoLink rather than this tab's own openSo: the drill is already a
+        // dialog, and swapping it for the order card would lose the reader's
+        // place in the list they clicked from. SoLink opens over the drill and
+        // closes back to it.
+        ref: <SoLink soId={o.id} label={o.ref} canOpenInStriven />,
         type: <StatusPill status={o.type} />,
         rep: o.rep || '-',
         payer: o.payer || '-',
@@ -564,7 +569,30 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                 <tbody>
                   {soShown.map((o) => (
                     <tr key={o.id} onClick={() => openSo(o.id)} style={{ cursor: 'pointer' }}>
-                      <td><strong>{o.ref}</strong></td>
+                      {/* THE REFERENCE IS THE LINK. The whole row has opened this
+                          drill for as long as the table has existed, but the cell
+                          a reader actually aims at was plain bold text — the
+                          affordance was invisible and the row's cursor was the
+                          only hint. Styled with SO_REF_STYLE, the one declaration
+                          SoLink uses, so a reference reads identically wherever
+                          it appears.
+
+                          NOT a <SoLink>: that would open ITS dialog while the row
+                          behind it opens this tab's richer one — created/updated,
+                          payment term, AR account, the PO chain — putting two
+                          different sales-order dialogs one row apart. The button
+                          calls the same openSo the row does, so there is one
+                          drill and the link merely announces it.
+
+                          stopPropagation because the row handler would otherwise
+                          fire too: same id, but two calls race the `soDetails`
+                          guard in openSo and both miss it, fetching twice. */}
+                      <td>
+                        <button type="button" style={SO_REF_STYLE} title={`Open ${o.ref}`}
+                          onClick={(e) => { e.stopPropagation(); openSo(o.id); }}>
+                          {o.ref}
+                        </button>
+                      </td>
                       <td><StatusPill status={o.type} /></td>
                       <td>{o.rep || '-'}</td>
                       <td>{o.payer || '-'}</td>
@@ -681,7 +709,20 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                     <tr key={o.id} onClick={() => openPo(o.id)} style={{ cursor: 'pointer' }}>
                       <td><strong>{o.ref}</strong></td>
                       <td>{o.vendor || '-'}</td>
-                      <td>{o.so ? <span className="pill-tag tag-info">{o.so}</span> : <span className="pill-tag tag-muted">not linked</span>}</td>
+                      {/* THE SALES ORDER THIS PO WAS RAISED FOR — an SO
+                          reference like any other, and openable like any other.
+                          The row itself opens the PO, so the link stops the
+                          click from doing both. `soIdFromRef` because the PO row
+                          carries the reference text, not the numeric id. */}
+                      <td>
+                        {o.so
+                          ? (
+                            <span className="pill-tag tag-info" onClick={(e) => e.stopPropagation()} role="presentation">
+                              <SoLink soId={soIdFromRef(o.so)} label={o.so} canOpenInStriven />
+                            </span>
+                          )
+                          : <span className="pill-tag tag-muted">not linked</span>}
+                      </td>
                       <td className="num">{formatCurrency(o.total)}</td>
                       <td>{o.status ? <StatusPill status={o.status} /> : <span className="pill-tag tag-ok">Active</span>}</td>
                       <td>{fmtDate(o.date)}</td>
@@ -767,7 +808,10 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                   )}
                 </div>
                 {soDetail.phiMasked && (
-                  <div className="muted-note">Patient name masked · addresses, notes &amp; line descriptions withheld (PHI).</div>
+                  <div className="muted-note">
+                    Customer shown as its <b>PT-&lt;id&gt;</b> reference, not a patient name &mdash; the same reference used
+                    across the register, the order book and QuickBooks. Addresses, notes &amp; line descriptions withheld (PHI).
+                  </div>
                 )}
               </div>
 
