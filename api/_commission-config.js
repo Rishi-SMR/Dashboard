@@ -779,10 +779,11 @@ export function supervisorOf(sub, subReps = REP_SUB_REPS) {
  * Dashboard (producers, via STANDINGS_EXCLUDE) and another on Commission (the
  * whole list). One roster now, so the two cannot disagree.
  *
- * SINCE WIDENED AGAIN, to six: Alek Sigman and Alyssa Parker were added by
- * instruction. That is not a reversal of the narrowing above — the six names
- * removed then were house accounts, practices and non-producers, while these two
- * are people booking orders under their own name in Striven.
+ * WIDENED TO SIX AND NARROWED BACK TO FOUR. Alek Sigman and Alyssa Parker were
+ * added by instruction on the strength of orders booked under their names in
+ * Striven's Sales Rep field, then removed again by instruction: they are
+ * OPERATIONS, and being named on an order you processed is not the same as
+ * selling it. See the note beside their removal in REP_NAMES.
  *
  * Rishi Arora and Kevin Parker are off-roster for the same reason (admins with
  * an order apiece).
@@ -801,20 +802,29 @@ export const REP_NAMES = [
   'Jillian Colin',                  //  95 orders — Maverick Medical- Jillian Colin
   'Christy Tan',                    //  67 orders — CVT Medical - Christy Tan
   'Maylon Sanders',                 //  35 orders — already the full name
-  // ── ADDED, by instruction ──────────────────────────────────────────────────
-  // Both were already booking orders in Striven's Sales Rep field while absent
-  // from this list, which is the one failure mode this file warns about
-  // everywhere: a name the fold produces but the roster does not carry sends
-  // that rep's whole book into `striven.offRoster` and their commission to
-  // nobody. SO-559's card showed "Alek Sigman" as its sales rep with no roster
-  // row behind him.
+  // ── REMOVED, by instruction: Alek Sigman and Alyssa Parker ─────────────────
+  // They are OPERATIONS, not sales. They were added here when orders were seen
+  // booked under their names in Striven's Sales Rep field, but appearing in that
+  // field is not the same as being a rep — ops staff are recorded against an
+  // order they processed. This roster decides who is RANKED and who is PAID, and
+  // neither applies to them.
   //
-  // NO ORDER COUNT IS QUOTED against these two, deliberately. Every count above
-  // was measured against the live book at the time it was written; inventing a
-  // number here would put a figure in the same column that nobody has counted.
-  // Run the Commission tab once these are live and the real volume shows there.
-  'Alek Sigman',
-  'Alyssa Parker',
+  // WHAT MOVES, measured against the live book rather than assumed: Alek carried
+  // 1 order ($59.90) and Alyssa none, and BOTH were on $0 commission — so this
+  // takes no money off anyone and moves a single order out of the rep-attributed
+  // book into `striven.offRoster`, where the other ops and house names already
+  // sit (Crystal Chambers, Kinley Shepherd, House Account, Rishi Arora, Kevin
+  // Parker). Every order total on every screen is unchanged; the attribution
+  // moves, the business does not.
+  //
+  // THE NAME FOLDS IN commRep() AND RECON_REP_ALIASES ARE DELIBERATELY KEPT.
+  // They are not roster membership — they canonicalise the many spellings
+  // Striven and the sheets use ("Maverick Medical - Alek Sigman") onto one
+  // string. Deleting them would not remove anyone; it would scatter that one
+  // order across raw spellings in the off-roster tail and make it harder to see,
+  // not easier. Off-roster names are normal and are counted, just not ranked.
+  //
+  // NEITHER HAD A LOGIN. There is nothing to revoke in REP_DIRECTORY below.
   // CASSIE IS GONE FROM HERE, by instruction ("remove Cassie from Dashboard,
   // she is no longer needed"), together with her login and her commission — see
   // EXCLUDED_REPS above, which is what actually enforces it. Taking her off the

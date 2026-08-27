@@ -69,13 +69,11 @@ test('every name the fold produces for a rep is a name the roster carries', () =
   // belongs to, REP_NAMES decides who exists. A rename that touched one and not
   // the other would drop that rep's whole book into `unmatched` silently.
   for (const raw of ['Maverick Medical - Alle Ann Dubberley', 'Maverick Medical- Jillian Colin',
-    'CVT Medical - Christy Tan', 'Maylon Sanders', 'Christy', 'Jillian', 'Alle Ann',
-    // Added with the roster. The group-prefixed forms are the point: Striven
-    // prefixes most reps, and a fold that only recognises the bare spelling
-    // drops the rep's book into `unmatched` the day someone sets a referral
-    // group on their orders.
-    'Alek Sigman', 'Maverick Medical - Alek Sigman',
-    'Alyssa Parker', 'CVT Medical- Alyssa Parker']) {
+    'CVT Medical - Christy Tan', 'Maylon Sanders', 'Christy', 'Jillian', 'Alle Ann']) {
+    // Alek Sigman and Alyssa Parker were here while they were on the roster.
+    // They are Operations and are off it now, so they no longer fold to a roster
+    // name — by design. Their folds still canonicalise the spelling, which the
+    // test below asserts separately.
     assert.ok(REP_NAMES.includes(commRep(raw)), `${raw} folds to a roster name`);
   }
   // And every login must point at a rep who exists, for the same reason from
@@ -95,16 +93,14 @@ test('the source sheet can be rewritten to full names without breaking the fold'
   // safe in either direction: rows already rewritten and rows not yet rewritten
   // both land on the same roster entry, so the sheet can be edited a tab at a
   // time without splitting anyone across two rows mid-way.
-  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders',
-    'Alek Sigman', 'Alyssa Parker']) {
+  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders']) {
     assert.equal(commRep(full), full, `commRep keeps ${full}`);
     assert.ok(REP_NAMES.includes(commRep(full)), `${full} is on the roster`);
   }
   // The reconciliation file is a SECOND source with its own alias table. If it
   // folded differently the rep would split into two rows — the very bug that
   // table was written to fix.
-  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders',
-    'Alek Sigman', 'Alyssa Parker']) {
+  for (const full of ['Alle Ann Dubberley', 'Jillian Colin', 'Christy Tan', 'Maylon Sanders']) {
     assert.equal(reconRep(full), full, `reconRep keeps ${full}`);
   }
   // And the two folds must agree on the short forms as well, for as long as any
@@ -228,11 +224,25 @@ test('every roster name folds to itself in both tables', () => {
   }
 });
 
-// A roster name nothing can ever produce is a row that stays at zero forever.
-test('the two reps added by instruction are on the roster and reachable', () => {
+// OPERATIONS ARE NOT REPS. Alek Sigman and Alyssa Parker were briefly on the
+// roster because Striven's Sales Rep field named them; they were removed by
+// instruction once it was clear they process orders rather than sell them.
+//
+// This test pins BOTH halves of that, because the two are easy to confuse and
+// only one of them is about membership:
+//   · they are OFF the roster, so nothing ranks or pays them, and
+//   · their name folds STILL WORK, so the orders they are named on land in the
+//     off-roster tail under one clean spelling instead of scattering.
+// Deleting the folds along with the roster rows is the tempting wrong move; it
+// would hide that volume rather than reclassify it.
+test('Alek Sigman and Alyssa Parker are Operations, not roster reps', () => {
   for (const name of ['Alek Sigman', 'Alyssa Parker']) {
-    assert.ok(REP_NAMES.includes(name), `${name} is on the roster`);
-    assert.ok(!isExcludedRep(name), `${name} is not hard-excluded`);
-    assert.ok(!STANDINGS_EXCLUDE.includes(name), `${name} is not hidden from the leaderboard`);
+    assert.ok(!REP_NAMES.includes(name), `${name} is off the roster`);
+    assert.equal(commRep(name), name, `commRep still canonicalises ${name}`);
+    assert.equal(reconRep(name), name, `reconRep still canonicalises ${name}`);
   }
+  // The group-prefixed spellings must canonicalise too, or one ops name splits
+  // into two rows in the off-roster tail.
+  assert.equal(commRep('Maverick Medical - Alek Sigman'), 'Alek Sigman');
+  assert.equal(commRep('CVT Medical- Alyssa Parker'), 'Alyssa Parker');
 });

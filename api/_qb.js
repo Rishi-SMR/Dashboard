@@ -466,7 +466,234 @@ export async function qbPostInvoiceDoc(invId, { force = false } = {}) {
 }
 
 // ── route glue (shared by the local server and the Vercel function) ─────────
+/**
+ * ── PROFIT & LOSS, STRAIGHT FROM THE BOOKS ───────────────────────────────────
+ *
+ * The P&L tab computes its figures from Striven invoices and bills. That is an
+ * OPERATIONAL view — what was sold and what was ordered — and it is not what the
+ * accountant closes the year on. This reads the same statement from QuickBooks,
+ * which is the system of record.
+ *
+ * QuickBooks answers with a nested report, not a total: Sections contain Rows
+ * contain Sections, to arbitrary depth, and each level carries its own Summary.
+ * The shape also differs per company, because it follows that company's own
+ * chart of accounts — Sports Med Recovery has "Contract labor" and "Direct
+ * supplies & materials" where another would have neither. So the sections are
+ * found BY NAME from the summary rows QuickBooks itself labels, and the leaf
+ * accounts are flattened for display rather than hard-coded.
+ *
+ * THE NUMBERS WILL NOT MATCH THE STRIVEN TAB, and the caller is told so rather
+ * than left to discover it: `coverage` reports how much of the Striven book has
+ * actually been posted into QuickBooks. Today that is 1 invoice of 171, which is
+ * why the books show a large loss — the costs are entered but the revenue is
+ * not. A P&L is only as complete as what has been posted to it.
+ */
+const plNum = (v) => {
+  const n = Number(String(v ?? '').replace(/[$,]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** Depth-first walk yielding every row with its label, value and depth. */
+function plFlatten(rows, depth = 0, out = []) {
+  for (const row of (rows?.Row ?? [])) {
+    const cd = row.ColData ?? row.Summary?.ColData ?? null;
+    const label = String(cd?.[0]?.value ?? row.group ?? '').trim();
+    if (label) {
+      out.push({
+        label,
+        value: plNum(cd?.[1]?.value),
+        depth,
+        // A Section's own line is its SUBTOTAL; a Data row is a real account.
+        // Summing without this distinction double-counts every group.
+        isTotal: row.type === 'Section' || Boolean(row.Summary),
+        group: row.group ?? '',
+      });
+    }
+    if (row.Rows) plFlatten(row.Rows, depth + 1, out);
+  }
+  return out;
+}
+
+/**
+ * The money a section's subtotal claims that its named children do not account
+ * for — one synthetic row per section that fails to add up.
+ *
+ * Returns `[{ label: '<section> (not itemised)', value, depth }]`. Recurses, so
+ * a shortfall is attributed to the DEEPEST section that owns it: "Wages", not
+ * "Payroll expenses" above it, which is the level a bookkeeper would go and fix.
+ *
+ * Only POSITIVE shortfalls are emitted. A section whose children exceed its
+ * subtotal is a different fault — usually a sign the report was misread — and
+ * inventing a negative row would paper over it; it is left to show up as a
+ * reconciliation failure rather than be quietly balanced away.
+ */
+function plUnitemised(rows, depth = 0, out = []) {
+  for (const row of (rows?.Row ?? [])) {
+    const kids = row.Rows?.Row ?? [];
+    if (!kids.length) continue;
+    const summary = row.Summary?.ColData;
+    if (summary) {
+      // What the children actually account for: a child's own line if it has
+      // one, otherwise that child's subtotal.
+      const accounted = kids.reduce((s, k) => {
+        const cd = k.ColData ?? k.Summary?.ColData;
+        return s + plNum(cd?.[1]?.value);
+      }, 0);
+      const gap = plNum(summary[1]?.value) - accounted;
+      if (gap > 0.005) {
+        const name = String(summary[0]?.value ?? '').replace(/^Total\s+/i, '').trim() || 'Unnamed';
+        out.push({ label: `${name} (not itemised)`, value: Math.round(gap * 100) / 100, depth: depth + 1 });
+      }
+    }
+    plUnitemised(row.Rows, depth + 1, out);
+  }
+  return out;
+}
+
+/** Find one group's ColData anywhere in the tree, at any depth. */
+function plFindGroup(rows, group) {
+  for (const row of (rows?.Row ?? [])) {
+    if (row.group === group) {
+      const cd = row.Summary?.ColData ?? row.ColData;
+      if (cd) return cd;
+    }
+    if (row.Rows) { const hit = plFindGroup(row.Rows, group); if (hit) return hit; }
+  }
+  return null;
+}
+
+/**
+ * The same statement, one column per month — for the trend chart.
+ *
+ * A SECOND REQUEST, not a re-slice of the first: QuickBooks decides the column
+ * set server-side from `summarize_column_by`, and the totals-only report simply
+ * does not carry per-month figures to derive. Column titles come back as
+ * "Jan 2026" and, for the running month, "Aug 1-25, 2026" — parsed to a
+ * YYYY-MM key so the chart's month axis matches every other series in the app.
+ */
+async function qbMonthlySeries(startDate, endDate, basis) {
+  const r = await qbApi(`reports/ProfitAndLoss?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}&accounting_method=${encodeURIComponent(basis)}&summarize_column_by=Month`);
+  const cols = (r.Columns?.Column ?? []).map((c) => String(c.ColTitle ?? ''));
+  const MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  // "Aug 1-25, 2026" and "Aug 2026" both reduce to 2026-08.
+  const keyOf = (title) => {
+    const m = /^([A-Za-z]{3})[^,]*,?\s*(\d{4})$/.exec(title.trim());
+    if (!m) return null;
+    const i = MON.indexOf(m[1].toLowerCase());
+    return i < 0 ? null : `${m[2]}-${String(i + 1).padStart(2, '0')}`;
+  };
+  const pick = (group) => plFindGroup(r.Rows, group) ?? [];
+  const inc = pick('Income'); const cogs = pick('COGS'); const exp = pick('Expenses'); const net = pick('NetIncome');
+  const out = [];
+  for (let i = 1; i < cols.length; i += 1) {
+    const month = keyOf(cols[i]);
+    if (!month) continue;                       // skips the trailing "Total" column
+    const revenue = plNum(inc[i]?.value);
+    const expenses = plNum(cogs[i]?.value) + plNum(exp[i]?.value);
+    out.push({ month, revenue, expenses, net: net[i] ? plNum(net[i].value) : revenue - expenses });
+  }
+  return out;
+}
+
+export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const startDate = start || `${today.slice(0, 4)}-01-01`;
+  const endDate = end || today;
+  const [r, series] = await Promise.all([
+    qbApi(`reports/ProfitAndLoss?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}&accounting_method=${encodeURIComponent(basis)}`),
+    qbMonthlySeries(startDate, endDate, basis).catch(() => []),
+  ]);
+  const flat = plFlatten(r.Rows);
+
+  // QuickBooks tags its own summary rows with a `group`, which is stable across
+  // charts of accounts even when the visible labels are not — so the headline
+  // figures are read from those rather than by matching on English text.
+  const byGroup = (g) => flat.find((x) => x.group === g && x.isTotal)?.value ?? null;
+  const income = byGroup('Income');
+  const cogs = byGroup('COGS');
+  const grossProfit = byGroup('GrossProfit');
+  const expenses = byGroup('Expenses');
+  const netIncome = byGroup('NetIncome');
+  const netOperating = byGroup('NetOperatingIncome');
+
+  // The leaf accounts, for the breakdown table: real accounts only, never the
+  // subtotals — otherwise a group and its children both appear and the column
+  // adds to twice the truth.
+  //
+  // PLUS THE MONEY THAT HAS NO LEAF. A QuickBooks section's subtotal does not
+  // have to equal its named children: an amount posted directly to a PARENT
+  // account shows in the subtotal and appears nowhere below it. Sports Med
+  // Recovery's books do exactly that today —
+  //
+  //     Total Wages          372,341.27
+  //       Alle Ann Dubberley  52,671.27
+  //       Cassie Wates         7,025.00
+  //       Christy Tan         31,825.00
+  //       Jillian Colin       14,604.49   → children sum to 106,125.76
+  //
+  // leaving $266,215.51 with no row of its own. Listing only the leaves and
+  // printing the true total beneath them produced a breakdown that visibly did
+  // not add up, which reads as a broken page rather than as an incompletely
+  // itemised ledger. `plUnitemised` walks the tree and names that remainder
+  // against the section it belongs to, so the column always reconciles to the
+  // total and the reader can see WHERE the unnamed money sits.
+  const accounts = [
+    ...flat.filter((x) => !x.isTotal && x.value !== 0).map(({ label, value, depth }) => ({ label, value, depth })),
+    ...plUnitemised(r.Rows),
+  ].sort((a, b) => b.value - a.value);
+
+  return {
+    ok: true,
+    source: 'quickbooks',
+    company: r.Header?.ReportName ? undefined : undefined,
+    basis: r.Header?.ReportBasis ?? basis,
+    currency: r.Header?.Currency ?? 'USD',
+    periodFrom: r.Header?.StartPeriod ?? startDate,
+    periodTo: r.Header?.EndPeriod ?? endDate,
+    generatedAt: r.Header?.Time ?? null,
+    income, cogs, grossProfit, expenses, netOperating, netIncome,
+    /** One point per month, for the trend chart. Empty if QuickBooks refused
+     *  the monthly variant — the headline figures still stand without it. */
+    series,
+    /** Income − (COGS + Expenses). Recomputed rather than trusted, so a chart of
+     *  accounts that omits one of the summary rows still yields a net. */
+    net: netIncome ?? ((income ?? 0) - ((cogs ?? 0) + (expenses ?? 0))),
+    margin: income ? ((netIncome ?? 0) / income) * 100 : 0,
+    accounts,
+    rows: flat,
+  };
+}
+
+/**
+ * HOW MUCH OF THE BOOK QUICKBOOKS ACTUALLY HOLDS.
+ *
+ * Reported beside the P&L because without it the statement is misleading rather
+ * than merely different: QuickBooks can only report on documents that were
+ * posted to it, and this portal posts invoices one at a time on request. A
+ * dashboard that shows a QuickBooks loss without saying "1 of 171 invoices has
+ * been posted" invites someone to believe the company lost money.
+ */
+export async function qbCoverage() {
+  const [inv, bill] = await Promise.all([
+    qbApi(`query?query=${encodeURIComponent('select count(*) from Invoice')}`).catch(() => null),
+    qbApi(`query?query=${encodeURIComponent('select count(*) from Bill')}`).catch(() => null),
+  ]);
+  const postedInv = Object.keys(await postedInvMap().catch(() => ({}))).length;
+  return {
+    qbInvoices: inv?.QueryResponse?.totalCount ?? null,
+    qbBills: bill?.QueryResponse?.totalCount ?? null,
+    postedFromStriven: postedInv,
+  };
+}
+
 export async function qbHandle(pathname, q, method = 'GET', body = null) {
+  if (pathname === '/api/qb/pl') {
+    const [pl, coverage] = await Promise.all([
+      qbProfitAndLoss({ start: q.start, end: q.end, basis: q.basis }),
+      qbCoverage().catch(() => null),
+    ]);
+    return { json: { ...pl, coverage } };
+  }
   if (pathname === '/api/qb/status') return { json: await qbStatus() };
   if (pathname === '/api/qb/connect') return { redirect: await qbAuthUrl() };
   if (pathname === '/api/qb/disconnect') return { json: await qbDisconnect() };
