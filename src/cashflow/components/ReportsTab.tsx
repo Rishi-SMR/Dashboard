@@ -4,15 +4,15 @@ import {
   type VendorItemsReport, type PatientItemsReport,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
-import { C } from '../chartTheme';
+import { C, VERTICAL_COLORS as V_C, VERTICAL_ORDER } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
-import { DeviceChips } from './DeviceChips';
+import { DeviceChips, deviceVertical } from './DeviceChips';
 import { SoLink } from './SoLink';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-';
 
-type Tab = 'vendors' | 'patients';
+type Tab = 'devices' | 'vendors' | 'patients';
 
 function downloadCsv(name: string, header: string[], rows: (string | number)[][]) {
   const esc = (v: string | number) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -22,7 +22,7 @@ function downloadCsv(name: string, header: string[], rows: (string | number)[][]
 }
 
 export function ReportsTab() {
-  const [tab, setTab] = useState<Tab>('vendors');
+  const [tab, setTab] = useState<Tab>('devices');
   const [vend, setVend] = useState<VendorItemsReport | null>(null);
   const [pat, setPat] = useState<PatientItemsReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,7 +40,9 @@ export function ReportsTab() {
   }
   useEffect(() => { load(); }, []);
 
-  const generatedAt = tab === 'vendors' ? vend?.generatedAt ?? null : pat?.generatedAt ?? null;
+  // The device view is the vendor report pivoted, so it carries the vendor
+  // report's own timestamp — not a second one that could imply fresher data.
+  const generatedAt = tab === 'patients' ? (pat?.generatedAt ?? null) : (vend?.generatedAt ?? null);
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -48,7 +50,7 @@ export function ReportsTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Reports</h1>
           <div className="page-sub">
-            <span className="live-dot" /> What we buy from each vendor · what each patient orders: cancelled excluded{agoText ? ` · loaded ${agoText}` : ''}
+            <span className="live-dot" /> Which device we bought, from whom, how many and for how much · what we buy from each vendor · what each patient orders: cancelled excluded{agoText ? ` · loaded ${agoText}` : ''}
             {generatedAt && <span style={{ marginLeft: 10, fontSize: 12 }}>· data as of {fmtDate(generatedAt)}</span>}
           </div>
         </div>
@@ -60,13 +62,238 @@ export function ReportsTab() {
       {error && <div className="error" style={{ marginBottom: 14 }}>{error}</div>}
 
       <div className="ov-tabs">
+        <button className={`ov-tab ${tab === 'devices' ? 'active' : ''}`} onClick={() => setTab('devices')}>Device purchases</button>
         <button className={`ov-tab ${tab === 'vendors' ? 'active' : ''}`} onClick={() => setTab('vendors')}>Vendor purchases</button>
         <button className={`ov-tab ${tab === 'patients' ? 'active' : ''}`} onClick={() => setTab('patients')}>Patient orders</button>
       </div>
 
       {loading && !vend && !pat && <div className="page-sub" style={{ padding: 16 }}>Loading reports…</div>}
+      {tab === 'devices' && vend && <DeviceReport data={vend} />}
       {tab === 'vendors' && vend && <VendorReport data={vend} />}
       {tab === 'patients' && pat && (pat.orders?.length ? <OrdersReport data={pat} /> : <PatientReport data={pat} />)}
+    </div>
+  );
+}
+
+/**
+ * DEVICE PURCHASES — the same purchase history, read from the other end.
+ *
+ * "Vendor purchases" below answers "what do we buy from EvoHealth". This answers
+ * the question a buyer actually arrives with: I want to look up a DEVICE — who
+ * did we buy it from, how many did we take, and what did we spend on it? The
+ * vendor report cannot answer that without opening all seven vendors in turn and
+ * adding the rows up by hand, and a device bought from more than one supplier is
+ * exactly the case hand-addition gets wrong.
+ *
+ * PIVOTED IN THE BROWSER, from `report_vendor_items` — the very report the other
+ * two tabs read. No second endpoint and no second generator run: one source
+ * means the two views cannot disagree about the same purchase, and a device's
+ * total here is by construction the sum of the vendor rows shown under it.
+ *
+ * SPLIT SUPPLIERS ARE THE POINT, not an edge case. Three devices are bought from
+ * more than one vendor today — "PI Tens/NMES" comes from ManaMed, WMD and
+ * Wholesale Medical Devices — and a per-device unit cost is the quickest way to
+ * see the same thing being bought at different prices from different people. So
+ * the row carries a unit cost and flags a multi-vendor device.
+ */
+function DeviceReport({ data }: { data: VendorItemsReport }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState<string | null>(null);
+  /** null = every vertical. */
+  const [vert, setVert] = useState<string | null>(null);
+
+  /** vendor -> items, inverted to item -> vendors, then ranked by spend. */
+  const devices = useMemo(() => {
+    const m = new Map<string, {
+      item: string; vertical: string; qty: number; cost: number; poCount: number;
+      vendors: { vendor: string; qty: number; cost: number; poCount: number }[];
+    }>();
+    for (const v of data.vendors) {
+      for (const it of (v.items ?? [])) {
+        const key = String(it.item ?? '').trim();
+        if (!key) continue;
+        const e = m.get(key) ?? {
+          item: key,
+          // WHICH PROGRAMME THE DEVICE WAS BOUGHT FOR, read off the item name.
+          //
+          // That is not a shortcut, it is where the fact lives: purchasing names
+          // stock by programme ("PI Genesys Universal", "VA SofPulse Lumbar",
+          // "DEMO Genesys Lumbar"), and a purchase order carries no vertical
+          // field of its own to read instead. `deviceVertical` is the app's one
+          // definition of that parse — the same one the order boards and the
+          // device chips use — so this column cannot drift from what a device
+          // reads as everywhere else.
+          vertical: deviceVertical(key),
+          qty: 0, cost: 0, poCount: 0, vendors: [],
+        };
+        e.qty += Number(it.qty) || 0;
+        e.cost += Number(it.cost) || 0;
+        e.poCount += Number(it.poCount) || 0;
+        e.vendors.push({ vendor: v.vendor, qty: Number(it.qty) || 0, cost: Number(it.cost) || 0, poCount: Number(it.poCount) || 0 });
+        m.set(key, e);
+      }
+    }
+    // Dearest first — the spend a buyer wants to interrogate is the big one, and
+    // each device's own suppliers are ranked the same way.
+    return [...m.values()]
+      .map((d) => ({ ...d, vendors: d.vendors.sort((a, b) => b.cost - a.cost) }))
+      .sort((a, b) => b.cost - a.cost);
+  }, [data]);
+
+  /** Spend and volume per vertical — the filter chips, and the answer to "what
+   *  are we actually buying for each programme" without opening a single row. */
+  const byVertical = useMemo(() => {
+    const m = new Map<string, { vertical: string; devices: number; qty: number; cost: number }>();
+    for (const d of devices) {
+      const e = m.get(d.vertical) ?? { vertical: d.vertical, devices: 0, qty: 0, cost: 0 };
+      e.devices += 1; e.qty += d.qty; e.cost += d.cost;
+      m.set(d.vertical, e);
+    }
+    // The app's display order (clinical programmes first), with anything the
+    // parse could not place trailing rather than sorted in among them.
+    return [...m.values()].sort((a, b) => {
+      const ia = VERTICAL_ORDER.indexOf(a.vertical), ib = VERTICAL_ORDER.indexOf(b.vertical);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+  }, [devices]);
+
+  const shown = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return devices.filter((d) => {
+      if (vert && d.vertical !== vert) return false;
+      if (!t) return true;
+      // Matches the DEVICE, its VERTICAL, or any supplier of it — so typing a
+      // vendor narrows to what we buy from them without leaving this view.
+      return d.item.toLowerCase().includes(t)
+        || d.vertical.toLowerCase().includes(t)
+        || d.vendors.some((v) => v.vendor.toLowerCase().includes(t));
+    });
+  }, [devices, q, vert]);
+
+  // THE TILES FOLLOW THE FILTER. A "Total spend" that ignored the selected
+  // vertical would sit above a table showing a fraction of it and quietly
+  // contradict the rows underneath.
+  const totalQty = shown.reduce((s, d) => s + d.qty, 0);
+  const totalSpend = shown.reduce((s, d) => s + d.cost, 0);
+
+  /** Unit cost, or a dash. A zero-quantity line must never print "$Infinity". */
+  const unit = (cost: number, qty: number) => (qty > 0 ? formatCurrency(cost / qty) : '-');
+
+  function exportCsv() {
+    // One row per device PER VENDOR: the grain a buyer negotiates on, and it
+    // re-aggregates in a spreadsheet to exactly the totals shown on screen.
+    // EXPORTS WHAT IS ON SCREEN. A CSV that ignored the vertical filter would
+    // hand back a different answer from the one the reader is looking at.
+    const rows = shown.flatMap((d) => d.vendors.map((v) => [
+      d.item, d.vertical, v.vendor, v.qty, v.cost, v.qty > 0 ? Math.round((v.cost / v.qty) * 100) / 100 : '', v.poCount,
+    ]));
+    downloadCsv('device-purchases.csv', ['Device', 'Vertical', 'Vendor', 'Qty', 'Spend', 'Unit cost', 'PO count'], rows);
+  }
+
+  if (!devices.length) return <NotReady note={data.note} />;
+
+  const scope = vert ? `${vert} only` : 'all verticals';
+
+  return (
+    <div className="section">
+      <div className="kpi-r-strip" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 14 }}>
+        <KpiR ico="box" tint="#8B5CF6" label="Devices purchased" value={shown.length}
+          foot="distinct items across all vendors" deltaText={scope} />
+        <KpiR ico="bag" tint={C.brand} label="Units bought" value={totalQty}
+          foot="total quantity on non-cancelled POs" deltaText={scope} />
+        <KpiR ico="cash" tint="#16A34A" label="Total spend" value={totalSpend} format={formatCurrency}
+          foot="from non-cancelled POs" deltaText={scope} />
+      </div>
+
+      {/* SPEND BY PROGRAMME, and the filter in the same control. Each chip
+          carries its own spend, so the split is readable without clicking —
+          and clicking scopes the table, the tiles and the CSV together. */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <button className={`ov-tab ${vert === null ? 'active' : ''}`} onClick={() => setVert(null)}>
+          All · {formatCurrency(devices.reduce((s, d) => s + d.cost, 0))}
+        </button>
+        {byVertical.map((v) => (
+          <button key={v.vertical} className={`ov-tab ${vert === v.vertical ? 'active' : ''}`}
+            onClick={() => setVert(vert === v.vertical ? null : v.vertical)}
+            title={`${v.devices} device${v.devices === 1 ? '' : 's'} · ${v.qty} unit${v.qty === 1 ? '' : 's'}`}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 999, background: V_C[v.vertical] ?? C.muted, marginRight: 7 }} />
+            {v.vertical} · {formatCurrency(v.cost)}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <div className="page-sub" style={{ margin: 0, fontSize: 12.5 }}>
+          Search a device to see who supplied it and which programme it was bought for. Click a row for the per-vendor breakdown.
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input className="login-input" style={{ maxWidth: 260, height: 38 }}
+            placeholder="Search device / vendor…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <button className="btn ghost" onClick={exportCsv}>⭳ CSV</button>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr>
+            <th style={{ width: 40 }}>#</th><th>Device</th><th>Vertical</th>
+            <th className="num">Qty</th><th className="num">Unit cost</th>
+            <th className="num">Spend</th><th className="num">POs</th><th className="num">Vendors</th>
+          </tr></thead>
+          <tbody>
+            {shown.length === 0 && (
+              <tr><td colSpan={8} style={{ color: C.muted }}>No device matches that search.</td></tr>
+            )}
+            {shown.map((d, i) => (
+              <Fragment key={d.item}>
+                <tr onClick={() => setOpen(open === d.item ? null : d.item)} style={{ cursor: 'pointer' }}>
+                  <td style={{ color: C.muted }}>{i + 1}</td>
+                  <td>
+                    <strong>{d.item}</strong>
+                    {/* Bought from more than one supplier: the row worth opening. */}
+                    {d.vendors.length > 1 && (
+                      <span className="pill-tag tag-warn" style={{ marginLeft: 8 }}>{d.vendors.length} vendors</span>
+                    )}
+                  </td>
+                  {/* The programme this stock was bought for. Coloured from the
+                      app-wide vertical map, so PI is the same blue here as on
+                      every order board. */}
+                  <td style={{ fontWeight: 700, color: V_C[d.vertical] ?? C.muted }}>{d.vertical}</td>
+                  <td className="num">{d.qty.toLocaleString()}</td>
+                  <td className="num">{unit(d.cost, d.qty)}</td>
+                  <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(d.cost)}</td>
+                  <td className="num">{d.poCount}</td>
+                  <td className="num">{d.vendors.length}</td>
+                </tr>
+                {open === d.item && (
+                  <tr>
+                    <td />
+                    <td colSpan={7} style={{ background: 'var(--panel-2)' }}>
+                      <table className="data-table" style={{ margin: 0 }}>
+                        <thead><tr>
+                          <th>Vendor</th><th className="num">Qty</th>
+                          <th className="num">Unit cost</th><th className="num">Spend</th><th className="num">POs</th>
+                        </tr></thead>
+                        <tbody>
+                          {d.vendors.map((v) => (
+                            <tr key={v.vendor}>
+                              <td><strong>{v.vendor}</strong></td>
+                              <td className="num">{v.qty.toLocaleString()}</td>
+                              <td className="num">{unit(v.cost, v.qty)}</td>
+                              <td className="num">{formatCurrency(v.cost)}</td>
+                              <td className="num">{v.poCount}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
