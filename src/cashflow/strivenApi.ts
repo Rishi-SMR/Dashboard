@@ -119,6 +119,34 @@ export const fetchStrivenAR = () => get<ArResult>('/api/ar');
 export const fetchStrivenAP = () => get<ApResult>('/api/ap');
 export const fetchStrivenAccounts = () => get<AccountsResult>('/api/accounts');
 export const fetchStrivenPL = () => get<PlResult>('/api/pl');
+
+/**
+ * THE SAME STATEMENT, FROM THE BOOKS.
+ *
+ * QuickBooks is the accounting system of record; /api/pl derives its figures
+ * from Striven invoices and bills instead, which is an OPERATIONAL view of the
+ * same business. The two will not agree, and `coverage` is how the UI explains
+ * why rather than leaving a reader to assume one of them is broken.
+ */
+export type QbPl = {
+  ok: boolean; source: 'quickbooks';
+  basis: string; currency: string;
+  periodFrom: string; periodTo: string; generatedAt: string | null;
+  income: number | null; cogs: number | null; grossProfit: number | null;
+  expenses: number | null; netOperating: number | null; netIncome: number | null;
+  net: number; margin: number;
+  /** Leaf accounts only — never the subtotals, or the column adds to double. */
+  accounts: { label: string; value: number; depth: number }[];
+  /** Expenses grouped as the chart of accounts groups them: the level
+   *  QuickBooks subtotals at. Each category's accounts sum to its own total,
+   *  and the categories sum to COGS + Expenses. */
+  categories: { category: string; total: number; accounts: { label: string; value: number }[] }[];
+  series: { month: string; revenue: number; expenses: number; net: number }[];
+  /** How much of the Striven book has actually been posted into QuickBooks.
+   *  A statement can only report on documents it has been given. */
+  coverage: { qbInvoices: number | null; qbBills: number | null; postedFromStriven: number } | null;
+};
+export const fetchQbPL = () => get<QbPl>('/api/qb/pl');
 export const fetchStrivenSO = () => get<SoResult>('/api/so');
 
 /** AP REGISTER — vendor bills from the "AP Ledgers" tab of the AP workbook, NOT
