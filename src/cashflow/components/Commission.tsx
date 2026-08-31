@@ -320,14 +320,27 @@ export function CommissionTab() {
                 gridTemplateColumns: progs.length + 1 <= 2 ? '1fr' : 'repeat(auto-fit, minmax(190px, 1fr))',
                 gridAutoRows: '1fr',
               }}>
-                <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={money}
-                  foot={`${vt.orders} orders · ${vt.units} units · tap for detail`} deltaText={sel ? 'selected month' : 'all months'}
-                  onClick={() => setDrill(drill === 'total' ? null : 'total')} />
+                {/* THE PARTS FIRST, THE TOTAL LAST.
+                    The total led this strip, which put the sum before the things
+                    it sums and left each programme's "% OF TOTAL" pointing back
+                    at a tile already behind the reader. Parts-then-total is the
+                    order the figures are read in — TriCare + Personal Injury,
+                    then what they come to — and it matches every table on this
+                    page, where the total row closes the column rather than
+                    opening it.
+
+                    It stays LAST however many programmes show, so the total is
+                    third on a two-programme board and fourth on a three. Pinning
+                    it to a fixed position would put it mid-strip for a rep
+                    working all three. */}
                 {progs.map((p) => (
                   <KpiR key={p.key} ico={p.ico} tint={p.tint} label={p.label} value={p.value} format={money}
                     foot={`${p.orders} orders · ${p.note}`} deltaText={pct(p.value, total)}
                     onClick={() => setDrill(drill === p.key ? null : p.key)} />
                 ))}
+                <KpiR ico="cash" tint={C.brand} label={sel ? monthLabel(sel.month) : 'Total commission'} value={total} format={money}
+                  foot={`${vt.orders} orders · ${vt.units} units · tap for detail`} deltaText={sel ? 'selected month' : 'all months'}
+                  onClick={() => setDrill(drill === 'total' ? null : 'total')} />
               </div>
             );
           })()}
