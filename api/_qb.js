@@ -550,6 +550,71 @@ function plUnitemised(rows, depth = 0, out = []) {
   return out;
 }
 
+/**
+ * EXPENSES BY CATEGORY — grouped the way the chart of accounts groups them.
+ *
+ * The breakdown was a flat list of leaf accounts, which put "Direct supplies &
+ * materials" ($185,059) beside "Bank and credit card fees" ($14) with nothing to
+ * say that one is cost of goods and the other is a rounding error in office
+ * overhead. Worse, it scattered payroll: three named people appeared as three
+ * unrelated lines while the category they belong to — Payroll expenses, the
+ * largest cost in the business at $203,848 — appeared nowhere at all.
+ *
+ * The CATEGORY is the top level under Cost of Goods Sold / Expenses, which is
+ * exactly the level QuickBooks subtotals at:
+ *
+ *   Cost of goods sold      185,059.53   <- category (a Section)
+ *   Payroll expenses        203,848.72   <- category (a Section)
+ *     Wages -> Alle Ann Dubberley, Cassie Wates, Jillian Colin
+ *   Office expenses            411.98    <- category (a bare Data row, its own)
+ *
+ * A direct Data child IS its own category; there is no group above it and
+ * inventing one ("Other") would be a category this company does not have.
+ *
+ * EVERY CATEGORY'S ACCOUNTS SUM TO ITS SUBTOTAL, because the unitemised
+ * remainder is carried down with them — see plUnitemised. So the drill reconciles
+ * at both levels: accounts to category, categories to total expenses.
+ */
+function plExpenseCategories(rows) {
+  const out = [];
+  const clean = (s) => String(s ?? '').replace(/^Total\s+/i, '').trim();
+
+  /** Leaves under one subtree, plus any money its subtotals do not itemise. */
+  const leavesOf = (node) => {
+    const leaves = [];
+    const walk = (n) => {
+      for (const row of (n?.Row ?? [])) {
+        if (!row.Rows && row.ColData) {
+          const label = String(row.ColData[0]?.value ?? '').trim();
+          const value = plNum(row.ColData[1]?.value);
+          if (label && value !== 0) leaves.push({ label, value });
+        }
+        if (row.Rows) walk(row.Rows);
+      }
+    };
+    walk(node);
+    return leaves;
+  };
+
+  for (const top of (rows?.Row ?? [])) {
+    if (top.group !== 'COGS' && top.group !== 'Expenses') continue;
+    for (const child of (top.Rows?.Row ?? [])) {
+      if (child.Rows) {
+        const total = plNum(child.Summary?.ColData?.[1]?.value);
+        const accounts = [...leavesOf(child.Rows), ...plUnitemised({ Row: [child] })
+          .map(({ label, value }) => ({ label, value }))];
+        out.push({ category: clean(child.Summary?.ColData?.[0]?.value), total, accounts });
+      } else if (child.ColData) {
+        // A bare account at the top level: it is its own category.
+        const label = String(child.ColData[0]?.value ?? '').trim();
+        const value = plNum(child.ColData[1]?.value);
+        if (label) out.push({ category: label, total: value, accounts: [{ label, value }] });
+      }
+    }
+  }
+  return out.sort((a, b) => b.total - a.total);
+}
+
 /** Find one group's ColData anywhere in the tree, at any depth. */
 function plFindGroup(rows, group) {
   for (const row of (rows?.Row ?? [])) {
@@ -652,6 +717,9 @@ export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
     periodTo: r.Header?.EndPeriod ?? endDate,
     generatedAt: r.Header?.Time ?? null,
     income, cogs, grossProfit, expenses, netOperating, netIncome,
+    /** Expenses grouped as the chart of accounts groups them — the level
+     *  QuickBooks subtotals at. See plExpenseCategories. */
+    categories: plExpenseCategories(r.Rows),
     /** One point per month, for the trend chart. Empty if QuickBooks refused
      *  the monthly variant — the headline figures still stand without it. */
     series,
