@@ -254,8 +254,9 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Commission — identity-scoped. Handled here rather than via ROUTES because
-  // the redaction needs the caller, and ROUTES handlers take no arguments.
+  // ---- commission — identity-scoped. Handled here rather than via ROUTES
+  // because the redaction needs the CALLER, and the table can only hand a
+  // handler the query string. ----
   if (pathname === '/api/commission') {
     try {
       // ?fresh=1 re-reads the reconciliation sheet — see getCommissionFor().
@@ -309,7 +310,12 @@ const server = http.createServer(async (req, res) => {
   }
   if (!fn) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'not found' })); }
   try {
-    const data = await fn();
+  // ROUTE HANDLERS NOW SEE THE QUERY STRING. They took no arguments, so a route
+  // that wanted a parameter — /api/pl asked for one month rather than the year —
+  // had to be special-cased above this table. Handing every handler the parsed
+  // query costs nothing (one that ignores it is unaffected) and keeps the
+  // period-filtered endpoints in the table where they belong.
+    const data = await fn(Object.fromEntries(reqUrl.searchParams));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data));
   } catch (err) {
