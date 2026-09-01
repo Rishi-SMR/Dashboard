@@ -26,11 +26,32 @@ const momDelta = (series: { month: string; value: number }[]): { pct: number; up
  *
  * They do not agree, and they are not meant to. QuickBooks can only report on
  * documents that have been posted to it, and this portal posts invoices one at
- * a time on request — so the QuickBooks view carries a coverage banner naming
- * exactly how much of the book it holds. Without that line a reader has no way
- * to tell a real loss from an unposted one.
+ * a time on request — so a QuickBooks figure can be missing revenue the Striven
+ * view has. This page used to say so in a banner above the statement; that was
+ * removed on request, and the Source control is now the whole of the answer:
+ * the same period, read from either book.
  */
 type PlSource = 'quickbooks' | 'striven';
+
+/**
+ * WHAT THIS COMPANY CALLS A QUICKBOOKS CATEGORY.
+ *
+ * QuickBooks' chart of accounts files this business's rep commission under
+ * "Payroll expenses", which is what its API returns and what an accountant sees
+ * in QuickBooks itself. On this page it reads as "Commissions", because that is
+ * what the money is and what the people reading this statement call it.
+ *
+ * DISPLAY ONLY, AND IN ONE PLACE. Nothing is renamed on the server, no figure
+ * moves, and the drill still totals the same accounts — so the statement can
+ * always be traced back to the QuickBooks report it came from. Every place a
+ * category name reaches the screen goes through `catLabel`, so the tile, the
+ * chart, the statement line and the drill cannot end up disagreeing about what
+ * the same category is called.
+ */
+const CATEGORY_LABELS: Record<string, string> = {
+  'Payroll expenses': 'Commissions',
+};
+const catLabel = (name: string) => CATEGORY_LABELS[name.trim()] ?? name;
 
 /**
  * WHICH PERIOD THE STATEMENT COVERS.
@@ -135,7 +156,7 @@ function qbToPl(q: QbPl): PlResult {
     // itself subtotals at, so the chart now reads as a P&L rather than a ledger
     // dump. The accounts are still there, one level down, in the drill.
     byVendor: (q.categories ?? []).filter((c) => c.total > 0)
-      .map((c) => ({ name: c.category, value: c.total }))
+      .map((c) => ({ name: catLabel(c.category), value: c.total }))
       .sort((a, b) => b.value - a.value),
     approximate: false,
   };
@@ -257,7 +278,7 @@ export function PLTab() {
   const dollarBase = dollarSegs.reduce((sum, d) => sum + d.v, 0) || 1;
   /** The single largest cost category — the one line worth naming on a tile. */
   const topCategory = (qb?.categories ?? []).reduce<null | { category: string; total: number }>(
-    (best, c) => (best == null || c.total > best.total ? { category: c.category, total: c.total } : best), null);
+    (best, c) => (best == null || c.total > best.total ? { category: catLabel(c.category), total: c.total } : best), null);
 
   // Tap-to-explain drills.
   const kv = (rows: { k: ReactNode; v: ReactNode; rowClass?: string }[]) => ({
@@ -287,7 +308,7 @@ export function PLTab() {
       <>
         {cats.map((c) => (
           <div className="pl-line pl-item" key={`${section}-${c.category}`}>
-            <span className="lbl">{c.category}</span>
+            <span className="lbl">{catLabel(c.category)}</span>
             <span className="pct">{shareText(c.total)}</span>
             <span className="val">{formatCurrency(c.total)}</span>
           </div>
@@ -343,13 +364,15 @@ export function PLTab() {
             return [{
               // "Office expenses / Office expenses" was already noise; the account
               // name is only worth printing when it says something the category does not.
-              k: only.label === c.category ? c.category : <>{c.category} <span className="drill-in">· {only.label}</span></>,
+              k: only.label === c.category
+                ? catLabel(c.category)
+                : <>{catLabel(c.category)} <span className="drill-in">· {only.label}</span></>,
               v: formatCurrency(c.total),
               rowClass: 'subtotal-row',
             }];
           }
           return [
-            { k: c.category, v: formatCurrency(c.total), rowClass: 'subtotal-row' },
+            { k: catLabel(c.category), v: formatCurrency(c.total), rowClass: 'subtotal-row' },
             ...c.accounts.map((a) => ({ k: <span className="drill-acct">{a.label}</span>, v: formatCurrency(a.value) })),
           ];
         })
@@ -453,24 +476,13 @@ export function PLTab() {
 
       {error && <div className="error">{error}</div>}
 
-      {/* ── WHAT THE BOOKS ACTUALLY HOLD ────────────────────────────────────────
-          A P&L can only report on documents posted to it. This portal posts
-          Striven invoices to QuickBooks ONE AT A TIME, on request, so the books
-          can be missing most of the revenue while carrying all of the cost —
-          which prints as a loss that never happened. Naming the coverage is the
-          difference between a statement a reader can act on and one that quietly
-          misleads them. Shown whenever anything is missing, never suppressed. */}
-      {qb?.coverage && (qb.coverage.qbInvoices ?? 0) >= 0 && (
-        <div className="qb-flash warn" style={{ marginBottom: 14 }}>
-          <b>These are QuickBooks' own figures, and QuickBooks holds only part of the book.</b>{' '}
-          It has <b>{(qb.coverage.qbInvoices ?? 0).toLocaleString()}</b> invoice{qb.coverage.qbInvoices === 1 ? '' : 's'} and{' '}
-          <b>{(qb.coverage.qbBills ?? 0).toLocaleString()}</b> bill{qb.coverage.qbBills === 1 ? '' : 's'};{' '}
-          <b>{qb.coverage.postedFromStriven.toLocaleString()}</b> Striven invoice{qb.coverage.postedFromStriven === 1 ? ' has' : 's have'} been posted across.
-          {' '}Costs entered directly in QuickBooks are therefore weighed against revenue that may not have been posted yet, so a
-          negative net here is not necessarily a loss. Switch <b>Source</b> to <b>Striven</b> for the operational view of the
-          same period.
-        </div>
-      )}
+      {/* THE COVERAGE BANNER WAS REMOVED ON REQUEST. It sat above every
+          QuickBooks statement and named how many invoices and bills the books
+          hold and how many had been posted across from Striven.
+          `coverage` is still fetched and still feeds the invoice/bill counts in
+          qbToPl, so nothing on the server changed and the banner is one JSX
+          block away if it is ever wanted back. The Source control remains the
+          way to read the same period from the other book. */}
       {loading && !pl && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
 
       {pl && (
@@ -767,7 +779,7 @@ export function PLTab() {
                   them is how much of the book has been posted across. */}
               <div className="muted-note">
                 {source === 'quickbooks'
-                  ? <>{qb?.basis ?? 'Accrual'} basis · {period.label} · QuickBooks' own monthly Profit &amp; Loss, one column per month. It reports only what has been posted to it — see the coverage note above.</>
+                  ? <>{qb?.basis ?? 'Accrual'} basis · {period.label} · QuickBooks' own monthly Profit &amp; Loss, one column per month — it reports only what has been posted to it. Switch <b>Source</b> to <b>Striven</b> for the operational view of the same period.</>
                   : <>Accrual basis · {period.label} · computed from {pl.invoiceCount} invoices &amp; {pl.billCount} bills. Striven's API has no P&amp;L report endpoint, so this statement is derived live from the underlying transactions.</>}
               </div>
             </div>
