@@ -108,8 +108,27 @@ export type GlAccount = { id: number; name: string; extendedName?: string; type:
 export type AccountsResult = { count: number; accounts: GlAccount[]; balancesAvailable?: boolean; note?: string };
 
 export type PlMonth = { month: string; revenue: number; expenses: number; net: number };
+/**
+ * THE PERIOD BOTH P&L ENDPOINTS TAKE.
+ *
+ * Plain YYYY-MM-DD, inclusive at both ends. Omitted entirely, both sources fall
+ * back to the year to date — the behaviour they had before the filter existed.
+ */
+export type PlPeriod = { start?: string; end?: string };
+const periodQuery = (p?: PlPeriod) => {
+  const q = new URLSearchParams();
+  if (p?.start) q.set('start', p.start);
+  if (p?.end) q.set('end', p.end);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+};
+
 export type PlResult = {
-  periodFrom: string; revenue: number; expenses: number; net: number; margin: number; cashReceived: number;
+  periodFrom: string;
+  /** The last day the figures cover. Absent from a response built before the
+   *  period filter existed, which is why the UI never relies on it for a label. */
+  periodTo?: string;
+  revenue: number; expenses: number; net: number; margin: number; cashReceived: number;
   invoiceCount: number; billCount: number; avgInvoice: number; avgBill: number;
   series: PlMonth[]; byVendor: { name: string; value: number }[]; approximate: boolean;
 };
@@ -118,7 +137,7 @@ export const fetchStrivenStatus = () => get<StrivenStatus>('/api/status');
 export const fetchStrivenAR = () => get<ArResult>('/api/ar');
 export const fetchStrivenAP = () => get<ApResult>('/api/ap');
 export const fetchStrivenAccounts = () => get<AccountsResult>('/api/accounts');
-export const fetchStrivenPL = () => get<PlResult>('/api/pl');
+export const fetchStrivenPL = (period?: PlPeriod) => get<PlResult>(`/api/pl${periodQuery(period)}`);
 
 /**
  * THE SAME STATEMENT, FROM THE BOOKS.
@@ -139,14 +158,17 @@ export type QbPl = {
   accounts: { label: string; value: number; depth: number }[];
   /** Expenses grouped as the chart of accounts groups them: the level
    *  QuickBooks subtotals at. Each category's accounts sum to its own total,
-   *  and the categories sum to COGS + Expenses. */
-  categories: { category: string; total: number; accounts: { label: string; value: number }[] }[];
+   *  and the categories sum to COGS + Expenses.
+   *  `section` says which cost line it belongs to — 'cogs' or 'opex' — so the
+   *  statement can break each line into its own categories instead of one lump.
+   *  Optional: a response cached before this field existed simply omits it. */
+  categories: { category: string; section?: 'cogs' | 'opex'; total: number; accounts: { label: string; value: number }[] }[];
   series: { month: string; revenue: number; expenses: number; net: number }[];
   /** How much of the Striven book has actually been posted into QuickBooks.
    *  A statement can only report on documents it has been given. */
   coverage: { qbInvoices: number | null; qbBills: number | null; postedFromStriven: number } | null;
 };
-export const fetchQbPL = () => get<QbPl>('/api/qb/pl');
+export const fetchQbPL = (period?: PlPeriod) => get<QbPl>(`/api/qb/pl${periodQuery(period)}`);
 export const fetchStrivenSO = () => get<SoResult>('/api/so');
 
 /** AP REGISTER — vendor bills from the "AP Ledgers" tab of the AP workbook, NOT

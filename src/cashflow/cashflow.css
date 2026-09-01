@@ -198,6 +198,8 @@ code {
   font-weight: 600;
   cursor: pointer;
   font-size: 13px;
+  /* A label and its icon stay on one line: "↻ Refresh", never "↻" over "Refresh". */
+  white-space: nowrap;
 }
 .btn:hover { background: var(--accent-hover); }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -505,13 +507,24 @@ code {
 .stat-card.primary .stat-card-value { color: var(--accent); }
 /* (light theme: no OS-dark override) */
 
-/* P&L income statement. */
+/* P&L income statement.
+   THREE COLUMNS, one grid: label · % of revenue · amount. Every row — heading,
+   line, indented category, total, footnote — uses the same track sizes, which is
+   what keeps the money column aligned down the whole statement. */
 .pl-statement { max-width: 520px; }
-.pl-line {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 20px;
-  padding: 13px 4px; border-bottom: 1px solid var(--border); font-size: 14.5px;
+.pl-head, .pl-line {
+  display: grid; grid-template-columns: 1fr 92px 132px; column-gap: 14px; align-items: baseline;
 }
+.pl-head {
+  padding: 0 4px 7px; border-bottom: 1px solid var(--border);
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+}
+.pl-line { padding: 13px 4px; border-bottom: 1px solid var(--border); font-size: 14.5px; }
 .pl-line .lbl { color: var(--muted-strong); }
+.pl-head .pct, .pl-line .pct {
+  text-align: right; font-size: 12.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.pl-head .val, .pl-line .val { text-align: right; }
 .pl-line .val { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
 .pl-line .val.neg { color: #b91c1c; }
 .pl-line.pl-total {
@@ -519,14 +532,50 @@ code {
 }
 .pl-line.pl-total .lbl { font-weight: 800; color: var(--text); }
 .pl-line.pl-total .val { font-weight: 800; color: var(--accent); font-size: 19px; }
+.pl-line.pl-total .pct { font-weight: 700; color: var(--muted-strong); font-size: 13px; }
 .pl-line.pl-sub { border-bottom: none; padding-top: 4px; font-size: 13px; }
-.pl-line.pl-sub .lbl, .pl-line.pl-sub .val { color: var(--muted); font-weight: 600; }
+.pl-line.pl-sub .lbl, .pl-line.pl-sub .val, .pl-line.pl-sub .pct { color: var(--muted); font-weight: 600; }
+/* One category inside a cost line: indented, quieter, and hairline-separated so
+   a block of them reads as belonging to the line above rather than as more lines. */
+.pl-line.pl-item {
+  padding: 7px 4px 7px 20px; font-size: 13px; border-bottom: 1px dashed var(--border);
+}
+.pl-line.pl-item .lbl { color: var(--muted); }
+.pl-line.pl-item .val { font-weight: 600; color: var(--muted-strong); }
+.pl-line.pl-item .pct { font-size: 11.5px; }
+/* A row that opens its own breakdown. */
+.pl-line.pl-click { cursor: pointer; border-radius: 8px; }
+.pl-line.pl-click:hover { background: var(--accent-soft); }
+.pl-line.pl-click:hover .lbl { color: var(--accent); }
+
+/* WHERE EACH REVENUE DOLLAR GOES — the cascade as one bar, under the gauge.
+   Segments are separated by a surface-coloured gap so two touching costs never
+   read as one, and each carries its own label below, never colour alone. */
+.pl-dollar { margin-top: 16px; }
+.pl-dollar .t {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); margin-bottom: 7px; text-align: center;
+}
+.pl-dollar .bar {
+  display: flex; gap: 2px; height: 13px; border-radius: 999px; overflow: hidden; background: var(--border);
+}
+.pl-dollar .seg { height: 100%; min-width: 3px; }
+.pl-dollar .keys {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 9px;
+  font-size: 11.5px; font-weight: 600; color: var(--muted-strong);
+}
+.pl-dollar .keys i {
+  display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px;
+}
 .pl-meta {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 18px;
 }
 .pl-meta > div {
   border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; background: var(--panel);
 }
+/* A tile whose value is a name AND a figure needs two columns, or it wraps into
+   a three-line block beside neighbours that are one line tall. */
+.pl-meta > div.wide { grid-column: span 2; }
 .pl-meta span { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 700; margin-bottom: 4px; }
 .pl-meta strong { font-size: 17px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
 /* (light theme: no OS-dark override) */
@@ -1204,6 +1253,14 @@ code {
 .drill-close { border: 0; background: rgba(255,255,255,0.18); color: #fff; width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 20px; }
 .drill-close:hover { background: rgba(255,255,255,0.34); }
 .drill-body { padding: 20px 22px 26px; }
+/* A breakdown's two levels. The account sits one level in and reads quieter
+   than the category subtotal above it — and the indent is MARKUP, because a
+   label padded with spaces renders flush left: HTML collapses them, which is
+   how a category and its only account came to look like two equal rows
+   carrying the same money. */
+.data-table .drill-acct { display:inline-block; padding-left:20px; color:var(--muted); }
+/* The account named on its category's own row, where it has only one. */
+.data-table .drill-in { color:var(--muted); font-weight:600; }
 
 /* ---- Uniform chart grid + summary stat tiles (Overview & tabs) ---- */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
@@ -1512,7 +1569,12 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 /* ============================ EXEC OVERVIEW v2 (screenshot parity) ============================ */
 
 /* Head extras: notification bell + context pills row. */
-.ov-headright { display:flex; align-items:center; gap:10px; }
+/* THE CONTROLS WRAP AS WHOLE CHIPS, NEVER MID-WORD. With nowrap on the row,
+   a narrow header squeezed each chip instead of moving it, and the date chip
+   broke into three lines — "Jan 1 –" / "Sep 1," / "2026" — beside a Refresh
+   button split from its own icon. A filter that has to be reassembled by eye
+   is worse than one that sits on a second row. */
+.ov-headright { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
 .ov-bell { position:relative; width:38px; height:38px; border-radius:10px; border:1px solid var(--border-strong); background:var(--panel);
   display:inline-flex; align-items:center; justify-content:center; cursor:pointer; color:var(--muted-strong); transition:border-color .15s ease, color .15s ease; }
 .ov-bell:hover { color:var(--text); border-color:var(--text); }
@@ -1520,7 +1582,7 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
   background:var(--negative); color:#fff; font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; border:2px solid var(--panel); }
 .ov-filters { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
 .ov-filter { display:inline-flex; align-items:center; gap:7px; padding:7px 12px; border-radius:9px; background:var(--panel);
-  border:1px solid var(--border-strong); font-size:12.5px; font-weight:600; color:var(--muted-strong); }
+  border:1px solid var(--border-strong); font-size:12.5px; font-weight:600; color:var(--muted-strong); white-space:nowrap; }
 .ov-filter b { color:var(--text); font-weight:700; }
 .ov-filter .fl { color:var(--muted); font-weight:600; }
 /* Functional filter chips: a bare select / date input inside the chip. */

@@ -467,7 +467,16 @@ export function DrillModal({ title, sub, columns, rows, onClose }: {
                 <thead><tr>{columns.map((c) => <th key={c.key} className={c.num ? 'num' : undefined}>{c.label}</th>)}</tr></thead>
                 <tbody>
                   {rows.length === 0 && <tr><td colSpan={columns.length} style={{ color: C.muted }}>No rows.</td></tr>}
-                  {rows.map((r, i) => <tr key={i}>{columns.map((c) => <td key={c.key} className={c.num ? 'num' : undefined}>{r[c.key]}</td>)}</tr>)}
+                  {/* `rowClass` is a RESERVED KEY, not a column: a row can ask to be
+                      styled (a category header, a total) without every caller having
+                      to switch to a wrapper shape. It is never rendered as a cell,
+                      because cells are drawn from `columns` and no column is named
+                      rowClass. */}
+                  {rows.map((r, i) => (
+                    <tr key={i} className={typeof r.rowClass === 'string' ? r.rowClass : undefined}>
+                      {columns.map((c) => <td key={c.key} className={c.num ? 'num' : undefined}>{r[c.key]}</td>)}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
