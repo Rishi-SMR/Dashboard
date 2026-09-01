@@ -598,17 +598,21 @@ function plExpenseCategories(rows) {
 
   for (const top of (rows?.Row ?? [])) {
     if (top.group !== 'COGS' && top.group !== 'Expenses') continue;
+    // WHICH SIDE OF THE STATEMENT THIS CATEGORY SITS ON. Without it a reader of
+    // the list cannot tell cost of goods from overhead, and the statement can
+    // only show cost as one lump — the exact thing splitting COGS out fixed.
+    const section = top.group === 'COGS' ? 'cogs' : 'opex';
     for (const child of (top.Rows?.Row ?? [])) {
       if (child.Rows) {
         const total = plNum(child.Summary?.ColData?.[1]?.value);
         const accounts = [...leavesOf(child.Rows), ...plUnitemised({ Row: [child] })
           .map(({ label, value }) => ({ label, value }))];
-        out.push({ category: clean(child.Summary?.ColData?.[0]?.value), total, accounts });
+        out.push({ category: clean(child.Summary?.ColData?.[0]?.value), section, total, accounts });
       } else if (child.ColData) {
         // A bare account at the top level: it is its own category.
         const label = String(child.ColData[0]?.value ?? '').trim();
         const value = plNum(child.ColData[1]?.value);
-        if (label) out.push({ category: label, total: value, accounts: [{ label, value }] });
+        if (label) out.push({ category: label, section, total, accounts: [{ label, value }] });
       }
     }
   }

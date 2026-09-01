@@ -121,7 +121,8 @@ export default async function handler(req, res) {
   }
 
   // ---- commission — identity-scoped. Handled here rather than via ROUTES
-  // because the redaction needs the caller, and ROUTES handlers take no args. ----
+  // because the redaction needs the CALLER, and the table can only hand a
+  // handler the query string. ----
   if (pathname === '/api/commission') {
     try {
       // ?fresh=1 re-reads the reconciliation sheet — see getCommissionFor().
@@ -256,7 +257,12 @@ export default async function handler(req, res) {
   }
   if (!fn) return res.status(404).json({ error: 'not found' });
   try {
-    return res.status(200).json(await fn());
+  // ROUTE HANDLERS NOW SEE THE QUERY STRING. They took no arguments, so a route
+  // that wanted a parameter — /api/pl asked for one month rather than the year —
+  // had to be special-cased above this table. Handing every handler the parsed
+  // query costs nothing (one that ignores it is unaffected) and keeps the
+  // period-filtered endpoints in the table where they belong.
+    return res.status(200).json(await fn(Object.fromEntries(url.searchParams)));
   } catch (err) {
     console.error(`[${pathname}]`, err.message);
     return res.status(500).json({ error: err.message });

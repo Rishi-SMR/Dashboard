@@ -1461,15 +1461,32 @@ async function getAccounts() {
     note: "Striven's API does not expose GL account balances — running balances live only inside Striven's Report Builder. Shown here is the complete chart of accounts with every field the API returns.",
   };
 }
-async function getPL() {
-  const yearStart = `${new Date().getFullYear()}-01-01`;
-  const inYear = (r) => String(r.dateCreated ?? '').slice(0, 10) >= yearStart;
+/**
+ * THE OPERATIONAL P&L, FOR A PERIOD THE CALLER CHOOSES.
+ *
+ * `start`/`end` are plain YYYY-MM-DD and INCLUSIVE at both ends, which is what a
+ * month or a quarter means to the person asking for one: August is the 1st to
+ * the 31st, not "the 1st up to but not including September". Omitted, they mean
+ * the year to date — the behaviour this endpoint had when it took no arguments
+ * at all, so an old caller sees exactly what it saw before.
+ *
+ * The filter is a STRING comparison on the YYYY-MM-DD prefix, deliberately: the
+ * dates arrive as ISO text, and parsing them into Date objects would drag the
+ * server's timezone into the answer — which is how a transaction booked late on
+ * the 31st lands in the wrong month for half the world.
+ */
+async function getPL(q = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(String(q.start ?? '')) ? q.start : `${today.slice(0, 4)}-01-01`;
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(q.end ?? '')) ? q.end : today;
+  const inRange = (dateStr) => { const d = String(dateStr ?? '').slice(0, 10); return Boolean(d) && d >= start && d <= end; };
+  const inPeriod = (r) => inRange(r.dateCreated);
   // Invoice status isn't on the search payload — resolve voids from INVOICE_STATUS
   // (same as getAR); notVoid(r) would be a no-op here and leak voided invoices.
   const invNotVoid = (r) => !isVoidStatus(INVOICE_STATUS[r.id] ?? '');
-  const inv = (await allInvoices()).filter((r) => inYear(r) && invNotVoid(r));
-  const bills = (await allBills()).filter((r) => inYear(r) && notVoid(r));
-  const payments = (await allPayments()).filter((r) => notVoid(r) && String(r.paymentDate ?? r.dateCreated ?? '').slice(0, 10) >= yearStart);
+  const inv = (await allInvoices()).filter((r) => inPeriod(r) && invNotVoid(r));
+  const bills = (await allBills()).filter((r) => inPeriod(r) && notVoid(r));
+  const payments = (await allPayments()).filter((r) => notVoid(r) && inRange(r.paymentDate ?? r.dateCreated));
 
   const revenue = round2(inv.reduce((s, r) => s + Number(r.invoiceTotal ?? 0), 0));
   const expenses = round2(bills.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0));
@@ -1491,7 +1508,8 @@ async function getPL() {
   const byVendor = Object.entries(vmap).map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 12);
 
   return {
-    periodFrom: `${yearStart}T00:00:00`,
+    periodFrom: `${start}T00:00:00`,
+    periodTo: `${end}T00:00:00`,
     revenue, expenses, net,
     margin: revenue ? round2((net / revenue) * 100) : 0,
     cashReceived,
@@ -6161,7 +6179,13 @@ export const ROUTES = {
   '/api/projects': getProjects,
   '/api/exceptions': getExceptions,
   '/api/orders': getOrders,
-  '/api/commission': getCommission,
+  // ARGUMENT-DROPPING WRAPPER, ON PURPOSE. Every other entry here is called with
+  // the request's query object; getCommission's first parameter is a VIEWER, and
+  // handing it a query would silently redact the wrong person's numbers. Both
+  // dispatchers intercept /api/commission above the table and call
+  // getCommissionFor with a real viewer, so this entry is only ever the fallback
+  // — and the fallback must be the unscoped call it always was.
+  '/api/commission': () => getCommission(),
 };
 export const DYNAMIC = [
   { re: /^\/api\/po\/(\d+)$/, handler: (m) => getPODetail(m[1]) },
