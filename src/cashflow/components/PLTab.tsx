@@ -209,8 +209,20 @@ export function PLTab() {
   const share = (v: number) => (pl?.revenue ? (v / pl.revenue) * 100 : 0);
   const shareText = (v: number) => (pl?.revenue ? pct(share(v)) : '-');
   const cogsRatio = share(qb?.cogs ?? 0);
-  /** Months the statement actually covers, for the per-month averages. */
-  const monthCount = pl?.series.length ?? 0;
+  /**
+   * Months the per-month averages divide by.
+   *
+   * NOT `series.length`. On the 1st of a month the series already carries that
+   * month as a row of zeros, so YTD revenue was being divided by nine on a book
+   * with eight months of trading — an average understated by an eighth, printed
+   * as "across 9 months". A month counts once it is COMPLETE, or as soon as it
+   * has anything booked in it: a genuinely quiet February still belongs in the
+   * denominator and still drags the average down, which is the honest answer;
+   * a September that is one day old does not.
+   */
+  const monthCount = (pl?.series ?? []).filter(
+    (mo) => mo.month < nowYm || (mo.revenue ?? 0) !== 0 || (mo.expenses ?? 0) !== 0,
+  ).length;
   const perMonth = (v: number) => (monthCount ? v / monthCount : 0);
   /**
    * OPERATING INCOME vs NET PROFIT. They differ only where the book carries
