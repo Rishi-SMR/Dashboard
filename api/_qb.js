@@ -575,7 +575,7 @@ function plUnitemised(rows, depth = 0, out = []) {
  * remainder is carried down with them — see plUnitemised. So the drill reconciles
  * at both levels: accounts to category, categories to total expenses.
  */
-function plExpenseCategories(rows) {
+export function plExpenseCategories(rows) {
   const out = [];
   const clean = (s) => String(s ?? '').replace(/^Total\s+/i, '').trim();
 
@@ -612,7 +612,7 @@ function plExpenseCategories(rows) {
         // A bare account at the top level: it is its own category.
         const label = String(child.ColData[0]?.value ?? '').trim();
         const value = plNum(child.ColData[1]?.value);
-        if (label) out.push({ category: label, section, total, accounts: [{ label, value }] });
+        if (label) out.push({ category: label, section, total: value, accounts: [{ label, value }] });
       }
     }
   }
