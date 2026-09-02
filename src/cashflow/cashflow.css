@@ -43,6 +43,45 @@
   --chart-nonpayroll: #D97706;
   --highlight: rgba(217,119,6,0.10);
 
+
+  /* ── SPACING, ONE SCALE ────────────────────────────────────────────────────
+     4 / 8 / 12 / 16 / 24 / 32. Every margin, gap and padding on the company
+     board is one of these six, referenced by token and never as a literal.
+     The scale exists because the board had 13px, 14px, 18px, 20px and 22px in
+     it at once: five values close enough to look like one intention and far
+     enough apart to leave edges half a step out of line down the page. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* ── RADIUS ───────────────────────────────────────────────────────────────
+     Three steps: controls, cards, and the pill. */
+  --r-1: 8px;
+  --r-2: 12px;
+  --r-pill: 999px;
+
+  /* ── TYPE SCALE ───────────────────────────────────────────────────────────
+     12 / 14 / 16 / 20 / 28. --fs-1 is a label or a caption, --fs-2 body,
+     --fs-3 a secondary figure, --fs-4 a page title, --fs-5 a headline number.
+     ANY FIGURE COMPARED ACROSS CARDS USES THE SAME STEP: a reader takes size
+     for importance, so two comparable numbers at 30px and 32px say something
+     about each other that is not true. */
+  --fs-1: 12px;
+  --fs-2: 14px;
+  --fs-3: 16px;
+  --fs-4: 20px;
+  --fs-5: 28px;
+
+  /* ── CONTROLS AND BARS ────────────────────────────────────────────────────
+     One height for every chip, select and button in a filter row, so a row of
+     them shares a baseline instead of each sitting to its own. One height,
+     radius and track colour for every progress bar on the board. */
+  --control-h: 40px;
+  --bar-h: var(--sp-3);
+  --bar-track: var(--panel-2);
   font-family: 'Inter', -apple-system, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   color-scheme: light;
 }
@@ -84,13 +123,18 @@ code {
   min-height: 100vh;
 }
 
+/* ONE LEFT EDGE DOWN THE WHOLE SIDEBAR. The rail padded itself 12px, the brand
+   block added 8px, and the nav rows added 12px — so the logo, the Company/Reps
+   switch and the nav labels each started at a different x (20, 16 and 24px).
+   Every block now carries the SAME horizontal padding as its siblings, so the
+   boxes align at the rail's edge and the text aligns one step inside it. */
 .sidebar {
   background: var(--panel);
   border-right: 1px solid var(--border);
-  padding: 16px 12px;
+  padding: var(--sp-4) var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
   position: sticky;
   top: 0;
   height: 100vh;
@@ -99,10 +143,10 @@ code {
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 8px 16px 8px;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--border);
-  margin-bottom: 12px;
+  margin-bottom: var(--sp-3);
 }
 .brand-logo {
   width: 40px;
@@ -117,16 +161,44 @@ code {
   font-size: 16px;
   letter-spacing: 0.02em;
 }
-.brand-name { font-weight: 600; font-size: 15px; }
-.brand-sub { color: var(--muted); font-size: 11px; margin-top: 1px; }
+/* The logo tile when it holds an image rather than initials: white plate, one
+   scale step of inset so the artwork does not touch the corners. */
+.brand-logo.is-img { background: #FFFFFF; padding: var(--sp-1); }
+.brand-name { font-weight: 600; font-size: var(--fs-2); }
+.brand-sub { color: var(--muted); font-size: var(--fs-1); margin-top: 0; }
+
+/* The fold control in the Reps drill: a caret that takes its own click, sized as
+   a real target rather than a glyph you have to aim at. */
+.rep-fold {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--sp-6); height: var(--sp-6); margin-right: var(--sp-1);
+  border: 0; border-radius: var(--r-1); background: transparent;
+  color: var(--muted); font: inherit; font-size: var(--fs-1); line-height: 1; cursor: pointer;
+}
+.rep-fold:hover { background: var(--panel-2); color: var(--accent); }
+.rep-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── BUSINESS GROWTH card: its own spacing, from the scale ─────────────────── */
+.bg-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin: 0 0 var(--sp-4); }
+.bg-chip {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3); border-radius: var(--r-pill); background: var(--panel-2);
+  font-size: var(--fs-1); color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.bg-chip b { font-weight: 800; }
+.bg-plot { height: calc(var(--sp-8) * 8); }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  font-size: 14px;
+  gap: var(--sp-3);
+  /* One row height for every entry, set here rather than falling out of the
+     label: an item that wraps, or one with a badge, used to be a pixel or two
+     taller than its neighbours and the whole column drifted below it. */
+  min-height: var(--control-h);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-1);
+  font-size: var(--fs-2);
   color: var(--muted-strong);
   cursor: pointer;
   background: transparent;
@@ -140,8 +212,12 @@ code {
   color: var(--accent);
   font-weight: 600;
 }
+/* A FIXED ICON COLUMN, so the labels form one vertical line. The icons are
+   drawn at different widths — a bell is narrower than a cart — and an
+   auto-width column let every label start at its own x. */
 .nav-item .nav-icon {
-  width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  width: var(--sp-6); height: var(--sp-6); flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
   color: currentColor;
 }
 
@@ -180,13 +256,16 @@ code {
 
 .page-head {
   display: flex;
-  align-items: flex-start;
+  /* ONE AXIS. The title block is two lines and the controls beside it are one,
+     so top-aligning them left the Live pill, Refresh and the bell riding above
+     the title's optical centre — a row of furniture that looked dropped in. */
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-6);
 }
-.page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 4px 0; }
-.page-sub { color: var(--muted); font-size: 13px; }
+.page-title { font-size: var(--fs-4); font-weight: 700; letter-spacing: -0.01em; margin: 0 0 var(--sp-1) 0; }
+.page-sub { color: var(--muted); font-size: var(--fs-1); }
 
 /* --- Buttons / chips / period selector --- */
 .btn {
@@ -591,10 +670,13 @@ code {
 .section {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 22px;
+  border-radius: var(--r-2);
+  /* ONE PADDING FOR EVERY CARD. It was 22px here, 20px on .chart-card and 18px
+     in the grid, so three cards side by side started their content at three
+     different insets and no two dividers lined up. */
+  padding: var(--sp-6);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  margin-bottom: 20px;
+  margin-bottom: var(--sp-6);
 }
 /* Collapsible variant: when closed, drop section-head bottom margin so the
    collapsed bar feels tight rather than padded for absent content. */
@@ -833,7 +915,7 @@ code {
 }
 
 /* --- Chart card --- */
-.chart-card { padding: 20px; }
+.chart-card { padding: var(--sp-6); }
 .chart-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
 .chart-subtitle { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
 
@@ -1273,7 +1355,7 @@ code {
    kept a 14px rhythm. Grid children are never direct children of .main, so this
    restores the standalone case without touching them. */
 .main > .chart-card { margin-bottom: 14px !important; }
-.chart-card { padding: 18px; }
+.chart-card { padding: var(--sp-6); }
 .chart-card .chart-box { width: 100%; height: 260px; }
 
 /* Section-summary mini stat tiles: one per app area. */
@@ -1360,7 +1442,7 @@ code {
 /* ============================ PREMIUM LIGHT: EXECUTIVE ============================ */
 /* Board-deck wrapper + titled sections. */
 .exec-deck { max-width: 1560px; margin-inline: auto; }
-.deck-head { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 18px; }
+.deck-head { border-bottom: 1px solid var(--border); padding-bottom: var(--sp-4); margin-bottom: var(--sp-6); }
 .deck-pills { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .deck-pill { display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:var(--accent); background:var(--accent-soft); border:1px solid var(--border-strong); border-radius:999px; padding:3px 10px; }
 .deck-pill.muted { color:var(--muted-strong); }
@@ -1580,9 +1662,20 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 .ov-bell:hover { color:var(--text); border-color:var(--text); }
 .ov-bell .bell-badge { position:absolute; top:-6px; right:-6px; min-width:17px; height:17px; padding:0 4px; border-radius:999px;
   background:var(--negative); color:#fff; font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; border:2px solid var(--panel); }
-.ov-filters { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
-.ov-filter { display:inline-flex; align-items:center; gap:7px; padding:7px 12px; border-radius:9px; background:var(--panel);
-  border:1px solid var(--border-strong); font-size:12.5px; font-weight:600; color:var(--muted-strong); white-space:nowrap; }
+/* ONE ROW, ONE GAP, ONE HEIGHT.
+   The chips sized themselves off their contents, so a select-bearing chip stood
+   a couple of pixels taller than a text one and the row had no single baseline.
+   `--control-h` fixes the height for every control in the row — chips, buttons
+   and the reset link alike — and the flex row centres them on it. */
+.ov-filters { display:flex; align-items:center; gap:var(--sp-3); flex-wrap:wrap; margin-bottom:var(--sp-6); }
+.ov-filters > * { min-height: var(--control-h); }
+.ov-filters .btn, .ov-filters .card-link { display:inline-flex; align-items:center; }
+/* The status chip closes the row on the right, so its right edge lands on the
+   same line as the header above it and the last card below it. */
+.ov-filters > *:last-child { margin-left: auto; }
+.ov-filter { display:inline-flex; align-items:center; gap:var(--sp-2); padding:0 var(--sp-3); border-radius:var(--r-2);
+  background:var(--panel); min-height: var(--control-h);
+  border:1px solid var(--border-strong); font-size:var(--fs-1); font-weight:600; color:var(--muted-strong); white-space:nowrap; }
 .ov-filter b { color:var(--text); font-weight:700; }
 .ov-filter .fl { color:var(--muted); font-weight:600; }
 /* Functional filter chips: a bare select / date input inside the chip. */
@@ -1648,7 +1741,78 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 
 /* 12-col analytics grid: every row sums to exactly 12, no row spans, so each
    row's cards stretch to ONE shared height and every edge lines up. */
-.exec-grid12 { display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:18px; align-items:stretch; }
+.exec-grid12 { display:grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap:var(--sp-6); align-items:stretch; }
+/* ── THE ROW FILLS ITSELF ───────────────────────────────────────────────────
+   A twelve-column grid gives every card the width its span asks for and leaves
+   whatever is left over as EMPTY TRACKS. Most rows on this board are built from
+   cards that only render when they have something to say — Commission Due is
+   absent in a month with no commission, Units by programme when the device mix
+   is empty — so a row of four regularly renders three, and the twelfth column
+   sits blank at the right of the row looking like a card failed to load.
+
+   The board therefore lays its rows out with FLEX, not grid tracks: on the last
+   (or only) line, flex items grow into the space instead of leaving it. Three
+   cards then fill the row as three wide cards, four fill it as four.
+
+   `flex-grow` carries the span, so a 4-of-12 card is still wider than a 3-of-12
+   card beside it, and `flex-basis` keeps a real wrapping width — with a zero
+   basis the items would never wrap, they would just shrink until the labels
+   collapsed. Heights still match across a line: that is flex's default
+   `align-items: stretch`, the same behaviour the grid had.
+
+   SCOPED TO THIS BOARD. Other tabs lay out fixed sets of cards where a 12-col
+   grid is exactly right, and they keep it. */
+.ov-board .exec-grid12 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-6);
+}
+.ov-board .exec-grid12 > .section { flex: 3 1 clamp(260px, 22%, 420px); }
+.ov-board .exec-grid12 > .g12-1 { flex-grow: 1; }
+.ov-board .exec-grid12 > .g12-2 { flex-grow: 2; }
+.ov-board .exec-grid12 > .g12-3 { flex-grow: 3; }
+.ov-board .exec-grid12 > .g12-4 { flex-grow: 4; flex-basis: clamp(300px, 30%, 520px); }
+.ov-board .exec-grid12 > .g12-5 { flex-grow: 5; flex-basis: clamp(340px, 38%, 620px); }
+.ov-board .exec-grid12 > .g12-6 { flex-grow: 6; flex-basis: clamp(380px, 46%, 720px); }
+.ov-board .exec-grid12 > .g12-7 { flex-grow: 7; flex-basis: clamp(420px, 54%, 820px); }
+.ov-board .exec-grid12 > .g12-8 { flex-grow: 8; flex-basis: clamp(460px, 62%, 920px); }
+/* Anything asking for the full twelve takes its own line, as it always did. */
+.ov-board .exec-grid12 > .g12-9,
+.ov-board .exec-grid12 > .g12-10,
+.ov-board .exec-grid12 > .g12-11,
+.ov-board .exec-grid12 > .g12-12,
+.ov-board .exec-grid12 > .g12-w { flex: 1 1 100%; }
+
+/* THE SAME BREAKPOINT THE GRID USED, expressed as a wider basis: below it, two
+   cards to a line rather than three squeezed ones. The line still fills — this
+   sets how many fit, never whether the last one stretches. */
+@media (max-width: 1360px) {
+  .ov-board .exec-grid12 > .section { flex-basis: clamp(320px, 45%, 560px); }
+  .ov-board .exec-grid12 > .g12-4,
+  .ov-board .exec-grid12 > .g12-5,
+  .ov-board .exec-grid12 > .g12-6,
+  .ov-board .exec-grid12 > .g12-7,
+  .ov-board .exec-grid12 > .g12-8 { flex-basis: clamp(320px, 45%, 560px); }
+}
+
+/* A GRID CARRIES NO BOTTOM MARGIN OF ITS OWN, so any block placed after one sits
+   flush against it: the Business growth card landed hard under the Order book /
+   Revenue row with nothing between them, and once the cards float on a shadow
+   the two read as OVERLAPPING rather than merely tight.
+   The gap below a row is the gap inside it — one value, from the scale. */
+.ov-board .exec-grid12 { margin-bottom: var(--sp-6); }
+.ov-board .exec-grid12:last-child { margin-bottom: 0; }
+
+/* BELOW 1024px THE ROW BECOMES A COLUMN, with the same gap it had as a row —
+   the cards keep their padding and their order, and nothing re-flows into a
+   two-up layout narrow enough to ellipsise its own labels. */
+@media (max-width: 1024px) {
+  .ov-board .exec-grid12 { gap: var(--sp-6); }
+  .ov-board .exec-grid12 > .section { flex: 1 1 100%; }
+  /* The status chip returns to the flow: pinned right on a wrapped row it would
+     sit alone on a line of its own. */
+  .ov-board .ov-filters > *:last-child { margin-left: 0; }
+}
 .exec-grid12 > * { margin:0 !important; min-width:0; }
 /* EVERY SPAN 1..12, not only the ones in use today.
    A grid item with no `grid-column` falls back to ONE column — so a card
@@ -1665,7 +1829,20 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 .g12-11 { grid-column: span 11; } .g12-12 { grid-column: 1 / -1; }
 /* Consistent internals: fixed head rhythm, chart flex-fills the card body, the
    stat footer pins to the base: so titles, charts and footers align per row. */
-.exec-grid12 .section-head { margin-bottom: 12px; }
+/* CARD HEADS LINE UP ACROSS A ROW. A one-line subtitle in one card and a
+   two-line subtitle in the next put their dividers at different heights, and
+   everything below them inherited the offset. The head reserves the space for
+   two lines, so the rule under it — and the content after it — starts at the
+   same y in every card in the row. */
+.exec-grid12 .section-head { margin-bottom: var(--sp-4); }
+.exec-grid12 > .section { display: flex; flex-direction: column; padding: var(--sp-6); }
+/* SCOPED TO THE COMPANY BOARD, not to every page that uses this grid: reserving
+   two lines of subtitle is right where cards sit four abreast and their
+   dividers are compared, and would only add dead space on a tab whose cards all
+   carry a one-line head. */
+.ov-board .exec-grid12 .section-head { min-height: calc(var(--sp-8) + var(--sp-6)); }
+/* Footers close their cards at the same y for the same reason. */
+.ov-board .exec-grid12 > .section > .cfoot { margin-top: auto; }
 .exec-grid12 .chart-card .chart-box { height:240px; flex:none; }
 .exec-grid12 .card-body { flex:1 1 auto; display:flex; flex-direction:column; justify-content:center; }
 @media (max-width:1360px){
@@ -1919,13 +2096,17 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 .pgn-pages button:disabled { opacity:.45; cursor:not-allowed; }
 
 /* Combo-chart inline legend + pinned stat footer. */
-.mini-legend { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:-4px 0 8px; }
+/* No negative margin: the legend sat 4px into the block above it to look
+   optically attached, which is alignment by nudge. It now owns its own space. */
+.mini-legend { display:flex; align-items:center; gap:var(--sp-3); flex-wrap:wrap; margin:0 0 var(--sp-2); }
 .mini-legend .ml-i { display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; color:var(--muted-strong); }
 .mini-legend .ml-dot { width:8px; height:8px; border-radius:2.5px; flex:none; }
-.cfoot { margin-top:auto; padding-top:12px; border-top:1px solid var(--border); display:flex; gap:8px; }
+.cfoot { margin-top:auto; padding-top:var(--sp-3); border-top:1px solid var(--border); display:flex; gap:var(--sp-2); }
 .cfoot .cf-i { flex:1; min-width:0; }
-.cfoot .cf-i .l { font-size:10.5px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
-.cfoot .cf-i .v { font-size:14.5px; font-weight:800; color:var(--text); font-variant-numeric:tabular-nums; margin-top:2px; }
+.cfoot .cf-i .l { font-size:var(--fs-1); font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+/* The footer figures are read ACROSS cards ("revenue here vs expense there"),
+   so they take one step of the scale and one weight everywhere. */
+.cfoot .cf-i .v { font-size:var(--fs-3); font-weight:800; color:var(--text); font-variant-numeric:tabular-nums; margin-top:var(--sp-1); }
 .cfoot .cf-i .v.pos { color:var(--positive); } .cfoot .cf-i .v.neg { color:var(--negative); } .cfoot .cf-i .v.accent { color:var(--accent); }
 
 /* Donut + itemised legend (aging summaries). */
@@ -1935,23 +2116,30 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
    one part of the row a reader cannot infer from the others.
    `flex: 1 1 165px` is the rule doing the work: given less than 165px the
    legend takes its own line at full card width instead of ellipsising. */
-.donut-list { display:flex; align-items:center; gap:14px; flex:1 1 auto; flex-wrap:wrap; }
+/* The chart and the legend are centred on each other, so neither rides high
+   when the legend is short. */
+.donut-list { display:flex; align-items:center; gap:var(--sp-4); flex:1 1 auto; flex-wrap:wrap; }
 .donut-list .dl-chart { flex:none; width:124px; height:124px; }
-.donut-list .dl-legend { flex:1 1 165px; min-width:0; }
-.dl-item { display:flex; align-items:baseline; gap:7px; padding:3.5px 0; font-size:11.5px; }
+.donut-list .dl-legend { flex:1 1 165px; min-width:0; display:flex; flex-direction:column; justify-content:center; }
+/* FOUR COLUMNS, NOT A FLEX ROW: dot, label, amount, percent. `margin-left:auto`
+   put the money "somewhere right of the label", which is not the same as a
+   column — a longer label pushed its amount out of line with the row above.
+   Fixed tracks put every amount and every percent on one edge. */
+.dl-item { display:grid; grid-template-columns: var(--sp-3) 1fr auto var(--sp-8);
+  align-items:baseline; gap:var(--sp-2); padding:var(--sp-1) 0; font-size:var(--fs-1); }
 /* No ellipsis: these labels are short and fixed ("Current", "1–30", "90+"), so
    the row should give them their width rather than trim them. */
-.dl-item .dl-name { color:var(--muted-strong); font-weight:600; flex:1 1 auto; min-width:0; white-space:nowrap; }
+.dl-item .dl-name { color:var(--muted-strong); font-weight:600; min-width:0; white-space:nowrap; }
 /* `margin-left:auto` pins the money to the right edge whatever the label is,
    so the figures still form a column down the legend. */
-.dl-item .dl-val { margin-left:auto; flex:none; font-weight:700; color:var(--text); font-variant-numeric:tabular-nums; }
-.dl-item .dl-pct { flex:none; color:var(--muted); font-variant-numeric:tabular-nums; width:32px; text-align:right; }
-.dl-total { display:flex; align-items:center; justify-content:space-between; margin-top:7px; padding-top:8px; border-top:1px solid var(--border);
-  font-size:11.5px; font-weight:700; color:var(--muted-strong); }
-.dl-total b { font-size:13px; color:var(--text); font-variant-numeric:tabular-nums; }
+.dl-item .dl-val { font-weight:700; color:var(--text); font-variant-numeric:tabular-nums; text-align:right; }
+.dl-item .dl-pct { color:var(--muted); font-variant-numeric:tabular-nums; text-align:right; }
+.dl-total { display:flex; align-items:center; justify-content:space-between; margin-top:var(--sp-2); padding-top:var(--sp-2);
+  border-top:1px solid var(--border); font-size:var(--fs-1); font-weight:700; color:var(--muted-strong); }
+.dl-total b { font-size:var(--fs-2); color:var(--text); font-variant-numeric:tabular-nums; }
 
 /* CSS progress-bar ranking rows (program split / top vendors). */
-.hbar-list { display:flex; flex-direction:column; gap:11px; flex:1 1 auto; justify-content:center; }
+.hbar-list { display:flex; flex-direction:column; gap:var(--sp-3); flex:1 1 auto; justify-content:center; }
 .hbar-row.clickable { cursor:pointer; }
 .hbar-row .hb-top { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:5px; }
 .hbar-row .hb-name { font-size:12px; font-weight:600; color:var(--muted-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -2746,6 +2934,131 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 /* The page's own H1 keeps its size — it is a page title, not a tile heading. */
 .ov-board .page-head .section-title { font-size: inherit; letter-spacing: normal; }
 
+/* ── KEVIN'S FINANCIAL OVERVIEW — the same board, its own surface ───────────
+   Asked for explicitly: the tiles keep their names and their figures, and only
+   the LOOK differs from the board Crystal and the rest of finance/ops see.
+
+   Everything here is scoped to `.ov-board.ov-kevin`, so it cannot reach another
+   tab, and it is presentation only — no rule in this block can change what a
+   tile says. The class is set in OverviewCharts from the login OR the 'kevin'
+   view profile, the same pair that governs the View-as picker.
+
+   WHAT MAKES IT READ AS PREMIUM rather than merely different. Restraint, not
+   decoration: one dark header that frames the board, white cards floating on a
+   soft two-tier shadow with no hairline boxes, a single 4px brand mark beside
+   each title instead of a rule across every card, generous padding, and figures
+   a size up in tabular numerals with tightened tracking. Nothing blinks, nothing
+   is gold-plated; it reads like a printed board pack.
+
+   The palette is the app's own tokens and the logo's own two colours. A
+   different arrangement of one design system, never a second one. */
+.ov-board.ov-kevin {
+  /* One step deeper than --text, for the header only: the board's furniture
+     recedes so the cards on top of it come forward. */
+  --kv-ink: #0B1B33;
+  --kv-mark: linear-gradient(180deg, var(--accent) 0%, #6EB60A 100%);
+}
+
+/* ── THE HEADER BAND ────────────────────────────────────────────────────────
+   The one piece of chrome on the page. A dark plate under the title turns a
+   scrolling list of cards into a board with a top, which is the difference
+   between a screen and a document. */
+.ov-board.ov-kevin > .page-head {
+  background: linear-gradient(135deg, #0B1B33 0%, #13294B 52%, #0A369F 100%);
+  border: 0;
+  border-radius: var(--r-2);
+  padding: var(--sp-4) var(--sp-6);
+  margin-bottom: var(--sp-6);
+  box-shadow: 0 20px 44px -30px rgba(11, 27, 51, .85);
+}
+.ov-board.ov-kevin > .page-head .page-title {
+  color: #FFFFFF;
+  letter-spacing: -0.02em;
+}
+.ov-board.ov-kevin > .page-head .page-sub { color: rgba(255, 255, 255, .70); }
+/* The controls sitting on the plate borrow its contrast rather than keeping
+   their light-surface styling, which would read as pasted on. */
+.ov-board.ov-kevin > .page-head .deck-pill,
+.ov-board.ov-kevin > .page-head .ov-bell,
+.ov-board.ov-kevin > .page-head .ov-viewas {
+  background: rgba(255, 255, 255, .10);
+  border-color: rgba(255, 255, 255, .22);
+  color: #FFFFFF;
+  box-shadow: none;
+}
+.ov-board.ov-kevin > .page-head .ov-viewas span,
+.ov-board.ov-kevin > .page-head .ov-viewas select { color: #FFFFFF; }
+.ov-board.ov-kevin > .page-head .ov-viewas select option { color: var(--text); }
+.ov-board.ov-kevin > .page-head .btn.ghost {
+  color: #FFFFFF;
+  border-color: rgba(255, 255, 255, .32);
+  background: rgba(255, 255, 255, .06);
+}
+.ov-board.ov-kevin > .page-head .btn.ghost:hover {
+  color: #FFFFFF; border-color: rgba(255, 255, 255, .6); background: rgba(255, 255, 255, .14);
+}
+
+/* ── THE CARDS ──────────────────────────────────────────────────────────────
+   Borderless and lifted: objects on a surface, not cells in a grid. Two shadow
+   layers — a 1px contact shadow so an edge still exists at close range, and a
+   wide soft one for the lift. */
+.ov-board.ov-kevin .section {
+  border: 0;
+  border-radius: var(--r-2);
+  /* The SAME padding as every other card — the skin changes the surface, never
+     the geometry, so Kevin's board and Crystal's stay measurably identical. */
+  padding: var(--sp-6);
+  background: linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%);
+  box-shadow: 0 1px 2px rgba(14, 27, 46, .05), 0 22px 46px -30px rgba(14, 27, 46, .48);
+}
+.ov-board.ov-kevin .section > .section-head {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+/* THE BRAND MARK, once per card and beside the title rather than a rule across
+   the top of every one: at a dozen cards, twelve full-width bars is wallpaper. */
+.ov-board.ov-kevin .section-title {
+  position: relative;
+  padding-left: var(--sp-4);
+  color: var(--kv-ink);
+  letter-spacing: 0.1em;
+}
+.ov-board.ov-kevin .section-title::before {
+  content: '';
+  position: absolute; left: 0; top: .1em; bottom: .1em;
+  width: var(--sp-1); border-radius: var(--r-pill);
+  background: var(--kv-mark);
+}
+/* The page's own H1 is not a card title and takes no mark. */
+.ov-board.ov-kevin .page-head .section-title { padding-left: 0; }
+.ov-board.ov-kevin .page-head .section-title::before { content: none; }
+
+/* ── THE FIGURES ────────────────────────────────────────────────────────────
+   One size up, tabular, tracked in. Values only: labels stay where they are, or
+   the card loses the hierarchy the heading exists to create. */
+.ov-board.ov-kevin .cfoot .v,
+.ov-board.ov-kevin .kpi-value,
+.ov-board.ov-kevin .stat-card-value,
+.ov-board.ov-kevin .pos-net {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+/* NO SIZE BUMPS. These were 17 / 30 / 36px, off the scale and different from
+   the same figures on Crystal's board — so the two boards disagreed about how
+   important the same number is. The skin is a surface, not a type scale. */
+.ov-board.ov-kevin .cfoot .v { font-size: var(--fs-3); }
+.ov-board.ov-kevin .kpi-value, .ov-board.ov-kevin .stat-card-value { font-size: var(--fs-5); }
+.ov-board.ov-kevin .pos-net { font-size: var(--fs-5); }
+
+/* The filter row picks up the same borderless, floating treatment, so the
+   controls belong to the board the cards sit on. */
+.ov-board.ov-kevin .ov-filters .ov-filter {
+  border-color: transparent;
+  background: #FFFFFF;
+  box-shadow: 0 1px 2px rgba(14, 27, 46, .05), 0 10px 22px -18px rgba(14, 27, 46, .5);
+}
+
 /* ── AP Register: KPI footnotes in caps ─────────────────────────────────────
    Scoped to .ap-register, NOT to .kpi-r — a dozen tabs share that card.
 
@@ -2849,32 +3162,39 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
    The doughnut splits open balances; this states the DIRECTION they run in,
    which a ring cannot show. Same card family, different question. */
 .pos { display: flex; flex-direction: column; min-width: 0; }
-.pos-net { font-size: 32px; font-weight: 800; letter-spacing: -.03em; line-height: 1.1;
+.pos-net { font-size: var(--fs-5); font-weight: 800; letter-spacing: -.03em; line-height: 1.1;
   font-variant-numeric: tabular-nums; color: var(--text); }
 .pos-net.neg { color: var(--danger); }
 .pos-net.pos { color: var(--positive); }
-.pos-cap { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-.pos-sub { font-size: 12px; color: var(--muted); margin: 4px 0 16px; }
+.pos-cap { font-size: var(--fs-1); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.pos-sub { font-size: var(--fs-1); color: var(--muted); margin: var(--sp-1) 0 var(--sp-4); }
 
-.pos-side { margin-bottom: 14px; }
-.pos-lab { display: flex; align-items: baseline; gap: 8px; font-size: 12px; margin-bottom: 5px; }
+/* THE TWO SIDES ARE ONE STRUCTURE, spaced identically: label left and amount
+   right on one line, the bar full width beneath it, the key beneath that. They
+   drifted apart at 14/5/7px, which is close enough to look accidental. */
+.pos-side { margin-bottom: var(--sp-4); }
+.pos-side:last-child { margin-bottom: 0; }
+.pos-lab { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-1); margin-bottom: var(--sp-2); }
 .pos-lab .t { font-weight: 700; color: var(--muted-strong); }
 .pos-lab .v { margin-left: auto; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
-.pos-track { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--panel-2); }
+/* ONE BAR EVERYWHERE: height, radius and track from the tokens, so the bars in
+   this card, in the ranking rows and under the P&L read as the same component. */
+.pos-track { display: flex; height: var(--bar-h); border-radius: var(--r-pill); overflow: hidden; background: var(--bar-track); }
 .pos-track .seg { transform-origin: left center; animation: ubdGrow .6s cubic-bezier(.16,.84,.44,1) both; }
-.pos-key { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 7px; font-size: 11.5px; color: var(--muted); }
-.pos-key .k { display: inline-flex; align-items: center; gap: 6px; }
+.pos-key { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-2); font-size: var(--fs-1); color: var(--muted); }
+.pos-key .k { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .pos-key .d { width: 9px; height: 9px; border-radius: 3px; flex: none; }
 .pos-key b { color: var(--muted-strong); font-weight: 700; }
 
-.pos-note { margin-top: auto; padding-top: 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.pos-note { margin-top: auto; padding-top: var(--sp-3); font-size: var(--fs-1); color: var(--muted); line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) { .pos-track .seg { animation: none !important; } }
 
 /* ── COMMISSION BREAKDOWN ───────────────────────────────────────────────────
    Ranked rows with a drill-down, in the portal's own tokens. */
 .cmb { display: flex; flex-direction: column; min-width: 0; }
 .cmb-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.cmb-total { font-size: 30px; font-weight: 800; letter-spacing: -.03em; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.1; }
+/* Headline number, same step as .pos-net: the two sit side by side. */
+.cmb-total { font-size: var(--fs-5); font-weight: 800; letter-spacing: -.03em; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.1; }
 .cmb-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .cmb-sub .off { color: var(--warn); font-weight: 700; }
 .cmb-tabs { margin-left: auto; }
@@ -3121,14 +3441,19 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 /* Sidebar Company ⇄ Reps switch (admins only). Reuses .segmented, but stretches
    to the sidebar's width and splits the room evenly so neither side reads as
    the primary one: they are peers, not a default plus an alternative. */
+/* The switch spans the rail between the same edges as the brand block above it
+   and the nav rows below it — one box, one left edge, one right edge. */
 .sidebar .segmented.mode-switch {
   display: flex;
   width: 100%;
-  margin: 0 0 12px;
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-1);
+  border-radius: var(--r-2);
 }
 .sidebar .segmented.mode-switch button {
   flex: 1 1 0;
-  padding: 7px 8px;
+  min-height: var(--sp-8);
+  padding: var(--sp-2);
   text-align: center;
 }
 
@@ -3198,10 +3523,12 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
      NOT a style choice: iOS Safari zooms the whole page when a font-size below
      16px receives focus, and the page never zooms back — the single most
      common way a form ruins a mobile layout. */
-  .ov-filter { padding: 9px 13px; }
-  .ov-filter select, .ov-filter input[type="date"], .ov-filter input[type="month"] { font-size: 16px; }
-  .tbl-search, .data-table select, input, select, textarea { font-size: 16px; }
-  .btn, .tbl-controls button, .pgn-pages button { min-height: 38px; }
+  /* Touch padding from the scale, and ONE control height — 38px here and 40px
+     on the desktop rules put two heights in the same row on a narrow screen. */
+  .ov-filter { padding: 0 var(--sp-3); }
+  .ov-filter select, .ov-filter input[type="date"], .ov-filter input[type="month"] { font-size: var(--fs-3); }
+  .tbl-search, .data-table select, input, select, textarea { font-size: var(--fs-3); }
+  .btn, .tbl-controls button, .pgn-pages button { min-height: var(--control-h); }
 
   /* Filter/segment rows scroll sideways instead of stacking into a tall wall
      of controls that pushes the data itself off the first screen. */

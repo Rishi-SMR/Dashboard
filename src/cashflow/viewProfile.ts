@@ -54,6 +54,11 @@ export const PROFILE_LABEL: Record<ViewProfile, string> = {
  */
 const KEVIN_HIDDEN: string[] = [
   // ── Overview ──
+  // 'overview.growth' is NOT hidden: the Business growth card — revenue and net
+  // profit by month, off the P&L — was asked for on this board specifically. The
+  // id exists so it CAN be dropped without editing OverviewCharts, not because
+  // it is dropped.
+
   // 'overview.devices' is NO LONGER HIDDEN — Kevin asked for the units-by-device
   // breakdown on his own board, so the tile it totals has to be visible too.
   // Leaving the tile hidden would put a breakdown on the page with no headline
