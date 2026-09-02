@@ -17,9 +17,10 @@ import {
   COMMISSION_RATES, FALLBACK_VERTICAL_RATES, ORDER_LABEL_RULES,
   REP_DIRECTORY, REP_NAMES, STANDINGS_ORDERS_ONLY, STANDINGS_EXCLUDE, EXCLUDED_REPS,
   REP_SUB_REPS, REP_BLINDSPOTS, blindspotsFor, supervisorOf, PI_STAGES, STRIVEN_STAGE_FIELD,
+  REP_COMMISSION_SCHEMES,
   PI_LABEL_STAGE, PIP_STAGES, PIP_LABEL_STAGE, PIP_IDENTIFYING_LABELS, REVIEW_LABELS,
   VA_STAGES, VA_LABEL_STAGE, COMMISSION_PAID_THROUGH, canonicalStage, arExpectedFor,
-  verticalOfCommissionLine,
+  verticalOfCommissionLine, identitiesOf,
 } from './_commission-config.js';
 import {
   commissionForOrder, splitByState, resolveIdentity,
@@ -317,6 +318,9 @@ export async function getCommissionConfig() {
     fallback: cfg.COMMISSION_FALLBACK_RATES ? _json(cfg.COMMISSION_FALLBACK_RATES, FALLBACK_VERTICAL_RATES) : FALLBACK_VERTICAL_RATES,
     labelRules: _rules(cfg.ORDER_LABEL_RULES, ORDER_LABEL_RULES),
     directory: cfg.REP_DIRECTORY ? _json(cfg.REP_DIRECTORY, REP_DIRECTORY) : REP_DIRECTORY,
+    // Per-rep schedules, overridable without a redeploy like every other table
+    // here. Same shape as REP_COMMISSION_SCHEMES.
+    schemes: cfg.REP_COMMISSION_SCHEMES ? _json(cfg.REP_COMMISSION_SCHEMES, REP_COMMISSION_SCHEMES) : REP_COMMISSION_SCHEMES,
   };
   _commCfg = { at: Date.now(), val };
   return val;
@@ -1736,7 +1740,8 @@ async function getSO() {
   const byRepMap = {};
   for (const r of book) {
     const raw = String(r.d.rep ?? '').trim();
-    const rep = raw ? commRep(raw) : 'Unassigned';
+    // The SO's own type is the programme — the same value soClass() buckets on.
+    const rep = raw ? commRep(raw, r.d.type) : 'Unassigned';
     if (!rosterSet.has(rep)) continue;
     if (!byRepMap[rep]) byRepMap[rep] = { count: 0, value: 0, units: 0 };
     byRepMap[rep].count += 1;
@@ -2408,6 +2413,11 @@ const RECON_REP_ALIASES = [
   [/^jillian/i, 'Jillian Colin'],
   [/^christy/i, 'Christy Tan'],
   [/^cassie/i, 'Cassie'],
+  // AHEAD OF /^maylon/, because this table is ordered and the first match wins:
+  // listed after it, "Maylon Sanders- David/Dino" folded onto Maylon and the
+  // sub-rep's sheet rows were paid to him. Same rule, and same ordering trap,
+  // as commRep().
+  [/david|dino/i, 'Maylon Sanders- David/Dino'],
   [/^maylon/i, 'Maylon Sanders'],
   [/^kinley/i, 'Kinley Shepherd'],
   [/cmc/i, 'CMC (direct)'],
@@ -2416,6 +2426,13 @@ const RECON_REP_ALIASES = [
   // anyway, so the most specific existing fold keeps first refusal.
   [/^alek/i, 'Alek Sigman'],
   [/^alyssa/i, 'Alyssa Parker'],
+  // CAMI FOLDS TO HER NON-VA ROW HERE, and that is deliberate. This sheet is
+  // read row by row with no programme on the row, so there is nothing to decide
+  // the VA/non-VA split with — and inventing one would put money on the wrong
+  // identity. A row the sheet spells "CVT Medical - Cami Montanari" keeps that
+  // spelling and lands on her VA row; anything else lands on the plain one.
+  [/^cvt medical\s*-\s*cami/i, 'CVT Medical - Cami Montanari'],
+  [/^cami|montanari/i, 'Cami Montanari'],
 ];
 export const reconRep = (raw) => {
   const s = String(raw ?? '').trim();
@@ -3963,8 +3980,31 @@ const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 //
 // Order matters: the /christ/i test would also catch "Christy Tan", so the
 // specific folds run before the pass-through.
-export const commRep = (r) => {
+/**
+ * Raw Striven "Sales Rep" → a roster name.
+ *
+ * `vertical` is the ORDER'S OWN PROGRAMME (VA / PI / TriCare / DOL / Other), and
+ * it matters for exactly one rep: Cami Montanari is carried as two roster rows,
+ * her VA orders under "CVT Medical - Cami Montanari" and everything else under
+ * "Cami Montanari". Striven spells her one way, so nothing in the string can
+ * make that split — only the programme can.
+ *
+ * It is OPTIONAL, and omitting it is safe for every other rep: without a
+ * vertical Cami's orders fold to her non-VA row, which is where a caller that
+ * does not know the programme should put them rather than guessing VA. Every
+ * call site that has the order passes it — the SO roster rollup, the commission
+ * engine's SO index, order analytics, and the commission sheet reader, whose
+ * section headings are themselves the programme.
+ */
+export const commRep = (r, vertical) => {
   const s = String(r || '').trim();
+  // CAMI FIRST, because her two names are decided by the programme and not by
+  // the string, and no test below can reach that decision.
+  if (/cami|montanari/i.test(s)) {
+    return String(vertical ?? '').trim().toUpperCase() === 'VA'
+      ? 'CVT Medical - Cami Montanari'
+      : 'Cami Montanari';
+  }
   if (/cassie/i.test(s)) return 'Cassie';
   if (/jillian/i.test(s)) return 'Jillian Colin';
   if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann Dubberley';
@@ -3979,6 +4019,12 @@ export const commRep = (r) => {
   // and their commission on the wrong person. This test must run BEFORE the
   // plain /maylon/ one only in the sense that both now return the same name;
   // it is kept explicit so the intent survives the next edit.
+  // DAVID/DINO IS A REP, NOT A FOLD — and this test must stay ABOVE the plain
+  // /maylon\s+sanders/ one below, which would otherwise swallow
+  // "Maylon Sanders- David/Dino" and pay every one of their orders to Maylon.
+  // Denise, immediately below, is the opposite case and the contrast is the
+  // point: she folds INTO Maylon because he is paid on her orders.
+  if (/david|dino/i.test(s)) return 'Maylon Sanders- David/Dino';
   if (/denise\s+zavala/i.test(s)) return 'Maylon Sanders';         // "Maylon Sanders - Denise Zavala"
   if (/angel\s+santiago/i.test(s)) return 'Angel Santiago';        // "House Account- Angel Santiago"
   if (/maylon\s+sanders/i.test(s)) return 'Maylon Sanders';
@@ -4068,7 +4114,10 @@ function commParseCsv(csv) {
     if (!prog || !c[1]) continue;
     const p = (c[0] || '').trim(); if (!/^[A-Za-z]/.test(p) || p.toUpperCase() === 'PATIENT') continue;
     const comm = commMoney(c[3]); if (!comm) continue;
-    rows.push({ rep: commRep(c[1]), prog, comm, last: commLastName(p), lastDisp: commLastDisp(p), device: (c[2] || '').trim() });
+    // `prog` is the sheet's own section heading — VA COMMISSION / PERSONAL
+    // INJURY / TRICARE — so a commission line knows its programme too, and
+    // Cami's VA lines land on her VA row exactly as her VA orders do.
+    rows.push({ rep: commRep(c[1], prog), prog, comm, last: commLastName(p), lastDisp: commLastDisp(p), device: (c[2] || '').trim() });
   }
   return rows;
 }
@@ -4111,7 +4160,7 @@ export async function getCommission(viewer = null) {
   const soInfo = new Map();
   for (const o of recent) {
     soInfo.set(String(o.id), {
-      rep: commRep(o.rep || 'Unassigned'), ref: o.ref || `SO-${o.id}`,
+      rep: commRep(o.rep || 'Unassigned', o.type), ref: o.ref || `SO-${o.id}`,
       status: o.status || '', date: o.date || '', program: o.type || 'Other', value: Number(o.value || 0),
       stage: o.stage || '',
       // The Striven LABELS, which is where HOLD and "Waiting for
@@ -4227,7 +4276,11 @@ export async function getCommission(viewer = null) {
     if (!['TriCare', 'VA', 'PI', 'DOL'].includes(program)) continue;
 
     const value = Number(o.value || info.value || 0);
-    const res = commissionForOrder({ status: info.status, labels: info.labels, program, items: o.items, value }, commCfg);
+    // `rep` is passed so the engine can price this order on the rep's OWN
+    // schedule where they have one. `cogs` is not on a sales order today, so a
+    // percentage-of-collections schedule reports what it is missing rather than
+    // guessing — see piCommission().
+    const res = commissionForOrder({ rep, status: info.status, labels: info.labels, program, items: o.items, value }, commCfg);
     for (const g of res.rateGaps) rateGaps.add(g);
     if (res.state === 'cancelled') { sCancelled++; continue; }    // cancelled → never earned
     if (res.state === 'zero-value') { sZeroValue++; continue; }   // $0 order earns nothing
@@ -4837,7 +4890,10 @@ export async function getCommission(viewer = null) {
 // protects commission protects it here.
 export async function getOrderAnalytics(viewer = null) {
   const isAdmin = viewer?.role === 'admin';
-  const mine = viewer?.repName ? String(viewer.repName).trim().toLowerCase() : null;
+  // EVERY ROSTER ROW THIS VIEWER OWNS, not just the one their login spells. A
+  // rep carried as two identities (see REP_IDENTITY_GROUPS) would otherwise
+  // read half her own book and have the rest redacted as a colleague's.
+  const mineSet = identitiesOf(viewer?.repName);
 
   let recent = [];
   // getSO() is the expensive derivation, and a single page load can reach it
@@ -4896,8 +4952,11 @@ export async function getOrderAnalytics(viewer = null) {
       excludedCancelledValue = round2(excludedCancelledValue + Number(r.value || 0));
       continue;
     }
-    const rep = commRep(r.rep || 'Unassigned');
-    if (!isAdmin && (!mine || rep.toLowerCase() !== mine)) continue;
+    const rep = commRep(r.rep || 'Unassigned', r.type);
+    // OWN ROWS, PLURAL. Compared against the viewer's whole identity set, so a
+    // rep carried as two roster rows gets her whole book rather than the half
+    // that happens to match her login's spelling.
+    if (!isAdmin && !mineSet.has(rep.toLowerCase())) continue;
     const devices = devBySo.get(String(r.id)) || [];
     orders.push({
       ref: r.ref, soId: String(r.id),
@@ -5067,7 +5126,9 @@ export async function deleteDashboardView(user, id) {
 export async function getRepOverview(viewer = null) {
   const isAdmin = viewer?.role === 'admin';
   const mine = viewer?.repName ? String(viewer.repName).trim().toLowerCase() : null;
-  const isOwn = (rep) => Boolean(mine) && String(rep).trim().toLowerCase() === mine;
+  // A viewer's own rows, plural: one person can hold two roster identities.
+  const mineSet = identitiesOf(viewer?.repName);
+  const isOwn = (rep) => mineSet.has(String(rep).trim().toLowerCase());
 
   // Computed unredacted, then narrowed per row below.
   const ADMIN = { repName: null, role: 'admin' };
@@ -5509,7 +5570,12 @@ export async function getRepOverview(viewer = null) {
   const tileRows = isAdmin ? shown : shown.filter((r) => r.isSelf);
   const tileNames = new Set(tileRows.map((r) => r.rep));
 
-  const self = shown.find((r) => r.isSelf) ?? null;
+  // THE VIEWER'S OWN ROW, and where they hold two (an identity group), the one
+  // their login is spelled as. `find(isSelf)` returns whichever comes first,
+  // which for Cami is her non-VA row whichever identity is signed in — so a
+  // figure meant to describe "you" could describe the other half of your book.
+  const self = shown.find((r) => String(r.rep).trim().toLowerCase() === (viewer?.repName ?? '').trim().toLowerCase())
+    ?? shown.find((r) => r.isSelf) ?? null;
   // Scoped to `tileRows`, so for a rep this is their own book and nothing else.
   const repOrders = analytics.orders.filter((o) => tileNames.has(o.rep));
   const teamTotals = {
@@ -5927,7 +5993,8 @@ export async function setPiStage({ soId, stage: requested, user }) {
  */
 export async function getPiStages(viewer = null) {
   const isAdmin = viewer?.role === 'admin';
-  const mine = viewer?.repName ? String(viewer.repName).trim().toLowerCase() : null;
+  // The pipeline scopes through getOrderAnalytics(viewer), which now narrows on
+  // the viewer's whole identity set — nothing to compare here.
 
   const [analytics, store, labelMap] = await Promise.all([
     getOrderAnalytics(viewer), readStageStore(), soLabelsBySoId(),
@@ -6123,7 +6190,7 @@ export async function getPiStages(viewer = null) {
   return {
     ok: true,
     scopedToRep: isAdmin ? null : (viewer?.repName ?? null),
-    canEdit: isAdmin || Boolean(mine),
+    canEdit: isAdmin || Boolean(viewer?.repName),
     stageNames: PI_STAGES,
     stages,
     orders,

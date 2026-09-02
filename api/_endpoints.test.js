@@ -16,6 +16,7 @@ import {
 import { isCancelledStatus } from './_commission-core.js';
 import {
   STANDINGS_EXCLUDE, REP_NAMES, REVIEW_LABELS, REP_SUB_REPS, blindspotsFor, supervisorOf,
+  identitiesOf,
   PI_LABEL_STAGE, PIP_LABEL_STAGE, VA_LABEL_STAGE,
 } from './_commission-config.js';
 
@@ -112,10 +113,21 @@ test('no cancelled order reaches analytics, the pipeline, or a commission line',
 // tile labelled "Your orders" must carry the rep's own count, not the team's.
 test('rep-overview: peers rank, but only their volume is visible', opts, async () => {
   const { reps: admin } = await load();
-  const target = admin.reps[0].rep;
+  // A VIEWER WHO SUPERVISES NOBODY. This took `reps[0]`, which is whoever sorts
+  // first — and a supervisor legitimately sees their sub-rep's units, so the
+  // "every peer row is counts-only" assertion below is false for them. It passed
+  // only while the top of the list happened to be a rep with no reports; the day
+  // the ordering moved (or the live figures came back empty and the sort tied)
+  // it failed for a rule that was working correctly.
+  const target = (admin.reps.find((r) => blindspotsFor(r.rep).size === 0
+    && !admin.reps.some((x) => x.subRepOf === r.rep)) ?? admin.reps[0]).rep;
   const scoped = await getRepOverview(viewerFor(ADMIN, target));
 
-  const self = scoped.reps.find((r) => r.isSelf);
+  // BY NAME, not "the first row marked self". A rep carried as two identities
+  // has two self rows, and `find` would answer with whichever sorts first —
+  // which is how this test came to compare one identity's rank against the
+  // other's expected position.
+  const self = scoped.reps.find((r) => r.rep === target);
   const peers = scoped.reps.filter((r) => !r.isSelf);
   assert.ok(self, 'own row present');
   assert.equal(self.rep, target);
@@ -145,8 +157,15 @@ test('rep-overview: peers rank, but only their volume is visible', opts, async (
   assert.ok(self.commission != null, 'own commission survives — it is their pay');
 
   // THE TILES DESCRIBE THE CALLER, not the roster on the board above them.
-  assert.equal(scoped.teamTotals.orders, self.orders, '"Your orders" = their own row, not the team');
-  assert.equal(scoped.teamTotals.reps, 1, 'the tile scope is one rep: themselves');
+  const own = scoped.reps.filter((r) => r.isSelf);
+  assert.equal(scoped.teamTotals.orders, own.reduce((t, r) => t + r.orders, 0),
+    '"Your orders" = their own row(s), not the team');
+  // ONE CALLER, BUT NOT ALWAYS ONE ROW. A rep carried as two roster identities
+  // (REP_IDENTITY_GROUPS — Cami's VA book and her other book) owns both, so the
+  // tile scope is "every row that is theirs", not the literal number 1. It is
+  // still only ever the caller: every counted row is `isSelf`.
+  assert.equal(scoped.teamTotals.reps, own.length, 'the tile scope is the caller’s own row(s)');
+  assert.equal(own.length, identitiesOf(target).size, 'and that is exactly their identity set');
   assert.ok(scoped.teamTotals.units < admin.teamTotals.units, 'their units, not the team\'s');
   assert.equal(scoped.teamTotals.commission, self.commission, 'their commission, not the team\'s');
 
@@ -179,7 +198,15 @@ test('rep-overview: a blind spot hides the rep, and does not promote anyone', op
       // Not merely absent from the row list — absent from the PAYLOAD. A name
       // surviving in a roster, a drill or a remark is the same disclosure.
       assert.ok(!seen.includes(hidden), `${viewer} must not receive ${hidden}'s row`);
-      assert.ok(!JSON.stringify(scoped).includes(hidden),
+      // THE VIEWER'S OWN NAME IS MASKED FIRST. A sub-rep's canonical name can
+      // CONTAIN their supervisor's — "Maylon Sanders- David/Dino" — which makes
+      // a raw substring test unsatisfiable: the seven characters are in the
+      // viewer's own row label, which they are obviously allowed to see. Masking
+      // self keeps the guarantee that matters (no other mention of the hidden
+      // rep, in any row, drill or remark) without turning a naming convention
+      // into a failure.
+      const payload = JSON.stringify(scoped).split(viewer).join('«self»');
+      assert.ok(!payload.includes(hidden),
         `"${hidden}" must not appear anywhere in ${viewer}'s payload`);
     }
 
@@ -189,15 +216,23 @@ test('rep-overview: a blind spot hides the rep, and does not promote anyone', op
     // burns their one-per-achievement confetti — a claim invented by the
     // privacy filter. `rank` is stamped over the whole field before the filter,
     // so the numbering keeps its hole.
-    const self = scoped.reps.find((r) => r.isSelf);
+    const self = scoped.reps.find((r) => r.rep === viewer);
     assert.ok(self, `${viewer} has their own row`);
     const trueRank = [...admin.reps]
       .sort((a, b) => b.orders - a.orders || a.rep.localeCompare(b.rep))
       .findIndex((r) => r.rep === viewer) + 1;
     assert.equal(self.rank, trueRank, `${viewer}'s rank is their real one, not their position in a shortened list`);
-    // The rep they cannot see outranks them here, so rank 1 must be missing.
-    assert.ok(!scoped.reps.some((r) => r.rank === 1),
-      `no row claims 1st on ${viewer}'s board while the leader is withheld`);
+    // THE HOLE IS WHERE THE HIDDEN REP SAT, which is not always rank 1: that
+    // held only while the single configured pair happened to hide the leader.
+    // The invariant is that the withheld rep's rank is claimed by nobody — the
+    // numbering keeps its gap instead of closing up and promoting the viewer.
+    for (const hidden of hiddenNames) {
+      const hiddenRank = [...admin.reps]
+        .sort((a, b) => b.orders - a.orders || a.rep.localeCompare(b.rep))
+        .findIndex((r) => r.rep === hidden) + 1;
+      assert.ok(!scoped.reps.some((r) => r.rank === hiddenRank),
+        `no row claims rank ${hiddenRank} on ${viewer}'s board while ${hidden} is withheld`);
+    }
     // Everyone still shown keeps their own true rank.
     for (const r of scoped.reps) {
       const real = [...admin.reps]

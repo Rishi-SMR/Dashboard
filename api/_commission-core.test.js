@@ -585,3 +585,68 @@ test('paid-through is a YYYY-MM month, because it is compared as a string', () =
     assert.match(String(through), /^\d{4}-(0[1-9]|1[0-2])$/, `${v} is a zero-padded YYYY-MM`);
   }
 });
+
+// ── A REP ON THEIR OWN SCHEDULE ──────────────────────────────────────────────
+//
+// Maylon Sanders- David/Dino is engaged on different terms from the house rate
+// card: their own money per device on the flat verticals, and a share of net
+// collected reimbursement on Personal Injury. These pin both, and — just as
+// importantly — that nobody else's pricing moved.
+test('a rep schedule prices VA devices on the rep\'s own card', () => {
+  const order = {
+    rep: 'Maylon Sanders- David/Dino', program: 'VA', status: 'Completed', value: 5000,
+    items: [{ item: 'Genesys Lumbar', qty: 2 }, { item: 'Prizm', qty: 1 }, { item: 'ManaRay Redlight', qty: 3 }],
+  };
+  const res = commissionForOrder(order);
+  // 2 x $450 + 1 x $350 + 3 x $400 = $2,450 — not the house card's Genesys $650.
+  assert.equal(res.commission, 2450);
+  assert.deepEqual(res.rateGaps, [], 'every device is on their card');
+
+  // The same order booked to a house-card rep is priced the house way:
+  // 2 x $650 + 3 x fallback $425 (ManaRay is not on the house card) + Prizm fallback.
+  const house = commissionForOrder({ ...order, rep: 'Maylon Sanders' });
+  assert.notEqual(house.commission, res.commission, 'the house card is untouched');
+  assert.equal(house.lines.find((l) => l.device === 'Genesys Lumbar').rate, 650);
+});
+
+test('a rep schedule pays PI as a share of net collected reimbursement', () => {
+  // The schedule's own worked example, as an order: billed $13,990.
+  const res = commissionForOrder({
+    rep: 'Maylon Sanders- David/Dino', program: 'PI', status: 'Completed',
+    value: 13990, cogs: 1600, items: [{ item: 'Genesys Lumbar', qty: 1 }],
+  });
+  assert.equal(res.commission, 659.30, 'advance leg $99.70 + settlement leg $559.60');
+  assert.equal(res.state, 'waiting', 'paid out of money that has arrived, so never payable on the order alone');
+  assert.deepEqual(res.needs, []);
+  const [line] = res.lines;
+  assert.equal(line.rateSource, 'percent');
+  assert.equal(line.pi.advanceLeg, 99.70);
+  assert.equal(line.pi.settlementLeg, 559.60);
+
+  // Without the device cost the advance leg is unknowable and is NAMED, not
+  // guessed; the settlement leg does not depend on it and still stands.
+  const noCogs = commissionForOrder({
+    rep: 'Maylon Sanders- David/Dino', program: 'PI', status: 'Completed',
+    value: 13990, items: [{ item: 'Genesys Lumbar', qty: 1 }],
+  });
+  assert.deepEqual(noCogs.needs, ['cogs']);
+  assert.equal(noCogs.commission, 559.60);
+
+  // A hold still wins: an order not dispensed has earned nothing to wait for.
+  const held = commissionForOrder({
+    rep: 'Maylon Sanders- David/Dino', program: 'PI', status: 'HOLD',
+    value: 13990, cogs: 1600, items: [{ item: 'Genesys Lumbar', qty: 1 }],
+  });
+  assert.equal(held.state, 'hold');
+});
+
+test('PI for every other rep is unchanged', () => {
+  const res = commissionForOrder({
+    rep: 'Christy Tan', program: 'PI', status: 'Completed', value: 13990,
+    items: [{ item: 'Genesys Lumbar', qty: 1 }],
+  });
+  // The house card prices PI devices at the vertical fallback, which is $0
+  // until the business supplies a rule — see FALLBACK_VERTICAL_RATES.
+  assert.equal(res.commission, 650, 'Genesys is on the house card, so it prices as a device');
+  assert.ok(!('pi' in (res.lines[0] || {})), 'no percentage model for a house-card rep');
+});

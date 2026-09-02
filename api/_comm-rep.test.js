@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { commRep, reconRep, isExcludedRep } from './_striven.js';
+import { identitiesOf, ownsRep, REP_IDENTITY_GROUPS } from './_commission-config.js';
 import { REP_NAMES, STANDINGS_EXCLUDE, EXCLUDED_REPS, REP_DIRECTORY } from './_commission-config.js';
 
 test('sub-rep: Denise Zavala is paid to Maylon Sanders', () => {
@@ -219,9 +220,43 @@ test('an unrecognised value passes through rather than vanishing', () => {
 // than having to remember the rule.
 test('every roster name folds to itself in both tables', () => {
   for (const name of REP_NAMES) {
-    assert.equal(commRep(name), name, `commRep keeps ${name}`);
+    // CAMI'S TWO ROWS ARE DECIDED BY THE PROGRAMME, not by the string, so the
+    // fold has to be given one to reproduce them — 'VA' for her VA row and
+    // anything else for the other. Passing the vertical is what every real call
+    // site does; the invariant is unchanged, it just has a second argument.
+    const vertical = /^CVT Medical - Cami/.test(name) ? 'VA' : 'PI';
+    assert.equal(commRep(name, vertical), name, `commRep keeps ${name}`);
     assert.equal(reconRep(name), name, `reconRep keeps ${name}`);
   }
+});
+
+/**
+ * CAMI MONTANARI — one person, two roster rows, split by programme.
+ *
+ * Striven spells her exactly one way, so nothing in the raw string can make the
+ * split: the ORDER'S PROGRAMME decides which row it lands on. These pin both
+ * directions, and the default, because a caller that does not know the
+ * programme must not guess VA.
+ */
+test('Cami Montanari splits on the programme, not the spelling', () => {
+  // VA lands on the CVT row, whatever Striven spelled.
+  assert.equal(commRep('Cami Montanari', 'VA'), 'CVT Medical - Cami Montanari');
+  assert.equal(commRep('CVT Medical - Cami Montanari', 'VA'), 'CVT Medical - Cami Montanari');
+  assert.equal(commRep('cami montanari', 'va'), 'CVT Medical - Cami Montanari');
+
+  // Everything else lands on the plain row — including a CVT-prefixed spelling
+  // on a non-VA order, because the programme is the authority here.
+  for (const prog of ['PI', 'TriCare', 'DOL', 'Other', '', undefined]) {
+    assert.equal(commRep('Cami Montanari', prog), 'Cami Montanari', `${prog} is not VA`);
+  }
+  assert.equal(commRep('CVT Medical - Cami Montanari', 'PI'), 'Cami Montanari');
+
+  // Both rows are on the roster, or one of them is a row nothing can reach.
+  assert.ok(REP_NAMES.includes('Cami Montanari'));
+  assert.ok(REP_NAMES.includes('CVT Medical - Cami Montanari'));
+
+  // Christy's CVT prefix must not be caught by Cami's fold, and vice versa.
+  assert.equal(commRep('CVT Medical - Christy Tan', 'VA'), 'Christy Tan');
 });
 
 // OPERATIONS ARE NOT REPS. Alek Sigman and Alyssa Parker were briefly on the
@@ -245,4 +280,39 @@ test('Alek Sigman and Alyssa Parker are Operations, not roster reps', () => {
   // into two rows in the off-roster tail.
   assert.equal(commRep('Maverick Medical - Alek Sigman'), 'Alek Sigman');
   assert.equal(commRep('CVT Medical- Alyssa Parker'), 'Alyssa Parker');
+});
+
+/**
+ * ONE PERSON, TWO ROSTER ROWS — and one login.
+ *
+ * cami@ resolves to 'Cami Montanari'. Without the identity group her VA row
+ * would be redacted from her as a colleague's, which is half her own book gone
+ * with nothing on screen saying why. These pin the group in both directions and,
+ * just as importantly, pin that it changes NOTHING for a rep who is not in one.
+ */
+test('a viewer owns every roster row in their identity group', () => {
+  const both = ['cami montanari', 'cvt medical - cami montanari'];
+  for (const name of ['Cami Montanari', 'CVT Medical - Cami Montanari', '  cami montanari  ']) {
+    assert.deepEqual([...identitiesOf(name)].sort(), [...both].sort(), `${name} owns both rows`);
+  }
+  assert.ok(ownsRep({ repName: 'Cami Montanari' }, 'CVT Medical - Cami Montanari'));
+  assert.ok(ownsRep({ repName: 'CVT Medical - Cami Montanari' }, 'Cami Montanari'));
+});
+
+test('a rep in no group is a set of one, and owns nobody else', () => {
+  assert.deepEqual([...identitiesOf('Christy Tan')], ['christy tan']);
+  for (const peer of ['Alle Ann Dubberley', 'Cami Montanari', 'CVT Medical - Cami Montanari']) {
+    assert.equal(ownsRep({ repName: 'Christy Tan' }, peer), false, `Christy does not own ${peer}`);
+  }
+  // Nobody owns anything without a name — an unresolved login must not match.
+  assert.equal(ownsRep({ repName: null }, 'Christy Tan'), false);
+  assert.equal(identitiesOf(null).size, 0);
+});
+
+test('every name in an identity group is a real roster row', () => {
+  // A group naming a row that does not exist is a viewer owning nothing, and it
+  // fails silently — exactly the drift the roster tests above guard against.
+  for (const group of REP_IDENTITY_GROUPS) {
+    for (const name of group) assert.ok(REP_NAMES.includes(name), `${name} is on the roster`);
+  }
 });

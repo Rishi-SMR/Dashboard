@@ -56,6 +56,59 @@ export const COMMISSION_RATES = {
 // entry above and fall through to the vertical fallback below.
 export const FALLBACK_VERTICAL_RATES = { VA: 425, TriCare: 369.78, PI: 0, DOL: 0 };
 
+/**
+ * PER-REP COMMISSION SCHEDULES.
+ *
+ * The tables above are the house rate card. A rep engaged on different terms
+ * gets an entry here, and it OVERRIDES the house card for their orders only —
+ * every other rep is costed exactly as before.
+ *
+ * Two shapes, because the business pays the two payer types on different
+ * models:
+ *
+ *   `rates`  flat money per device, same lookup as COMMISSION_RATES (longest
+ *            matching key wins), used for the flat verticals.
+ *   `pi`     a PERCENTAGE OF NET COLLECTED REIMBURSEMENT, which is not a
+ *            per-device rate at all — see piCommission() in _commission-core.js
+ *            for the arithmetic and the worked example this was written from.
+ *
+ * MAYLON SANDERS- DAVID/DINO, per the schedule supplied:
+ *
+ *   Veteran Affairs   Prizm $350/device · Genesys $450/device
+ *                     ManaRay Redlight $400/unit
+ *   Personal Injury   20% of each net reimbursement received:
+ *                       advance     15% of billed, less COGS
+ *                       settlement  50% of billed, less the funding company's
+ *                                   repayment of 2× the advance
+ *
+ * NOTE HOW FAR THESE ARE FROM THE HOUSE CARD: Genesys pays $650 there and $450
+ * here. That is the whole reason this table exists, and it is also why a rep
+ * must never be added to it casually — an entry silently re-prices every order
+ * they book.
+ */
+export const REP_COMMISSION_SCHEMES = {
+  'Maylon Sanders- David/Dino': {
+    rates: {
+      'prizm': 350,
+      'genesys': 450,
+      'genesis': 450,               // the alternate spelling the house card also carries
+      'manaray redlight': 400,
+      'manaray': 400,
+    },
+    pi: {
+      /** Share of each net reimbursement that is the rep's. */
+      share: 0.20,
+      /** The advance, as a share of the billed amount. */
+      advancePct: 0.15,
+      /** The settlement, as a share of the billed amount. */
+      settlementPct: 0.50,
+      /** What the funding company takes back out of the settlement, as a
+       *  multiple of the advance it paid. */
+      repaymentMultiple: 2,
+    },
+  },
+};
+
 // ── AR EXPECTED ──────────────────────────────────────────────────────────────
 // What the business expects to RECEIVE on an invoice, as against what it billed.
 //
@@ -674,6 +727,29 @@ export const EXCLUDED_REPS = [
 // own login, her own $57,234 — who happens to work under Alle. Nothing rolls up.
 export const REP_SUB_REPS = {
   'Alle Ann Dubberley': ['Jillian Colin'],
+  // Maylon sees David/Dino's row in full — units, accounts, verticals, months,
+  // last order — and their login cannot see his. Same shape as the pair above,
+  // and the same limit: MONEY IS NOT SHARED. Commission, payable and waiting
+  // stay null on a sub-rep's row exactly as on any other peer's, because pay is
+  // between the rep and finance. If Maylon is meant to see their pay too, that
+  // is a different rule from this one and has to be asked for.
+  'Maylon Sanders': ['Maylon Sanders- David/Dino'],
+  // CVT MEDICAL IS CHRISTY'S GROUP — Striven spells her "CVT Medical - Christy
+  // Tan" — and Cami's VA book is booked under it, so that row reports to
+  // Christy. Christy therefore sees it in full on her board, and it folds into
+  // her figure wherever sub-reps fold.
+  //
+  // IT IS STILL CAMI'S WORK. The row sits in her identity group
+  // (REP_IDENTITY_GROUPS), so her login owns it and reads it as her own; this
+  // line adds WHO IT REPORTS TO, not who did it. The two tables answer different
+  // questions and both are true at once: one person's two books, one of which
+  // rolls up to another rep.
+  //
+  // Her login is spelled 'Cami Montanari', so the blindspot this pair implies —
+  // a sub-rep cannot see their supervisor — does not reach her: she still sees
+  // Christy's row as any peer does, counts only, no money. Say the word if that
+  // should be closed too; it is a disclosure decision, not an oversight.
+  'Christy Tan': ['CVT Medical - Cami Montanari'],
 };
 
 // ── Per-rep blind spots ──────────────────────────────────────────────────────
@@ -693,6 +769,53 @@ export const REP_SUB_REPS = {
 export const REP_BLINDSPOTS = {};
 
 const normRep = (s) => String(s ?? '').trim().toLowerCase();
+
+/**
+ * ONE PERSON, SEVERAL ROSTER ROWS.
+ *
+ * Cami Montanari is carried as two rows — 'Cami Montanari' for her non-VA book
+ * and 'CVT Medical - Cami Montanari' for her VA book — because the business
+ * reports them separately. A LOGIN, though, is a person: hers resolves to one
+ * repName, and without this table she would sign in and see half her own work,
+ * with the other half redacted from her as if it belonged to a colleague.
+ *
+ * NOT A REPORTING LINE. REP_SUB_REPS above is two different people, and it
+ * carries a disclosure rule in the other direction (a sub-rep must not see the
+ * rep they work under). This is the same person twice, so there is nothing to
+ * withhold and no direction to it: every name in a group owns every other.
+ *
+ * IT WIDENS NOTHING ELSE. Membership decides only whether a row is the viewer's
+ * OWN — a rep still sees no peer's money, and an admin is unaffected. The
+ * roster, the ranking and the pay all still work per ROW, so the two rows keep
+ * their own totals wherever the business wants them apart.
+ */
+export const REP_IDENTITY_GROUPS = [
+  ['Cami Montanari', 'CVT Medical - Cami Montanari'],
+];
+
+/**
+ * Every roster row a viewer with this repName owns, lower-cased.
+ *
+ * Always includes the name itself, so a rep in no group behaves exactly as
+ * before: a one-element set, and the comparisons below are unchanged for them.
+ */
+export function identitiesOf(repName, groups = REP_IDENTITY_GROUPS) {
+  const n = normRep(repName);
+  const out = new Set();
+  if (!n) return out;
+  out.add(n);
+  for (const g of (groups || [])) {
+    if ((g || []).some((x) => normRep(x) === n)) for (const x of g) out.add(normRep(x));
+  }
+  return out;
+}
+
+/** Does a viewer own this roster row — their own name, or another of their own? */
+export function ownsRep(viewer, repName, groups = REP_IDENTITY_GROUPS) {
+  const who = typeof viewer === 'string' ? viewer : viewer?.repName;
+  if (!who || !repName) return false;
+  return identitiesOf(who, groups).has(normRep(repName));
+}
 
 /**
  * Every rep this viewer must not see, as a set of lower-cased canonical names.
@@ -802,6 +925,46 @@ export const REP_NAMES = [
   'Jillian Colin',                  //  95 orders — Maverick Medical- Jillian Colin
   'Christy Tan',                    //  67 orders — CVT Medical - Christy Tan
   'Maylon Sanders',                 //  35 orders — already the full name
+  // ── CAMI MONTANARI, AS TWO ROSTER ROWS ────────────────────────────────────
+  // One person, two identities, split by PROGRAMME on instruction:
+  //
+  //   'CVT Medical - Cami Montanari'  — her VA orders, and nothing else
+  //   'Cami Montanari'                — everything that is not VA
+  //
+  // WHY THE SPLIT CANNOT LIVE IN THE NAME FOLD ALONE. Striven spells her one
+  // way today — "Cami Montanari" on every order, checked against the live book
+  // — so there is no second spelling to fold. The identity therefore has to be
+  // decided by the order's own programme, which is why commRep() now takes the
+  // vertical as its second argument. If Striven ever starts writing
+  // "CVT Medical - Cami Montanari" itself, the same rule still holds: the
+  // programme decides, not the prefix, and the two cannot drift apart.
+  //
+  // WHAT IS ON THE BOOK TODAY: 1 order, $9,415, 2 units, August 2026, programme
+  // "Other" — so it lands on the plain row and the CVT row opens empty. That is
+  // correct rather than broken: an empty row is a rep with no VA orders yet, and
+  // it will fill the moment one is booked.
+  //
+  // BOTH ROWS ARE REAL ROSTER MEMBERS: both are ranked, both are paid, and both
+  // must be produced by commRep() — a roster name nothing folds onto is a row
+  // that exists and never fills, which is the failure this list warns about.
+  'Cami Montanari',                 //   1 order  — non-VA programmes
+  'CVT Medical - Cami Montanari',   //   VA only — same person, split on instruction
+  // ── MAYLON'S SUB-REP, AS A REP IN HIS OWN RIGHT ───────────────────────────
+  // A SEPARATE rep, not a fold: his own roster row, his own orders, his own
+  // commission. That is the difference between this row and Denise Zavala, who
+  // has no row at all because commRep() folds her orders into Maylon's — he is
+  // paid on hers, he is not paid on these.
+  //
+  // Maylon SEES this row on his dashboard, in full operational detail, because
+  // the pair is declared in REP_SUB_REPS above; that table is also what stops
+  // this rep's own login (if one is ever made) from seeing Maylon at all.
+  //
+  // NOTHING IS BOOKED UNDER IT YET — checked against the live book: Striven has
+  // no Sales Rep value mentioning David or Dino today, so the row opens empty
+  // and fills the moment one is written. The fold in commRep() is what makes
+  // that possible, and it must sit BEFORE the plain /maylon/ test or every one
+  // of these orders is quietly paid to Maylon instead.
+  'Maylon Sanders- David/Dino',     //   sub-rep of Maylon, paid separately
   // ── REMOVED, by instruction: Alek Sigman and Alyssa Parker ─────────────────
   // They are OPERATIONS, not sales. They were added here when orders were seen
   // booked under their names in Striven's Sales Rep field, but appearing in that
@@ -882,6 +1045,25 @@ export const REP_DIRECTORY = [
   // an empty dashboard with every tile at zero. This is the failure the note
   // above describes; a login without a directory row fails closed and silent.
   { email: 'maylon@sportsmedrecovery.com', repName: 'Maylon Sanders', role: 'rep' },
+  // CAMI — the `dashboard_users` login is "Cami@sportsmedrecovery.com" (capital
+  // C); emails are matched case-insensitively by resolveIdentity, so the
+  // lower-cased spelling here is the same account.
+  //
+  // repName IS HER NON-VA ROW. She has two roster rows and a login resolves to
+  // exactly one name, so this decides which book she sees: 'Cami Montanari'
+  // (non-VA). Her VA row, 'CVT Medical - Cami Montanari', is a separate roster
+  // identity and is NOT visible to this login — a rep sees their own row and
+  // nothing else, by design. Widening that means teaching the ownership test to
+  // accept a SET of names for one viewer; it is not a directory change.
+  { email: 'cami@sportsmedrecovery.com', repName: 'Cami Montanari', role: 'rep' },
+  // The sub-rep's own login. `dashboard_users` carries
+  // "maylondd@sportsmedrecovery.com"; without this row it authenticates and
+  // resolves to { repName: null }, which is the silent empty-dashboard failure
+  // this file warns about twice above.
+  //
+  // Their board shows their own row and NOT Maylon's — that blindspot comes
+  // from REP_SUB_REPS and is the whole point of declaring the pair there.
+  { email: 'maylondd@sportsmedrecovery.com', repName: 'Maylon Sanders- David/Dino', role: 'rep' },
 ];
 
 // Verticals. VA and PI are active; DOL is future (may have zero orders);

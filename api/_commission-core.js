@@ -4,7 +4,7 @@
 // what it is worth and who is allowed to see it.
 import {
   COMMISSION_RATES, FALLBACK_VERTICAL_RATES, ORDER_LABEL_RULES,
-  REP_DIRECTORY,
+  REP_DIRECTORY, REP_COMMISSION_SCHEMES, identitiesOf,
 } from './_commission-config.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -18,6 +18,21 @@ const norm = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
  * surface the gap rather than pay a guessed number silently.
  * @returns {{rate:number, source:'device'|'fallback'}}
  */
+/**
+ * The commission SCHEDULE this rep is engaged on, or null for the house card.
+ *
+ * Looked up by canonical roster name, so it follows commRep()'s fold: an order
+ * booked to any spelling of the rep is priced on their terms, and one booked to
+ * anybody else is not.
+ */
+export function schemeFor(rep, cfg = {}) {
+  const schemes = cfg.schemes || REP_COMMISSION_SCHEMES;
+  const r = norm(rep);
+  if (!r) return null;
+  const hit = Object.keys(schemes || {}).find((k) => norm(k) === r);
+  return hit ? schemes[hit] : null;
+}
+
 export function rateForDevice(device, vertical, cfg = {}) {
   const rates = cfg.rates || COMMISSION_RATES;
   const fallback = cfg.fallback || FALLBACK_VERTICAL_RATES;
@@ -34,6 +49,57 @@ export function rateForDevice(device, vertical, cfg = {}) {
     return { rate: Number(rates[hit]) || 0, source: 'device' };
   }
   return { rate: Number(fallback[vertical]) || 0, source: 'fallback' };
+}
+
+/**
+ * PERSONAL INJURY, PAID AS A SHARE OF WHAT IS ACTUALLY COLLECTED.
+ *
+ * A PI case is not billed and settled once: money arrives in two payments and
+ * the rep earns a share of each, NET of what the business had to pay out first.
+ * From the schedule, with the worked example that defines it:
+ *
+ *   Billed                                            $13,990.00
+ *   Advance      15% of billed                          2,098.50
+ *   COGS                                                1,600.00
+ *   Advance net  (2,098.50 - 1,600.00) x 20%   =           99.70
+ *   Settlement   50% of billed                          6,995.00
+ *   Repayment    2 x the advance                        4,197.00
+ *   Settlement net (6,995.00 - 4,197.00) x 20% =          559.60
+ *   Total case commission                       =         659.30
+ *
+ * WHY BOTH LEGS ARE RETURNED SEPARATELY. They fall due at different times — the
+ * advance when the funder pays, the settlement when the case closes — so a
+ * caller that knows which payments have landed can pay the right half. A caller
+ * that does not gets the whole-case figure and can report it as pending.
+ *
+ * COGS IS REQUIRED AND IS NOT GUESSED. Without it the advance leg is unknowable
+ * (it is the only term it depends on), so this returns `advance: null` and names
+ * the missing input instead of quietly paying a number that is too high. The
+ * settlement leg does not depend on COGS and is still returned, because it is a
+ * real figure and withholding it would understate the case just as badly.
+ *
+ * A NEGATIVE LEG IS FLOORED AT ZERO, not carried: a device that cost more than
+ * the advance brought in is a loss to the business, and it is not deducted from
+ * the rep's other cases.
+ */
+export function piCommission({ billed, cogs = null }, pi) {
+  const B = Number(billed) || 0;
+  const share = Number(pi?.share) || 0;
+  const advance = round2(B * (Number(pi?.advancePct) || 0));
+  const settlement = round2(B * (Number(pi?.settlementPct) || 0));
+  const repayment = round2(advance * (Number(pi?.repaymentMultiple) || 0));
+
+  const settlementLeg = round2(Math.max(0, settlement - repayment) * share);
+  const hasCogs = cogs != null && Number.isFinite(Number(cogs));
+  const advanceLeg = hasCogs ? round2(Math.max(0, advance - Number(cogs)) * share) : null;
+
+  return {
+    advance, settlement, repayment,
+    advanceLeg, settlementLeg,
+    total: round2((advanceLeg ?? 0) + settlementLeg),
+    /** What the figure above is missing, so a caller can say so rather than imply completeness. */
+    needs: hasCogs ? [] : ['cogs'],
+  };
 }
 
 // ── Order labels ─────────────────────────────────────────────────────────────
@@ -118,6 +184,42 @@ export function commissionForOrder(order, cfg = {}) {
   // as Waiting. splitByState is what routes it, so the money is computed here
   // and withheld there.
 
+  // ── A REP ON THEIR OWN TERMS ───────────────────────────────────────────────
+  // The house rate card prices a device the same whoever sold it. A rep with a
+  // schedule of their own is priced from theirs instead — different money per
+  // device, and for Personal Injury a different MODEL entirely.
+  const scheme = schemeFor(order?.rep, cfg);
+
+  if (scheme?.pi && vertical === 'PI') {
+    const units = items.reduce((n, it) => n + (Number(it?.qty) || 0), 0);
+    const r = piCommission({ billed: Number(order?.value) || 0, cogs: order?.cogs ?? null }, scheme.pi);
+    return {
+      // PAID OUT OF MONEY THAT HAS ARRIVED, so an order on its own can never
+      // make it payable: it is reported as WAITING until the reimbursements
+      // land, which is exactly what that state already means here. A hold still
+      // wins — an order not dispensed has not earned anything to wait for.
+      state: state === 'hold' ? 'hold' : 'waiting',
+      units,
+      commission: r.total,
+      lines: [{
+        device: 'Net collected reimbursement',
+        units,
+        rate: scheme.pi.share,
+        comm: r.total,
+        rateSource: 'percent',
+        state,
+        // The legs, so a caller can pay the advance when the funder pays and the
+        // settlement when the case closes, instead of treating the case as one
+        // lump that is either due or not.
+        pi: r,
+      }],
+      rateGaps: [],
+      // Named, not silently zero: the advance leg cannot be computed without the
+      // cost of the device, and this is how the UI can say so.
+      needs: r.needs,
+    };
+  }
+
   const lines = [];
   const rateGaps = [];
   let units = 0, commission = 0;
@@ -125,14 +227,18 @@ export function commissionForOrder(order, cfg = {}) {
     const qty = Number(it?.qty) || 0;
     if (qty <= 0) continue;
     const device = String(it?.item ?? '');
-    const { rate, source } = rateForDevice(device, vertical, cfg);
+    // THEIR CARD, NOT THE HOUSE ONE. A device absent from a rep's own card falls
+    // through to the vertical fallback and is reported in `rateGaps` — the same
+    // "the rate card is outstanding" path the house card uses — rather than
+    // borrowing a house price the rep is not engaged on.
+    const { rate, source } = rateForDevice(device, vertical, scheme?.rates ? { ...cfg, rates: scheme.rates } : cfg);
     const comm = round2(qty * rate);
     units += qty;
     commission = round2(commission + comm);
     lines.push({ device, units: qty, rate, comm, rateSource: source, state });
     if (source === 'fallback' && device) rateGaps.push(device);
   }
-  return { state, units, commission, lines, rateGaps };
+  return { state, units, commission, lines, rateGaps, needs: [] };
 }
 
 /**
@@ -285,7 +391,15 @@ export function resolveIdentity(email, directory = REP_DIRECTORY) {
 // and the blankMoney() helper are gone with the row-blanking they served. A
 // peer row is dropped whole now, so there is no row left to null fields on —
 // and no registry to keep in step with every field somebody adds later.
-const isOwn = (viewer, repName) => Boolean(viewer?.repName) && norm(viewer.repName) === norm(repName);
+/**
+ * Is this row the viewer's OWN?
+ *
+ * A SET, not an equality: a viewer can hold more than one roster row (see
+ * REP_IDENTITY_GROUPS), and comparing a single name would redact half of her own
+ * book from her as if it were a colleague's. For every rep in no group this is
+ * the same one-name test it always was.
+ */
+const isOwn = (viewer, repName) => Boolean(viewer?.repName) && identitiesOf(viewer.repName).has(norm(repName));
 
 /**
  * Redact one payload for one viewer. Runs on the SERVER before serialization —
