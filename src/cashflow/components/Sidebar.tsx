@@ -219,7 +219,9 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut, role
 
       <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
       <div className="brand">
-        <div className="brand-logo" style={{ background: '#fff', padding: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {/* Styling lives in `.brand-logo.is-img` — a padding literal here is a
+            value outside the scale that no stylesheet can see. */}
+        <div className="brand-logo is-img">
           <img src="/SMR%20Logo.png" alt="SMR" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </div>
         <div style={{ minWidth: 0 }}>

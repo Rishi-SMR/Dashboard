@@ -44,6 +44,7 @@ const shade = (base: string, i: number, n: number): string => {
 };
 import { fetchDeviceMix, fetchMe, type DeviceMixRow } from '../strivenApi';
 import { useHidden, useViewProfile, setViewProfile, isKevinLogin, PROFILE_LABEL, type ViewProfile } from '../viewProfile';
+import { BusinessGrowth } from './BusinessGrowth';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '-');
@@ -156,6 +157,20 @@ export function OverviewCharts() {
   // every later admin on that browser with no way to switch back — the picker
   // removed itself and took the only route out with it.
   const kevinBoard = isKevinLogin(meEmail);
+  /**
+   * KEVIN'S SKIN FOR THIS BOARD.
+   *
+   * Same tiles, same headings, same figures — a different SURFACE, so his
+   * Financial Overview reads as his rather than as the finance/ops board with
+   * panels missing. Presentation only, and one class: every rule hangs off
+   * `.ov-kevin` in cashflow.css, so nothing here can change a number and no
+   * other tab can inherit the look.
+   *
+   * BOTH THE LOGIN AND THE PROFILE, for the same reason the picker is hidden on
+   * both: Kevin on a fresh browser carries the default 'crystal' profile, and an
+   * admin previewing his board is meant to see what he sees — layout included.
+   */
+  const kevinLook = kevinBoard || profile === 'kevin';
 
   // ---- FY + Program + As-of scope (the header filters actually re-slice the data) ----
   const [fyPick, setFyPick] = useState<string | null>(null);
@@ -1068,8 +1083,14 @@ export function OverviewCharts() {
     // `ov-board` scopes the Company board's own typography. `exec-deck` is
     // shared by a dozen tabs, so styling through it would restyle the whole
     // portal — this class exists to keep the change on this screen.
-    <div className="exec-deck ov-board" style={{ padding: '4px 2px' }}>
-      <div className="page-head deck-head" style={{ marginBottom: 14 }}>
+    // NO INLINE PADDING ON THE BOARD ROOT. It carried `4px 2px`, which inset the
+    // whole board by two pixels the page's own padding had already provided —
+    // and put the header's left edge two pixels off the sidebar's rhythm.
+    // Spacing belongs to the stylesheet and the scale, not to a style attribute.
+    <div className={`exec-deck ov-board${kevinLook ? ' ov-kevin' : ''}`}>
+      {/* The header's own bottom margin comes from `.deck-head` (one scale step),
+          not from an inline 14. */}
+      <div className="page-head deck-head">
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Financial Overview</h1>
           <div className="page-sub">Executive Summary Dashboard · Sports Med Recovery</div>
@@ -1508,6 +1529,17 @@ export function OverviewCharts() {
             )}
 
           </div>
+
+          {/* BUSINESS GROWTH — the company's own trajectory, month by month, added
+              to this board on request (it already sits on the team dashboard).
+              It reads the P&L for BOTH revenue and net profit, so its margin is
+              the statement's own; the Revenue vs Expense card below is the
+              STRIVEN book over the selected period, which is a different set of
+              documents. Two cards, two books, each saying which it is.
+
+              Hideable like every other panel here, so a profile can drop it
+              without touching this file. */}
+          {!hide('overview.growth') && <BusinessGrowth />}
 
           <div className="exec-grid12">
             <ChartCard className="g12-5" title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>

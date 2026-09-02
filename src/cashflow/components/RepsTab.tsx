@@ -11,6 +11,7 @@ import { isKevinLogin } from '../viewProfile';
 import { Portal } from './Portal';
 import { StatStrip } from './StatStrip';
 import { MonthOverMonth } from './MonthOverMonth';
+import { BusinessGrowth } from './BusinessGrowth';
 import { ALL_TIME, MonthSelect, monthLabel, defaultMonth } from './MonthSelect';
 
 const money = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v));
@@ -282,6 +283,21 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               reps={isManager ? reps : undefined} />
           )}
 
+          {/* THE COMPANY'S OWN LINE, under the per-rep one. Reps growth
+              above draws orders, devices and commission — volume and the cost of
+              selling it — and a month can book more orders while billing less,
+              so neither of those is the business's trajectory. This is revenue
+              booked per month, on the same order-date basis as the counts.
+
+              IT READS THE P&L, NOT THIS PAYLOAD, and fetches it itself: net
+              margin only means anything when revenue and profit are cut from the
+              same statement, and `teamByMonth` carries the ORDER BOOK's revenue
+              with no cost at all. The card says which book it is on.
+
+              MANAGER ONLY: the P&L endpoints are company-wide and the server
+              refuses them to a rep. */}
+          {view === 'overview' && isManager && <BusinessGrowth />}
+
           {/* MANAGER ONLY — the "minimal dashboard" for a rep is the tiles plus
               the leaderboard, and this deck is neither. It also carried a live
               bug for them: its readout sums `o.revenue`, which the server nulls
@@ -489,7 +505,17 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
         </>
       )}
 
-      {sel && <RepModal rep={sel} onClose={() => setSel(null)} />}
+      {/* THE SUB-REPS GO IN WITH THE REP. A supervisor's row on the drill carries
+          their sub-reps' volume folded in, so the detail behind it has to be able
+          to say which part is whose — otherwise the reader clicks 316 and is
+          shown 213 with nothing accounting for the difference. */}
+      {sel && (
+        <RepModal
+          rep={sel}
+          subs={reps.filter((r) => String(r.subRepOf ?? '').trim().toLowerCase() === sel.rep.trim().toLowerCase())}
+          onPickRep={setSel}
+          onClose={() => setSel(null)} />
+      )}
       {drill && data && (
         <KpiDrill metric={drill} reps={reps} data={data} onClose={() => setDrill(null)} onPickRep={(r) => { setDrill(null); setSel(r); }} />
       )}
@@ -520,9 +546,46 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
+  /**
+   * WHICH SUPERVISORS ARE UNFOLDED.
+   *
+   * A sub-rep is FOLDED INTO their supervisor by default and the supervisor's
+   * figure carries both: SMR pays Maylon, who pays David/Dino, so "Maylon's
+   * volume" as the business reads it is the pair's. Unfolding splits them —
+   * the supervisor drops to their own figure and the sub-rep stands under it —
+   * which is the question the fold exists to answer: how much of that total is
+   * whose.
+   *
+   * FOLDED UNTIL CLICKED, on instruction. This drill is read as a ranking, and
+   * a ranking has to be of comparable things: a sub-rep listed beside the rep
+   * who is paid for their book puts the same volume on the board twice, once
+   * under each name, and pushes every rep below them down a place. Folded,
+   * every row is one payee. Splitting them is the deliberate act.
+   *
+   * IT WAS OPEN BY DEFAULT BEFORE, so that nobody arriving to look up a rep
+   * found them missing from the list. The row answers that without being
+   * unfolded: the caret sits on it, its title names who is inside, and the row
+   * itself says "incl. …" for as long as they are.
+   *
+   * THE STATE HOLDS WHAT IS OPEN, not what is folded, and that is deliberate: a
+   * set seeded with "every supervisor" would have to be built from `reps` at
+   * mount, and this dialog can mount before the payload lands — which would
+   * seed it empty and quietly unfold the very rows the default exists to
+   * collapse. An empty set means everything is folded, whatever arrives later.
+   */
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const toggle = (rep: string) => setOpened((prev) => {
+    const next = new Set(prev);
+    if (next.has(rep)) next.delete(rep); else next.add(rep);
+    return next;
+  });
+
   const MONEY = metric === 'commission';
   const CFG: Record<DrillKey, { title: string; sub: string; col: string; tint: string }> = {
-    reps: { title: 'Reps', sub: 'The four names on the commission sheet, by order volume.', col: 'Orders', tint: C.brand },
+    // COUNTED, NOT SPELLED OUT. It said "the four names" and the roster is
+    // seven; a hard-coded count is a caption that goes stale the day someone is
+    // hired.
+    reps: { title: 'Reps', sub: `The ${reps.length} names on the commission sheet, by order volume. A sub-rep is folded into the rep who pays them — open the caret to split them out.`, col: 'Orders', tint: C.brand },
     orders: { title: 'Orders by rep', sub: 'Cancelled and $0-value orders are excluded from every figure.', col: 'Orders', tint: V_C.PI },
     units: { title: 'Devices by rep', sub: 'Units shipped on those orders.', col: 'Units', tint: V_C.DOL },
     // "Vendors" is the client's term for the billed party. Note it is NOT
@@ -541,8 +604,36 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
           : metric === 'verticals' ? r.verticals
             : r.orders;
 
-  const rowsSorted = [...reps].sort((a, b) => (valOf(b) ?? -1) - (valOf(a) ?? -1) || b.orders - a.orders);
-  const known = rowsSorted.map(valOf).filter((v): v is number => v != null);
+  const keyOf = (n: string | null | undefined) => String(n ?? '').trim().toLowerCase();
+  const present = new Set(reps.map((r) => keyOf(r.rep)));
+  /** The rows folded into this one — only where the supervisor is on screen. */
+  const subsOf = (boss: RepRow) => reps.filter((x) => x.subRepOf && keyOf(x.subRepOf) === keyOf(boss.rep));
+  /**
+   * A supervisor's figure WITH their sub-reps in it.
+   *
+   * Null stays null: a withheld figure cannot be added to, and printing the
+   * sub-rep's number alone under the supervisor's name would attribute it to
+   * the wrong person. A withheld SUB adds nothing rather than voiding the
+   * total — the supervisor's own figure is still true, and the footnote below
+   * already says some rows are confidential.
+   */
+  const rolled = (r: RepRow): number | null => {
+    const own = valOf(r);
+    if (own == null) return null;
+    return subsOf(r).reduce((sum, x) => sum + (valOf(x) ?? 0), own);
+  };
+  /**
+   * RANKED ON THE ROLLED-UP FIGURE, whether or not the row is unfolded. Ranking
+   * on whichever number happens to be displayed would make rows jump places as
+   * the reader opens and closes them, which is a list reordering itself under
+   * the cursor for no reason the reader caused.
+   */
+  const rowsSorted = [...reps]
+    .filter((r) => !(r.subRepOf && present.has(keyOf(r.subRepOf))))
+    .sort((a, b) => (rolled(b) ?? -1) - (rolled(a) ?? -1) || b.orders - a.orders);
+  // The TOTAL is over every row, folded or not: the fold changes how the book is
+  // grouped on screen, never how big it is.
+  const known = reps.map(valOf).filter((v): v is number => v != null);
 
   // Accounts and verticals are DISTINCT counts, not additive quantities. Two
   // reps billing the same law firm are two rows of 1, but one account: so the
@@ -556,8 +647,12 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
   const DISTINCT = metric === 'accounts' || metric === 'verticals';
 
   const sum = known.reduce((s, v) => s + v, 0);
-  const max = Math.max(1, ...known);
-  const withheld = rowsSorted.filter((r) => valOf(r) == null).length;
+  // Bars are scaled to the largest figure ON SCREEN, so the longest bar is the
+  // row a reader can actually see rather than one hidden inside a fold.
+  const shown = rowsSorted.map((r) => (opened.has(r.rep) ? valOf(r) : rolled(r)))
+    .filter((v): v is number => v != null);
+  const max = Math.max(1, ...shown);
+  const withheld = reps.filter((r) => valOf(r) == null).length;
   const fmt = (v: number | null) => (v == null ? null : MONEY ? formatCurrency(v) : String(v));
 
   return (
@@ -594,8 +689,17 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
                     place over the rep SMR actually pays for her book. Ranking is
                     unchanged for everyone else: `subRepOf` only arrives on the
                     supervisor's payload and an admin's. */}
-                {nestSubReps(rowsSorted).map(({ r, rank, nested }) => {
-                  const v = valOf(r);
+                {rowsSorted.flatMap((parent, i) => {
+                  const subs = subsOf(parent);
+                  const open = opened.has(parent.rep);
+                  // Collapsed, the supervisor's row carries the pair. Unfolded,
+                  // it carries its own and the sub-rep stands underneath.
+                  const rows: { r: RepRow; rank: number; nested: boolean; v: number | null; subs: RepRow[]; open: boolean }[] = [
+                    { r: parent, rank: i + 1, nested: false, v: open ? valOf(parent) : rolled(parent), subs, open },
+                  ];
+                  if (open) for (const sub of subs) rows.push({ r: sub, rank: 0, nested: true, v: valOf(sub), subs: [], open: false });
+                  return rows;
+                }).map(({ r, rank, nested, v, subs, open }) => {
                   return (
                     <tr key={r.rep} className={nested ? 'tr-nested' : undefined} onClick={() => onPickRep(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined }}
                       title={[
@@ -605,7 +709,27 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
                       <td style={{ color: C.muted }}>{nested ? '' : rank}</td>
                       <td className="rep-cell" style={{ fontWeight: 700, color: C.brand }}>
                         {nested && <span className="lb-tie" aria-hidden="true" />}
+                        {/* THE FOLD IS ITS OWN CONTROL. The row already opens the
+                            rep's breakdown, so unfolding cannot be the row's job
+                            — one target, two meanings. A caret beside the name
+                            takes the click and stops it there. */}
+                        {subs.length > 0 && (
+                          <button type="button" className="rep-fold" aria-expanded={open}
+                            title={open ? `Fold ${subs.map((x) => x.rep).join(', ')} back in` : `Show ${subs.length} sub-rep${subs.length === 1 ? '' : 's'} separately`}
+                            onClick={(e) => { e.stopPropagation(); toggle(r.rep); }}>
+                            {open ? '▾' : '▸'}
+                          </button>
+                        )}
                         {r.rep}{r.isSelf && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.positive }}>you</span>}
+                        {/* A FIGURE THAT INCLUDES SOMEBODY ELSE SAYS SO. Folded,
+                            this row is two people's work under one name; silently
+                            is exactly how a number stops being trusted. */}
+                        {subs.length > 0 && !open && (
+                          <div className="lb-subline" title={`Includes ${subs.map((x) => x.rep).join(', ')} — click the caret to split them out`}>
+                            <span className="lb-subline-el" aria-hidden="true" />
+                            incl. {subs.map((x) => x.rep).join(', ')}
+                          </div>
+                        )}
                         {r.subRepOf && (
                           <div className="lb-subline" title={`SMR pays ${r.subRepOf}, who pays ${r.rep}`}>
                             <span className="lb-subline-el" aria-hidden="true" />
@@ -653,7 +777,9 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
               🔒 {withheld} rep{withheld === 1 ? "'s" : "s'"} figures are confidential to them. Order counts stay visible across the team; pay does not.
             </div>
           )}
-          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>Click any row for that rep's full breakdown.</div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
+            Click any row for that rep's full breakdown{rowsSorted.some((r) => subsOf(r).length > 0) ? ', or the caret to unfold a sub-rep' : ''}.
+          </div>
         </div>
       </div>
     </div>
@@ -1429,7 +1555,13 @@ function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
   );
 }
 
-function RepModal({ rep, onClose }: { rep: RepRow; onClose: () => void }) {
+function RepModal({ rep, subs = [], onPickRep, onClose }: {
+  rep: RepRow;
+  /** The reps who work under this one, where the payload marked them. */
+  subs?: RepRow[];
+  onPickRep?: (r: RepRow) => void;
+  onClose: () => void;
+}) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1464,6 +1596,72 @@ function RepModal({ rep, onClose }: { rep: RepRow; onClose: () => void }) {
               <div><b style={{ color: C.ink }}>{rep.rep}'s revenue and commission are confidential.</b> You can see their order volume by vertical, not what they earned.</div>
             </div>
           )}
+          {/* ── WHOSE ORDERS ARE THESE ────────────────────────────────────────
+              Only where this rep actually has someone under them. Three lines:
+              their own book, each sub-rep's, and the pair — which is the figure
+              the folded row on the drill was showing, now accounted for.
+
+              MONEY FOLLOWS THE SAME RULE AS EVERYWHERE ELSE: a sub-rep's pay is
+              confidential, so the commission column reads CONFIDENTIAL on their
+              line rather than being summed into a combined figure that would
+              disclose it by subtraction. Counts are shared; pay is not. */}
+          {subs.length > 0 && (
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>
+                Split with {subs.length === 1 ? 'their sub-rep' : 'their sub-reps'}
+              </div>
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead><tr>
+                    <th>Rep</th><th className="num">Orders</th><th className="num">Devices</th>
+                    {rep.revenue != null && <th className="num">Revenue</th>}
+                    <th className="num">Commission</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr>
+                      <td style={{ fontWeight: 700 }}>{rep.rep}<span style={{ color: C.muted, fontWeight: 600 }}> · own book</span></td>
+                      <td className="num" style={{ fontWeight: 700 }}>{rep.orders}</td>
+                      <td className="num">{n(rep.units)}</td>
+                      {rep.revenue != null && <td className="num">{money(rep.revenue)}</td>}
+                      <td className="num">{rep.commission == null ? <Confidential /> : pay(rep.commission)}</td>
+                    </tr>
+                    {subs.map((sub) => (
+                      <tr key={sub.rep} className="tr-nested"
+                        onClick={onPickRep ? () => onPickRep(sub) : undefined}
+                        style={onPickRep ? { cursor: 'pointer' } : undefined}
+                        title={onPickRep ? `Open ${sub.rep}'s own breakdown` : undefined}>
+                        <td style={{ fontWeight: 700, color: C.brand }}>
+                          <span className="lb-tie" aria-hidden="true" />{sub.rep}
+                        </td>
+                        <td className="num" style={{ fontWeight: 700 }}>{sub.orders}</td>
+                        <td className="num">{n(sub.units)}</td>
+                        {rep.revenue != null && <td className="num">{sub.revenue != null ? money(sub.revenue) : <Confidential />}</td>}
+                        <td className="num">{sub.commission == null ? <Confidential /> : pay(sub.commission)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot><tr className="total-row">
+                    <td>Together</td>
+                    <td className="num">{rep.orders + subs.reduce((t, x) => t + x.orders, 0)}</td>
+                    <td className="num">{rep.units == null ? '-' : n(rep.units + subs.reduce((t, x) => t + (x.units ?? 0), 0))}</td>
+                    {rep.revenue != null && (
+                      <td className="num">{money(rep.revenue + subs.reduce((t, x) => t + (x.revenue ?? 0), 0))}</td>
+                    )}
+                    {/* NO COMBINED PAY. It would be their own plus a figure the
+                        row above withholds, which is the withheld number given
+                        away by arithmetic. */}
+                    <td className="num">-</td>
+                  </tr></tfoot>
+                </table>
+              </div>
+              {onPickRep && (
+                <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
+                  Click a sub-rep for their own orders and breakdown. The figures below are {rep.rep}'s own.
+                </div>
+              )}
+            </div>
+          )}
+
           <RepDetail rep={rep} />
         </div>
       </div>

@@ -6,6 +6,7 @@ import { C } from '../chartTheme';
 import { DeviceChips } from './DeviceChips';
 import { TrackingCell } from './TrackingCell';
 import { ColumnFilter, SortHead } from './ColumnFilter';
+import { ALL_TIME, MonthSelect, monthLabel } from './MonthSelect';
 import { downloadXlsx, printToPdf, stamped, type Sheet } from '../export';
 
 // Cool → warm across the pipeline, so position reads as progress at a glance.
@@ -84,6 +85,24 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
   useEffect(() => { setOpen(null); }, [board]);
   // Per-stage table controls. Cleared whenever a different stage is opened, so
   // filters never silently carry over and make a stage look empty.
+  /**
+   * WHICH MONTH THIS BOARD IS READING.
+   *
+   * Opens on ALL TIME, because a pipeline answers "where does the book sit now"
+   * and a month-scoped board is a narrower question someone has to ask for.
+   *
+   * IT IS THE SAME PERIOD CONTROL, AND THE SAME MONTH RULE, AS MY ORDERS. That
+   * page cuts a rep's orders by `date.slice(0, 7)` server-side; this cuts the
+   * same orders — both boards read getOrderAnalytics — by the same key, so
+   * picking August here and August there gives the same count for the same rep.
+   * They disagreed before only because one had a period and the other did not:
+   * My Orders opens on the current month while this board showed the whole book,
+   * and the two numbers were never describing the same window.
+   *
+   * An UNDATED order joins no month, exactly as it joins none in My Orders'
+   * `byMonth` — so it is in All time and in no other period.
+   */
+  const [month, setMonth] = useState<string>(ALL_TIME);
   const [query, setQuery] = useState('');
   const [pickAcct, setPickAcct] = useState<Set<string>>(new Set());
   const [pickDev, setPickDev] = useState<Set<string>>(new Set());
@@ -104,19 +123,64 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
   // VA order has neither of those nor an attorney but does have a terminal
   // 'Paid'. Selecting a board swaps both the stage cards and the orders behind
   // them.
-  const pipCount = (data?.pipOrders ?? []).length;
-  const vaCount = (data?.vaOrders ?? []).length;
-  const stages = board === 'VA' ? (data?.vaStages ?? []) : board === 'PIP' ? (data?.pipStages ?? []) : (data?.stages ?? []);
-  const boardOrders = board === 'VA' ? (data?.vaOrders ?? []) : board === 'PIP' ? (data?.pipOrders ?? []) : (data?.orders ?? []);
+  const monthOf = (o: PiStageOrder) => String(o.date ?? '').slice(0, 7);
+  const inMonth = (o: PiStageOrder) => month === ALL_TIME || monthOf(o) === month;
+  const pipCount = (data?.pipOrders ?? []).filter(inMonth).length;
+  const vaCount = (data?.vaOrders ?? []).filter(inMonth).length;
+  const piCount = (data?.orders ?? []).filter(inMonth).length;
+  const serverStages = board === 'VA' ? (data?.vaStages ?? []) : board === 'PIP' ? (data?.pipStages ?? []) : (data?.stages ?? []);
+  const boardOrders = (board === 'VA' ? (data?.vaOrders ?? []) : board === 'PIP' ? (data?.pipOrders ?? []) : (data?.orders ?? []))
+    .filter(inMonth);
+  /** Every month this entry's boards have an order in, oldest first — the same
+   *  list-from-the-rows rule the rep board uses, so a period that exists on one
+   *  page exists on the other and neither offers an empty month. */
+  const monthsAvailable = [...new Set(
+    [...(data?.orders ?? []), ...(data?.pipOrders ?? []), ...(data?.vaOrders ?? [])]
+      .filter((o) => BOARDS_OF[kind].includes(o.pipeline ?? 'PI'))
+      .map(monthOf)
+      .filter(Boolean),
+  )].sort();
+  /**
+   * THE STAGE CARDS, ROLLED FROM THE ORDERS ON SCREEN.
+   *
+   * This used to render the server's own buckets, which are cut over the whole
+   * book — so under a month they would have described a different set of orders
+   * to the ones the cards open. Recomputed here from `boardOrders`, which is
+   * the same set the flow bar, the total and every stage drawer read.
+   *
+   * IT MIRRORS THE SERVER'S `roll()` EXACTLY, and must keep doing so: `count`
+   * is membership of `stages` (an order tagged for two stages is counted at
+   * both, so these overlap), `current` is the one stage an order actually sits
+   * at (so those sum to the board), and the ageing is over `daysInStage`.
+   * The stage ORDER still comes from the server's list — that is the pipeline's
+   * shape, not a figure — so a stage that is empty this month still shows.
+   */
+  const stages = serverStages.map((s) => {
+    const set = boardOrders.filter((o) => (o.stages ?? [o.stage]).includes(s.stage));
+    const aged = set.map((o) => o.daysInStage ?? 0);
+    return {
+      stage: s.stage,
+      count: set.length,
+      current: boardOrders.filter((o) => o.stage === s.stage).length,
+      revenue: Math.round(set.reduce((sum, o) => sum + (o.revenue ?? 0), 0) * 100) / 100,
+      units: set.reduce((sum, o) => sum + (o.units ?? 0), 0),
+      oldestDays: aged.length ? Math.max(...aged) : 0,
+      avgDays: aged.length ? Math.round(aged.reduce((sum, n) => sum + n, 0) / aged.length) : 0,
+    };
+  });
   // Every order this ENTRY is responsible for, across its boards. The review
   // queue and the empty-state counts are scoped to it, so the VA page never
   // reports a PI mapping gap as its own and vice versa.
   const myBoards = BOARDS_OF[kind];
   const myOrders = [...(data?.orders ?? []), ...(data?.pipOrders ?? []), ...(data?.vaOrders ?? [])]
-    .filter((o) => myBoards.includes(o.pipeline ?? 'PI'));
+    .filter((o) => myBoards.includes(o.pipeline ?? 'PI') && inMonth(o));
   // Server-side and admin-only: a rep receives empty arrays, so the tab never
   // appears for them rather than appearing and reading zero.
-  const reviewOrders = (data?.reviewOrders ?? []).filter((o) => myBoards.includes(o.pipeline ?? 'PI'));
+  const reviewOrders = (data?.reviewOrders ?? [])
+    .filter((o) => myBoards.includes(o.pipeline ?? 'PI'))
+    // Scoped to the same month as the boards: a page showing one month must not
+    // carry a review count cut over the whole book beside it.
+    .filter(inMonth);
   // REBUILT from the scoped orders rather than filtered from the server's list.
   // A label's server-side `count` spans every board it appears on — HOLD sits on
   // both PI and VA — so filtering would keep the row and its whole-book number,
@@ -308,7 +372,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
           <div className="section-sub">
             {board === 'VA' ? (
               <>
-                {total} VA order{total === 1 ? '' : 's'}. Billed to the Department of Veterans Affairs and paid in full off the
+                {total} VA order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. Billed to the Department of Veterans Affairs and paid in full off the
                 invoice — no attorney, no lien and no settlement, so this board has none of the PI board's chasing stages. It does
                 have a terminal <b>Paid</b> stage, which PI does not: most of the VA book has already been paid, and a stage named
                 for waiting would be the wrong place to put it.
@@ -321,14 +385,18 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
               </>
             ) : board === 'PIP' ? (
               <>
-                {total} PIP order{total === 1 ? '' : 's'}. A PIP order never goes to Lienstar: it is billed through the
+                {total} PIP order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. A PIP order never goes to Lienstar: it is billed through the
                 customer to the auto insurer at the full billed amount and paid in full — no advance, no settlement.
                 {pipCount === 0 && <> Nothing here yet: the PIP order type is still being created in Striven, and orders will appear as soon as it exists.</>}
               </>
             ) : (
               <>
-                {total} PI order{total === 1 ? '' : 's'}. Click a stage to see its orders. An order is listed at every stage its Striven labels attest to, so one can appear on more than one card.
-                {data && data.trackedCount < total && (
+                {total} PI order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. Click a stage to see its orders. An order is listed at every stage its Striven labels attest to, so one can appear on more than one card.
+                {/* WHOLE-BOOK FIGURE, so it is only quoted on the whole book.
+                    `trackedCount` counts every order ever moved across the
+                    pipeline; subtracting it from a month's total would print a
+                    nonsense number — negative on most months. */}
+                {month === ALL_TIME && data && data.trackedCount < total && (
                   <> Ageing is measured from the first time an order is moved: <b>{total - data.trackedCount}</b> {total - data.trackedCount === 1 ? 'order has' : 'orders have'} never
                   been moved, so {total - data.trackedCount === 1 ? 'its' : 'their'} age falls back to the order date and is marked <i>est.</i></>
                 )}
@@ -336,6 +404,11 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
             )}
           </div>
         </div>
+        {/* THE PERIOD, and the same control the rep boards use — same chip, same
+            wording, same "All time" sentinel. One vocabulary for periods across
+            the app, so a month picked here means what it means there. */}
+        <MonthSelect months={monthsAvailable} month={month} onMonth={setMonth}
+          title="Show one month of this pipeline, or the whole book. Same months as My Orders." />
         {/* Board switch. PIP shows its count even at zero, so the tab reads as
             "built and empty" rather than as missing. The VA entry owns one
             board, so it gets one tab — kept rather than dropped so the count and
@@ -348,7 +421,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
           ) : (
             <>
               <button className={`ins-qtab${board === 'PI' ? ' on' : ''}`} onClick={() => setBoard('PI')}>
-                PI · {(data?.orders ?? []).length}
+                PI · {piCount}
               </button>
               <button className={`ins-qtab${board === 'PIP' ? ' on' : ''}`} onClick={() => setBoard('PIP')}>
                 PIP · {pipCount}
@@ -378,6 +451,15 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
 
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
+
+      {/* A PERIOD WITH NOTHING IN IT. Empty stage cards look identical to a board
+          that failed to load, and the reader's next move — pick another month —
+          depends on knowing which it is. */}
+      {board !== 'REVIEW' && data && total === 0 && month !== ALL_TIME && (
+        <div className="muted-note" style={{ marginBottom: 12 }}>
+          No orders were booked on this board in {monthLabel(month)}. Pick another period, or <b>All time</b> for the whole book.
+        </div>
+      )}
 
       {/* stage cards: count, ageing and revenue per stage */}
       {board !== 'REVIEW' && (

@@ -502,7 +502,19 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
   //
   // Everything below reads `board`, not `ranked`: the chase line, the podium
   // split and the "scroll me into view" all describe what is on screen.
-  const board = useMemo(() => ranked.filter((r) => !r.subRepOf), [ranked]);
+  //
+  // ...BUT ONLY WHERE THE CARD ACTUALLY RENDERS. The roll-down lives inside the
+  // VIEWER'S OWN row (`isSelf`), and a manager has no own row at all — so on
+  // Crystal's board the sub-reps were pulled off the leaderboard and put into a
+  // card that never drew. Jillian, second by volume, simply was not on the
+  // manager's board, and neither was any sub-rep added after her.
+  //
+  // The exclusion exists to stop one person being listed twice in one view; with
+  // no card to be listed in, there is no duplication to prevent, so the row
+  // stays where it belongs. It still carries its "under <supervisor>" pill, so
+  // the reporting line is visible either way.
+  const rollsUp = useMemo(() => ranked.some((r) => r.isSelf) && ranked.some((r) => r.subRepOf), [ranked]);
+  const board = useMemo(() => ranked.filter((r) => !(rollsUp && r.subRepOf)), [ranked, rollsUp]);
 
   const self = board.find((r) => r.isSelf) ?? null;
   // POSITION COMES FROM `rank`, NOT FROM THE ARRAY. The server stamps `rank`

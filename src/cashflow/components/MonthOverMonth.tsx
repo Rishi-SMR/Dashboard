@@ -373,7 +373,12 @@ export function MonthOverMonth({ months, rep, team, reps }: {
     <div className="section chart-card" style={{ marginBottom: 14 }}>
       <div className="section-head">
         <div>
-          <h2 className="section-title">Month over month</h2>
+          {/* RENAMED FROM "Month over month" on request. The team board calls it
+              REPS growth, because that is whose book it draws — orders, devices
+              and commission per rep. A rep looking at their own board is not
+              "the reps", so theirs says so; the card is the same card either way.
+              Sentence case, like every other section title in this app. */}
+          <h2 className="section-title">{isRep ? 'Your growth' : 'Reps growth'}</h2>
           <div className="section-sub">
             {isRep ? 'How your book has moved.' : "How the team's book has moved."}
             {split === 'team'
