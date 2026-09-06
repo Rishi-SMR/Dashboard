@@ -444,9 +444,22 @@ export function AgingBar({ aging, onSelect, money = true }: { aging: Record<stri
 }
 
 // Generic drill modal: dark header + a rows table. Use for chart/row click-throughs.
-export function DrillModal({ title, sub, columns, rows, onClose }: {
+export function DrillModal({ title, sub, columns, rows, total, onClose }: {
   title: string; sub?: string; columns: { key: string; label: string; num?: boolean }[];
-  rows: Record<string, ReactNode>[]; onClose: () => void;
+  rows: Record<string, ReactNode>[];
+  /**
+   * COLUMN TOTALS, PINNED TO THE FOOT OF THE DIALOG. Keyed by column; only the
+   * keys present are printed, so a caller totals the money and leaves dates and
+   * statuses alone rather than filling them with something.
+   *
+   * A BAR RATHER THAN A LAST ROW, because a total row is only ever seen by a
+   * reader who scrolls to the end — on a 56-invoice drill that is nobody. This
+   * sits outside the scrolling body and is on screen from the moment the dialog
+   * opens. It carries each column's LABEL with its figure for the same reason:
+   * once it is out of the table it can no longer borrow the header above it.
+   */
+  total?: Record<string, ReactNode>;
+  onClose: () => void;
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -482,6 +495,13 @@ export function DrillModal({ title, sub, columns, rows, onClose }: {
             </div>
           </div>
         </div>
+        {total && (
+          <div className="drill-foot">
+            {columns.filter((c) => total[c.key] != null && total[c.key] !== '').map((c) => (
+              <span key={c.key}><i>{c.label}</i><b>{total[c.key]}</b></span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Sidebar, DEFAULT_VIEW, allowedViews, defaultViewFor, type Mode } from './components/Sidebar';
 import { fetchStrivenStatus, fetchMe, type StrivenStatus } from './strivenApi';
+import { setProfileIdentity } from './viewProfile';
 
 // Lazy-loaded so recharts (heavy) only downloads when a chart tab is opened.
 const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m) => ({ default: m.OverviewCharts })));
@@ -107,7 +108,15 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
 
   useEffect(() => {
     let live = true;
-    fetchMe().then((m) => { if (live) setRole(m?.role === 'admin' ? 'admin' : 'rep'); })
+    fetchMe().then((m) => {
+      if (!live) return;
+      setRole(m?.role === 'admin' ? 'admin' : 'rep');
+      // BINDS THE VIEW PROFILE TO THIS LOGIN. Done here, off the same call as
+      // the role gate, because the profile governs panels on eight lazily-
+      // loaded tabs and any of them can be the first to mount. Until it lands,
+      // every board reads as Crystal's unrestricted one.
+      setProfileIdentity(m?.email);
+    })
       .catch(() => { if (live) setRole('rep'); });   // fail closed: least privilege
     return () => { live = false; };
   }, []);

@@ -1313,8 +1313,37 @@ code {
 
 /* Numeric table cells: right-aligned, tabular. */
 .data-table .num, .data-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* AN INVOICE WHOSE ADVANCE EXCEEDS THE LIEN RATE — see advanceOverRate() in
+   ArSheetTab. A tint plus a bar on the leading edge, so the row is findable when
+   scrolling a long book and still legible; the "!" beside the figure carries the
+   same fact in a form that survives a printout and a colour-blind reader. */
+.data-table tr.row-overrate > td { background: var(--warn-soft); }
+.data-table tr.row-overrate > td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+
 .cell-pos { color: var(--pos); font-weight: 600; }
 .cell-neg { color: var(--danger); font-weight: 600; }
+
+/* AN ADVANCE THAT HAS LANDED, on the PI book and its drill. Green ink alone
+   (.cell-pos above) put it in the same register as every other coloured figure
+   in a table that already spends red on what is owed; a filled pill lifts it
+   out and reads as a receipt rather than as a shade of number.
+   BLACK INK, not the #166534 the status pills use. This is money — it is read
+   digit by digit against the figures above and below it, so it takes the
+   highest contrast the ground allows rather than the tinted text a one-word
+   tag can afford. Same #dcfce7 ground as .tag-ok, so the two still read as one
+   family.
+   Tabular figures because a pill in a right-aligned money column that shifts
+   width with its digits makes the whole column look ragged. */
+.amt-received {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+  color: #0F172A;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .data-table th { text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
 .muted-note { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
 
@@ -1327,14 +1356,31 @@ code {
 /* Drill-down modal (click a row/bar to see the underlying detail). */
 .drill-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgba(15,23,42,0.55); backdrop-filter: blur(3px);
   display: flex; align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto; animation: smrFadeUp .18s ease; }
-.drill { background: var(--bg); border-radius: 16px; width: min(1020px, 100%); box-shadow: 0 28px 70px rgba(15,23,42,0.38); overflow: hidden; animation: smrPop .22s cubic-bezier(.2,.8,.2,1); }
+/* THE DIALOG SCROLLS, NOT THE PAGE BEHIND IT. It used to grow to whatever its
+   table needed and let .drill-backdrop scroll the whole card, which works until
+   something has to stay on screen — a footer at the end of 56 rows is seen by
+   nobody. A column box with a scrolling body keeps the head and the foot fixed
+   and gives the rows the space between them. */
+.drill { background: var(--bg); border-radius: 16px; width: min(1020px, 100%); box-shadow: 0 28px 70px rgba(15,23,42,0.38);
+  overflow: hidden; animation: smrPop .22s cubic-bezier(.2,.8,.2,1);
+  display: flex; flex-direction: column; max-height: calc(100vh - 80px); }
 .drill-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 16px 22px; color: #fff; background: linear-gradient(135deg, #1E293B, #0F172A); }
 .drill-head .title { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
 .drill-head .sub { font-size: 12px; opacity: .82; margin-top: 3px; }
 .drill-close { border: 0; background: rgba(255,255,255,0.18); color: #fff; width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 20px; }
 .drill-close:hover { background: rgba(255,255,255,0.34); }
-.drill-body { padding: 20px 22px 26px; }
+.drill-body { padding: 20px 22px 26px; flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+
+/* The totals bar. Each entry is its own column's label and figure, so it reads
+   without the table header it no longer sits under. Wraps rather than scrolls:
+   a total that runs off the side is a total nobody reads. */
+.drill-foot { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 22px;
+  padding: 12px 22px; border-top: 1px solid var(--border); background: var(--panel); }
+.drill-foot > span { display: inline-flex; align-items: baseline; gap: 7px; }
+.drill-foot i { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--muted); }
+.drill-foot b { font-size: 14px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
 /* A breakdown's two levels. The account sits one level in and reads quieter
    than the category subtotal above it — and the indent is MARKUP, because a
    label padded with spaces renders flush left: HTML collapses them, which is
@@ -1563,8 +1609,24 @@ code {
 
 /* Programme × billed × expected. A grid rather than a <table> so the three
    columns stay aligned across rows without table layout fighting the card. */
-.ar-exp-tbl { margin-top: 12px; display: grid; gap: 5px; font-size: 12px; }
-.ar-exp-tr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: baseline; }
+/* Pulled out by the row padding below, so the clickable rows can carry a hover
+   ground that extends past the text while every row — head, programme, total —
+   still lines up with the rest of the card. */
+.ar-exp-tbl { margin-top: 12px; margin-left: -6px; margin-right: -6px; display: grid; gap: 5px; font-size: 12px; }
+.ar-exp-tr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: baseline;
+  padding: 2px 6px; }
+
+/* A PROGRAMME ROW OPENS ITS OWN INVOICES. Everything here is undoing the user
+   agent's button styling so the grid above still lays the row out; the element
+   is a <button> for what it gives free — tab order, a focus ring, Enter and
+   Space — none of which a div with an onClick has. */
+button.ar-exp-tr {
+  font: inherit; width: 100%; background: none; border: 0;
+  text-align: left; cursor: pointer; border-radius: 7px;
+  transition: background .14s ease;
+}
+button.ar-exp-tr:hover { background: var(--panel-2); }
+button.ar-exp-tr:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ar-exp-tr > span:nth-child(n+2) { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); text-align: right; min-width: 62px; }
 .ar-exp-tr > span:first-child { font-weight: 700; color: var(--ink); display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 /* The rate, on the row it applies to — this is the thing the card is for. */
@@ -2986,9 +3048,24 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   color: #FFFFFF;
   box-shadow: none;
 }
-.ov-board.ov-kevin > .page-head .ov-viewas span,
-.ov-board.ov-kevin > .page-head .ov-viewas select { color: #FFFFFF; }
-.ov-board.ov-kevin > .page-head .ov-viewas select option { color: var(--text); }
+.ov-board.ov-kevin > .page-head .ov-viewas span { color: #FFFFFF; }
+/* THE SELECT NEEDED THE BACKGROUND TOO, not just the colour. This rule set white
+   text on it and stopped, so the control kept `background: var(--panel)` from the
+   base rule above — and --panel is #FFFFFF. White on white: the picker rendered
+   as an empty box and the name of whoever was being previewed was invisible,
+   which is the one thing a "View as" control exists to tell you.
+   Translucent rather than opaque light, so it borrows the plate's contrast like
+   the Live pill and the bell beside it instead of reading as pasted on. */
+.ov-board.ov-kevin > .page-head .ov-viewas select {
+  background: rgba(255, 255, 255, .10);
+  border-color: rgba(255, 255, 255, .30);
+  color: #FFFFFF;
+}
+/* The OPEN LIST is drawn by the OS on its own surface, not on the plate, so its
+   rows need the ordinary colours back or they invert the same bug into the
+   dropdown. Both stated explicitly rather than left to the UA, which is what
+   made the parent's white text reach them in the first place. */
+.ov-board.ov-kevin > .page-head .ov-viewas select option { color: var(--text); background: var(--panel); }
 .ov-board.ov-kevin > .page-head .btn.ghost {
   color: #FFFFFF;
   border-color: rgba(255, 255, 255, .32);

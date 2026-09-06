@@ -117,8 +117,32 @@ const HIDDEN: Record<ViewProfile, Set<string>> = {
 // header but the panels it governs are spread across eight lazily-loaded tabs,
 // and threading a provider through all of them buys nothing a subscription
 // does not. Persisted so the preview survives a tab switch or a reload.
-const KEY = 'smr.viewProfile';
+/**
+ * THE SELECTION IS PER LOGIN, NOT PER BROWSER.
+ *
+ * It used to be one key, `smr.viewProfile`, shared by everyone who ever signed
+ * in on the machine. So Kevin's board — or one preview of it that nobody
+ * switched back out of — became the DEFAULT for whoever signed in next:
+ * Crystal would land on the curated Overview, panels missing, having chosen
+ * nothing. Keying the store to the signed-in address is what stops one
+ * person's choice from being the next person's default.
+ *
+ * `LEGACY_KEY` is deleted rather than migrated, and that is the point: reading
+ * the old shared value into the current user's key would carry the very bug
+ * forward under a new name.
+ */
+const LEGACY_KEY = 'smr.viewProfile';
+const KEY = (who: string) => `smr.viewProfile:${who}`;
 const EVENT = 'smr:viewprofile';
+
+/**
+ * The signed-in address, once /api/me has said so; null until then.
+ *
+ * Held at module scope for the same reason the selection is: `useHidden()` is
+ * called from panels across eight lazily-loaded tabs, and every one of them
+ * has to agree about whose board this is.
+ */
+let identity: string | null = null;
 
 /**
  * `?view=crystal` / `?view=kevin` — THE WAY BACK.
@@ -126,28 +150,65 @@ const EVENT = 'smr:viewprofile';
  * Kevin's board does not render the profile picker (his dashboard should read
  * as his, not as a view someone selected), and the choice is persisted, so
  * without this there would be no way to return to Crystal's view short of
- * clearing site data. The URL sets the stored profile once at load; every read
- * after that is the ordinary localStorage path.
+ * clearing site data.
  *
- * Applied at module scope rather than inside `read()` so it happens exactly
- * once — `read()` runs on every profile event and must stay a pure read.
+ * HELD, NOT WRITTEN, until the login is known — there is no key to write it to
+ * before that. It still takes effect immediately on screen, because `read()`
+ * below prefers it while identity is pending.
  */
-try {
-  const q = new URLSearchParams(window.location.search).get('view');
-  if (q === 'kevin' || q === 'crystal') localStorage.setItem(KEY, q);
-} catch { /* private mode, or no URL — fall through to the stored value */ }
-
-// Defaults to Crystal's unrestricted view: a stored value that no longer maps
-// to a profile must fall back to showing MORE, never to hiding panels nobody
-// asked to hide.
-const read = (): ViewProfile => {
+let pending: ViewProfile | null = (() => {
   try {
-    return localStorage.getItem(KEY) === 'kevin' ? 'kevin' : 'crystal';
-  } catch { return 'crystal'; }
+    const q = new URLSearchParams(window.location.search).get('view');
+    return q === 'kevin' || q === 'crystal' ? q : null;
+  } catch { return null; /* private mode, or no URL */ }
+})();
+
+/**
+ * Binds the profile store to whoever signed in. Called once, app-level, off the
+ * same /api/me the role gate uses.
+ *
+ * Everything before this call reads 'crystal', the unrestricted view. That is
+ * deliberate in both directions: an unknown viewer must be shown MORE rather
+ * than have panels hidden nobody asked to hide, and the pre-identity frame is
+ * exactly where a stale 'kevin' used to leak in.
+ */
+export function setProfileIdentity(email?: string | null) {
+  const who = String(email ?? '').trim().toLowerCase();
+  if (!who || who === identity) return;
+  identity = who;
+  try { localStorage.removeItem(LEGACY_KEY); } catch { /* private mode */ }
+  // A `?view=` or a selection made before /api/me landed: persist it now, to
+  // this login's key. setViewProfile fires the event, so this returns after.
+  if (pending) { const v = pending; pending = null; setViewProfile(v); return; }
+  window.dispatchEvent(new CustomEvent(EVENT));
+}
+
+/**
+ * KEVIN'S LOGIN DEFAULTS TO KEVIN'S BOARD; every other login defaults to the
+ * unrestricted one.
+ *
+ * The curated view was previously reachable only through the shared key, which
+ * meant Kevin's own board depended on somebody having selected it on that
+ * browser — and per-login keys would have made that unreachable for him, since
+ * his board renders no picker. His identity is the signal instead, and it is
+ * the stronger one: a profile is a preview, a login is who you are.
+ *
+ * An explicit stored choice still wins, so `?view=crystal` remains his way out.
+ */
+const read = (): ViewProfile => {
+  if (!identity) return pending ?? 'crystal';
+  try {
+    const v = localStorage.getItem(KEY(identity));
+    if (v === 'kevin' || v === 'crystal') return v;
+  } catch { /* private mode — fall through to the identity default */ }
+  return isKevinLogin(identity) ? 'kevin' : 'crystal';
 };
 
 export function setViewProfile(v: ViewProfile) {
-  try { localStorage.setItem(KEY, v); } catch { /* private mode */ }
+  // Chosen before /api/me landed. Held rather than dropped, and written to the
+  // right key a moment later, so the picker never silently ignores a click.
+  if (!identity) { pending = v; window.dispatchEvent(new CustomEvent(EVENT)); return; }
+  try { localStorage.setItem(KEY(identity), v); } catch { /* private mode */ }
   window.dispatchEvent(new CustomEvent(EVENT));
 }
 

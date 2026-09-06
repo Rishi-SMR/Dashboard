@@ -98,7 +98,10 @@ export type SoDetail = {
 
 export type Aging = { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
 
-export type ArInvoice = { id: number; number: string; customer: string; customerId: number | null; payer: string; dueDate: string | null; total: number; open: number; currency: string; memo: string };
+/** `open` is what the CASE still owes, not what the invoice does — the two
+ *  differ on PI, where Striven invoices only the 15% lien advance. See
+ *  arOwedOf() in _striven.js; `ledgerOpen` keeps Striven's own figure beside it. */
+export type ArInvoice = { id: number; number: string; customer: string; customerId: number | null; payer: string; dueDate: string | null; total: number; open: number; vertical?: string; ledgerOpen?: number; currency: string; memo: string };
 export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number };
 
 export type ApBill = { id: number; number: string; vendor: string; vendorId: number | null; dueDate: string | null; total: number; open: number; currency: string };
@@ -272,6 +275,12 @@ export type ArRegisterInvoice = {
   arExpected?: number;
   /** Which rule produced `arExpected`: 'pi-15' | 'billed'. */
   arBasis?: string;
+  /** WHAT THE SALES ORDER BEHIND THIS INVOICE WAS WORTH, where Striven bills
+   *  only part of it — on PI the invoice is the 15% lien advance and the order
+   *  carries the real figure. Null where no order is found, or where the order
+   *  is worth no more than the invoice: in both cases the invoice IS the total
+   *  and there is nothing extra to report. */
+  orderTotal?: number | null;
   /** How `paid` was actually settled. `cashPaid + creditApplied + open === total`
    *  on every row: cash banked against this invoice, an unapplied customer
    *  credit covering the rest, and what is still owed. */
