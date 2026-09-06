@@ -1348,26 +1348,83 @@ async function netOpenByInvoice(live) {
   return { net, unappliedCredits: round2([...creditByCust.values()].reduce((s, v) => s + v, 0)) };
 }
 
+/**
+ * WHAT AN INVOICE STILL OWES — the basis the whole dashboard reports on.
+ *
+ * The ledger cannot answer this for PI. Striven bills the 15% lien advance and
+ * books THAT as the invoice, so a PI invoice with `open = 0` is a settled
+ * ADVANCE, not a settled case: the remaining 85% is still to come and the
+ * ledger has no row for it.
+ *
+ *   PI, advance not in  the whole case. Nothing has come back, so deducting an
+ *                       advance that was never paid understates the exposure.
+ *   PI, advance in      the case less the advance.
+ *   PI, invoiced gross  nothing. Where the invoice IS the whole bill there is
+ *                       no second tranche to wait for.
+ *   everything else     the ledger's balance, net of customer credits. Billed
+ *                       and paid in one go, so what is owed is what is unpaid.
+ *
+ * Mirrors piBalanceOf() in ArSheetTab.tsx. The two exist because this endpoint
+ * feeds the Receivables tab and that one feeds the AR page; they must not
+ * disagree, and the register that joins them ships `orderTotal` for both.
+ */
+function arOwedOf({ vertical, total, netOpen, orderTotal }) {
+  const owed = round2(Number(netOpen) || 0);
+  if (vertical !== 'PI') return owed;
+  const invoiced = round2(Number(total) || 0);
+  const gross = Number.isFinite(orderTotal) && orderTotal > invoiced + 0.005 ? round2(orderTotal) : invoiced;
+  if (Math.abs(gross - invoiced) <= 0.005) return 0;
+  return owed > 0.005 ? gross : round2(gross - invoiced);
+}
+
 async function getAR() {
-  const openInv = openOnly(await allInvoices());                          // openBalance > 0
+  const everyInv = await allInvoices();
+  const openInv = openOnly(everyInv);                                     // openBalance > 0
   const statusOf = (r) => INVOICE_STATUS[r.id] ?? '';
   const live = openInv.filter((r) => !isVoidStatus(statusOf(r)));         // drop VOIDED invoices
   const voidedExcluded = round2(openInv.filter((r) => isVoidStatus(statusOf(r))).reduce((s, r) => s + Number(r.openBalance || 0), 0));
 
   const { net, unappliedCredits } = await netOpenByInvoice(live);
-  const netRows = live.map((r) => ({ ...r, netOpen: net.get(r.id) ?? round2(Number(r.openBalance || 0)) }));
+  // EVERY NON-VOID INVOICE, not only those the ledger still shows a balance on.
+  // Starting from `openOnly` dropped exactly the rows this endpoint now has to
+  // carry: a PI invoice whose advance has been paid has no ledger balance and
+  // 85% of its case outstanding.
+  const netRows = everyInv
+    .filter((r) => !isVoidStatus(statusOf(r)))
+    .map((r) => ({ ...r, netOpen: net.get(r.id) ?? round2(Number(r.openBalance || 0)) }));
   // Payer per invoice: each invoice links to a sales order, and the order carries
   // the payer (law firm for PI, VA / TriCare by type). Map invoice # → payer via
   // the order_chain cache so we can show WHO pays each invoice (patient stays masked).
   const payerByInv = await invoicePayerMap();
+  // Which programme billed it, and what the order behind it was worth — the two
+  // things arOwedOf needs. Same joins the AR register uses, so one invoice
+  // cannot be PI on one screen and VA on another.
+  const vertMap = await invoiceVerticalMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
+  const soValMap = await invoiceOrderValueMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
 
-  const invoices = netRows.filter((r) => r.netOpen > 0.005).map((r) => ({
-    id: r.id, number: r.txnNumber ?? String(r.id),
-    customer: maskName(r.customer?.name), customerId: r.customer?.id ?? null,
-    payer: payerByInv[String(r.txnNumber ?? r.id)] || '',
-    dueDate: r.dueDate ?? null, total: Number(r.invoiceTotal ?? 0), open: r.netOpen,
-    currency: r.currency?.currencyISOCode ?? 'USD',
-  }));
+  const invoices = netRows.map((r) => {
+    const no = String(r.txnNumber ?? r.id);
+    const total = round2(Number(r.invoiceTotal ?? 0));
+    const vertical = vertMap.byInvoice[no]
+      || vertMap.byCustRef.get(`PT-${r.customer?.id}`)
+      || verticalOfPayer(payerByInv[no])
+      || '';
+    const orderTotal = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
+    return {
+      id: r.id, number: no,
+      customer: maskName(r.customer?.name), customerId: r.customer?.id ?? null,
+      payer: payerByInv[no] || '',
+      // The programme, so the tab can filter and colour by it without a second
+      // guess from the payer string.
+      vertical,
+      dueDate: r.dueDate ?? null, total,
+      open: arOwedOf({ vertical, total, netOpen: r.netOpen, orderTotal }),
+      /** The ledger's own balance, kept beside the case figure: the two differ
+       *  only on PI, and a reader reconciling against Striven needs this one. */
+      ledgerOpen: r.netOpen,
+      currency: r.currency?.currencyISOCode ?? 'USD',
+    };
+  }).filter((i) => i.open > 0.005);
   const totalOpen = round2(invoices.reduce((s, i) => s + i.open, 0));
   const aging = bucketAging(invoices, 'dueDate', 'open');
   for (const k of Object.keys(aging)) aging[k] = round2(aging[k]);
@@ -1565,6 +1622,127 @@ async function invoiceVerticalMap() {
   for (const o of (rc?.data?.orders || [])) if (o.custRef && o.program) byCustRef.set(o.custRef, o.program);
   return { byInvoice, byCustRef };
 }
+
+/**
+ * INVOICE # → PATIENT, as FIRST INITIAL + SURNAME.
+ *
+ * The AR register got this from the accountant's sheet alone, which covers 164
+ * of 239 invoices — the other 75 fell through to the Striven customer, already
+ * scrubbed to PT-<id> at cache write, so one column printed "D. Butler" on some
+ * rows and "PT-385" on others. This fills the gap from the same sources the
+ * commission drill uses, so the whole column reads one way.
+ *
+ * TWO SOURCES, and the order matters:
+ *   1. THE LABELS REPORT — the only one carrying a first name, so the only one
+ *      that can produce an INITIAL. Reduced to "D. Butler" at this boundary by
+ *      commInitialLastDisp(); no full first name is stored or returned.
+ *   2. report_patient_items — surname only, in its own case rather than
+ *      shouted. A surname beats a PT- code, and it covers orders the labels
+ *      report has not picked up.
+ * Loaded in that order so the better one wins, exactly as at the commission
+ * drill's own `lastNameBySo`.
+ *
+ * The join is the SO→invoice order_chain, the same link invoiceVerticalMap and
+ * invoicePayerMap use. An invoice reaching no order simply gets no entry, and
+ * the caller falls back as it did before.
+ *
+ * PHI: first-initial-plus-surname is the portal's patient rendering throughout
+ * — the pipeline, the commission drill and the sheet rows all already show it,
+ * as minimum-necessary and client-authorized. This adds no new KIND of data; it
+ * makes an existing one consistent. The full first name still dies at the
+ * boundary above.
+ */
+async function invoicePatientMap() {
+  const [sb, tags, rc] = await Promise.all([
+    sbCacheRead('order_chain').catch(() => null),
+    soLabelsBySoId().catch(() => new Map()),
+    sbCacheRead('report_patient_items').catch(() => null),
+  ]);
+  const rcOrders = rc?.data?.orders || [];
+
+  // soId → the best name available for it.
+  const bySo = new Map();
+  // Surname-only first, so the labels report overwrites it where it has the row.
+  for (const o of rcOrders) {
+    const ln = commLastDisp(o.lastName);
+    if (ln && o.soId != null) bySo.set(String(o.soId), ln);
+  }
+  for (const [soId, tag] of tags) if (tag?.patient) bySo.set(String(soId), tag.patient);
+
+  // ── TWO JOINS, because neither reaches the whole book on its own ───────────
+  //
+  // BY INVOICE, through the SO→invoice chain. Exact where it applies, and it
+  // does not apply widely: the chain carries 156 invoice refs against 239 in
+  // the register, and its highest are far below the newest invoice numbers —
+  // it is topped up on a cycle, so recent invoices are simply not in it yet.
+  //
+  // BY CUSTOMER REFERENCE, which is the one that actually covers the gap. The
+  // patient-items report carries `custRef` — "PT-17" — and that is the very
+  // string these rows already print, so a row showing PT-17 has its name sitting
+  // one lookup away under its own label. invoiceVerticalMap resolves its
+  // fallback exactly this way.
+  const byInvoice = {};
+  for (const [soId, o] of Object.entries((sb && sb.data) || {})) {
+    const name = bySo.get(String(soId));
+    if (!name) continue;
+    for (const inv of (o.invoices || [])) {
+      const num = String(inv.ref || '').replace(/^#/, '');
+      if (num) byInvoice[num] = name;
+    }
+  }
+  const byCustRef = new Map();
+  for (const o of rcOrders) {
+    const name = (o.soId != null && bySo.get(String(o.soId))) || commLastDisp(o.lastName);
+    if (o.custRef && name) byCustRef.set(String(o.custRef), name);
+  }
+  return { byInvoice, byCustRef };
+}
+
+/**
+ * INVOICE # → THE VALUE OF THE SALES ORDER BEHIND IT.
+ *
+ * WHAT THE INVOICE IS FOR, which on PI is not what the invoice SAYS. Striven
+ * bills the lien advance — 15% — and books that as the invoice total, while the
+ * order it was raised against carries the real figure. #241 invoices $899.25;
+ * SO-207 behind it is $5,995.00, and 899.25 is exactly 15% of it.
+ *
+ * Verified before it was relied on: 50 of the 56 PI invoices have a total that
+ * is exactly 15% of some sales order's value. Six do not — #170, #166, #165,
+ * #113, #112, #72 — and those are largely the same rows the accountant's sheet
+ * carries at Striven's own figure, i.e. where the gross WAS invoiced. They get
+ * no entry here and the caller falls back to the invoice total, which for them
+ * is right.
+ *
+ * TWO JOINS, for the same reason invoicePatientMap needs two: the SO→invoice
+ * chain is exact but covers 156 refs of 239 and lags the newest invoices, while
+ * the patient-items report reaches them through `custRef` — the PT-<id> that is
+ * the invoice's own customer.
+ *
+ * A CUSTOMER WITH SEVERAL ORDERS is not resolved by the reference alone, so the
+ * by-invoice join is applied last and wins wherever it has an answer.
+ */
+async function invoiceOrderValueMap() {
+  const [sb, rc] = await Promise.all([
+    sbCacheRead('order_chain').catch(() => null),
+    sbCacheRead('report_patient_items').catch(() => null),
+  ]);
+  const byCustRef = new Map();
+  for (const o of (rc?.data?.orders || [])) {
+    const v = Number(o.value);
+    if (o.custRef && Number.isFinite(v) && v > 0) byCustRef.set(String(o.custRef), round2(v));
+  }
+  const byInvoice = {};
+  for (const o of Object.values((sb && sb.data) || {})) {
+    const v = Number(o.value);
+    if (!Number.isFinite(v) || v <= 0) continue;
+    for (const inv of (o.invoices || [])) {
+      const num = String(inv.ref || '').replace(/^#/, '');
+      if (num) byInvoice[num] = round2(v);
+    }
+  }
+  return { byInvoice, byCustRef };
+}
+
 /** Programme implied by the payer, for invoices neither join reaches. */
 const verticalOfPayer = (payer) => {
   const s = String(payer ?? '').trim();
@@ -3559,6 +3737,10 @@ export async function getArRegister() {
     const all = (await allInvoices()).filter((r) => !isVoidStatus(INVOICE_STATUS[r.id] ?? ''));
     const payerByInv = await invoicePayerMap().catch(() => ({}));
     const vertMap = await invoiceVerticalMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
+    // Patient names for the invoices the sheet has never seen — see invoicePatientMap().
+    const patMap = await invoicePatientMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
+    // What the order behind each invoice was actually worth — see invoiceOrderValueMap().
+    const soValMap = await invoiceOrderValueMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
     // Same netting the AR tab applies — see netOpenByInvoice(). Reading raw
     // `openBalance` here would put two different outstanding figures on one page.
     const { net, unappliedCredits } = await netOpenByInvoice(all);
@@ -3590,7 +3772,18 @@ export async function getArRegister() {
         // Prefer the sheet's, which is what the accountant reads.
         date: d?.date || String(r.dateCreated ?? '').slice(0, 10),
         dueDate: r.dueDate ? String(r.dueDate).slice(0, 10) : '',
-        patient: d?.patient ?? maskName(r.customer?.name),
+        // FIRST INITIAL + SURNAME WHEREVER IT CAN BE HAD. The sheet is still
+        // preferred — it is the accountant's own spelling — then the order
+        // behind the invoice, and only then the de-identified PT- reference for
+        // an invoice neither reaches.
+        //
+        // `||`, not `??`: the sheet stores an empty patient on some rows, and
+        // `??` treats "" as a value and stops there — which is how a blank cell
+        // in the workbook would win over a name we actually have.
+        patient: d?.patient
+          || patMap.byInvoice[no]
+          || patMap.byCustRef.get(`PT-${r.customer?.id}`)
+          || maskName(r.customer?.name),
         payer: payerByInv[no] || '',
         // Which programme billed this — see invoiceVerticalMap().
         vertical,
@@ -3600,6 +3793,14 @@ export async function getArRegister() {
         // than leaving the reader to wonder why a figure differs from Billed.
         arExpected: expected.amount,
         arBasis: expected.basis,
+        // THE ORDER'S OWN VALUE, where it can be found and where it is not simply
+        // the invoice again. Null otherwise, so the client can tell "the order
+        // was worth more than this invoice" from "we do not know", and never
+        // has to guess which by dividing.
+        orderTotal: (() => {
+          const v = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
+          return v != null && v > total + 0.005 ? round2(v) : null;
+        })(),
         memo: d?.memo ?? '',
         gl: d?.gl ?? '',
         total,
