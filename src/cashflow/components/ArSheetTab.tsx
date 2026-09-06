@@ -54,6 +54,145 @@ const expectedOf = (i: ArRegisterInvoice) =>
 const isDiscounted = (i: ArRegisterInvoice) => i.arBasis === 'pi-15';
 
 /**
+ * THE ADVANCE IS IN.
+ *
+ * A settled invoice is one with nothing outstanding — paid, or cleared by a
+ * customer credit — and on a PI lien the money that settles it IS the advance.
+ * So this is the ledger's own answer to "has the 15% been received", read off
+ * figures already on the row rather than inferred from anywhere else.
+ *
+ * WHAT IT CANNOT SEE is a part-payment: an invoice where the advance landed but
+ * something is still owed reads as not-received here, because `open` alone
+ * cannot say which tranche the shortfall belongs to. Every PI invoice in the
+ * book today is wholly paid or wholly open, so nothing is misread right now —
+ * but the first part-payment will be, and the answer then is the pipeline's
+ * stage, not more arithmetic on this row.
+ */
+const advanceIn = (i: ArRegisterInvoice) => i.status === 'paid' || i.status === 'credited';
+
+/**
+ * WHAT A PI CASE WAS ACTUALLY BILLED.
+ *
+ * NOT the invoice. Striven bills the 15% lien advance and books THAT as the
+ * invoice total, so the invoice figure is the advance and the sales order behind
+ * it carries the real one — `orderTotal`, resolved server-side from the SO→
+ * invoice chain and the patient-items report. #241 invoices $899.25 against
+ * SO-207's $5,995.00.
+ *
+ * FALLS BACK TO THE INVOICE where the server found no larger order. That is not
+ * a failure mode, it is the other true case: five PI rows were invoiced gross,
+ * and the accountant's sheet carries them at exactly Striven's own figure.
+ * Grossing those up would multiply a correct number by 6.67.
+ */
+const piGrossOf = (i: ArRegisterInvoice) =>
+  (typeof i.orderTotal === 'number' && Number.isFinite(i.orderTotal) ? i.orderTotal : num(i.total));
+
+/** The lien advance rate. Named because two rules now turn on it. */
+const PI_ADVANCE_RATE = 0.15;
+
+/**
+ * AN ADVANCE BIGGER THAN THE LIEN RATE ALLOWS.
+ *
+ * On PI the invoice should be 15% of the order behind it. Where it is more,
+ * one of two things is true and neither is visible from the row alone:
+ *
+ *   · THE INVOICE IS THE GROSS. Striven booked the whole bill rather than the
+ *     advance, so `orderTotal` is null, the total falls back to the invoice and
+ *     the ratio reads 100%. Five rows, and the accountant's sheet agrees with
+ *     every one of them.
+ *   · THE ORDER IS THE WRONG ONE. Where a patient has more than one order the
+ *     customer-reference join cannot say which invoice belongs to which, and it
+ *     takes the first. #170 reads 40% against an order that is almost certainly
+ *     #72's.
+ *
+ * The first is correct data, the second is a bad join, and a reader cannot tell
+ * them apart — which is exactly why the row is marked rather than quietly
+ * averaged into a programme total. A tolerance of a cent absorbs rounding; this
+ * is not meant to catch a rate struck a fraction off.
+ */
+const advanceOverRate = (i: ArRegisterInvoice) => {
+  const gross = piGrossOf(i);
+  if (gross <= 0.005) return false;
+  return num(i.total) > r2(gross * PI_ADVANCE_RATE) + 0.01;
+};
+
+/** The invoice as a share of the order behind it. Null where there is no total
+ *  to take a share OF. */
+const advancePctOf = (i: ArRegisterInvoice) => {
+  const gross = piGrossOf(i);
+  return gross > 0.005 ? (num(i.total) / gross) * 100 : null;
+};
+
+/**
+ * WHAT SHARE OF THE CASE THIS INVOICE IS.
+ *
+ * On a lien it should read 15% on every row, which is exactly what makes the
+ * ones that do not worth printing: the number IS the flag, so the anomaly is
+ * legible without a legend and without comparing two columns in your head.
+ *
+ * IT REPLACES A BARE "!". The mark said a row was wrong; this says by how much,
+ * which is the difference between "look at this" and "look at this, it is the
+ * whole bill" — 100% and 40% are different problems with different fixes.
+ *
+ * Whole percent: a lien struck at 15% either was or was not, and a decimal here
+ * would invite reading rounding noise as a finding. The tooltip carries the
+ * exact figures for anyone who needs them.
+ */
+function AdvancePct({ i }: { i: ArRegisterInvoice }) {
+  const pct = advancePctOf(i);
+  if (pct == null) return null;
+  const over = advanceOverRate(i);
+  return (
+    <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: over ? C.warning : C.muted }}
+      title={over
+        ? `${formatCurrency(num(i.total), true)} is ${pct.toFixed(1)}% of the ${formatCurrency(piGrossOf(i), true)} total, not 15%. Either this invoice is the whole bill rather than the advance, or it has been matched to the wrong sales order.`
+        : `${formatCurrency(num(i.total), true)} of the ${formatCurrency(piGrossOf(i), true)} total — the lien advance`}>
+      {pct.toFixed(0)}%
+    </span>
+  );
+}
+
+/**
+ * THE PI BALANCE: WHAT THE CASE STILL OWES.
+ *
+ * NOT the ledger's `open`, which is what the INVOICE owes at face value — and
+ * the invoice is only the advance. This is the lien's own arithmetic, and it
+ * turns on one question: has the advance arrived?
+ *
+ *   advance received  →  total − advance. The 15% is in; the rest of the case
+ *                        is what has yet to return.
+ *   advance NOT in    →  the WHOLE total. Nothing has come back at all, so
+ *                        deducting an advance that was never paid would
+ *                        understate the exposure by exactly the amount still
+ *                        being chased.
+ *
+ * NEVER ZERO on a real invoice, which is why the status column beside it cannot
+ * be derived from this figure — it reads `advanceIn` directly instead.
+ *
+ * IT INHERITS advanceIn's BLIND SPOT, in the direction that overstates: a
+ * part-paid invoice is not "settled", so it takes the whole-total branch even
+ * where the advance has arrived. Nothing in the book is part-paid today. The
+ * fix when one appears is the pipeline's stage, not deeper arithmetic here.
+ */
+const piBalanceOf = (i: ArRegisterInvoice) => {
+  const gross = piGrossOf(i);
+  const invoiced = num(i.total);
+  // THE WHOLE BILL WAS INVOICED — nothing is coming after it.
+  //
+  // These are the rows marked at 100%: no lien tranche was struck, so there is
+  // no second payment to wait for and the case owes nothing beyond the invoice
+  // itself. Whether that invoice has been PAID is the status column's question,
+  // not this one — this column reports what is still to come, and for these
+  // rows the answer is nothing.
+  //
+  // Checked before the advance branch, because it outranks it: an unpaid
+  // 100% row would otherwise take the "nothing has arrived, so the whole total
+  // is out" path and report a second tranche that does not exist.
+  if (Math.abs(gross - invoiced) <= 0.005) return 0;
+  return advanceIn(i) ? r2(gross - invoiced) : gross;
+};
+
+/**
  * ACTUAL COLLECTABLE — what an OPEN invoice is realistically worth.
  *
  * `arExpected` is the programme rule applied to the whole invoice; this applies
@@ -68,12 +207,25 @@ const isDiscounted = (i: ArRegisterInvoice) => i.arBasis === 'pi-15';
  *
  * Zero on a settled invoice: nothing outstanding is nothing to collect.
  */
-const collectableOf = (i: ArRegisterInvoice) => {
-  const total = num(i.total);
-  const open = num(i.open);
-  if (open <= 0.005 || total <= 0.005) return 0;
-  return expectedOf(i) * (open / total);
-};
+/**
+ * WHAT THIS INVOICE STILL OWES. The one figure the dashboard reports.
+ *
+ * Outstanding, Actual Collectable and AR Receivable are three tiles asking the
+ * same question, and they were answering it three ways. They all read this now,
+ * so the dashboard cannot show a reader two totals for one book.
+ *
+ *   PI       `piBalanceOf` — the case less whatever advance has arrived. The
+ *            ledger cannot answer for PI: its invoice is only the 15% advance,
+ *            so an invoice with `open = 0` is a settled ADVANCE, not a settled
+ *            case, and the remaining 85% is still to come.
+ *   the rest the ledger's open balance. Billed and paid in one go, so what is
+ *            owed is simply what has not been paid.
+ */
+const owedOf = (i: ArRegisterInvoice) =>
+  (vertOf(i) === 'PI' ? piBalanceOf(i) : num(i.open));
+
+/** Kept as the name the collectable card and its drill were written against. */
+const collectableOf = (i: ArRegisterInvoice) => owedOf(i);
 
 const fmtDate = (s: string) => {
   if (!s) return '-';
@@ -102,6 +254,16 @@ const trunc = (v: string, n = 26) => (v && v.length > n ? v.slice(0, n - 1) + '�
  * either of which would poison the same sums.
  */
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/** Two decimals, the way the server rounds every total it sends. Kept so the
+ *  per-vertical headline is the same arithmetic as the register-wide one and
+ *  not a float tail away from it. */
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** The residue bucket: an invoice the server could join to no programme. */
+const UNASSIGNED = 'Unassigned';
+/** The programme a row belongs to, with that residue named rather than blank. */
+const vertOf = (i: ArRegisterInvoice) => i.vertical || UNASSIGNED;
 const PART = {
   creditApplied: (i: ArRegisterInvoice) => num(i.creditApplied),
   cashPaid: (i: ArRegisterInvoice) =>
@@ -122,6 +284,68 @@ const statusLabel = (i: ArRegisterInvoice) => STATUS_LABEL[i.status] ?? i.status
  * zero-value invoice nor one settled by an unapplied credit can be told apart
  * from an ordinary paid row by its balance alone.
  */
+/**
+ * THE PI BOOK'S STATUS. PAID MEANS FULLY SETTLED — nothing less.
+ *
+ * On a lien the advance arriving is not the case being paid; it is the first of
+ * two tranches, and the invoice still has its balance to return. Calling that
+ * "Paid" told a reader the case was closed while 85% of it was outstanding, and
+ * on a chase list that is the one thing a status must never get wrong.
+ *
+ * So there are three states, not two, and the middle one is where the whole
+ * book currently sits:
+ *
+ *   Paid        the balance is settled — the case has returned in full
+ *   Partially Paid (Advance)
+ *               the 15% arrived, the balance has not. The green figure beside
+ *               it says the same thing; this says it in words
+ *   Open        nothing has come back at all — not even the advance, so the
+ *               WHOLE total is outstanding and the invoice is open in the
+ *               ordinary sense the rest of the register uses the word
+ *
+ * NOTHING CAN REACH 'Paid' ON TODAY'S DATA, and that is worth being plain
+ * about rather than hiding behind a condition that never fires. `piBalanceOf`
+ * is invoiced − advance once the advance is in, which is structurally 85% of
+ * the invoice and never zero: the portal holds no signal for the settlement
+ * arriving. The test is written against the balance because that IS the right
+ * rule; it starts returning Paid the moment something can tell us a case
+ * settled — the pipeline's 'Waiting for settlement' stage clearing, or a
+ * ledger that records the second tranche.
+ *
+ * ZERO-VALUE IS ITS OWN ANSWER. An invoice that billed nothing has no advance
+ * and no balance; filing it under either Paid or Open would claim something
+ * about money that was never owed.
+ */
+function piStatusText(i: ArRegisterInvoice): string {
+  if (i.status === 'zero-value') return 'Zero value';
+  // NOTHING RECEIVED IS OPEN, WHATEVER THE BALANCE SAYS. Not a cent has arrived
+  // — not even the advance — so the whole case is outstanding, and "open" is what
+  // the rest of the register calls that.
+  //
+  // Tested FIRST because a 100%-invoiced row carries a zero balance the moment
+  // it is raised (there is no second tranche to wait for), and reading Paid off
+  // that alone would call an untouched invoice settled.
+  if (!advanceIn(i)) return 'Open';
+  // Received, and nothing further to come: the case is closed. Reachable only
+  // where the whole bill was invoiced; a 15% advance always leaves a balance.
+  if (piBalanceOf(i) <= 0.005) return 'Paid';
+  return 'Partially Paid (Advance)';
+}
+
+/** ONE definition of the three states, so the pill, the filter chip and the
+ *  workbook cannot drift apart on what a row is called. */
+function piStatusTag(i: ArRegisterInvoice): ReactNode {
+  const label = piStatusText(i);
+  if (label === 'Zero value') return <span className="pill-tag tag-muted">Zero value</span>;
+  if (label === 'Paid') return <span className="pill-tag tag-ok" style={{ fontWeight: 700 }}>✓ Paid</span>;
+  // GREEN paid · AMBER partially paid · RED open, per the agreed key. The pill
+  // grounds already carry those three, so the colour and the words say the same
+  // thing and neither has to be read against a legend elsewhere.
+  return label === 'Partially Paid (Advance)'
+    ? <span className="pill-tag tag-warn" title="The 15% advance has been received. The balance is still outstanding, so the case is not settled.">Partially Paid (Advance)</span>
+    : <span className="pill-tag tag-danger" title="Nothing has been received on this invoice — not even the advance — so the whole total is outstanding.">Open</span>;
+}
+
 function statusTag(i: ArRegisterInvoice): ReactNode {
   if (i.status === 'zero-value') return <span className="pill-tag tag-muted">Zero value</span>;
   if (i.status === 'open') return <span className="pill-tag tag-danger">Open</span>;
@@ -139,7 +363,18 @@ export function ArSheetTab() {
   const [query, setQuery] = useState('');
   const [segment, setSegment] = useState<Segment>('all');
   const [pickPayer, setPickPayer] = useState<Set<string>>(new Set());
-  const [pickVert, setPickVert] = useState<Set<string>>(new Set());
+  /**
+   * WHICH VERTICAL'S BOOK IS ON SCREEN. 'all' is the whole register.
+   *
+   * A TAB, NOT A FILTER, and the difference is what the headline says. The
+   * VERTICAL column filter this replaces narrowed the ROWS and left the totals
+   * above them describing the register — so picking PI drew a table of 154
+   * under a headline of 196 invoices and $312,919.90 billed, and the reader
+   * had no way to tell which of the two numbers was about what they could see.
+   * Everything scopes to this now: the totals line, the status counts, the
+   * table, and both exports.
+   */
+  const [vert, setVert] = useState<string>('all');
   const [pickStatus, setPickStatus] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'no', dir: -1 });
   const [page, setPage] = useState(1);
@@ -147,6 +382,8 @@ export function ArSheetTab() {
     title: string; sub: string;
     columns: { key: string; label: string; num?: boolean }[];
     rows: Record<string, ReactNode>[];
+    /** Optional column totals, pinned to the foot of the dialog. */
+    total?: Record<string, ReactNode>;
   }>(null);
   const printRef = useRef<HTMLDivElement>(null);
 
@@ -165,19 +402,153 @@ export function ArSheetTab() {
   // Same rule as the payer filter below: options come from the rows, so a
   // programme with nothing behind it is never offered. Unassigned is real —
   // two invoices resolve to no programme at all.
-  const vertOpts = useMemo(() => {
+  const vertTabs = useMemo(() => {
     const m = new Map<string, number>();
-    for (const i of INV) m.set(i.vertical || 'Unassigned', (m.get(i.vertical || 'Unassigned') ?? 0) + 1);
-    return [...m.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+    for (const i of INV) m.set(vertOf(i), (m.get(vertOf(i)) ?? 0) + 1);
+    return [...m.entries()].map(([value, count]) => ({ value, count }))
+      // Biggest book first, but Unassigned pinned last whatever its size: it is
+      // the residue, not a programme, and it should not sit between two that are.
+      .sort((a, b) => Number(a.value === UNASSIGNED) - Number(b.value === UNASSIGNED)
+        || b.count - a.count || a.value.localeCompare(b.value));
   }, [INV]);
+
+  /**
+   * PI'S BOOK SPEAKS PI'S LANGUAGE.
+   *
+   * The same three columns carrying the same three figures — the words the lien
+   * business actually uses for them. A PI invoice is not "billed and
+   * outstanding": it is INVOICED, the funder ADVANCES 15% of that against the
+   * lien, and what is left is the BALANCE still outstanding on the case.
+   *
+   * ONLY ON THE PI TAB, and that is the whole reason this is keyed to the tab
+   * rather than done once in the header. On 'All verticals' the same column
+   * holds VA and TriCare rows, where there is no advance and no lien and every
+   * invoice is expected in full — "ADVANCE 15%" over that column would be false
+   * about three quarters of the register.
+   */
+  const isPi = vert === 'PI';
+  /**
+   * IS THIS ROW PI — as against `isPi`, which is "is the PI TAB open".
+   *
+   * The two are the same thing only on the PI tab. Everywhere a row is DRAWN,
+   * this is the one that matters: on "All verticals" a PI invoice is still a PI
+   * invoice, and gating its status, its percentage and its highlight on the tab
+   * meant the same row read one way on one tab and another way on another. The
+   * money columns were fixed for this already; the annotations around them were
+   * not.
+   *
+   * `isPi` still governs what is TAB-level and genuinely so: the column
+   * headings, the running words in the totals line, and which columns the
+   * workbook carries.
+   */
+  const rowIsPi = (i: ArRegisterInvoice) => vertOf(i) === 'PI';
+  // TOTAL and INVOICED read the same on every tab now: the first column is what
+  // the case was billed, the second what Striven invoiced against it. Only the
+  // last still varies, because on PI it is the case balance rather than the
+  // invoice's.
+  const COL = { billed: 'TOTAL', expected: 'INVOICED', open: isPi ? 'BALANCE OUTSTANDING' : 'OUTSTANDING' };
+  /** The same three words in running text, for the totals line. */
+  const WORD = {
+    billed: 'total',
+    expected: isPi ? 'invoiced (advance)' : 'invoiced',
+    open: isPi ? 'balance outstanding' : 'outstanding',
+  };
+
+  /**
+   * THE THREE MONEY COLUMNS, as one definition each.
+   *
+   * The PI book reports the CASE, not the invoice: the order's value, the 15%
+   * advance Striven invoiced against it, and what is still to come. Every other
+   * programme bills and expects the same figure, so nothing moves there.
+   *
+   * Defined once because five things have to agree — the cell, the sort, the
+   * headline, the TOTAL row and the workbook — and a sixth reading of "billed"
+   * introduced later is how a column comes to disagree with its own total.
+   */
+  // KEYED ON THE ROW'S PROGRAMME, not on the open tab. Gated on `isPi` these
+  // reverted to the invoice basis the moment you left the PI tab, so "All
+  // verticals" reported PI at its advance and the header disagreed with every
+  // other card on the page.
+  const billedOf = (i: ArRegisterInvoice) => (vertOf(i) === 'PI' ? piGrossOf(i) : num(i.total));
+  const expOf = (i: ArRegisterInvoice) => (vertOf(i) === 'PI' ? num(i.total) : expectedOf(i));
+
+  /**
+   * WHAT THE LAST MONEY COLUMN REPORTS, for one row.
+   *
+   * Defined once because four things have to agree about it — the cell, the
+   * sort, the TOTAL row and the workbook — and a fifth reading of "outstanding"
+   * added later is how a column comes to disagree with its own total.
+   */
+  const openOf = owedOf;
+
+  /** The book on screen: every invoice in the picked vertical, BEFORE search,
+   *  status or payer narrows it any further. */
+  const inVert = useMemo(
+    () => (vert === 'all' ? INV : INV.filter((i) => vertOf(i) === vert)),
+    [INV, vert],
+  );
+
+  /**
+   * THE HEADLINE FOR THE BOOK ON SCREEN, and the status counts under it.
+   *
+   * Summed from the rows rather than read off `reg.totals`, because those are
+   * register-wide and there is no per-vertical set to ask the server for. That
+   * is not a second source of truth: the server builds its totals from the same
+   * per-row figures this table renders (see the `totals` note in strivenApi.ts),
+   * so 'all' still agrees with it to the cent — and the verticals now add back
+   * to 'all' by construction rather than by coincidence.
+   *
+   * The three status counts belong here for the same reason. Open / Settled /
+   * Zero value have to partition the BOOK above them; left on the register's
+   * figures they would have gone on claiming 196 under a book of 38.
+   */
+  const book = useMemo(() => {
+    // OPEN-STATUS ROWS ONLY for the outstanding figure, which is how the server
+    // sums its own (`outstanding = sum(openRows, 'open')`). Every settled row
+    // carries open = 0 so the two agree today; matching the DEFINITION rather
+    // than relying on that is what keeps them agreeing.
+    const openRows = inVert.filter((i) => i.status === 'open');
+    const billed = r2(inVert.reduce((s, i) => s + billedOf(i), 0));
+    const arExpected = r2(inVert.reduce((s, i) => s + expOf(i), 0));
+    return {
+      invoices: inVert.length,
+      billed,
+      arExpected,
+      arDiscount: Math.max(0, r2(billed - arExpected)),
+      arDiscounted: inVert.filter(isDiscounted).length,
+      // THE HEADLINE IS THE SUM OF THE COLUMN UNDER IT. On the PI tab that
+      // column is the lien balance, not the ledger's open figure, and totalling
+      // the one while printing the other is the exact mismatch the per-vertical
+      // totals were introduced to close.
+      // openOf ALREADY asks what programme each ROW is, so one sum serves every
+      // tab. The ternary here undid that: off the PI tab it fell back to the
+      // ledger's open balance, and "All verticals" reported $85,754.19 while the
+      // tiles above it reported $307,764.55 for the same book.
+      outstanding: r2(inVert.reduce((s, i) => s + openOf(i), 0)),
+      openInvoices: openRows.length,
+      // SETTLED is paid OR credit-applied — the same union the segment filter
+      // uses. Counting only 'paid' would leave the three tabs short of the book.
+      collectedInvoices: inVert.filter((i) => i.status === 'paid' || i.status === 'credited').length,
+      zeroValue: inVert.filter((i) => i.status === 'zero-value').length,
+    };
+  }, [inVert, isPi]);
   // Same rule as the other two: options come from the ROWS, so a status with
   // nothing behind it is never offered.
+  /** What the STATUS column actually prints for a row, on whichever tab is
+   *  open. The filter below and the workbook both go through this, so a chip can
+   *  never offer a label the table does not print — the rule STATUS_LABEL was
+   *  written for, now that the PI book prints a different vocabulary. */
+  const statusTextOf = (i: ArRegisterInvoice) => (rowIsPi(i) ? piStatusText(i) : statusLabel(i));
   const statusOpts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const i of INV) m.set(statusLabel(i), (m.get(statusLabel(i)) ?? 0) + 1);
+    // Off the rows IN VIEW, not the whole register: on the PI tab a chip built
+    // from every invoice would offer statuses no PI row can have, and count them
+    // against verticals this table is not showing.
+    for (const i of inVert) m.set(statusTextOf(i), (m.get(statusTextOf(i)) ?? 0) + 1);
     return [...m.entries()].map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
-  }, [INV]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inVert, isPi]);
   const payerOpts = useMemo(() => {
     const m = new Map<string, number>();
     for (const i of INV) m.set(i.payer || 'Unassigned', (m.get(i.payer || 'Unassigned') ?? 0) + 1);
@@ -187,36 +558,37 @@ export function ArSheetTab() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return INV.filter((i) => {
+    return inVert.filter((i) => {
       // 'paid' means SETTLED, so it has to include the credit-settled rows —
       // otherwise the segments do not add back to the register.
       if (segment === 'paid' && !(i.status === 'paid' || i.status === 'credited')) return false;
       if (segment === 'open' && i.status !== 'open') return false;
       if (segment === 'zero-value' && i.status !== 'zero-value') return false;
-      if (pickPayer.size && !pickPayer.has(i.payer || 'Unassigned')) return false;
-      if (pickVert.size && !pickVert.has(i.vertical || 'Unassigned')) return false;
-      if (pickStatus.size && !pickStatus.has(statusLabel(i))) return false;
+      if (pickPayer.size && !pickPayer.has(i.payer || UNASSIGNED)) return false;
+      if (pickStatus.size && !pickStatus.has(statusTextOf(i))) return false;
       return !q || i.no.includes(q) || i.patient.toLowerCase().includes(q)
         || i.payer.toLowerCase().includes(q) || i.memo.toLowerCase().includes(q)
         || String(i.vertical || '').toLowerCase().includes(q);
     });
-  }, [INV, query, segment, pickPayer, pickVert, pickStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inVert, query, segment, pickPayer, pickStatus, isPi]);
 
   const sorted = useMemo(() => {
     const v = (i: ArRegisterInvoice) => (sort.key === 'no' ? Number(i.no) || 0
-      : sort.key === 'total' ? i.total : sort.key === 'open' ? i.open
-        : sort.key === 'expected' ? expectedOf(i)
+      : sort.key === 'total' ? billedOf(i) : sort.key === 'open' ? openOf(i)
+        : sort.key === 'expected' ? expOf(i)
           : new Date((sort.key === 'due' ? i.dueDate : i.date) + 'T00:00:00').getTime() || 0);
     return [...filtered].sort((a, b) => (v(a) - v(b)) * sort.dir);
-  }, [filtered, sort]);
+  }, [filtered, sort, isPi]);
 
   const pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const pageSafe = Math.min(page, pages);
-  const fBilled = filtered.reduce((s, i) => s + i.total, 0);
-  const fOpen = filtered.reduce((s, i) => s + i.open, 0);
+  const fBilled = filtered.reduce((s, i) => s + billedOf(i), 0);
+  const fOpen = filtered.reduce((s, i) => s + openOf(i), 0);
+  const fPaid = filtered.reduce((s, i) => s + num(i.paid), 0);
   // Summed over the SAME rows the table renders, so the total answers for what
   // is on screen under whatever filter is applied — not for the whole register.
-  const fExpected = filtered.reduce((s, i) => s + expectedOf(i), 0);
+  const fExpected = filtered.reduce((s, i) => s + expOf(i), 0);
 
   const setKey = (key: SortKey) => {
     setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: -1 }));
@@ -230,10 +602,13 @@ export function ArSheetTab() {
     const money = (n: number) => (Number.isFinite(n) ? Number(n.toFixed(2)) : 0);
     const scope = [
       'AR Register',
-      filtered.length === INV.length ? `all ${INV.length}` : `filtered: ${filtered.length} of ${INV.length}`,
+      // FIRST, because it is the book this file is OF. Counted against the
+      // vertical rather than the register below it, so "all 154" means the
+      // whole PI book and not 154 of 196.
+      vert === 'all' ? 'all verticals' : `vertical: ${vert}`,
+      filtered.length === inVert.length ? `all ${inVert.length}` : `filtered: ${filtered.length} of ${inVert.length}`,
       segment === 'all' ? 'all statuses' : segment === 'zero-value' ? 'zero value only' : `${segment} only`,
       pickPayer.size ? `payers: ${[...pickPayer].join(', ')}` : 'all payers',
-      pickVert.size ? `verticals: ${[...pickVert].join(', ')}` : 'all verticals',
       pickStatus.size ? `status: ${[...pickStatus].join(', ')}` : 'all statuses',
     ].join(' · ');
     const rows: (string | number)[][] = [
@@ -245,20 +620,35 @@ export function ArSheetTab() {
       // settled, sheet presence) — it is a superset, not a mirror.
       // 'AR expected basis' names the rule per row so a reader can tell a
       // discounted figure from a full one without recomputing it.
+      // The three money headings follow the SCREEN they were exported from. A
+      // workbook of the PI book headed "Billed / AR expected" is read away from
+      // the portal by someone who asked for invoiced and advance, with nothing on
+      // the sheet tying the two vocabularies together. The scope line above
+      // already names the vertical, so the words cannot be ambiguous.
       ['Invoice number', 'Invoice date', 'Due date', 'Patient', 'Vertical', 'Payer', 'Patient PO / memo',
-        'Billed', 'AR expected', 'AR expected basis', 'Settled', 'Outstanding', 'Status', 'In accountant sheet'],
+        'Total', 'Invoiced', 'AR expected basis',
+        'Settled', isPi ? 'Balance outstanding' : 'Outstanding', 'Status', 'In accountant sheet',
+        // Colour does not survive an export, so what the green SAYS ships as a
+        // column of its own rather than being lost on the way to the file.
+        ...(isPi ? ['Advance received'] : [])],
       ...sorted.map((i) => [i.no, i.date, i.dueDate, i.patient, i.vertical || '', i.payer, i.memo,
-        money(i.total), money(expectedOf(i)),
+        money(billedOf(i)), money(expOf(i)),
         isDiscounted(i) ? 'PI lien — 15% of billed' : 'Full billed amount',
-        money(i.paid), money(i.open),
-        i.status === 'credited' ? 'Paid (credit applied)' : i.status === 'zero-value' ? 'Zero value'
-          : i.status === 'open' ? 'Open' : 'Paid',
-        i.inSheet ? 'yes' : 'NO — Striven only']),
+        money(i.paid), money(openOf(i)),
+        // The PI book collapses four states to two on screen; the workbook says
+        // the same two, or it is a different report of the same rows.
+        rowIsPi(i)
+          ? piStatusText(i)
+          : i.status === 'credited' ? 'Paid (credit applied)' : i.status === 'zero-value' ? 'Zero value'
+            : i.status === 'open' ? 'Open' : 'Paid',
+        i.inSheet ? 'yes' : 'NO — Striven only',
+        ...(isPi ? [rowIsPi(i) && advanceIn(i) ? 'yes' : 'no'] : [])]),
       [],
       // Padded to the header above: Billed is column 8 and AR expected 9, so the
       // two blanks after it hold the basis column's place before Settled.
       ['Total', '', '', `${filtered.length} invoices`, '', '', '',
-        money(fBilled), money(fExpected), '', money(fBilled - fOpen), money(fOpen), '', ''],
+        money(fBilled), money(fExpected), '', money(fPaid), money(fOpen), '', '',
+        ...(isPi ? [''] : [])],
     ];
     downloadXlsx([{ name: 'AR register', rows }], stamped('smr-ar-register', 'xlsx'));
   }
@@ -313,47 +703,118 @@ export function ArSheetTab() {
    */
   // Headline for the ACTUAL COLLECTABLE tile: what the open book is really
   // worth, and how many of those invoices the lien rule discounts.
+  /**
+   * EVERYTHING BILLED, on the same basis the book below reports.
+   *
+   * NOT the server's `t.billed`, which sums what Striven INVOICED — and on PI
+   * that is the 15% lien advance, not what the case was billed. The tile read
+   * $364,936.60 while the invoice book it opens read $612,826.95, a $247,890.35
+   * gap on one screen between a tile and the table it links to.
+   */
+  const totalBilled = r2(INV.reduce((s2, i) => s2 + billedOf(i), 0));
+
   const collectable = useMemo(() => {
-    const open = INV.filter((i) => num(i.open) > 0.005);
+    // OWED, not `open`. A PI invoice whose advance has been paid has open = 0 and
+    // 85% of the case still to come; filtering on the ledger dropped exactly the
+    // rows this tile exists to chase.
+    const open = INV.filter((i) => owedOf(i) > 0.005);
     return {
       total: open.reduce((s, i) => s + collectableOf(i), 0),
       face: open.reduce((s, i) => s + num(i.open), 0),
       count: open.length,
-      discounted: open.filter(isDiscounted).length,
     };
   }, [INV]);
 
-  const arExp = (() => {
-    const billed = num(t?.billed);
-    const expected = typeof t?.arExpected === 'number' ? t.arExpected : billed;
-    const discount = typeof t?.arDiscount === 'number' ? t.arDiscount : Math.max(0, billed - expected);
+  /**
+   * COLLECTED AND THE RATE, on the same basis as the two tiles beside them.
+   *
+   * Stated as billed LESS what is still owed, not summed from the ledger's
+   * `paid`. The server's `t.collected` counts cash against INVOICES, and on PI
+   * the invoice is the 15% advance — so it reported $279,182.41 sitting between
+   * a Total Billed of $612,826.95 and an Outstanding of $307,764.55, three
+   * adjacent tiles that did not add up.
+   *
+   * Derived rather than summed for the same reason the drills derive theirs:
+   * three figures that subtract to each other cannot drift apart.
+   */
+  const totalCollected = r2(totalBilled - collectable.total);
+  const collectionRate = totalBilled > 0 ? r2((totalCollected / totalBilled) * 100) : 0;
 
-    // BY VERTICAL, because the blended 85.5% is not a rule anyone applies — it
-    // is an accident of this month's mix. The rule is per programme: PI settles
-    // out of a lien at 15% of face value, everything else is expected in full.
-    // One headline hid that; the split states it.
+  /**
+   * THE CARD'S TWO FIGURES, PER ROW — keyed on the ROW's programme, not on the
+   * open tab, because this card describes the whole register at once.
+   *
+   * On PI, BILLED is the sales order and RECEIVABLE is what is STILL TO COME on
+   * it — the case less whatever advance has already been received, which is the
+   * same `piBalanceOf` the book, both drills and this card's own footer report.
+   * The footer used to quote a figure the column above it did not; they are now
+   * the same number.
+   *
+   * RECEIVABLE IS WHAT IS STILL OWED — one meaning, across the whole card. It
+   * took two forms only because the programmes are collected differently:
+   *
+   *   PI       the case less whatever advance has arrived — `piBalanceOf`, the
+   *            same figure the book, both drills and this card's footer report.
+   *            A settled PI invoice is not the end of the case, so the ledger's
+   *            `open` cannot answer for it.
+   *   the rest the OPEN invoices. Every other programme bills and is paid in one
+   *            go, so what is receivable is simply what has not been paid.
+   *
+   * IT USED TO REPORT WHAT WAS EXPECTED ON THE WHOLE BOOK, settled invoices
+   * included, which is a different question and not the one the heading asks:
+   * VA read $277,822.81 receivable against $46,500.00 genuinely outstanding.
+   *
+   * BILLED IS UNTOUCHED for everything but PI. It is what was billed, and that
+   * does not change with how much of it has come back.
+   */
+  const cardBilled = (i: ArRegisterInvoice) => (vertOf(i) === 'PI' ? piGrossOf(i) : num(i.total));
+  const cardExpected = owedOf;
+
+  const arExp = (() => {
+    // BY VERTICAL, because a single blended figure is not a rule anyone applies
+    // — it is an accident of this month's mix. The split states what each
+    // programme is actually owed.
     //
-    // Cut from the invoice rows rather than from a server total, so it uses the
-    // same `arExpected` the drill below lists and cannot disagree with it.
+    // Cut from the invoice rows rather than from a server total, so the card
+    // uses the same arithmetic the drills below list and cannot disagree with
+    // them.
     const vm = new Map<string, { vertical: string; n: number; billed: number; expected: number }>();
     for (const i of INV) {
       const key = i.vertical || 'Unassigned';
       const e = vm.get(key) ?? { vertical: key, n: 0, billed: 0, expected: 0 };
-      e.n += 1; e.billed += num(i.total); e.expected += expectedOf(i);
+      e.n += 1; e.billed += cardBilled(i); e.expected += cardExpected(i);
       vm.set(key, e);
     }
     const byVert = [...vm.values()]
-      .filter((v) => v.billed > 0 || v.n > 0)
+      // ONLY WHAT IS STILL OWED. A programme that has been collected in full has
+      // no receivable, and a row of zeroes on a card headed AR RECEIVABLE is a
+      // line the reader has to check and discard. DEMO is collected in full
+      // today and drops off; it returns by itself the moment an invoice of its
+      // opens.
+      .filter((v) => v.expected > 0.005)
       .map((v) => ({ ...v, pct: v.billed > 0 ? (v.expected / v.billed) * 100 : 100 }))
-      // Discounted programmes first — they are the reason the card exists — then
-      // by size, so PI leads and VA follows it rather than burying it.
+      // Least recoverable first — the programmes with the most still outstanding
+      // relative to what they billed are the reason the card exists — then by
+      // size, so the big books lead within a tier.
       .sort((a, b) => (a.pct - b.pct) || (b.billed - a.billed));
+
+    // THE TOTAL IS OF THE ROWS ABOVE IT, not of the register. Once a programme
+    // can be filtered out, summing the whole book here would print a total the
+    // visible rows do not add up to — the "four rows under a total of eleven"
+    // this file has been bitten by before. BILLED moves with it for the same
+    // reason: it is the billed figure of the programmes shown, and the card
+    // says so by sitting directly under them.
+    const billed = r2(byVert.reduce((s2, v) => s2 + v.billed, 0));
+    const expected = r2(byVert.reduce((s2, v) => s2 + v.expected, 0));
+    const discount = Math.max(0, r2(billed - expected));
 
     return {
       billed,
       expected,
       discount,
-      discounted: num(t?.arDiscounted),
+      // THE PI BOOK'S SIZE, which is what the footer beneath says — "N PI
+      // invoices · $X yet to be received".
+      discounted: INV.filter((i) => vertOf(i) === 'PI').length,
       pct: billed > 0 ? Math.max(0, Math.min(100, (expected / billed) * 100)) : 0,
       byVert,
     };
@@ -368,8 +829,88 @@ export function ArSheetTab() {
    * list ordered by face value would put nearly all its effort on the smallest
    * real recovery.
    */
+  /**
+   * WHAT THE 85 ARE, from the Open Invoices tile.
+   *
+   * The tile counts every invoice with money still on it, and that is two very
+   * different situations the count alone cannot separate: an invoice nobody has
+   * paid a cent on, and a PI case whose advance arrived months ago and whose
+   * balance is still out. GROUPED BY THAT, not by programme — the Actual
+   * Collectable drill beside it already splits by vertical, and a second copy of
+   * the same table would only make the reader check which one they opened.
+   */
+  const explainOwing = () => {
+    const owing = INV.filter((i) => owedOf(i) > 0.005);
+    if (!owing.length) return;
+    const isPiRow = (i: ArRegisterInvoice) => vertOf(i) === 'PI';
+    const S = (rows: ArRegisterInvoice[]) => r2(rows.reduce((s2, i) => s2 + owedOf(i), 0));
+    const nonPi = owing.filter((i) => !isPiRow(i));
+    const byVert = [...new Set(nonPi.map(vertOf))]
+      .map((v) => ({
+        label: `${v} · open`,
+        note: 'billed and paid in one go, so the balance is what is unpaid',
+        rows: nonPi.filter((i) => vertOf(i) === v),
+      }))
+      .sort((a, b) => S(b.rows) - S(a.rows));
+    const groups = [
+      {
+        label: 'PI · nothing received',
+        note: 'not even the advance, so the WHOLE total is outstanding',
+        rows: owing.filter((i) => isPiRow(i) && !advanceIn(i)),
+      },
+      {
+        label: 'PI · advance received, balance owing',
+        note: 'the 15% is in; the case has yet to settle',
+        rows: owing.filter((i) => isPiRow(i) && advanceIn(i)),
+      },
+      ...byVert,
+    ].filter((g) => g.rows.length > 0);
+
+    setDrill({
+      title: 'Invoices still owing',
+      sub: `${owing.length} invoice${owing.length === 1 ? '' : 's'} · ${formatCurrency(S(owing), true)} outstanding`,
+      columns: [
+        { key: 'k', label: 'GROUP' }, { key: 'n', label: 'INVOICES', num: true },
+        { key: 'amt', label: 'OUTSTANDING', num: true }, { key: 'why', label: '' },
+      ],
+      rows: [
+        ...groups.map((g) => ({
+          k: <span style={{ fontWeight: 800 }}>{g.label}</span>,
+          n: String(g.rows.length),
+          amt: <span style={{ color: C.negative, fontWeight: 800 }}>{formatCurrency(S(g.rows), true)}</span>,
+          why: <span style={{ fontSize: 11.5, color: C.muted }}>{g.note}</span>,
+        })),
+        {
+          rowClass: 'total-row',
+          k: <strong>TOTAL</strong>,
+          n: <strong>{owing.length}</strong>,
+          amt: <strong>{formatCurrency(S(owing), true)}</strong>,
+          why: '',
+        },
+        // The worklist itself. Largest first — this is a chase list, and the
+        // order it opens in is the order somebody will work it in.
+        { k: <span style={{ color: C.muted, fontSize: 12 }}>Every invoice still owing, largest first</span>, n: '', amt: '', why: '' },
+        ...owing.slice().sort((a, b) => owedOf(b) - owedOf(a)).map((i) => ({
+          k: (
+            <span style={{ paddingLeft: 10 }}>
+              #{i.no} · {i.patient || '-'}
+              <span style={{ color: VERT_C[i.vertical ?? ''] ?? C.muted, fontWeight: 700 }}> · {i.vertical || 'Unassigned'}</span>
+            </span>
+          ),
+          n: <span style={{ color: C.muted }}>{i.dueDate ? `due ${fmtDate(i.dueDate)}` : 'no due date'}</span>,
+          amt: <span style={{ color: C.negative }}>{formatCurrency(owedOf(i), true)}</span>,
+          why: vertOf(i) === 'PI' ? piStatusTag(i) : statusTag(i),
+        })),
+      ] as Record<string, ReactNode>[],
+      total: {
+        k: `${owing.length} invoices`,
+        amt: <span style={{ color: C.negative }}>{formatCurrency(S(owing), true)}</span>,
+      },
+    });
+  };
+
   const explainCollectable = () => {
-    const open = INV.filter((i) => num(i.open) > 0.005);
+    const open = INV.filter((i) => owedOf(i) > 0.005);
     const m = new Map<string, ArRegisterInvoice[]>();
     for (const i of open) {
       const k = i.vertical || 'Unassigned';
@@ -381,35 +922,29 @@ export function ArSheetTab() {
     const S = (rows: ArRegisterInvoice[], f: (i: ArRegisterInvoice) => number) => rows.reduce((s, i) => s + f(i), 0);
     setDrill({
       title: 'Actual collectable',
-      sub: `${open.length} open invoice${open.length === 1 ? '' : 's'} · ${formatCurrency(S(open, (i) => num(i.open)), true)} outstanding at face · ${formatCurrency(S(open, collectableOf), true)} realistically collectable`,
+      sub: `${open.length} invoice${open.length === 1 ? '' : 's'} still owing · ${formatCurrency(S(open, collectableOf), true)} outstanding`,
       columns: [
         { key: 'k', label: 'VERTICAL' }, { key: 'n', label: 'OPEN INVOICES' },
-        { key: 'face', label: 'OUTSTANDING (FACE)', num: true },
-        { key: 'coll', label: 'ACTUAL COLLECTABLE', num: true },
-        { key: 'rate', label: 'BASIS' },
+        // ONE MONEY COLUMN. "Outstanding at face" beside "actual collectable"
+        // was a contrast between a face value and a discounted one; both are the
+        // same figure now, and printing it twice invites the reader to hunt for
+        // a difference that is not there.
+        { key: 'coll', label: 'OUTSTANDING', num: true },
       ],
       rows: [
         ...groups.map((g) => ({
           k: <span style={{ fontWeight: 800, color: VERT_C[g.vertical] ?? C.ink }}>{g.vertical}</span>,
           n: String(g.rows.length),
-          face: formatCurrency(S(g.rows, (i) => num(i.open)), true),
           coll: <span className="cell-pos" style={{ fontWeight: 800 }}>{formatCurrency(S(g.rows, collectableOf), true)}</span>,
-          rate: g.rows.every(isDiscounted)
-            ? <span className="pill-tag tag-warn">lien · 15% of face</span>
-            : g.rows.some(isDiscounted)
-              ? <span className="pill-tag tag-warn">mixed</span>
-              : <span className="pill-tag tag-ok">expected in full</span>,
         })),
         {
           k: <strong>TOTAL</strong>,
           n: <strong>{open.length}</strong>,
-          face: <strong>{formatCurrency(S(open, (i) => num(i.open)), true)}</strong>,
           coll: <strong>{formatCurrency(S(open, collectableOf), true)}</strong>,
-          rate: '',
         },
         // The worklist itself, hardest money first — ordered by what is really
         // recoverable, not by face value.
-        { k: <span style={{ color: C.muted, fontSize: 12 }}>Every open invoice, by what is really recoverable</span>, n: '', face: '', coll: '', rate: '' },
+        { k: <span style={{ color: C.muted, fontSize: 12 }}>Every invoice still owing, largest first</span>, n: '', coll: '' },
         ...open.slice().sort((a, b) => collectableOf(b) - collectableOf(a)).map((i) => ({
           k: (
             <span style={{ paddingLeft: 10 }}>
@@ -418,40 +953,175 @@ export function ArSheetTab() {
             </span>
           ),
           n: <span style={{ color: C.muted }}>{i.dueDate ? `due ${fmtDate(i.dueDate)}` : 'no due date'}</span>,
-          face: formatCurrency(num(i.open), true),
           coll: <span className="cell-pos">{formatCurrency(collectableOf(i), true)}</span>,
-          rate: isDiscounted(i)
-            ? <span style={{ fontSize: 11, color: C.muted }}>15% of face</span>
-            : <span style={{ fontSize: 11, color: C.muted }}>full</span>,
         })),
       ],
     });
   };
 
-  /** The invoices the lien rule actually bit, from the card's footer link. */
+  /**
+   * WHAT PI STILL OWES, over every one of its invoices.
+   *
+   * Held here rather than computed twice because the card footer and the drill
+   * it opens have to agree: a footer quoting one total that opens a table
+   * summing to another is the reader's first reason to distrust both.
+   *
+   * Per row this is `piBalanceOf` — the same arithmetic as the PI book's
+   * BALANCE OUTSTANDING column and the programme drill's, so no two screens can
+   * disagree about a single invoice either.
+   */
+  const piYetToCome = useMemo(() => {
+    const rows = INV.filter((i) => vertOf(i) === 'PI');
+    return {
+      rows,
+      // TOTAL and ADVANCE on the order basis — the same two figures the book and
+      // the programme drill print for these rows.
+      billed: r2(rows.reduce((s2, i) => s2 + piGrossOf(i), 0)),
+      advance: r2(rows.reduce((s2, i) => s2 + num(i.total), 0)),
+      yetToCome: r2(rows.reduce((s2, i) => s2 + piBalanceOf(i), 0)),
+    };
+  }, [INV]);
+
+  /** The PI book as a chase list, from the card's footer link. */
   const explainExpected = () => {
-    // Identified by the RULE rather than by re-testing the vertical here: the
-    // server stamps `arBasis`, and a second copy of "which invoices are PI"
-    // living in the UI is how the two drift.
-    const rows = INV.filter((i) => expectedOf(i) < num(i.total) - 0.005)
-      .sort((a, b) => (num(b.total) - expectedOf(b)) - (num(a.total) - expectedOf(a)));
+    // Ranked by what is still owed, which is also what the last column says —
+    // ordering on one figure while printing another would put the biggest
+    // number somewhere down the list.
+    const rows = [...piYetToCome.rows].sort((a, b) => piBalanceOf(b) - piBalanceOf(a));
     if (!rows.length) return;
-    const billed = rows.reduce((s, i) => s + num(i.total), 0);
-    const exp = rows.reduce((s, i) => s + expectedOf(i), 0);
     setDrill({
-      title: 'AR expected · PI lien discount',
-      sub: `${rows.length} invoice${rows.length === 1 ? '' : 's'} · billed ${formatCurrency(billed, true)} · expected ${formatCurrency(exp, true)} · discount ${formatCurrency(billed - exp, true)}`,
+      title: 'AR receivable · Amount yet to be received from PI',
+      sub: `${rows.length} invoice${rows.length === 1 ? '' : 's'} · total ${formatCurrency(piYetToCome.billed, true)} · invoiced (advance) ${formatCurrency(piYetToCome.advance, true)} · yet to be received ${formatCurrency(piYetToCome.yetToCome, true)}`,
       columns: [
         { key: 'no', label: 'INVOICE NUMBER' }, { key: 'd', label: 'INVOICE DATE' },
-        { key: 'p', label: 'PATIENT' }, { key: 'b', label: 'BILLED', num: true },
-        { key: 'e', label: 'EXPECTED', num: true }, { key: 'x', label: 'DISCOUNT', num: true },
+        { key: 'p', label: 'PATIENT' }, { key: 'b', label: 'TOTAL', num: true },
+        { key: 'e', label: 'INVOICED', num: true }, { key: 'x', label: 'YET TO BE RECEIVED', num: true },
       ],
       rows: rows.map((i) => ({
+        rowClass: advanceOverRate(i) ? 'row-overrate' : undefined,
         no: <strong>#{i.no}</strong>, d: fmtDate(i.date), p: i.patient || '-',
-        b: formatCurrency(num(i.total), true),
-        e: formatCurrency(expectedOf(i), true),
-        x: <span style={{ color: C.negative }}>−{formatCurrency(num(i.total) - expectedOf(i), true)}</span>,
+        b: formatCurrency(piGrossOf(i), true),
+        e: <>
+          {advanceIn(i)
+            ? <span className="amt-received">{formatCurrency(num(i.total), true)}</span>
+            : formatCurrency(num(i.total), true)}
+          <AdvancePct i={i} />
+        </>,
+        // NO LEADING MINUS. It was a deduction from billed; it is money owed, and
+        // a negative sign on a receivable reads as a credit. Heavy where nothing
+        // has arrived at all — those are the rows a chase list exists to surface.
+        x: <span style={{ color: C.negative, fontWeight: advanceIn(i) ? 600 : 800 }}
+          title={advanceIn(i)
+            ? `${formatCurrency(piGrossOf(i), true)} total less the ${formatCurrency(num(i.total), true)} advance already received`
+            : `The whole ${formatCurrency(piGrossOf(i), true)} total — the advance has not been received, so nothing is deducted`}>
+          {formatCurrency(piBalanceOf(i), true)}
+        </span>,
       })),
+    });
+  };
+
+  /**
+   * ONE PROGRAMME'S INVOICES, from clicking its row on the AR RECEIVABLE card.
+   *
+   * The card states what each programme is still owed, and the obvious next
+   * question is which invoices are behind the number. This is that list.
+   *
+   * IT SPEAKS EACH PROGRAMME'S OWN LANGUAGE. On PI the columns are the lien's —
+   * the order's total, the 15% advance Striven invoiced against it (pilled once
+   * it has landed, with its share of the total beside it) and what is still to
+   * come — and the status is the three-state one. Everywhere else there is no
+   * advance and no lien, so the neutral wording and the register's own status
+   * are the only true ones.
+   *
+   * BOTH ROUTES GO THROUGH THE SHARED HELPERS — piGrossOf, piBalanceOf,
+   * advanceIn, piStatusTag — rather than repeating their arithmetic locally.
+   * A local copy is how this drill came to miss the rule that zeroes the
+   * balance when the whole bill was invoiced, and drifted from the book that
+   * had it.
+   */
+  const explainVertical = (vertical: string) => {
+    const rows = INV.filter((i) => vertOf(i) === vertical).sort((a, b) => Number(b.no) - Number(a.no));
+    if (!rows.length) return;
+    const pi = vertical === 'PI';
+    const grossOf = (i: ArRegisterInvoice) => (pi ? piGrossOf(i) : num(i.total));
+    const owedOf = (i: ArRegisterInvoice) => (pi ? piBalanceOf(i) : num(i.open));
+    /**
+     * THE MIDDLE COLUMN IS WHAT HAS COME IN — total less what is still to come.
+     *
+     * That identity already held on PI, where the invoice IS the advance:
+     * $5,995.00 total − $5,095.75 still to come = the $899.25 invoiced. It did
+     * not hold anywhere else, because the column carried AR EXPECTED — what the
+     * programme is expected to yield on the whole book, settled or not — so VA
+     * read $277,822.81 billed, $277,822.81 expected and $46,500.00 outstanding,
+     * three figures with no arithmetic between them.
+     *
+     * Stated as the subtraction rather than summed from `paid`, so the three
+     * columns reconcile by construction and cannot drift apart on a row where
+     * the ledger's parts do not quite add up.
+     */
+    const inOf = (i: ArRegisterInvoice) => r2(grossOf(i) - owedOf(i));
+    const gross = r2(rows.reduce((s2, i) => s2 + grossOf(i), 0));
+    const billed = r2(rows.reduce((s2, i) => s2 + num(i.total), 0));
+    const owed = r2(rows.reduce((s2, i) => s2 + owedOf(i), 0));
+    const exp = r2(gross - owed);
+    setDrill({
+      title: `${vertical} · AR receivable`,
+      sub: [
+        `${rows.length} invoice${rows.length === 1 ? '' : 's'}`,
+        ...(pi ? [`total ${formatCurrency(gross, true)}`] : []),
+        `${pi ? 'invoiced (advance)' : 'billed'} ${formatCurrency(billed, true)}`,
+        ...(pi ? [] : [`received ${formatCurrency(exp, true)}`]),
+        `${pi ? 'yet to be received' : 'outstanding'} ${formatCurrency(owed, true)}`,
+      ].join(' · '),
+      columns: [
+        { key: 'no', label: 'INVOICE NUMBER' }, { key: 'd', label: 'INVOICE DATE' },
+        { key: 'p', label: 'PATIENT' },
+        // TOTAL sits LEFT of INVOICED because it is the prior, larger fact: the
+        // order, of which the invoice is the 15% advance.
+        ...(pi ? [{ key: 't', label: 'TOTAL', num: true }] : []),
+        { key: 'b', label: pi ? 'INVOICED' : 'BILLED', num: true },
+        // RECEIVED, not EXPECTED. The figure is now total less what is still to
+        // come, which is money already in — and a column headed "expected"
+        // printing what has already arrived is the plainest kind of wrong.
+        ...(pi ? [] : [{ key: 'e', label: 'RECEIVED', num: true }]),
+        { key: 'o', label: pi ? 'YET TO BE RECEIVED' : 'OUTSTANDING', num: true },
+        { key: 's', label: 'STATUS' },
+      ],
+      rows: rows.map((i) => ({
+        rowClass: pi && advanceOverRate(i) ? 'row-overrate' : undefined,
+        no: <strong>#{i.no}</strong>, d: fmtDate(i.date), p: i.patient || '-',
+        ...(pi ? {
+          t: <span title={i.orderTotal != null
+            ? `The sales order behind this invoice is ${formatCurrency(i.orderTotal, true)}; the invoice is the 15% advance against it`
+            : 'No larger order found — this invoice is the whole bill'}>
+            {formatCurrency(grossOf(i), true)}
+          </span>,
+        } : {}),
+        b: pi
+          ? <>
+            {advanceIn(i)
+              ? <span className="amt-received">{formatCurrency(num(i.total), true)}</span>
+              : formatCurrency(num(i.total), true)}
+            <AdvancePct i={i} />
+          </>
+          : formatCurrency(num(i.total), true),
+        ...(pi ? {} : { e: formatCurrency(inOf(i), true) }),
+        o: owedOf(i) > 0.005
+          ? <span style={{ color: C.negative, fontWeight: pi && !advanceIn(i) ? 800 : 600 }}>
+            {formatCurrency(owedOf(i), true)}
+          </span>
+          : '—',
+        s: pi ? piStatusTag(i) : statusTag(i),
+      })),
+      // The SAME sums the subtitle quotes — one reckoning, printed at both ends
+      // of the dialog so it is in view whichever end you are reading from.
+      total: {
+        p: `${rows.length} invoice${rows.length === 1 ? '' : 's'}`,
+        ...(pi ? { t: formatCurrency(gross, true) } : {}),
+        b: formatCurrency(billed, true),
+        ...(pi ? {} : { e: formatCurrency(exp, true) }),
+        o: <span style={{ color: C.negative }}>{formatCurrency(owed, true)}</span>,
+      },
     });
   };
 
@@ -490,7 +1160,7 @@ export function ArSheetTab() {
    * otherwise ambiguous about which card you were sent to.
    */
   const showBook = () => {
-    setQuery(''); setSegment('all'); setPickPayer(new Set()); setPickVert(new Set()); setPage(1);
+    setQuery(''); setSegment('all'); setVert('all'); setPickPayer(new Set()); setPage(1);
     requestAnimationFrame(() => {
       const el = printRef.current;
       if (!el) return;
@@ -711,13 +1381,19 @@ export function ArSheetTab() {
                 it clears the filters on the way down — landing on a table
                 showing 12 rows under a headline of 164 would read as a
                 contradiction rather than as a filter someone left on. */}
-            <KpiR ico="doc" tint="#0A369F" label="Total Billed" value={t.billed} format={formatCurrency}
-              deltaText={`${t.invoices} invoices`} foot="every invoice raised · click to open the book"
+            <KpiR ico="doc" tint="#0A369F" label="Total Billed" value={totalBilled} format={formatCurrency}
+              deltaText={`${INV.length} invoices`} foot="PI at case value, the rest as invoiced · click to open the book"
               onClick={showBook} />
             {/* Clickable: the split between cash banked and credit applied is
                 the question this tile invites, and $17,687 of it is not what it
                 looks like on the face of the card. */}
-            <KpiR ico="wallet" tint="#16A34A" label="Collected" value={t.collected} format={formatCurrency}
+            {/* BILLED LESS WHAT IS STILL OWED, so the three money tiles on this
+                row subtract to each other. `t.collected` counts cash against
+                INVOICES, and a PI invoice is the 15% advance — it read
+                $279,182.41 between a billed of $612,826.95 and an outstanding of
+                $307,764.55. The cash/credit split below is still the ledger's and
+                still true; it just no longer accounts for the whole figure. */}
+            <KpiR ico="wallet" tint="#16A34A" label="Collected" value={totalCollected} format={formatCurrency}
               deltaText={`${t.collectedInvoices} settled`}
               // Same guard as the drill: an older payload has neither figure,
               // and `$- cash · $- credit` under a real total reads as breakage.
@@ -725,23 +1401,35 @@ export function ArSheetTab() {
                 ? `${formatCurrency(num(t.cashCollected))} cash · ${formatCurrency(num(t.creditCollected))} credit`
                 : `${t.collectedInvoices} paid in full`}
               onClick={explainCollected} />
-            <KpiR ico="cash" tint="#DC2626" label="Outstanding" value={t.outstanding} format={formatCurrency}
-              deltaText={`${t.openInvoices} open invoices`} foot="net of customer credits" />
-            <KpiR ico="clip" tint="#D97706" label="Open Invoices" value={t.openInvoices}
-              deltaText="awaiting payment" foot="from the invoice book" />
-            {/* ACTUAL COLLECTABLE sits beside OUTSTANDING deliberately: it is
-                the same money, valued at what it is really worth. Outstanding is
-                face value, and on a PI lien face value is ~6.7x the recovery —
-                $31,075.99 of open PI is $4,661.40 of expected cash. A chase list
-                built on the tile to its left would spend its effort backwards. */}
+            {/* OFF `collectable`, not the server's `t.outstanding`. The server
+                totals the LEDGER, which cannot see that a PI invoice with its
+                advance paid still has 85% of the case to come — it reported
+                $82,754.19 against $304,764.55 genuinely owed. */}
+            <KpiR ico="cash" tint="#DC2626" label="Outstanding" value={collectable.total} format={formatCurrency}
+              deltaText={`${collectable.count} invoices still owing`} foot="PI at case value, the rest net of credits" />
+            {/* EVERY INVOICE WITH MONEY STILL ON IT, which is more than the ones
+                the ledger calls open. `t.openInvoices` counts status = open, so it
+                missed every PI invoice whose advance has been received and whose
+                case still owes the balance — 49 of them, each with a live figure
+                in the Outstanding tile beside this one. A count that excludes
+                rows the total includes cannot be reconciled against it.
+                `collectable.count` is the same set that total is summed over. */}
+            <KpiR ico="clip" tint="#D97706" label="Open Invoices" value={collectable.count}
+              deltaText="still owing" foot="open, plus advance-in with a balance · click for the split"
+              onClick={explainOwing} />
+            {/* THE SAME FIGURE AS OUTSTANDING, deliberately. No lien discount is
+                applied anywhere any more, so the two tiles are one number said
+                twice; this one is kept because the drill behind it is the
+                per-vertical chase list, which nothing else on this page offers. */}
             <KpiR ico="cash" tint="#0D9488" label="Actual Collectable" value={collectable.total} format={formatCurrency}
-              deltaText={`of ${formatCurrency(t.outstanding)} outstanding`}
-              foot={collectable.discounted > 0
-                ? `${collectable.discounted} PI lien${collectable.discounted === 1 ? '' : 's'} at 15% · click for the split`
-                : 'every open invoice expected in full'}
+              deltaText={`of ${formatCurrency(collectable.total)} outstanding`}
+              foot="every open invoice at its full balance · click for the split"
               onClick={explainCollectable} />
-            <KpiR ico="pie" tint="#7C3AED" label="Collection Rate" value={t.collectionRate}
-              format={(n) => `${n.toFixed(1)}%`} deltaText="collected ÷ billed" foot="of everything invoiced" />
+            {/* Off the two tiles beside it rather than the server's own rate,
+                which divided invoice-basis collected by invoice-basis billed and
+                so answered a different question from the row it sits in. */}
+            <KpiR ico="pie" tint="#7C3AED" label="Collection Rate" value={collectionRate}
+              format={(n) => `${n.toFixed(1)}%`} deltaText="collected ÷ billed" foot="of everything billed to the case" />
           </div>
 
           <div className="exec-grid12">
@@ -756,7 +1444,7 @@ export function ArSheetTab() {
                 The figure existed only as a phrase in the Invoice Book subtitle
                 below, where the reader had to hold two totals in their head to
                 see the gap. Here the gap IS the card. */}
-            <ChartCard className="g12-4" title="AR EXPECTED" sub="PI settles at 15% of billed · every other programme in full">
+            <ChartCard className="g12-4" title="AR RECEIVABLE" sub="What is still owed — PI after the advance, every other programme its open invoices">
               <div className="ar-exp">
                 <div className="ar-exp-head">
                   <div>
@@ -778,20 +1466,27 @@ export function ArSheetTab() {
                     blended figure said nothing about why $42k is missing. */}
                 <div className="ar-exp-tbl">
                   <div className="ar-exp-tr is-head">
-                    <span>Programme</span><span>Billed</span><span>Expected</span>
+                    <span>Programme</span><span>Billed</span><span>Receivable</span>
                   </div>
+                  {/* EVERY PROGRAMME OPENS ITS OWN INVOICES. A real <button>
+                      rather than a div with an onClick, so the row is tabbable,
+                      announced as a control and fires on Enter and Space without
+                      any of that being hand-rolled. The grid layout is unchanged
+                      — button.ar-exp-tr in the stylesheet only undoes the UA's
+                      own button styling. */}
                   {arExp.byVert.map((v) => {
                     const cut = v.pct < 99.95;
                     return (
-                      <div key={v.vertical} className={`ar-exp-tr${cut ? ' is-cut' : ''}`}
-                        title={`${v.n} invoice${v.n === 1 ? '' : 's'} · ${cut ? `expected at ${v.pct.toFixed(0)}% of billed` : 'expected in full'}`}>
+                      <button type="button" key={v.vertical} className={`ar-exp-tr${cut ? ' is-cut' : ''}`}
+                        onClick={() => explainVertical(v.vertical)}
+                        title={`${v.n} invoice${v.n === 1 ? '' : 's'} · ${cut ? `expected at ${v.pct.toFixed(0)}% of billed` : 'expected in full'} — click for the list`}>
                         <span>
                           {v.vertical}
                           <i>{cut ? `${v.pct.toFixed(0)}%` : 'full'}</i>
                         </span>
                         <span>{formatCurrency(v.billed, true)}</span>
                         <span>{formatCurrency(v.expected, true)}</span>
-                      </div>
+                      </button>
                     );
                   })}
                   <div className="ar-exp-tr is-total">
@@ -803,12 +1498,14 @@ export function ArSheetTab() {
 
                 {arExp.discounted > 0 ? (
                   <button className="card-link ar-exp-foot" onClick={explainExpected}>
-                    {arExp.discounted} PI invoice{arExp.discounted === 1 ? '' : 's'} discounted
-                    {' '}−{formatCurrency(arExp.discount, true)} →
+                    {/* Quotes the SAME total the drill sums to. */}
+                    {arExp.discounted} PI invoice{arExp.discounted === 1 ? '' : 's'} ·
+                    {' '}{formatCurrency(piYetToCome.yetToCome, true)} yet to be received →
                   </button>
                 ) : (
-                  <div className="ar-exp-foot">No programme discount applies — every invoice is expected in full.</div>
+                  <div className="ar-exp-foot">Nothing is outstanding on PI.</div>
                 )}
+
               </div>
             </ChartCard>
 
@@ -828,19 +1525,23 @@ export function ArSheetTab() {
             <div className="section chart-card g12-12" ref={printRef}>
               <div className="section-head">
                 <div>
-                  <h2 className="section-title">INVOICE BOOK</h2>
+                  {/* NAMED FOR THE BOOK ON SCREEN. "INVOICE BOOK" over a table
+                      of 38 VA invoices reads as the whole register with rows
+                      missing; the programme in the heading is what says it is
+                      not. */}
+                  <h2 className="section-title">{vert === 'all' ? 'INVOICE BOOK' : `${vert.toUpperCase()} INVOICE BOOK`}</h2>
                   <div className="section-sub">
-                    <b>{t.invoices}</b> invoices · billed <b>{formatCurrency(t.billed, true)}</b> ·
-                    {' '}AR expected <b>{formatCurrency(t.arExpected ?? t.billed, true)}</b>
+                    <b>{book.invoices}</b> invoices · {WORD.billed} <b>{formatCurrency(book.billed, true)}</b> ·
+                    {' '}{WORD.expected} <b>{formatCurrency(book.arExpected, true)}</b>
                     {/* Names the difference rather than leaving two totals side
                         by side for the reader to reconcile. Only shown when the
                         rule actually bit something. */}
-                    {(t.arDiscounted ?? 0) > 0 && (
-                      <span title={`${t.arDiscounted} PI invoice${t.arDiscounted === 1 ? '' : 's'} carried at 15% of billed`}>
-                        {' '}(−{formatCurrency(t.arDiscount ?? 0, true)} PI lien)
+                    {book.arDiscounted > 0 && (
+                      <span title={`${book.arDiscounted} PI invoice${book.arDiscounted === 1 ? '' : 's'} carried at 15% of billed`}>
+                        {' '}(−{formatCurrency(book.arDiscount, true)} PI lien)
                       </span>
                     )}
-                    {' '}· outstanding <b style={{ color: C.negative }}>{formatCurrency(t.outstanding, true)}</b>
+                    {' '}· {WORD.open} <b style={{ color: C.negative }}>{formatCurrency(book.outstanding, true)}</b>
                   </div>
                 </div>
                 {/* Controls, not content: `no-print` keeps them off the PDF. */}
@@ -861,9 +1562,9 @@ export function ArSheetTab() {
                   </span>
                   {/* A filter left on is easy to forget and makes the totals look
                       wrong, so the way out is on screen whenever one applies. */}
-                  {(query || segment !== 'all' || pickPayer.size > 0 || pickVert.size > 0 || pickStatus.size > 0) && (
+                  {(query || segment !== 'all' || vert !== 'all' || pickPayer.size > 0 || pickStatus.size > 0) && (
                     <button className="btn ghost" style={{ padding: '7px 11px' }}
-                      onClick={() => { setQuery(''); setSegment('all'); setPickPayer(new Set()); setPickVert(new Set()); setPickStatus(new Set()); setPage(1); }}>Reset</button>
+                      onClick={() => { setQuery(''); setSegment('all'); setVert('all'); setPickPayer(new Set()); setPickStatus(new Set()); setPage(1); }}>Reset</button>
                   )}
                   <button className="btn ghost" style={{ padding: '7px 11px' }} onClick={exportExcel}
                     title="Download these rows as an Excel workbook. Amounts stay numeric so they total in Excel.">⤓ Excel</button>
@@ -872,11 +1573,37 @@ export function ArSheetTab() {
                 </div>
               </div>
 
+              {/* ── ONE BOOK PER PROGRAMME ────────────────────────────────────
+                  The outer split, drawn above the status one because it is the
+                  coarser of the two: this picks WHICH BOOK, the strip below it
+                  partitions that book. Only rendered where there is more than
+                  one programme to choose between — a single-vertical register
+                  would be offering a choice of one.
+
+                  The status segment resets with it. Landing on VA still filtered
+                  to "Zero value" from the PI book shows an empty table under a
+                  headline of 38, which reads as a broken page rather than as a
+                  filter left on. */}
+              {vertTabs.length > 1 && (
+                <div className="smr-seg no-print" style={{ marginBottom: 8 }}>
+                  {/* "All VERTICALS", not "All": two strips stacked, each with an
+                      All at its left edge, otherwise leaves the reader working
+                      out which of the two 'All's they are looking at. */}
+                  {([['all', `All verticals ${INV.length}`], ...vertTabs.map((v) => [v.value, `${v.value} ${v.count}`] as [string, string])])
+                    .map(([k, label]) => (
+                      <button key={k} className={vert === k ? 'active' : ''}
+                        title={k === 'all' ? 'Every invoice in the register' : `Only the ${k} book — totals, counts and exports all scope to it`}
+                        onClick={() => { setVert(k); setSegment('all'); setPage(1); }}>{label}</button>
+                    ))}
+                </div>
+              )}
+
               {/* Open / Settled / Zero value are exhaustive and disjoint, so the
-                  three counts always add back to the register. */}
+                  three counts always add back to the book above them — the
+                  register when the tab is All, one programme otherwise. */}
               <div className="smr-seg no-print" style={{ marginBottom: 10 }}>
-                {([['all', `All ${t.invoices}`], ['open', `Open ${t.openInvoices}`],
-                  ['paid', `Settled ${t.collectedInvoices}`], ['zero-value', `Zero value ${t.zeroValue}`]] as [Segment, string][])
+                {([['all', `All ${book.invoices}`], ['open', `Open ${book.openInvoices}`],
+                  ['paid', `Settled ${book.collectedInvoices}`], ['zero-value', `Zero value ${book.zeroValue}`]] as [Segment, string][])
                   .map(([k, label]) => (
                     <button key={k} className={segment === k ? 'active' : ''}
                       onClick={() => { setSegment(k); setPage(1); }}>{label}</button>
@@ -891,20 +1618,24 @@ export function ArSheetTab() {
                       <th className="sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setKey('date')}>INVOICE DATE {ind('date')}</th>
                       <th className="sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setKey('due')}>DUE DATE {ind('due')}</th>
                       <th>PATIENT</th>
-                      <th style={{ whiteSpace: 'nowrap' }}>
-                        VERTICAL
-                        <ColumnFilter label="Vertical" options={vertOpts} picked={pickVert}
-                          onChange={(next) => { setPickVert(next); setPage(1); }} />
-                      </th>
-                      <th className="num sortable" onClick={() => setKey('total')}>BILLED {ind('total')}</th>
+                      {/* No filter chip: the tab strip above IS this column's
+                          filter now, and a second control for the same field
+                          could only disagree with it. */}
+                      <th style={{ whiteSpace: 'nowrap' }}>VERTICAL</th>
+                      <th className="num sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setKey('total')}>{COL.billed} {ind('total')}</th>
                       {/* Replaces PAYER. Sits immediately after BILLED because
                           the pair is only meaningful read together — the gap
                           between them IS the PI lien discount. */}
                       <th className="num sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setKey('expected')}
-                        title="What is expected to be received. PI settles out of a lien at 15% of billed; every other programme is expected in full.">
-                        AR EXPECTED {ind('expected')}
+                        title={isPi
+                          ? 'The advance: 15% of the invoiced amount, paid against the lien. Shown green once it has been received.'
+                          : 'What is expected to be received. PI settles out of a lien at 15% of billed; every other programme is expected in full.'}>
+                        {COL.expected} {ind('expected')}
                       </th>
-                      <th className="num sortable" onClick={() => setKey('open')}>OUTSTANDING {ind('open')}</th>
+                      <th className="num sortable" style={{ whiteSpace: 'nowrap' }} onClick={() => setKey('open')}
+                        title={isPi
+                          ? 'What is still owed on the invoice at face value — the balance the case has yet to settle.'
+                          : undefined}>{COL.open} {ind('open')}</th>
                       <th style={{ whiteSpace: 'nowrap' }}>
                         STATUS
                         <ColumnFilter label="Status" options={statusOpts} picked={pickStatus}
@@ -918,7 +1649,11 @@ export function ArSheetTab() {
                         rather than page 1 of 12. */}
                     {sorted.map((i, n) => (
                       <tr key={i.no}
-                        className={n >= (pageSafe - 1) * PAGE_SIZE && n < pageSafe * PAGE_SIZE ? undefined : 'pg-off'}>
+                        className={[
+                          n >= (pageSafe - 1) * PAGE_SIZE && n < pageSafe * PAGE_SIZE ? '' : 'pg-off',
+                          // MARKED, NOT CORRECTED. See advanceOverRate.
+                          rowIsPi(i) && advanceOverRate(i) ? 'row-overrate' : '',
+                        ].filter(Boolean).join(' ') || undefined}>
                         <td>
                           <strong>#{i.no}</strong>
                           {/* Striven has it, the accountant's sheet does not.
@@ -935,24 +1670,68 @@ export function ArSheetTab() {
                         <td style={{ whiteSpace: 'nowrap', fontWeight: i.vertical ? 700 : 400, color: i.vertical ? (VERT_C[i.vertical] || C.sub) : C.muted }}>
                           {i.vertical || '-'}
                         </td>
-                        <td className="num">{formatCurrency(i.total, true)}</td>
+                        {/* On PI this is the ORDER, not the invoice — see
+                            piGrossOf. The tooltip says which of the two a row
+                            is showing, because a figure six times the invoice
+                            beside it needs to account for itself. */}
+                        <td className="num" title={rowIsPi(i)
+                          ? (i.orderTotal != null
+                            ? `The sales order behind this invoice is ${formatCurrency(i.orderTotal, true)}; the ${formatCurrency(num(i.total), true)} invoice is the 15% advance against it`
+                            : 'No larger order found — this invoice is the whole bill')
+                          : undefined}>{formatCurrency(billedOf(i), true)}</td>
                         {/* A discounted row is MARKED, not just smaller. Without
                             the badge the only signal that a figure is 15% of
                             billed rather than equal to it is doing the division
                             in your head, and a reader scanning the column would
                             take a quietly reduced number at face value. */}
-                        <td className="num" title={isDiscounted(i)
-                          ? `PI lien: 15% of ${formatCurrency(i.total, true)} billed`
-                          : 'Expected in full — no programme discount applies'}>
-                          {formatCurrency(expectedOf(i), true)}
-                          {isDiscounted(i) && (
-                            <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: C.muted }}>PI 15%</span>
-                          )}
+                        {/* GREEN MEANS THE ADVANCE IS IN — the same .cell-pos /
+                            .cell-neg pairing the outstanding column already uses,
+                            so one column reads as money in and the other as money
+                            owed without needing a legend. PI ONLY: elsewhere this
+                            column is AR EXPECTED, where green would be claiming a
+                            receipt the heading never promised.
+                            The title says it in words too — colour alone is not a
+                            label, and it is the one cue a colour-blind reader or a
+                            printed page does not get. */}
+                        <td className="num" title={[
+                          isDiscounted(i)
+                            ? `PI lien: 15% of ${formatCurrency(i.total, true)} billed`
+                            : 'Expected in full — no programme discount applies',
+                          rowIsPi(i) ? (advanceIn(i) ? 'Advance received' : 'Advance not yet received') : '',
+                        ].filter(Boolean).join(' · ')}>
+                          {/* THE PILL CARRIES THE MEANING NOW, so it goes on the
+                              FIGURE rather than the cell: a green cell tints
+                              whatever else sits in it, and this one also holds
+                              the lien badge on the mixed tab. */}
+                          {rowIsPi(i) && advanceIn(i)
+                            ? <span className="amt-received">{formatCurrency(expOf(i), true)}</span>
+                            : formatCurrency(expOf(i), true)}
+                          {/* THE PERCENTAGE REPLACES THE OLD "PI 15%" BADGE on every
+                              tab. The badge marked which rows in a mixed column had
+                              been cut by the lien, which the percentage does too —
+                              and it does it truthfully: the badge said 15% on the
+                              six rows that are 40% and 100%. */}
+                          {rowIsPi(i) && <AdvancePct i={i} />}
                         </td>
-                        <td className={i.open > 0.005 ? 'num cell-neg' : 'num'}>
-                          {i.open > 0.005 ? formatCurrency(i.open, true) : '-'}
+                        {/* RED IS FOR THE ROWS WITH NOTHING IN YET. Every PI row
+                            now carries a balance, so colouring all of them would
+                            spend the alarm on the whole column and leave the five
+                            invoices where not a cent has arrived looking like the
+                            seventeen where the advance already has. Red and heavy
+                            is reserved for those; the rest are the ordinary
+                            remainder of a case that is running to plan. */}
+                        <td className={rowIsPi(i)
+                          ? (advanceIn(i) ? 'num' : 'num cell-neg')
+                          : (openOf(i) > 0.005 ? 'num cell-neg' : 'num')}
+                          style={rowIsPi(i) && !advanceIn(i) ? { fontWeight: 800 } : undefined}
+                          title={rowIsPi(i)
+                            ? (advanceIn(i)
+                              ? `${formatCurrency(billedOf(i), true)} total less the ${formatCurrency(num(i.total), true)} advance already received`
+                              : `The whole ${formatCurrency(billedOf(i), true)} total — the ${formatCurrency(num(i.total), true)} advance has not been received, so nothing is deducted`)
+                            : undefined}>
+                          {openOf(i) > 0.005 ? formatCurrency(openOf(i), true) : '-'}
                         </td>
-                        <td>{statusTag(i)}</td>
+                        <td>{rowIsPi(i) ? piStatusTag(i) : statusTag(i)}</td>
                       </tr>
                     ))}
                     {sorted.length === 0 && <tr><td colSpan={9} style={{ color: C.muted }}>No invoices match.</td></tr>}
@@ -1007,7 +1786,7 @@ export function ArSheetTab() {
       )}
 
       {drill && (
-        <DrillModal title={drill.title} sub={drill.sub} columns={drill.columns} rows={drill.rows}
+        <DrillModal title={drill.title} sub={drill.sub} columns={drill.columns} rows={drill.rows} total={drill.total}
           onClose={() => setDrill(null)} />
       )}
     </div>
