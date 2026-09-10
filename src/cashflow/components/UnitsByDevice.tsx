@@ -1,85 +1,77 @@
 // ── UNITS BY DEVICE ──────────────────────────────────────────────────────────
-// Vertical rounded bars, one per device, count labelled above. Hatched in the
-// primary tint; only the leader renders solid, so "what sells most" reads before
-// any label does.
+// A TABLE, in the portal's own table furniture: `.table-wrap.scroll-y` around a
+// `.data-table.compact`, sticky header, `.num` columns, a `.total-row` at the
+// foot, and the `sortable` / `sort-ind` header idiom the AR and AP registers
+// already use. Nothing here is a new control — a table on this board should
+// behave exactly like the tables on every other one.
+//
+// It used to draw bars (vertical columns up to ten devices, horizontal tracks
+// above that). Scaled against a 29-unit leader, every tail device came out the
+// same 2%-wide stub, so twelve tracks drew "small" twelve times and said
+// nothing the count beside them had not already said. The room they took is
+// four more columns of fact.
 //
 // COUNTS ONLY. No money enters this component — the props carry units and order
 // counts and nothing else, so a dollar value cannot reach it even by mistake.
-//
-// SCALING. Past ~10 devices a vertical bar per device stops fitting a card and
-// the labels collide, so the same component switches itself to horizontal rows
-// with an internal scroll. Every behaviour (sort, tooltip, pin, hold dot) is
-// written once and carries across both modes rather than being duplicated.
-//
-// Colours and type are the portal's own: --accent for the primary, --warn for
-// the hold dot, --border for the gridlines, all from cashflow.css :root.
 import { useMemo, useState } from 'react';
 import type { DeviceMixRow } from '../strivenApi';
 
-const REDUCED = typeof window !== 'undefined'
-  && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-
-type Sort = 'units' | 'az';
-
-/** Device names wrap to two lines under a vertical bar; longer ones ellipsise. */
-function twoLine(name: string): [string, string] {
-  const words = String(name || '').trim().split(/\s+/);
-  if (words.length < 2) return [name, ''];
-  // Break as near the middle as the words allow, so neither line is a stub.
-  const mid = Math.ceil(words.length / 2);
-  return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')];
-}
+type SortKey = 'device' | 'vertical' | 'orders' | 'units' | 'per' | 'held';
 
 export function UnitsByDevice({ rows, subtitle, onOpen }: {
   rows: DeviceMixRow[];
   subtitle?: string;
   onOpen?: () => void;
 }) {
-  const [sort, setSort] = useState<Sort>('units');
-  const [pinned, setPinned] = useState<string | null>(null);
-  const [hover, setHover] = useState<string | null>(null);
+  // Opens on most units first, which is the question the card is here for.
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'units', dir: -1 });
 
-  // IDENTITY IS NAME + DEMO, never the name alone. A demo device shortens to
-  // the same label as its real counterpart ("DEMO ManaRay Lumbar" → "ManaRay
-  // Lumbar"), so keying rows on the name would collide two different rows into
-  // one React key and make pinning one highlight the other.
-  const rowId = (d: DeviceMixRow) => (d.demo ? `demo:${d.device}` : d.device);
+  // A NAME defaults to A-Z; a figure defaults to largest first. One shared
+  // default would open the Device column at Z-A, which reads as broken rather
+  // than as a choice. Same rule as the AP register's own `setSortKey`.
+  const setSortKey = (key: SortKey) => setSort((s) => (s.key === key
+    ? { key, dir: (s.dir * -1) as 1 | -1 }
+    : { key, dir: key === 'device' || key === 'vertical' ? 1 : -1 }));
+  const sortInd = (key: SortKey) => <span className="sort-ind">{sort.key === key ? (sort.dir === 1 ? '↑' : '↓') : '⇅'}</span>;
 
-  // ZERO-UNIT DEVICES ARE HIDDEN, not drawn as zero-height bars: a bar with no
-  // height is an axis tick pretending to be data.
+  const perOrder = (d: DeviceMixRow) => d.units / Math.max(1, d.orders);
+
+  // ZERO-UNIT DEVICES ARE HIDDEN, not listed as a zero: a row with no units is
+  // a catalogue entry, and this is a table of what shipped.
   //
-  // DEMO ROWS SORT LAST whatever the sort is. They are a footnote to the
-  // catalogue, and a sort that can float a test order above a real device
-  // invites exactly the comparison this card should not offer.
+  // DEMO ROWS SORT LAST whatever the column and whichever the direction. They
+  // are a footnote to the catalogue, and a sort that can float a test order
+  // above a real device invites exactly the comparison this card should not
+  // offer — so the demo test runs BEFORE the column comparison, never inside it.
   const data = useMemo(() => {
     const live = rows.filter((d) => d.units > 0);
-    return [...live].sort((a, b) => (Number(a.demo ?? false) - Number(b.demo ?? false)) || (sort === 'az'
-      ? a.device.localeCompare(b.device)
-      : b.units - a.units || a.device.localeCompare(b.device)));
+    const byName = (a: DeviceMixRow, b: DeviceMixRow) => a.device.localeCompare(b.device);
+    const cmp = (a: DeviceMixRow, b: DeviceMixRow) => {
+      switch (sort.key) {
+        case 'device': return byName(a, b) * sort.dir;
+        case 'vertical': return (a.vertical || '').localeCompare(b.vertical || '') * sort.dir || byName(a, b);
+        case 'orders': return (a.orders - b.orders) * sort.dir || byName(a, b);
+        case 'per': return (perOrder(a) - perOrder(b)) * sort.dir || byName(a, b);
+        case 'held': return (a.heldUnits - b.heldUnits) * sort.dir || byName(a, b);
+        default: return (a.units - b.units) * sort.dir || byName(a, b);
+      }
+    };
+    return [...live].sort((a, b) => (Number(a.demo ?? false) - Number(b.demo ?? false)) || cmp(a, b));
   }, [rows, sort]);
 
-  // The leader by UNITS regardless of the active sort — it stays the solid bar
-  // under A–Z too, or the highlight would move for a reason that is not about
-  // the data. Real devices only: a demo can never be "the leader".
+  // The leader by UNITS whatever the sorted column: under A-Z, or sorted by
+  // held units, nothing else in the table would say which device leads. Real
+  // devices only — a demo can never be "the leader".
   const leader = useMemo(() => data.filter((d) => !d.demo).reduce<DeviceMixRow | null>(
     (m, d) => (!m || d.units > m.units ? d : m), null), [data]);
 
-  const max = Math.max(1, ...data.map((d) => d.units));
-  // Horizontal past 10 (a full catalogue), and past 6 on a narrow screen where
-  // vertical bars would be thinner than their own labels.
-  const narrow = typeof window !== 'undefined' && window.innerWidth < 640;
-  const horizontal = data.length > 10 || (narrow && data.length > 6);
-
-  const pin = (name: string) => setPinned((p) => (p === name ? null : name));
-  const detail = pinned ? data.find((d) => rowId(d) === pinned) ?? null : null;
-
-  const tip = (d: DeviceMixRow) => [
-    d.device,
-    d.demo ? 'DEMO / test — not sold, no commission' : d.vertical,
-    `${d.units} unit${d.units === 1 ? '' : 's'}`,
-    `${d.orders} order${d.orders === 1 ? '' : 's'}`,
-    d.heldUnits > 0 ? `${d.heldUnits} unit${d.heldUnits === 1 ? '' : 's'} on hold` : '',
-  ].filter(Boolean).join(' · ');
+  // THE TOTAL COUNTS REAL DEVICES ONLY, which is what the subtitle above the
+  // table already reports ("N units across M devices ... plus K demo units,
+  // listed separately"). A total that swept the demo rows in would contradict
+  // the line directly above it.
+  const live = data.filter((d) => !d.demo);
+  const totalUnits = live.reduce((s, d) => s + d.units, 0);
+  const totalHeld = live.reduce((s, d) => s + d.heldUnits, 0);
 
   if (data.length === 0) {
     return (
@@ -93,83 +85,60 @@ export function UnitsByDevice({ rows, subtitle, onOpen }: {
 
   return (
     <div className="ubd">
-      <div className="ubd-head">
-        {subtitle && <span className="ubd-sub">{subtitle}</span>}
-        {/* The portal's existing segmented control, not a new one. */}
-        <span className="ins-qtabs ubd-sortr">
-          <button className={`ins-qtab${sort === 'units' ? ' on' : ''}`} onClick={() => setSort('units')}>Most units</button>
-          <button className={`ins-qtab${sort === 'az' ? ' on' : ''}`} onClick={() => setSort('az')}>A–Z</button>
-        </span>
+      {subtitle && <div className="ubd-head"><span className="ubd-sub">{subtitle}</span></div>}
+
+      <div className="table-wrap scroll-y">
+        <table className="data-table compact">
+          <thead>
+            <tr>
+              <th className="sortable" onClick={() => setSortKey('device')}>Device {sortInd('device')}</th>
+              <th className="sortable" onClick={() => setSortKey('vertical')}>Programme {sortInd('vertical')}</th>
+              <th className="num sortable" onClick={() => setSortKey('orders')}>Orders {sortInd('orders')}</th>
+              <th className="num sortable" onClick={() => setSortKey('units')}>Units {sortInd('units')}</th>
+              {/* The one figure the bars could never carry: whether a device
+                  ships singly or in sets. */}
+              <th className="num sortable" onClick={() => setSortKey('per')} title="Units per order: whether this device ships singly or in sets">Per order {sortInd('per')}</th>
+              <th className="num sortable" onClick={() => setSortKey('held')} title="Units standing on a held order">Held {sortInd('held')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((d) => (
+              <tr key={d.demo ? `demo:${d.device}` : d.device}
+                className={`${d.demo ? 'demo' : ''}${leader && !d.demo && d.device === leader.device ? ' lead' : ''}`}>
+                <td>
+                  <strong>{d.device}</strong>
+                  {d.demo && <span className="ubd-demo">demo</span>}
+                </td>
+                <td>{d.demo ? 'DEMO / test' : (d.vertical || '—')}</td>
+                <td className="num">{d.orders.toLocaleString()}</td>
+                <td className="num u">{d.units.toLocaleString()}</td>
+                <td className="num">{perOrder(d).toFixed(1)}</td>
+                <td className={`num${d.heldUnits > 0 ? ' held' : ''}`}
+                  title={d.heldUnits > 0 ? `${d.heldUnits} unit${d.heldUnits === 1 ? '' : 's'} on ${d.heldOrders || 1} held order${(d.heldOrders || 1) === 1 ? '' : 's'}` : undefined}>
+                  {d.heldUnits > 0 ? d.heldUnits.toLocaleString() : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            {/* ORDERS AND PER-ORDER DO NOT TOTAL, so they are dashed rather
+                than summed. One order can carry two devices, so adding the
+                Orders column counts that order twice — a figure that would sit
+                under a column of honest ones and quietly contradict the order
+                book. Units and Held are per device line, so those do add up. */}
+            <tr className="total-row">
+              <td><strong>Total</strong></td>
+              <td>{live.length} device{live.length === 1 ? '' : 's'}</td>
+              <td className="num" title="Orders do not total: an order carrying two devices would be counted twice">—</td>
+              <td className="num"><strong>{totalUnits.toLocaleString()}</strong></td>
+              <td className="num" title="An average of per-device averages is not the fleet average">—</td>
+              <td className="num">{totalHeld > 0 ? totalHeld.toLocaleString() : '—'}</td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
 
-      {horizontal ? (
-        // ── HORIZONTAL: name left, bar and count right, scrolled ────────────
-        <div className="ubd-hlist" role="list">
-          {data.map((d, i) => {
-            const on = pinned === rowId(d);
-            return (
-              <div key={rowId(d)} role="listitem"
-                className={`ubd-hrow${on ? ' pinned' : ''}${pinned && !on ? ' dim' : ''}${d.demo ? ' demo' : ''}`}
-                title={tip(d)} onClick={() => pin(rowId(d))}
-                onMouseEnter={() => setHover(rowId(d))} onMouseLeave={() => setHover(null)}
-                tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(rowId(d)); } }}>
-                <span className="nm">{d.device}{d.demo && <span className="ubd-demo">demo</span>}</span>
-                <span className="track">
-                  <i className={leader && rowId(d) === rowId(leader) ? 'solid' : undefined}
-                    style={{ width: `${Math.max(2, (d.units / max) * 100)}%`, animationDelay: REDUCED ? undefined : `${Math.min(i, 12) * 0.03}s` }} />
-                  {d.heldUnits > 0 && <span className="hold" title={`${d.heldUnits} on hold`} />}
-                </span>
-                <span className="ct">{d.units}</span>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        // ── VERTICAL: the default shape ─────────────────────────────────────
-        <div className="ubd-plot">
-          {/* Dashed gridlines at 0 / 50% / 100% of the max. */}
-          <span className="ubd-grid" style={{ bottom: '100%' }} />
-          <span className="ubd-grid" style={{ bottom: '50%' }} />
-          <span className="ubd-grid" style={{ bottom: 0 }} />
-          <div className="ubd-bars">
-            {data.map((d, i) => {
-              const on = pinned === rowId(d);
-              const [l1, l2] = twoLine(d.device);
-              return (
-                <div key={rowId(d)}
-                  className={`ubd-b${on ? ' pinned' : ''}${pinned && !on ? ' dim' : ''}${d.demo ? ' demo' : ''}`}
-                  title={tip(d)} onClick={() => pin(rowId(d))}
-                  onMouseEnter={() => setHover(rowId(d))} onMouseLeave={() => setHover(null)}
-                  tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(rowId(d)); } }}>
-                  <span className={`ct${hover === rowId(d) || on ? ' up' : ''}`}>{d.units}</span>
-                  <span className={`col${leader && rowId(d) === rowId(leader) ? ' solid' : ''}`}
-                    style={{ height: `${Math.max(3, (d.units / max) * 100)}%`, animationDelay: REDUCED ? undefined : `${Math.min(i, 12) * 0.04}s` }}>
-                    {/* Amber dot: units on this device sit on a held order. */}
-                    {d.heldUnits > 0 && <span className="hold" title={`${d.heldUnits} unit${d.heldUnits === 1 ? '' : 's'} on hold`} />}
-                  </span>
-                  <span className="lb"><b>{l1}</b>{l2 && <em>{l2}</em>}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Pinned detail. Average units per order is the one derived figure here,
-          and it is what says whether a device ships singly or in sets. */}
-      {detail && (
-        <div className="ubd-detail">
-          <b>{detail.device}</b>
-          <span className="pill">{detail.vertical}</span>
-          <span>{detail.units} unit{detail.units === 1 ? '' : 's'}</span>
-          <span>{detail.orders} order{detail.orders === 1 ? '' : 's'}</span>
-          <span>{(detail.units / Math.max(1, detail.orders)).toFixed(1)} per order</span>
-          {detail.heldUnits > 0 && (
-            <span className="held">● {detail.heldUnits} on hold{detail.heldOrders ? ` · ${detail.heldOrders} order${detail.heldOrders === 1 ? '' : 's'}` : ''}</span>
-          )}
-          {onOpen && <button className="card-link" style={{ marginTop: 0, marginLeft: 'auto' }} onClick={onOpen}>Open orders</button>}
-        </div>
-      )}
+      {onOpen && <button className="card-link" onClick={onOpen}>Open orders</button>}
     </div>
   );
 }

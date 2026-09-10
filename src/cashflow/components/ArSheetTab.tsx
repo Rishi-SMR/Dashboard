@@ -175,6 +175,32 @@ function AdvancePct({ i }: { i: ArRegisterInvoice }) {
  * fix when one appears is the pipeline's stage, not deeper arithmetic here.
  */
 const piBalanceOf = (i: ArRegisterInvoice) => {
+  // ── ONLY THE ADVANCE IS A RECEIVABLE ──────────────────────────────────────
+  //
+  // Mirrors arOwedOf() on the server, which carries the full reasoning. The
+  // 85% lien remainder is an EXPOSURE the business cannot chase on a timetable
+  // of its own, so it is no longer reported as money owed; what remains
+  // collectable is the unpaid part of the 15% advance.
+  //
+  // CAPPED, NOT MULTIPLIED. Striven already raises the advance as the invoice
+  // on 50 of 57 PI rows, so multiplying the ledger balance by 0.15 again would
+  // report 2.25% of the case. The cap exists for the seven billed at the full
+  // price, holding them to the same 15% the rest are billed at.
+  //
+  // No order value → no cap: `piGrossOf` falls back to the invoice total, and
+  // capping against that would re-introduce the double discount. The ledger
+  // balance stands, which is the majority case's truth anyway.
+  const gross = piGrossOf(i);
+  const invoiced = num(i.total);
+  const owed = num(i.open);
+  const hasOrder = typeof i.orderTotal === 'number' && Number.isFinite(i.orderTotal) && i.orderTotal > 0;
+  return hasOrder ? r2(Math.min(owed, gross * PI_ADVANCE_RATE)) : owed;
+};
+
+/** The lien exposure this register deliberately stops counting as a receivable:
+ *  the case value still riding on the award. Kept so a screen can show it as
+ *  context beside the advance, never added into an AR total. */
+const piCaseExposureOf = (i: ArRegisterInvoice) => {
   const gross = piGrossOf(i);
   const invoiced = num(i.total);
   // THE WHOLE BILL WAS INVOICED — nothing is coming after it.
@@ -214,10 +240,11 @@ const piBalanceOf = (i: ArRegisterInvoice) => {
  * same question, and they were answering it three ways. They all read this now,
  * so the dashboard cannot show a reader two totals for one book.
  *
- *   PI       `piBalanceOf` — the case less whatever advance has arrived. The
- *            ledger cannot answer for PI: its invoice is only the 15% advance,
- *            so an invoice with `open = 0` is a settled ADVANCE, not a settled
- *            case, and the remaining 85% is still to come.
+ *   PI       `piBalanceOf` — the unpaid part of the 15% advance, capped at 15%
+ *            of the order. The 85% lien remainder is NOT a receivable: it
+ *            settles out of the patient's award on nobody's timetable here, so
+ *            it is exposure rather than money owed. `piCaseExposureOf` still
+ *            reports it, for screens that want the context.
  *   the rest the ledger's open balance. Billed and paid in one go, so what is
  *            owed is simply what has not been paid.
  */

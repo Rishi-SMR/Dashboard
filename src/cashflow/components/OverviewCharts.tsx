@@ -97,7 +97,7 @@ export function OverviewCharts() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const agoText = useSyncAgo(lastSync);
-  type Drill = { title: string; sub?: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] };
+  type Drill = { title: string; sub?: string; summary?: ReactNode; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] };
   const [drill, setDrill] = useState<Drill | null>(null);
 
   async function load(silent = false) {
@@ -173,7 +173,6 @@ export function OverviewCharts() {
   const kevinLook = kevinBoard || profile === 'kevin';
 
   // ---- FY + Program + As-of scope (the header filters actually re-slice the data) ----
-  const [fyPick, setFyPick] = useState<string | null>(null);
   // PERIOD DEFAULTS TO THE AS-OF MONTH — "how are we doing right now".
   //
   // It defaulted to the FISCAL YEAR for a while, and the reason is worth keeping
@@ -208,11 +207,15 @@ export function OverviewCharts() {
     ...(trends?.series ?? []).map((s) => s.month.slice(0, 4)),
     ...(payments?.byMonth ?? []).map((m) => m.month.slice(0, 4)),
   ])).sort();
-  // When the user hasn't pinned a FY, follow the As-of year so moving As-of into
-  // a prior year re-scopes the charts instead of blanking them.
+  // THE FISCAL YEAR FOLLOWS THE AS-OF DATE. Its picker is gone from the header:
+  // the data covers one year, so the control could never switch to another, and
+  // sitting beside Period it read as a second live scope while contributing
+  // nothing. `fy` is still needed — Period's "Fiscal year" option scopes by it,
+  // and the quarters card and the insights line label themselves with it — so it
+  // is derived rather than picked. Moving As-of into a prior year re-scopes the
+  // charts instead of blanking them, which is what the picker was for.
   const asOfYear = asOfStr.slice(0, 4);
-  const fy = (fyPick && years.includes(fyPick)) ? fyPick
-    : (years.includes(asOfYear) ? asOfYear : (years[years.length - 1] ?? String(new Date().getFullYear())));
+  const fy = years.includes(asOfYear) ? asOfYear : (years[years.length - 1] ?? String(new Date().getFullYear()));
   // One predicate for every series on the page, so the KPIs, the charts and the
   // trend lines can never disagree about which period they are describing.
   // Every month the data actually covers, newest first — what the picker offers.
@@ -279,6 +282,28 @@ export function OverviewCharts() {
    */
   const periodScoped = scope === 'month' || scope === 'pick' || scope === 'custom';
 
+  /**
+   * DO THE BALANCE CARDS FOLLOW THE PERIOD? No — they are a snapshot.
+   *
+   * A BALANCE is not a flow. "What are we owed" has one answer at any moment,
+   * and slicing it by due month answers a different question — "what falls due
+   * in September" — which is a collections question, not a position. The two
+   * were being read as the same thing: the board showed $225,340 owed while the
+   * AR page showed $307,765, and neither said which question it had answered.
+   *
+   * FLOWS STILL FOLLOW THE PERIOD, and should: revenue, cash received and the
+   * monthly charts are all "in this month" by nature. Only the balance cards —
+   * Open balances, Position summary, AR Expected, AP Due, and the commission
+   * they net against — read the whole book.
+   *
+   * ONE FLAG so the decision is visible and reversible. Flip it to `true` and
+   * every balance card goes back to following the Period control, captions and
+   * titles included.
+   */
+  const BALANCES_FOLLOW_PERIOD = false;
+  /** Period scoping AS IT APPLIES TO A BALANCE — the flag, and then the period. */
+  const balScoped = BALANCES_FOLLOW_PERIOD && periodScoped;
+
   // COMMISSION DUE, scoped to the PRODUCING REPS — the same population the
   // Commission tab shows when this tile is clicked.
   //
@@ -316,7 +341,9 @@ export function OverviewCharts() {
     // They are reported separately instead, exactly as that table does.
     type Line = { comm: number; state: string; date?: string | null };
     const owedLines = (r: { lines?: Line[] }) => (r.lines ?? []).filter((l) => l.state !== 'paid');
-    const inScope = (l: Line) => !periodScoped || (Boolean(l.date) && inFy(String(l.date).slice(0, 7)));
+    // Commission is netted against AR and AP on the Position summary, so it has
+    // to be on their basis or the "net position" mixes a month against a book.
+    const inScope = (l: Line) => !balScoped || (Boolean(l.date) && inFy(String(l.date).slice(0, 7)));
     const owed = (r: { lines?: Line[]; payableTotal?: number }) => {
       const lines = owedLines(r);
       if (!(r.lines ?? []).length) return r.payableTotal ?? 0;   // no lines: nothing to scope by
@@ -328,7 +355,7 @@ export function OverviewCharts() {
     // tile without it would quietly understate the liability.
     const offRoster = r2((s.byRep ?? []).filter((r) => !roster.has(r.rep)).reduce((a, r) => a + owed(r), 0));
     // Owed, but belonging to no month — only meaningful while a period is on.
-    const undated = periodScoped
+    const undated = balScoped
       ? r2(rows.reduce((a, r) => a + owedLines(r).filter((l) => !l.date).reduce((b, l) => b + (l.comm ?? 0), 0), 0))
       : 0;
     return {
@@ -364,7 +391,7 @@ export function OverviewCharts() {
    * never "the balance as it stood then". The distinction is the whole reason
    * this string exists: the figure is honest, the default reading of it is not.
    */
-  const balanceScopeLabel = periodScoped ? `due in ${periodLabel}` : 'as of today';
+  const balanceScopeLabel = balScoped ? `due in ${periodLabel}` : 'as of today';
   // COUNTS IN THE ACTIVE PERIOD, not FY-wide. `pl.invoiceCount` is the whole
   // year and `payments.count` is every payment ever taken; either sitting under
   // a month-scoped figure contradicts it outright ("$0 this month · 165
@@ -437,7 +464,7 @@ export function OverviewCharts() {
   // shrink the figure, which is the wrong way for a money card to be wrong.
   const arInv = (ar?.invoices ?? []).filter((i) => i.open > 0
     && (prog === 'All' || programOfPayer(i.payer) === prog)
-    && inPeriodDate(i.dueDate));
+    && (!BALANCES_FOLLOW_PERIOD || inPeriodDate(i.dueDate)));
   const arOpenF = arInv.reduce((s, i) => s + i.open, 0);
   // THE AP TWIN OF arOpenF, and the reason it has to exist: every balance card
   // below pairs the two, and they were reading `apOpenF` — the server's
@@ -472,7 +499,7 @@ export function OverviewCharts() {
     : (ap?.bills ?? [])
       .filter((b) => b.open > 0)
       .map((b) => ({ number: String(b.number), vendor: b.vendor || '-', dueDate: b.dueDate, open: b.open }));
-  const apBookScoped = apBook.filter((b) => inPeriodDate(b.dueDate));
+  const apBookScoped = apBook.filter((b) => !BALANCES_FOLLOW_PERIOD || inPeriodDate(b.dueDate));
   const apOpenF = apBookScoped.reduce((s, b) => s + b.open, 0);
   // A credit note is money off the payable but nobody works it off a worklist,
   // so it counts toward the TOTAL and not toward the COUNT — the same split the
@@ -909,6 +936,229 @@ export function OverviewCharts() {
   const overdueSum = overdue.reduce((s, i) => s + i.open, 0);
   const billsDue = apBook.filter((b) => b.open > 0 && b.dueDate && new Date(b.dueDate).getTime() <= soon);
   const billsDueSum = billsDue.reduce((s, b) => s + b.open, 0);
+  /**
+   * DUE DATES, IN TWO DIRECTIONS.
+   *
+   * The board reports what is owed; this reports WHEN, which is the part that
+   * makes it actionable. Three states against the As-of date, in both
+   * directions — money owed to us, and money we owe out — because a week where
+   * $40k lands and $4k leaves is a different week from the reverse, and a single
+   * netted figure hides which one you are in.
+   *
+   * DAY PRECISION, on the date STRING. Comparing YYYY-MM-DD lexically avoids the
+   * timezone drift that `new Date(d) < Date.now()` introduces — an invoice due
+   * today read as overdue for anyone west of UTC.
+   *
+   * A ROW WITH NO DUE DATE IS IN NONE OF THEM. It cannot be scheduled, so it
+   * cannot be chased on a date; it stays in the balance cards, which is where an
+   * undated liability belongs.
+   */
+  /**
+   * A LOCAL DATE, FORMATTED LOCALLY — and `toISOString()` cannot be used here.
+   *
+   * `new Date('2026-09-07T00:00:00')` is LOCAL midnight; `toISOString()` prints
+   * it in UTC. East of Greenwich those are different days: at UTC+5:30, local
+   * midnight on the 14th is 18:30 on the 13th in UTC, so the 7-day horizon came
+   * back as 2026-09-13 and every invoice due on the 14th fell out of "Due within
+   * 7 days" into the later bucket. Reading the parts back off the local date is
+   * the fix, and it is why the month end below is built the same way.
+   */
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const dayPlus = (iso: string, n: number) => {
+    const d = new Date(`${iso}T00:00:00`);
+    d.setDate(d.getDate() + n);
+    return ymd(d);
+  };
+  const horizonStr = dayPlus(asOfStr, 7);
+  /** The last day of the as-of month. Day 0 of the NEXT month IS the last day of
+   *  this one, which handles February and leap years without a table. */
+  const monthEndStr = (() => {
+    const d = new Date(`${asOfStr}T00:00:00`);
+    return ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+  })();
+  /** Month-only, deliberately NOT the `monthName()` helper above — that one
+    *  prints "September 2026", which is more than a compact row label can carry
+    *  when the year is already stated in the card's own subtitle. */
+  const asOfMonth = new Date(`${asOfStr}T00:00:00`).toLocaleString(undefined, { month: 'long' });
+  const dueState = (d?: string | null) => {
+    const s = String(d ?? '').slice(0, 10);
+    if (!s) return 'none';
+    if (s < asOfStr) return 'past';
+    if (s === asOfStr) return 'today';
+    if (s <= horizonStr) return 'soon';
+    // THE REST OF THE CALENDAR MONTH, and it is a bucket of its own rather than
+    // a total spanning the three above. Every row on this card names one state,
+    // so the four add up and a reader can sum the column; a cumulative "due this
+    // month" row would double-count everything already sitting in Overdue and
+    // Due today, on a card whose whole job is to be added up.
+    //
+    // EMPTY BY CONSTRUCTION LATE IN THE MONTH. From the 24th onward the 7-day
+    // horizon reaches past month end, so nothing can land here — the row draws
+    // at zero, which is the truth, not a gap.
+    return s <= monthEndStr ? 'month' : 'later';
+  };
+  /**
+   * WHO THE ROW IS ABOUT, in the two ways that matter on a receivable.
+   *
+   * `who` is the PAYER — the law firm, the VA, TriCare — which is who gets
+   * chased. `patient` is the case the invoice belongs to, as FIRST INITIAL +
+   * SURNAME, which is how anyone here actually recognises it: an overdue list
+   * reading PT-36 / PT-231 / PT-385 cannot be worked without a second lookup
+   * per line. The server resolves it from the same joins the AR register uses,
+   * so an invoice cannot be "D. Butler" on one screen and "PT-385" here.
+   *
+   * PHI: first-initial-plus-surname is the portal's patient rendering
+   * throughout (pipeline, commission drill, AR sheet); no new kind of data
+   * reaches the browser. `customer` — the de-identified PT-<id> — is the
+   * fallback, so a row with no resolved name still names something.
+   */
+  type DueRow = { number: string; who: string; patient: string; vertical: string; dueDate: string | null; open: number };
+  const arDueRows: DueRow[] = arInv.map((i) => ({
+    number: String(i.number),
+    who: i.payer || '-',
+    patient: i.patient || i.customer || '-',
+    // The SERVER'S vertical first: it comes off the sales order behind the
+    // invoice, where the programme actually lives. programOfPayer() is the
+    // same last-resort read of the payer string the server itself falls back
+    // to, and it only ever answers when there IS a payer.
+    vertical: i.vertical || (i.payer ? programOfPayer(i.payer) : '') || '-',
+    dueDate: i.dueDate, open: i.open,
+  }));
+  const apDueRows: DueRow[] = apBook.map((b) => ({
+    number: String(b.number), who: b.vendor || '-', patient: '-', vertical: '-', dueDate: b.dueDate, open: b.open,
+  }));
+  const DUE_STATES = [
+    { key: 'past', label: 'Overdue', tone: C.negative, note: 'past its due date' },
+    { key: 'today', label: 'Due today', tone: C.warning, note: `due ${asOfStr}` },
+    { key: 'soon', label: 'Due within 7 days', tone: C.info, note: `due by ${horizonStr}` },
+    // Brand blue continues the urgency ramp — red, amber, cyan, blue — rather
+    // than introducing a hue that reads as a different KIND of thing.
+    { key: 'month', label: `Later in ${asOfMonth}`, tone: C.brand, note: `due ${dayPlus(horizonStr, 1)} – ${monthEndStr}` },
+  ] as const;
+  const bucketOfRows = (rows: DueRow[], key: string) => rows.filter((r) => dueState(r.dueDate) === key);
+  const sumRows = (rows: DueRow[]) => rows.reduce((s2, r) => s2 + r.open, 0);
+  /** Every bucket that actually has something in it, both directions. */
+  const dueBuckets = DUE_STATES.flatMap((st) => ([
+    { ...st, dir: 'in' as const, rows: bucketOfRows(arDueRows, st.key) },
+    { ...st, dir: 'out' as const, rows: bucketOfRows(apDueRows, st.key) },
+  ])).filter((b) => b.rows.length > 0);
+  const dueTotal = (dir: 'in' | 'out', key: string) =>
+    sumRows(bucketOfRows(dir === 'in' ? arDueRows : apDueRows, key));
+  const dueCount = (dir: 'in' | 'out', key: string) =>
+    bucketOfRows(dir === 'in' ? arDueRows : apDueRows, key).length;
+  const openDueDrill = (dir: 'in' | 'out', st: typeof DUE_STATES[number]) => {
+    const rows = bucketOfRows(dir === 'in' ? arDueRows : apDueRows, st.key)
+      .sort((a, b) => b.open - a.open);
+    if (!rows.length) return;
+    const sum = sumRows(rows);
+    /**
+     * HOW OLD, AND HOW CONCENTRATED — the two things 84 rows of dates and
+     * amounts will not tell you by being read in order.
+     *
+     * `ageOf` is days past the as-of date, so it is only meaningful on the
+     * OVERDUE bucket; the forward-looking buckets get days UNTIL instead, which
+     * is the same subtraction the other way round and is why the label flips
+     * rather than the arithmetic.
+     */
+    const ageOf = (r: DueRow) => {
+      const s = String(r.dueDate ?? '').slice(0, 10);
+      if (!s) return 0;
+      return Math.round((new Date(`${asOfStr}T00:00:00`).getTime() - new Date(`${s}T00:00:00`).getTime()) / 86_400_000);
+    };
+    const ages = rows.map(ageOf);
+    const oldest = ages.length ? Math.max(...ages) : 0;
+    const soonest = ages.length ? Math.min(...ages) : 0;
+    const biggest = rows[0];                       // already sorted by amount, descending
+    /** The programme split, which only a receivable has — a vendor bill belongs
+     *  to no programme, so the band is simply absent on the AP side rather than
+     *  drawn as one grey bar that says nothing. */
+    const byVert = (() => {
+      if (dir !== 'in') return [];
+      const m = new Map<string, number>();
+      // A DASH IS A CELL, NOT A LABEL. `-` is the right rendering in a table
+      // cell, where the column header already says what is missing; in a legend
+      // it is a segment named nothing. The unresolved programme gets a word
+      // here — $1,804 of the overdue book has one.
+      for (const r of rows) {
+        const k = r.vertical === '-' ? 'Unassigned' : r.vertical;
+        m.set(k, (m.get(k) ?? 0) + r.open);
+      }
+      return [...m.entries()]
+        .map(([name, value]) => ({ name, value, color: VERTICAL_COLORS[name] ?? C.muted }))
+        .filter((x) => x.value > 0)
+        .sort((a, b) => b.value - a.value);
+    })();
+    const pctOf = (v: number) => (sum > 0 ? Math.round((v / sum) * 100) : 0);
+
+    setDrill({
+      title: `${st.label} · ${dir === 'in' ? 'owed to us' : 'we owe out'}`,
+      sub: `${rows.length} ${dir === 'in' ? 'invoice' : 'bill'}${rows.length === 1 ? '' : 's'} · ${formatCurrency(sum)} · ${st.note}`,
+      /* THE SUMMARY, ABOVE THE ROWS. A dialog that opens on 84 lines has to say
+         what they amount to before it says what they are, or the reader is
+         doing the totalling the card behind it already did. */
+      summary: (
+        <div className="drill-sum">
+          <div className="drill-sum-stats">
+            <span><i>{dir === 'in' ? 'Invoices' : 'Bills'}</i><b>{rows.length}</b></span>
+            <span><i>Total</i><b style={{ color: dir === 'in' ? C.positive : C.negative }}>{formatCurrency(sum)}</b></span>
+            <span><i>Largest</i><b>{formatCurrency(biggest.open)}</b><em>#{biggest.number}</em></span>
+            {st.key === 'past'
+              ? <span><i>Oldest</i><b>{oldest}d</b><em>past due</em></span>
+              : <span><i>Furthest out</i><b>{Math.abs(soonest)}d</b><em>away</em></span>}
+          </div>
+          {byVert.length > 0 && (
+            <>
+              <div className="drill-sum-bar">
+                {byVert.map((v) => (
+                  <span key={v.name} title={`${v.name}: ${formatCurrency(v.value)}`}
+                    style={{ width: `${pctOf(v.value)}%`, background: v.color }} />
+                ))}
+              </div>
+              <div className="drill-sum-key">
+                {byVert.map((v) => (
+                  <span key={v.name}>
+                    <i style={{ background: v.color }} />{v.name}
+                    <b>{formatCurrency(v.value)}</b>
+                    <em>{pctOf(v.value)}%</em>
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      ),
+      columns: [
+        { key: 'no', label: dir === 'in' ? 'INVOICE' : 'BILL' },
+        // The patient and the programme belong to a receivable only: a vendor
+        // bill has neither, and empty columns would just be noise on it.
+        ...(dir === 'in' ? [
+          { key: 'patient', label: 'PATIENT' },
+          { key: 'vert', label: 'VERTICAL' },
+        ] : []),
+        { key: 'who', label: dir === 'in' ? 'PAYER' : 'VENDOR' },
+        { key: 'due', label: 'DUE' },
+        { key: 'amt', label: 'AMOUNT', num: true },
+      ],
+      rows: rows.map((r) => ({
+        no: <strong>#{r.number}</strong>,
+        patient: <span style={{ fontWeight: 700 }}>{r.patient}</span>,
+        vert: r.vertical === '-' ? <span style={{ color: C.muted }}>-</span> : (
+          <span style={{ whiteSpace: 'nowrap', fontWeight: 700, color: VERTICAL_COLORS[r.vertical] ?? C.sub }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, marginRight: 6, background: VERTICAL_COLORS[r.vertical] ?? C.muted }} />
+            {r.vertical}
+          </span>
+        ),
+        who: r.who,
+        // The feed carries a full timestamp on this field; a due DATE is what
+        // the column means, so the time half is dropped rather than printed as
+        // "T00:00:00" beside every date.
+        due: r.dueDate ? String(r.dueDate).slice(0, 10) : '-',
+        amt: <span style={{ color: dir === 'in' ? C.positive : C.negative, fontWeight: 700 }}>{formatCurrency(r.open)}</span>,
+      })),
+    });
+  };
+
   const waitingPo = (orders?.orders ?? []).filter((o) =>
     (prog === 'All' || o.pi === prog) && o.pos.length === 0 && !/cancel|void|complete|closed/i.test(o.status));
   type AcItem = { n: string; l1: string; l2: string; view: string; ico: ReactNode };
@@ -962,27 +1212,22 @@ export function OverviewCharts() {
   }
   const topCust = [...custAgg].map(([name, open]) => ({ name, open })).sort((a, b) => b.open - a.open).slice(0, 5);
 
-  const topVend = [...(po?.byVendor ?? [])].sort((a, b) => b.total - a.total).slice(0, 5);
 
   // ---- click-through drills: every list/donut leads to its underlying rows ----
   // Every open invoice for one payer. Mirrors drillApBill.
   const drillArPayer = (payer: string) => setDrill({
     title: payer || 'Payer', sub: 'Open invoices for this payer',
-    columns: [{ key: 'n', label: 'Invoice' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
+    // Same PATIENT column the Due drills carry, for the same reason: a list of
+    // invoice numbers and dates names no case, and this is the other place on
+    // the board where one payer's invoices are read one by one.
+    columns: [{ key: 'n', label: 'Invoice' }, { key: 'p', label: 'Patient' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
     rows: arInv.filter((i) => i.open > 0 && (i.payer || '-') === payer)
       .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))
-      .map((i) => ({ n: `#${i.number}`, d: shortDate(i.dueDate), o: formatCurrency(i.open) })),
+      .map((i) => ({ n: `#${i.number}`, p: i.patient || i.customer || '-', d: shortDate(i.dueDate), o: formatCurrency(i.open) })),
   });
   // drillApBucket ("AP Aging · 31–60") went with the donut that opened it.
   // drillApBill() went with the AP Due list it belonged to. Per-bill detail for
   // a vendor now lives on the Payables tab, which the AP Due card links to.
-  const drillVendor = (name: string) => setDrill({
-    title: name, sub: 'Recent purchase orders for this vendor',
-    columns: [{ key: 'r', label: 'PO ref' }, { key: 'd', label: 'Date' }, { key: 'a', label: 'Amount', num: true }],
-    rows: (po?.recent ?? []).filter((r) => (r.vendor || '-') === name).sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
-      .map((r) => ({ r: r.ref, d: shortDate(r.date), a: formatCurrency(r.total) })),
-  });
-
   // ── FINANCIAL INSIGHTS, BY QUARTER ─────────────────────────────────────────
   // This panel used to read the page's MONTH scope, which is why it showed two
   // lines out of five: three of them compared against the current month, and
@@ -1171,26 +1416,6 @@ export function OverviewCharts() {
             <input type="month" value={toYm} min={fromYm || undefined} onChange={(e) => setToYm(e.target.value)} />
           </label>
         )}
-        {/* FISCAL YEAR IS ACTIONABLE ON ITS OWN.
-            It used to be `disabled` unless Period was already set to "Fiscal
-            year", which made it a control that is visible, populated, and inert
-            — with nothing on screen saying why. Picking a year now SELECTS that
-            fiscal year, switching Period to it, which is the only thing choosing
-            a year could reasonably mean.
-            It is still disabled in one case, and an honest one: when the data
-            covers a single year there is no other year to move to, and a live
-            dropdown with one option invites a click that cannot do anything. The
-            title says which case you are in. */}
-        <label className="ov-filter"><span className="fl">Fiscal Year</span>
-          <select value={fy}
-            disabled={years.length < 2}
-            title={years.length < 2
-              ? `The data covers ${fy} only — there is no other fiscal year to switch to.`
-              : 'Scope the board to this fiscal year'}
-            onChange={(e) => { setFyPick(e.target.value); setScope('fy'); }}>
-            {(years.length ? years : [fy]).map((y) => <option key={y} value={y}>FY{y}</option>)}
-          </select>
-        </label>
         <label className="ov-filter"><span className="fl">Program</span>
           <select value={prog} onChange={(e) => setProg(e.target.value as 'All' | Program)}>
             <option value="All">All</option>
@@ -1230,6 +1455,90 @@ export function OverviewCharts() {
               units — a picture with no meaning. Revenue and Cash Received are
               period FLOWS, not balances, and both read $0 this month, so they
               would contribute invisible slices. Counts keep their tiles. */}
+          {/* ── WHAT IS DUE, AND WHEN ─────────────────────────────────────
+              First on the board and only when there IS something, so it reads as
+              a prompt rather than as furniture. The rest of the page answers
+              "how much"; this answers "by when", split by direction because
+              money arriving and money leaving are not one number.
+              Silent when nothing is due — a permanently present reminder is one
+              nobody reads. */}
+          {dueBuckets.length > 0 && (
+            <div className="exec-grid12">
+              {/* TITLED FOR ITS TWO HALVES. "Due dates" named the axis the card
+                  buckets on; this names what is actually in it — receivables on
+                  the left, what we owe on the right.
+                  THE SUBTITLE CARRIES THE SCOPE, and has to: the title says
+                  "this month", but the Overdue bucket reaches back as far as
+                  anything is still unpaid (today that is a May invoice), so the
+                  card is NOT confined to the month its name mentions. Stating
+                  the as-of date and the month end is what keeps the name from
+                  overselling the contents. */}
+              <ChartCard className="g12-12" title="Receivables and Dues this month"
+                sub={`Against ${asOfStr} · buckets run through ${monthEndStr}, and Overdue reaches back to whatever is still unpaid · click any figure for the list`}>
+                <div className="due-panel">
+                  {(['in', 'out'] as const).map((dir) => (
+                    <div className="due-col" key={dir}>
+                      <div className="due-head">
+                        {dir === 'in' ? 'Owed to us' : 'We owe out'}
+                        <i>{dir === 'in' ? 'receivables' : 'vendor bills'}</i>
+                      </div>
+                      {DUE_STATES.map((st) => {
+                        const n = dueCount(dir, st.key);
+                        // ── DUE TODAY GETS A PULSE ────────────────────────
+                        // Only this row, and only when something is actually in
+                        // it. Today is the one bucket with a deadline that
+                        // expires while you are looking at the screen — Overdue
+                        // has already passed and can wait for a chase list, and
+                        // anything Due within 7 days will still be there
+                        // tomorrow. Pulsing more than one row would make the
+                        // whole card move and single out nothing.
+                        //
+                        // A zero row must never pulse: an animation that fires
+                        // when there is no action to take is the fastest way to
+                        // teach someone to ignore it.
+                        const urgent = st.key === 'today' && n > 0;
+                        return (
+                          <button type="button" key={st.key}
+                            className={`due-row${n === 0 ? ' is-empty' : ''}${urgent ? ' is-urgent' : ''}`}
+                            disabled={n === 0}
+                            title={n === 0 ? `Nothing ${st.label.toLowerCase()}` : `${n} · ${st.note}`}
+                            onClick={() => openDueDrill(dir, st)}>
+                            <span className="dot" style={{ background: n === 0 ? 'var(--border)' : st.tone }} />
+                            <span className="l">
+                              {st.label}
+                              {/* The word, not only the motion. Colour and
+                                  movement are both unavailable to somebody —
+                                  colour-blind, reduced-motion, or reading a
+                                  screenshot — so the state is spelled out. */}
+                              {urgent && (
+                                <span className="due-badge">
+                                  {dir === 'in' ? 'collect today' : 'pay today'}
+                                </span>
+                              )}
+                            </span>
+                            <span className="n">{n}</span>
+                            <span className="v" style={{ color: n === 0 ? 'var(--muted)' : st.tone }}>
+                              {formatCurrency(dueTotal(dir, st.key))}
+                            </span>
+                            {/* Announced once when it appears, and politely —
+                                this must not interrupt whatever the reader is
+                                doing elsewhere on the page. */}
+                            {urgent && (
+                              <span className="sr-only" role="status">
+                                {n} {dir === 'in' ? 'receivable' : 'vendor bill'}{n === 1 ? '' : 's'} due today,
+                                {' '}{formatCurrency(dueTotal(dir, st.key))}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </ChartCard>
+            </div>
+          )}
+
           <div className="exec-grid12">
             {/* COMMISSION, INTERACTIVE. Replaces the flat tile: same headline,
                 but ranked by rep with a drill into programme split and the
@@ -1252,8 +1561,12 @@ export function OverviewCharts() {
                 )}
               </ChartCard>
             )}
+            {/* THE PERIOD IS IN THE TITLE, not only in the sub-line. A card
+                headed "Open balances" under a header showing FY2026 reads as the
+                whole year; it is September's, and the sub-line saying so was
+                being missed. See periodLabel. */}
             {donutSlices.length > 0 && (
-              <ChartCard className="g12-3" title="Open balances"
+              <ChartCard className="g12-3" title={`Open balances${balScoped ? ` · ${periodLabel}` : ''}`}
                 sub={`${formatCurrency(arOpenF)} owed to us · ${formatCurrency(apOpenF + commDue.payable)} owed out`}>
                 <DonutList data={donutSlices} totalLabel="Total outstanding"
                   onSelect={(n) => { location.hash = n === 'AR Expected' ? 'receivables' : n === 'AP Due' ? 'payables' : 'commission'; }} />
@@ -1265,7 +1578,7 @@ export function OverviewCharts() {
                 sum of two opposite things. This says which way each runs and
                 what is left, which is the question the ring raises. */}
             {donutSlices.length > 0 && (
-              <ChartCard className="g12-3" title="Position summary" sub={`Open balances, netted · ${balanceScopeLabel}`}>
+              <ChartCard className="g12-3" title={`Position summary${balScoped ? ` · ${periodLabel}` : ''}`} sub={`Open balances, netted · ${balanceScopeLabel}`}>
                 <div className="pos">
                   <div className="pos-cap">Net position</div>
                   <div className={`pos-net ${arOpenF - (apOpenF + commDue.payable) < 0 ? 'neg' : 'pos'}`}>
@@ -1412,7 +1725,9 @@ export function OverviewCharts() {
                 <h2 className="section-title">AR Due</h2>
                 <div className="section-sub">Open receivables · {PROG_LABEL[prog]} · {balanceScopeLabel}</div>
               </div></div>
-              <div className="rank-list">
+              {/* `is-scroll`: this list is not sliced, so it caps its own height
+                  and scrolls rather than stretching the cards beside it. */}
+              <div className="rank-list is-scroll">
                 {arDue.map((r) => (
                   <div key={r.id} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillArPayer(r.payer))}>
                     <span className="rk-ico" style={{ background: 'rgba(13,148,136,0.10)', color: '#0D9488' }}>{initials(r.payer || '-')}</span>
@@ -1543,7 +1858,7 @@ export function OverviewCharts() {
 
           <div className="exec-grid12">
             <ChartCard className="g12-5" title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>
-              <LegendDots items={[{ name: 'Cash In', color: C.positive }, { name: 'Cash Out', color: C.negative }, { name: 'Net Cash', color: C.brand }]} />
+              {cashData.length > 1 && <LegendDots items={[{ name: 'Cash In', color: C.positive }, { name: 'Cash Out', color: C.negative }, { name: 'Net Cash', color: C.brand }]} />}
               <BarsLine data={cashData}
                 bars={[{ key: 'cashIn', name: 'Cash In', color: C.positive }, { key: 'cashOut', name: 'Cash Out', color: C.negative }]}
                 line={{ key: 'net', name: 'Net Cash', color: C.brand }} />
@@ -1555,7 +1870,7 @@ export function OverviewCharts() {
             </ChartCard>
 
             <ChartCard className={hide('overview.collectionRate') ? "g12-7" : "g12-4"} title="Revenue vs Expense" sub={`Invoiced revenue vs billed expenses · ${periodLabel}`}>
-              <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />
+              {finData.length > 1 && <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />}
               <BarsLine data={finData}
                 bars={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expense', color: C.negative }]}
                 line={{ key: 'profit', name: 'Profit', color: C.brand }} />
@@ -1583,27 +1898,20 @@ export function OverviewCharts() {
             </ChartCard>
             )}
 
-            {!hide('overview.topVendors') && (
-            <div className="section chart-card g12-4">
-              <div className="section-head"><div><h2 className="section-title">Top Vendors (by Spend)</h2><div className="section-sub">Committed PO spend</div></div></div>
-              <div className="rank-list">
-                {topVend.map((v) => (
-                  <div key={v.vendor} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillVendor(v.vendor))}>
-                    <span className="rk-ico" style={{ background: 'rgba(124,58,237,0.10)', color: '#7C3AED' }}>{initials(v.vendor)}</span>
-                    <span className="rk-name" title={v.vendor}>{trunc(v.vendor, 26)}</span>
-                    <span className="rk-val">{formatCurrency(v.total)}</span>
-                  </div>
-                ))}
-                {topVend.length === 0 && <div className="muted-note">No active POs.</div>}
-              </div>
-              <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={go('vendors')}>View all vendors →</button>
-            </div>
-            )}
+            {/* TOP VENDORS (BY SPEND) WAS HERE, and is gone on request. It
+                ranked the five largest vendors by committed PO spend and linked
+                out to the Vendors tab.
+                It was never the only place that answered the question: "PO Spend
+                by Vendor (Top 5)" below covers the same ground from the same
+                `po.byVendor` payload, and the Vendors tab carries the full list.
+                With this removed, that card is no longer a duplicate of
+                anything — see the note beside `overview.poSpendTop5` in
+                viewProfile.ts, which hid it for exactly that reason. */}
 
             {/* The sub names the demo split rather than leaving a muted bar to
                 explain itself — it is the one row on this card that is in the
                 total but not in the business. */}
-            <ChartCard className={hide('overview.topVendors') ? "g12-6" : "g12-4"} title="Sales Orders by Program"
+            <ChartCard className="g12-6" title="Sales Orders by Program"
               sub={`${so.count} orders · click a program to filter${(so.piva.DEMO?.count ?? 0) > 0 ? ` · includes ${so.piva.DEMO.count} DEMO / test` : ''}`}>
               <div className="card-body">
                 <BarList data={programBars} money={false}
@@ -1776,7 +2084,8 @@ export function OverviewCharts() {
         </>
       )}
 
-      {drill && <DrillModal title={drill.title} sub={drill.sub} columns={drill.columns} rows={drill.rows} onClose={() => setDrill(null)} />}
+      {drill && <DrillModal title={drill.title} sub={drill.sub} summary={drill.summary}
+        columns={drill.columns} rows={drill.rows} onClose={() => setDrill(null)} />}
     </div>
   );
 }

@@ -669,7 +669,7 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
 
       <div className="section-head" style={{ minHeight: 0, marginBottom: 8, alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <h2 className="section-title" style={{ fontSize: 15 }}>Leaderboard</h2>
+          <h2 className="section-title">Leaderboard</h2>
           <div className="section-sub">
             By orders booked, {scoped ? <b>{monthLabel(period)}</b> : 'all time'}.
             {self ? ' Tap your row for your full breakdown.' : ''}

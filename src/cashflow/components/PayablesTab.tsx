@@ -497,7 +497,11 @@ export function PayablesTab() {
               </div>
             </div>
 
-            <div className="section chart-card g12-6">
+            {/* `tbl-single`: seven columns in half a row had every date breaking
+                across three lines ("Jul / 2, / 2026") and every long vendor across
+                four, so a row stood four lines tall and the card ran to twice the
+                height of Vendors beside it. See the rule in cashflow.css. */}
+            <div className="section chart-card g12-6 tbl-single">
               <div className="section-head">
                 <div><h2 className="section-title">Open Bills</h2><div className="section-sub">Unpaid vendor bills with a remaining balance</div></div>
                 <div className="tbl-controls">
@@ -512,7 +516,11 @@ export function PayablesTab() {
                   <button className="btn ghost" style={{ padding: '7px 11px' }} title="Download CSV of the filtered bills" onClick={exportCsv}>⤓ CSV</button>
                 </div>
               </div>
-              <div className="table-wrap">
+              {/* THE SAME 430px PANE VENDORS USES, so the pair are one height
+                   and one behaviour rather than two cards that happen to sit
+                   side by side. Both scroll their own rows; neither stretches
+                   the other. */}
+              <div className="table-wrap" style={{ maxHeight: 430, overflowY: 'auto' }}>
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -531,7 +539,10 @@ export function PayablesTab() {
                       return (
                         <tr key={b.id}>
                           <td><strong>#{b.number}</strong></td>
-                          <td>{b.vendor || '-'}</td>
+                          {/* The only cell that can run to forty characters
+                              ("Doctors Medical, LLC / A&O Medical, LLC"); it
+                              ellipsises rather than setting the table's width. */}
+                          <td className="clip" title={b.vendor || undefined}>{b.vendor || '-'}</td>
                           <td>{fmtDate(b.dueDate)}</td>
                           <td className="num">{formatCurrency(b.total)}</td>
                           <td className="num cell-neg">{formatCurrency(b.open)}</td>

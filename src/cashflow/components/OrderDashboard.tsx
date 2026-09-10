@@ -677,7 +677,9 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
           full-width row they had. */}
       <div className="section chart-card dg-devices" style={{ marginTop: 0 }}>
         <div className="section-head"><div>
-          <h2 className="section-title">By device type <span style={{ fontWeight: 500, color: C.muted, fontSize: 13 }}>· {byDevice.list.length}</span></h2>
+          {/* 12px, not 13: the heading around it is 12.5px caps now, and a
+              muted count set LARGER than its own heading reads as the headline. */}
+          <h2 className="section-title">By device type <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {byDevice.list.length}</span></h2>
           <div className="section-sub">
             Across every account, ranked by units dispensed. Every device type on these orders is listed.
           </div>

@@ -117,6 +117,12 @@ function DeltaChip({ delta, label }: { delta: Delta; label: string }) {
  * next question every time: a 131% month is a different conversation depending
  * on whether one rep doubled or all four rose together.
  *
+ * BOTH ARE DRAWN, SIDE BY SIDE UNDER THE TOTAL. They used to share one chart
+ * behind a View picker, which made two different questions into alternatives:
+ * seeing who moved the book cost you the sight of which programme did, and
+ * putting the two together meant flipping and remembering. They are two panels
+ * now — same area, same card, no switching.
+ *
  * STACKED, not grouped. The segments have to add up to the team total the card
  * already states two inches above — a grouped chart puts four short bars side by
  * side and leaves the reader summing them by eye against a figure that is
@@ -162,6 +168,90 @@ const METRICS_FOR: Record<Split, Metric[]> = {
  *  devices, HUE.po amber for pay), so nobody has to relearn the palette between
  *  the strip and the chart three inches below it. */
 const INK = { orders: '#0D9488', units: '#7C3AED', money: '#D97706' };
+
+/**
+ * ONE STACKED SERIES SET: the rows, the live keys in stacking order, and a
+ * colour per key.
+ *
+ * MODULE-LEVEL, because the card no longer holds a `split` to branch on. It
+ * draws both breakdowns at once, so this is called twice per render with
+ * different arguments — a hook closed over the component's state could not be.
+ */
+function buildStack(split: Exclude<Split, 'team'>, metric: Metric, months: string[], rows: RepRow[], nowYm: string) {
+  const window = months.slice(-WINDOW);
+
+  // ONE VALUE, for one series, in one month.
+  const repValue = (r: RepRow, m: string): number => {
+    if (metric === 'commission') {
+      // Payout cycle, exactly as the team line and the roster's pay columns.
+      return Number((r.commissionByCycle ?? []).find((x) => x.month === m)?.total) || 0;
+    }
+    const b = (r.byMonth ?? []).find((x) => x.month === m) ?? null;
+    if (metric === 'orders') return b?.orders ?? 0;
+    if (metric === 'units') return Number(b?.units) || 0;
+    return Number(b?.revenue) || 0;
+  };
+  const vertValue = (m: string, v: string): number => rows.reduce((s, r) => {
+    const bv = ((r.byMonth ?? []).find((x) => x.month === m)?.byVertical ?? []).find((x) => x.vertical === v);
+    return s + (metric === 'orders' ? (bv?.orders ?? 0) : (Number(bv?.units) || 0));
+  }, 0);
+  /** The month's whole rep-attributed figure — what the Team view draws. */
+  const monthTotal = (m: string): number => rows.reduce((s, r) => {
+    const b = (r.byMonth ?? []).find((x) => x.month === m) ?? null;
+    return s + (metric === 'orders' ? (b?.orders ?? 0) : (Number(b?.units) || 0));
+  }, 0);
+
+  // The series, and the order they stack in.
+  let keys: string[];
+  if (split === 'rep') {
+    // Biggest at the bottom: a stack whose segments jump order between months
+    // is unreadable, and the eye tracks the base most reliably.
+    keys = rows.map((r) => r.rep)
+      .sort((a, b) => window.reduce((s, m) => s + repValue(rows.find((r) => r.rep === b)!, m), 0)
+        - window.reduce((s, m) => s + repValue(rows.find((r) => r.rep === a)!, m), 0));
+  } else {
+    // VERTICAL_ORDER, the app's one display order — clinical programmes first
+    // — so this card stacks them the way every other breakdown lists them.
+    const present = new Set<string>();
+    for (const r of rows) for (const b of r.byMonth ?? []) for (const v of b.byVertical ?? []) if (v.orders) present.add(v.vertical);
+    keys = [...VERTICAL_ORDER.filter((v) => present.has(v)),
+      ...[...present].filter((v) => !VERTICAL_ORDER.includes(v)).sort()];
+  }
+
+  const data = window.map((m) => {
+    const row: Record<string, number | string | boolean> = { month: m, partial: m === nowYm };
+    for (const k of keys) {
+      row[k] = split === 'rep' ? repValue(rows.find((r) => r.rep === k)!, m) : vertValue(m, k);
+    }
+    // ── THE STACK MUST EQUAL THE HEADLINE ──────────────────────────────────
+    // `byVertical` enumerates the CONFIGURED verticals only (VERTS — VA, PI,
+    // DOL, TriCare), so an order booked as any other type is in the month's
+    // total and in no vertical. It is not hypothetical: July 2026 carries
+    // DEMO orders, and the vertical stack summed to 142 against the 143 this
+    // very card states two inches above, with nothing on screen to explain
+    // the missing one.
+    //
+    // The remainder is drawn rather than dropped. A breakdown that quietly
+    // fails to add up to its own total is worse than one with an "Other"
+    // band, because the first looks correct.
+    if (split === 'vertical') {
+      const known = keys.reduce((s, k) => s + (Number(row[k]) || 0), 0);
+      const rest = monthTotal(m) - known;
+      if (rest > 0) row[OTHER] = rest;
+    }
+    return row;
+  });
+  // `OTHER` joins the key list only where a month actually has a remainder,
+  // and always last: it is the residue, not a programme.
+  if (split === 'vertical' && data.some((d) => Number(d[OTHER]) > 0)) keys = [...keys, OTHER];
+  // A rep who booked nothing all year, or a vertical with no volume, is not a
+  // series — it is a legend entry with no mark, and it steals a colour.
+  const live = keys.filter((k) => data.some((d) => Number(d[k]) > 0));
+  const color = (k: string, i: number) => (split === 'vertical'
+    ? (VERTICAL_COLORS[k] ?? SERIES[i % SERIES.length])
+    : SERIES[i % SERIES.length]);
+  return { data, keys: live, colors: Object.fromEntries(live.map((k, i) => [k, color(k, i)])) };
+}
 
 export function MonthOverMonth({ months, rep, team, reps }: {
   /** Every month the shown book touches, oldest first. */
@@ -256,91 +346,27 @@ export function MonthOverMonth({ months, rep, team, reps }: {
   // than the server intends them to read off one screen, and for Revenue and
   // Commission it would be a column of nulls.
   const canSplit = !isRep && (reps?.length ?? 0) > 0;
-  const [splitRaw, setSplit] = useState<Split>('team');
-  const [metricRaw, setMetric] = useState<Metric>('orders');
-  const split: Split = canSplit ? splitRaw : 'team';
-  // A metric the ACTIVE split cannot honestly draw falls back to Orders rather
-  // than rendering an empty chart — switching to By vertical while Revenue is
-  // selected must not blank the card.
-  const metric: Metric = METRICS_FOR[split].includes(metricRaw) ? metricRaw : 'orders';
+  /**
+   * BOTH BREAKDOWNS AT ONCE, NOT ONE BEHIND A PICKER.
+   *
+   * "Who moved it" and "which programme moved it" are two questions, and the
+   * View dropdown made them alternatives — the answer to one was always the
+   * cost of hiding the other, and comparing them meant flipping back and forth
+   * holding numbers in your head. They are drawn side by side instead, under
+   * the team total they both add up to.
+   *
+   * A METRIC PICKER EACH, because the two panels cannot draw the same set:
+   * `byVertical` carries orders and units and no money at all (see the note
+   * above), so a shared picker would either blank half the card on Revenue or
+   * withhold Revenue from the rep panel, which does carry it honestly.
+   */
+  const [repMetric, setRepMetric] = useState<Metric>('orders');
+  const [vertMetric, setVertMetric] = useState<Metric>('orders');
+  const repStack = useMemo(() => (canSplit ? buildStack('rep', repMetric, months, reps ?? [], nowYm) : null),
+    [canSplit, repMetric, months, reps, nowYm]);
+  const vertStack = useMemo(() => (canSplit ? buildStack('vertical', vertMetric, months, reps ?? [], nowYm) : null),
+    [canSplit, vertMetric, months, reps, nowYm]);
 
-  const stack = useMemo(() => {
-    if (split === 'team') return null;
-    const window = months.slice(-WINDOW);
-    const rows = reps ?? [];
-
-    // ONE VALUE, for one series, in one month.
-    const repValue = (r: RepRow, m: string): number => {
-      if (metric === 'commission') {
-        // Payout cycle, exactly as the team line and the roster's pay columns.
-        return Number((r.commissionByCycle ?? []).find((x) => x.month === m)?.total) || 0;
-      }
-      const b = (r.byMonth ?? []).find((x) => x.month === m) ?? null;
-      if (metric === 'orders') return b?.orders ?? 0;
-      if (metric === 'units') return Number(b?.units) || 0;
-      return Number(b?.revenue) || 0;
-    };
-    const vertValue = (m: string, v: string): number => rows.reduce((s, r) => {
-      const bv = ((r.byMonth ?? []).find((x) => x.month === m)?.byVertical ?? []).find((x) => x.vertical === v);
-      return s + (metric === 'orders' ? (bv?.orders ?? 0) : (Number(bv?.units) || 0));
-    }, 0);
-    /** The month's whole rep-attributed figure — what the Team view draws. */
-    const monthTotal = (m: string): number => rows.reduce((s, r) => {
-      const b = (r.byMonth ?? []).find((x) => x.month === m) ?? null;
-      return s + (metric === 'orders' ? (b?.orders ?? 0) : (Number(b?.units) || 0));
-    }, 0);
-
-    // The series, and the order they stack in.
-    let keys: string[];
-    if (split === 'rep') {
-      // Biggest at the bottom: a stack whose segments jump order between months
-      // is unreadable, and the eye tracks the base most reliably.
-      keys = rows.map((r) => r.rep)
-        .sort((a, b) => window.reduce((s, m) => s + repValue(rows.find((r) => r.rep === b)!, m), 0)
-          - window.reduce((s, m) => s + repValue(rows.find((r) => r.rep === a)!, m), 0));
-    } else {
-      // VERTICAL_ORDER, the app's one display order — clinical programmes first
-      // — so this card stacks them the way every other breakdown lists them.
-      const present = new Set<string>();
-      for (const r of rows) for (const b of r.byMonth ?? []) for (const v of b.byVertical ?? []) if (v.orders) present.add(v.vertical);
-      keys = [...VERTICAL_ORDER.filter((v) => present.has(v)),
-        ...[...present].filter((v) => !VERTICAL_ORDER.includes(v)).sort()];
-    }
-
-    const data = window.map((m) => {
-      const row: Record<string, number | string | boolean> = { month: m, partial: m === nowYm };
-      for (const k of keys) {
-        row[k] = split === 'rep' ? repValue(rows.find((r) => r.rep === k)!, m) : vertValue(m, k);
-      }
-      // ── THE STACK MUST EQUAL THE HEADLINE ──────────────────────────────────
-      // `byVertical` enumerates the CONFIGURED verticals only (VERTS — VA, PI,
-      // DOL, TriCare), so an order booked as any other type is in the month's
-      // total and in no vertical. It is not hypothetical: July 2026 carries
-      // DEMO orders, and the vertical stack summed to 142 against the 143 this
-      // very card states two inches above, with nothing on screen to explain
-      // the missing one.
-      //
-      // The remainder is drawn rather than dropped. A breakdown that quietly
-      // fails to add up to its own total is worse than one with an "Other"
-      // band, because the first looks correct.
-      if (split === 'vertical') {
-        const known = keys.reduce((s, k) => s + (Number(row[k]) || 0), 0);
-        const rest = monthTotal(m) - known;
-        if (rest > 0) row[OTHER] = rest;
-      }
-      return row;
-    });
-    // `OTHER` joins the key list only where a month actually has a remainder,
-    // and always last: it is the residue, not a programme.
-    if (split === 'vertical' && data.some((d) => Number(d[OTHER]) > 0)) keys = [...keys, OTHER];
-    // A rep who booked nothing all year, or a vertical with no volume, is not a
-    // series — it is a legend entry with no mark, and it steals a colour.
-    const live = keys.filter((k) => data.some((d) => Number(d[k]) > 0));
-    const color = (k: string, i: number) => (split === 'vertical'
-      ? (VERTICAL_COLORS[k] ?? SERIES[i % SERIES.length])
-      : SERIES[i % SERIES.length]);
-    return { data, keys: live, colors: Object.fromEntries(live.map((k, i) => [k, color(k, i)])) };
-  }, [split, metric, months, reps, nowYm]);
 
   // ── The comparison ─────────────────────────────────────────────────────────
   // COMPLETE MONTHS ONLY. Comparing a month that is four days old against a full
@@ -381,60 +407,20 @@ export function MonthOverMonth({ months, rep, team, reps }: {
           <h2 className="section-title">{isRep ? 'Your growth' : 'Reps growth'}</h2>
           <div className="section-sub">
             {isRep ? 'How your book has moved.' : "How the team's book has moved."}
-            {split === 'team'
-              ? <> Orders and devices by order date; commission by payout cycle, matching Commission.</>
-              : <> <b>{METRIC_LABEL[metric]}</b> {split === 'rep' ? 'per rep' : 'per vertical'}, stacked to the team total
-                  {/* THE BASIS, PER METRIC — the split does not change it, but
-                      which one applies depends on what is being drawn. */}
-                  {metric === 'commission' ? ', by payout cycle (matching Commission).' : ', by order date.'}</>}
+            {' '}Orders and devices by order date; commission by payout cycle, matching Commission.
             {running && <> <b>{monthLabel(running.month)}</b> is still running, so it is drawn faint and left out of the comparison.</>}
-            {/* Said once, where the choice is made, rather than leaving someone
-                to wonder why two metrics vanish on this view. */}
-            {split === 'vertical' && <> Revenue and commission are not split by vertical: the payload carries neither per vertical per month.</>}
+            {canSplit && <> The two panels underneath break the same book down by <b>rep</b> and by <b>vertical</b>; each stacks to this total.</>}
           </div>
         </div>
-
-        {/* THE CONTROLS, ADMIN ONLY. `.ov-filter` is the app's existing filter
-            chip — the same control MonthSelect uses — so these read as the same
-            KIND of thing as the Period picker elsewhere on the page. */}
-        {canSplit && (
-          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
-            <label className="ov-filter" style={{ flex: 'none' }}>
-              <span className="fl">View</span>
-              <select value={split} onChange={(e) => setSplit(e.target.value as Split)}
-                title="Read the book as one total, or split it by who booked it / which programme"
-                style={{ color: C.ink }}>
-                <option value="team">Team total</option>
-                <option value="rep">By rep</option>
-                <option value="vertical">By vertical</option>
-              </select>
-            </label>
-            {split !== 'team' && (
-              <label className="ov-filter" style={{ flex: 'none' }}>
-                <span className="fl">Metric</span>
-                <select value={metric} onChange={(e) => setMetric(e.target.value as Metric)}
-                  title="A split can only draw one metric at a time" style={{ color: C.ink }}>
-                  {METRICS_FOR[split].map((m) => <option key={m} value={m}>{METRIC_LABEL[m]}</option>)}
-                </select>
-              </label>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* The legend keys the marks. On the team view it also keys the two AXES —
-          counts left, dollars right — without which the line reads as a third
-          count. On a split it names the stack, in stacking order. */}
+      {/* The legend keys the marks AND the two AXES — counts left, dollars right
+          — without which the line reads as a third count. The breakdown panels
+          below carry their own, because their series are their own. */}
       <div className="mini-legend" style={{ marginBottom: 10 }}>
-        {stack
-          ? stack.keys.map((k) => (
-            <span key={k} className="ml-i"><span className="ml-dot" style={{ background: stack.colors[k] }} />{k}</span>
-          ))
-          : <>
-            <span className="ml-i"><span className="ml-dot" style={{ background: INK.orders }} />Orders</span>
-            {hasUnits && <span className="ml-i"><span className="ml-dot" style={{ background: INK.units }} />Devices</span>}
-            {hasMoney && <span className="ml-i"><span className="ml-dot" style={{ background: INK.money }} />{moneyName}</span>}
-          </>}
+        <span className="ml-i"><span className="ml-dot" style={{ background: INK.orders }} />Orders</span>
+        {hasUnits && <span className="ml-i"><span className="ml-dot" style={{ background: INK.units }} />Devices</span>}
+        {hasMoney && <span className="ml-i"><span className="ml-dot" style={{ background: INK.money }} />{moneyName}</span>}
       </div>
 
       {/* THE HEADLINE: the sentence this card exists to say, above the chart that
@@ -471,27 +457,6 @@ export function MonthOverMonth({ months, rep, team, reps }: {
         // it. minHeight plus flex:none is what actually holds the 300px.
         <div className="chart-box" style={{ height: 300, minHeight: 300, flex: 'none' }}>
           <ResponsiveContainer width="100%" height="100%">
-          {stack ? (
-            // ── THE SPLIT ────────────────────────────────────────────────────
-            // One stack per month, one segment per rep / vertical, one metric.
-            <ComposedChart data={stack.data} margin={{ top: 14, right: 16, left: 0, bottom: 2 }} barCategoryGap="26%">
-              <CartesianGrid {...gridProps} />
-              <XAxis dataKey="month" {...axisProps} tickFormatter={(m: string) => axisMonth(String(m))} />
-              <YAxis {...axisProps} width={isMoney(metric) ? 54 : 44} allowDecimals={false}
-                tickFormatter={isMoney(metric) ? compactMoney : undefined} />
-              <Tooltip cursor={{ fill: 'rgba(148,163,184,0.08)' }}
-                content={<StackTooltip metric={metric} colors={stack.colors} />} />
-              {stack.keys.map((k, i) => (
-                <Bar key={k} dataKey={k} name={k} stackId="s" fill={stack.colors[k]} maxBarSize={54}
-                  // Only the TOP segment gets the rounded cap, or every band in
-                  // the stack draws its own corners and the bar reads as a pile
-                  // of separate bars rather than one total.
-                  radius={i === stack.keys.length - 1 ? [4, 4, 0, 0] : undefined}>
-                  {stack.data.map((d) => <Cell key={String(d.month)} fillOpacity={d.partial ? 0.38 : 1} />)}
-                </Bar>
-              ))}
-            </ComposedChart>
-          ) : (
             <ComposedChart data={series} margin={{ top: 14, right: hasMoney ? 8 : 16, left: 0, bottom: 2 }} barGap={3} barCategoryGap="26%">
               <CartesianGrid {...gridProps} />
               <XAxis dataKey="month" {...axisProps} tickFormatter={(m: string) => axisMonth(String(m))} />
@@ -527,8 +492,22 @@ export function MonthOverMonth({ months, rep, team, reps }: {
                   dot={{ r: 3, fill: INK.money, strokeWidth: 0 }} connectNulls />
               )}
             </ComposedChart>
-          )}
           </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ── THE TWO BREAKDOWNS, SIDE BY SIDE ───────────────────────────────────
+          Both answer "what is behind that total", so both sit under it rather
+          than taking turns in its place. `auto-fit` with a 340px floor is what
+          makes that safe on a narrow screen: twelve stacked months in half a
+          phone is unreadable, so below the floor they fall into one column
+          instead of being squeezed. */}
+      {canSplit && !nothingYet && repStack && vertStack && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, marginTop: 16 }}>
+          <SplitPanel title="By rep" note="Who booked it. Stacks to the team total above, biggest at the base."
+            split="rep" stack={repStack} metric={repMetric} onMetric={setRepMetric} />
+          <SplitPanel title="By vertical" note="Which programme booked it. Revenue and commission are not offered: the payload carries neither per vertical per month."
+            split="vertical" stack={vertStack} metric={vertMetric} onMetric={setVertMetric} />
         </div>
       )}
 
@@ -542,6 +521,90 @@ export function MonthOverMonth({ months, rep, team, reps }: {
           {best.money != null && best.money > 0 && <>, <b style={{ color: C.sub }}>{formatCurrency(best.money, true)}</b> {moneyName.toLowerCase()}</>}
           {cur && best.month === cur.month && <> — the month just closed.</>}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ONE BREAKDOWN PANEL — a stacked chart with its own title, legend and metric.
+ *
+ * A PANEL, NOT A SECOND CARD. It sits inside Reps growth because it is the same
+ * book: the stack height IS the total drawn above it, and putting a border and
+ * a heading round it would break that claim into two things that merely happen
+ * to agree. The frame is a hairline for that reason — it groups, it does not
+ * announce.
+ *
+ * ITS OWN METRIC, offering only what its split can honestly draw. By vertical
+ * lists Orders and Devices and stops there; the payload carries no money per
+ * vertical per month, and a picker that offered Revenue here would be offering
+ * a flat zero.
+ */
+function SplitPanel({ title, note, split, stack, metric, onMetric }: {
+  title: string;
+  note: string;
+  split: Exclude<Split, 'team'>;
+  stack: NonNullable<ReturnType<typeof buildStack>>;
+  metric: Metric;
+  onMetric: (m: Metric) => void;
+}) {
+  return (
+    // minWidth 0 or a grid column refuses to shrink below its chart's intrinsic
+    // width and the pair overflows the card instead of reflowing.
+    <div style={{ border: `1px solid ${C.grid}`, borderRadius: 12, padding: '12px 14px 14px', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>{title}</div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, lineHeight: 1.45 }}>{note}</div>
+        </div>
+        {/* `.ov-filter` is the app's existing filter chip — the same control the
+            Period picker uses — so this reads as the same KIND of thing. */}
+        <label className="ov-filter" style={{ flex: 'none' }}>
+          <span className="fl">Metric</span>
+          <select value={metric} onChange={(e) => onMetric(e.target.value as Metric)}
+            title="A stacked split can only draw one metric at a time" style={{ color: C.ink }}>
+            {METRICS_FOR[split].map((m) => <option key={m} value={m}>{METRIC_LABEL[m]}</option>)}
+          </select>
+        </label>
+      </div>
+
+      {stack.keys.length === 0 ? (
+        // A metric nothing was booked under is not a broken chart, and an empty
+        // grid with no bars reads as one.
+        <div style={{ fontSize: 12.5, color: C.muted, padding: '28px 0' }}>
+          No {METRIC_LABEL[metric].toLowerCase()} booked in this window.
+        </div>
+      ) : (
+        <>
+          <div className="mini-legend" style={{ margin: '10px 0 8px' }}>
+            {stack.keys.map((k) => (
+              <span key={k} className="ml-i"><span className="ml-dot" style={{ background: stack.colors[k] }} />{k}</span>
+            ))}
+          </div>
+          {/* Shorter than the team chart above: these are half its width, and a
+              300px box at that width draws a column of stalks. */}
+          <div className="chart-box" style={{ height: 250, minHeight: 250, flex: 'none' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={stack.data} margin={{ top: 10, right: 12, left: 0, bottom: 2 }} barCategoryGap="26%">
+                <CartesianGrid {...gridProps} />
+                <XAxis dataKey="month" {...axisProps} tickFormatter={(m: string) => axisMonth(String(m))} />
+                <YAxis {...axisProps} width={isMoney(metric) ? 54 : 40} allowDecimals={false}
+                  tickFormatter={isMoney(metric) ? compactMoney : undefined} />
+                <Tooltip cursor={{ fill: 'rgba(148,163,184,0.08)' }}
+                  content={<StackTooltip metric={metric} colors={stack.colors} />} />
+                {stack.keys.map((k, i) => (
+                  <Bar key={k} dataKey={k} name={k} stackId="s" fill={stack.colors[k]} maxBarSize={46}
+                    // Only the TOP segment gets the rounded cap, or every band in
+                    // the stack draws its own corners and the bar reads as a pile
+                    // of separate bars rather than one total.
+                    radius={i === stack.keys.length - 1 ? [4, 4, 0, 0] : undefined}>
+                    {stack.data.map((d) => <Cell key={String(d.month)} fillOpacity={d.partial ? 0.38 : 1} />)}
+                  </Bar>
+                ))}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </>
       )}
     </div>
   );

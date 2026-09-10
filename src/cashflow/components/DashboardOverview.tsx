@@ -183,7 +183,7 @@ function BarList({ title, sub, slices, total, fmt = (n: number) => String(n), em
     // one baseline instead of four ragged card bottoms.
     <div className="section chart-card" style={{ marginTop: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="section-head" style={{ minHeight: 52, alignItems: 'flex-start' }}><div>
-        <h2 className="section-title" style={{ fontSize: 15 }}>{title}</h2>
+        <h2 className="section-title">{title}</h2>
         {sub && <div className="section-sub">{sub}</div>}
       </div></div>
 
@@ -323,15 +323,24 @@ function BarList({ title, sub, slices, total, fmt = (n: number) => String(n), em
  * order, sized evenly so the sequence reads as a process rather than a ranking.
  * Empty stages stay visible: a gap in the middle of a pipeline is information.
  */
-function StageStrip({ slices, unfiltered }: { slices: Slice[]; unfiltered?: boolean }) {
+/** A funnel cell: a {@link Slice} plus how many orders have moved PAST this
+ *  stage — shown as a footnote, never counted in `value`. */
+type StageCell = Slice & { passed?: number };
+
+function StageStrip({ slices, unfiltered }: { slices: StageCell[]; unfiltered?: boolean }) {
   const total = slices.reduce((s, x) => s + x.value, 0);
+  // Whether the passed-through footnote appears anywhere, so the caption only
+  // explains a thing the reader can actually see on this board.
+  const passedAny = slices.reduce((s, x) => s + (x.passed ?? 0), 0);
   if (!slices.length) return null;
   return (
     <div className="section chart-card" style={{ marginTop: 0, marginBottom: 14 }}>
       <div className="section-head"><div>
-        <h2 className="section-title" style={{ fontSize: 15 }}>PI pipeline</h2>
+        <h2 className="section-title">PI pipeline</h2>
         <div className="section-sub">
           {total} Personal Injury order{total === 1 ? '' : 's'} by stage: a subset of the PI orders above. Left to right is the order of work.
+          {' '}Each cell counts the orders <b>standing at that stage now</b>, so they add up to {total}.
+          {passedAny > 0 && <> Orders that have moved past a stage are footnoted there rather than counted in it.</>}
         </div>
         {/* Honesty about scope: the stage store holds no dates and no rep, so
             the filters above genuinely cannot reach it. Say so rather than let
@@ -348,7 +357,7 @@ function StageStrip({ slices, unfiltered }: { slices: Slice[]; unfiltered?: bool
           const pct = total ? Math.round((s.value / total) * 100) : 0;
           const on = s.value > 0;
           return (
-            <div key={s.name} title={`${s.name}: ${s.value} order${s.value === 1 ? '' : 's'}${on ? ` · ${pct}%` : ''}`}
+            <div key={s.name} title={`${s.name}: ${s.value} order${s.value === 1 ? '' : 's'} standing here now${on ? ` · ${pct}%` : ''}${s.passed ? ` · ${s.passed} have passed through` : ''}`}
               style={{
                 position: 'relative', borderRadius: 10,
                 background: on
@@ -378,7 +387,13 @@ function StageStrip({ slices, unfiltered }: { slices: Slice[]; unfiltered?: bool
               <div style={{ height: 4, borderRadius: 999, background: 'var(--panel)', overflow: 'hidden', marginTop: 6 }}>
                 <div style={{ height: '100%', width: `${pct}%`, background: s.color }} />
               </div>
-              <div style={{ fontSize: 11, color: C.muted, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>{on ? `${pct}%` : 'empty'}</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
+                {on ? `${pct}%` : 'none standing'}
+                {/* Throughput, never the headline: the number above is who is
+                    standing here, and a stage can be empty while plenty has
+                    flowed through it. */}
+                {s.passed ? <span style={{ opacity: .85 }}> · +{s.passed} passed</span> : null}
+              </div>
             </div>
           );
         })}
@@ -505,7 +520,22 @@ export function DashboardOverview({ reps, viewAs, aside }: {
   const filteredDevices = deviceRows.filter((d) => orderSet.has(d.o));
   const byDevice = foldSlices(tally(filteredDevices, (d) => d.item, (d) => d.qty), pinnedDevices, 'Other devices');
 
-  const byStage: Slice[] = (pi?.stages ?? []).map((s) => ({ name: s.stage, value: s.count, color: STAGE_C[s.stage] ?? C.muted }));
+  /**
+   * THE STAGE FUNNEL, COUNTED BY WHERE ORDERS ACTUALLY STAND.
+   *
+   * `current` — the one stage an order sits at — not `count`, which lists an
+   * order at every stage its Striven labels attest to. The strip read `count`
+   * and so totalled 180 on a board of 115, with a "22%" under a stage holding
+   * nobody: the shares were cut over a denominator that double-counted. These
+   * sum to the board, which is what a share of a pipeline has to do.
+   *
+   * `passed` keeps the difference visible rather than dropping it — it is the
+   * stage's throughput, and the same figure the PI pipeline tab footnotes.
+   */
+  const byStage: StageCell[] = (pi?.stages ?? []).map((s) => {
+    const here = s.current ?? s.count;
+    return { name: s.stage, value: here, passed: Math.max(0, s.count - here), color: STAGE_C[s.stage] ?? C.muted };
+  });
 
   if (err) return <div className="error" style={{ marginBottom: 14 }}>{err}</div>;
   if (!a || !pi) return <div className="page-sub" style={{ padding: 16 }}>Loading summary…</div>;

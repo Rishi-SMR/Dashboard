@@ -268,9 +268,14 @@ export function AccountsTab() {
           </ChartCard>
 
           {/* ── Recent payments received ────────────────────────────── */}
-          <ChartCard title="Recent Payments Received" sub={`Latest of ${pay.count.toLocaleString()} customer payments · patient names masked`}>
-            <div className="table-wrap">
-              <table className="data-table">
+          {/* `pay.recent` is the server's 30-row slice, not all `pay.count` — so
+              the sub names both figures. "Latest of 198" read as though the
+              table held 198 rows and scrolling would reach them. */}
+          <ChartCard title="Recent Payments Received" sub={`Latest ${pay.recent.length} of ${pay.count.toLocaleString()} customer payments · patient names masked`}>
+            {/* Capped and scrolled: the register is as tall as the card lets it
+                be, and the column titles stay put while it moves. */}
+            <div className="table-wrap scroll-y">
+              <table className="data-table compact">
                 <thead>
                   <tr>
                     <th>Reference</th><th>Patient</th><th>Received on</th>
@@ -306,8 +311,12 @@ export function AccountsTab() {
                 account field is pulled live below.
               </span>
             </div>
-            <div className="table-wrap">
-              <table className="data-table">
+            {/* Capped and scrolled, like the payments register above. Unlike it,
+                this table holds the WHOLE list — `sortedAccounts` is every
+                account, not a slice — so scrolling here really does reach the
+                end, and the sub's count is the row count. */}
+            <div className="table-wrap scroll-y">
+              <table className="data-table compact">
                 <thead>
                   <tr>
                     <th>Account No</th><th>Account Name</th><th>Type</th><th>Parent</th>

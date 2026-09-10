@@ -1177,7 +1177,7 @@ function BoardTile({ rows, leader, totalOrders, pct, canOpen, openableCount, onP
     <div className="section chart-card" style={{ marginTop: 0, marginBottom: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="section-head" style={{ minHeight: 52, alignItems: 'flex-start' }}>
         <div>
-          <h2 className="section-title" style={{ fontSize: 15 }}>Leaderboard</h2>
+          <h2 className="section-title">Leaderboard</h2>
           <div className="section-sub">
             {openableCount > 1
               ? 'Reps by orders booked · click a rep for their full breakdown'

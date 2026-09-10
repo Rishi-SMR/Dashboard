@@ -108,7 +108,25 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
   const [pickDev, setPickDev] = useState<Set<string>>(new Set());
   const [pickLabel, setPickLabel] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'days', dir: 'asc' });
-  useEffect(() => { setQuery(''); setPickAcct(new Set()); setPickDev(new Set()); setPickLabel(new Set()); }, [open]);
+  /**
+   * WHICH COHORT THE DRAWER LISTS, and it has to be a choice.
+   *
+   * The cards now lead with the orders STANDING at a stage, so opening one has
+   * to show those orders or the panel contradicts the card that opened it.
+   * But membership is still worth reading — an order tagged
+   * "Shipped, Waiting for first payment" is genuinely part of dispatch's
+   * history, and whoever works that stage wants to see it shipped — so
+   * `'ever'` keeps the old behaviour one click away rather than deleting it.
+   *
+   * NULL MEANS "NOT CHOSEN", and the default is then read off the stage itself:
+   * standing orders where there are any, membership where there are none. A
+   * stage holding nobody is still a deliberate click, and answering it with an
+   * empty panel is a dead end. Storing the default instead of deriving it would
+   * need an effect, and the drawer would flash empty for a frame before it
+   * corrected itself.
+   */
+  const [scope, setScope] = useState<'now' | 'ever' | null>(null);
+  useEffect(() => { setQuery(''); setPickAcct(new Set()); setPickDev(new Set()); setPickLabel(new Set()); setScope(null); }, [open]);
 
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
@@ -154,16 +172,25 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
    * at (so those sum to the board), and the ageing is over `daysInStage`.
    * The stage ORDER still comes from the server's list — that is the pipeline's
    * shape, not a figure — so a stage that is empty this month still shows.
+   *
+   * EVERY MEASURE IS OF THE STANDING COHORT, because that is what the card now
+   * leads with. Ageing and money used to be cut over `count` — the wider,
+   * overlapping set — which is how a card came to read "0 here now" above
+   * $406,925: the money belonged to 40 orders that had already moved on.
+   * `count` survives as one footnote figure, the stage's throughput, and is the
+   * only thing on the card not measured over `current`.
    */
   const stages = serverStages.map((s) => {
-    const set = boardOrders.filter((o) => (o.stages ?? [o.stage]).includes(s.stage));
-    const aged = set.map((o) => o.daysInStage ?? 0);
+    const here = boardOrders.filter((o) => o.stage === s.stage);
+    const aged = here.map((o) => o.daysInStage ?? 0);
     return {
       stage: s.stage,
-      count: set.length,
-      current: boardOrders.filter((o) => o.stage === s.stage).length,
-      revenue: Math.round(set.reduce((sum, o) => sum + (o.revenue ?? 0), 0) * 100) / 100,
-      units: set.reduce((sum, o) => sum + (o.units ?? 0), 0),
+      // Ever listed here, standing orders included — overlaps across stages.
+      count: boardOrders.filter((o) => (o.stages ?? [o.stage]).includes(s.stage)).length,
+      // Standing here now. These sum to the board.
+      current: here.length,
+      revenue: Math.round(here.reduce((sum, o) => sum + (o.revenue ?? 0), 0) * 100) / 100,
+      units: here.reduce((sum, o) => sum + (o.units ?? 0), 0),
       oldestDays: aged.length ? Math.max(...aged) : 0,
       avgDays: aged.length ? Math.round(aged.reduce((sum, n) => sum + n, 0) / aged.length) : 0,
     };
@@ -214,10 +241,15 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
   // Orders listed at more than one stage — what makes the card counts overlap.
   const multi = boardOrders.filter((o) => (o.stages?.length ?? 1) > 1).length;
   const byLabel = boardOrders.filter((o) => o.source === 'labels').length;
-  // Membership, not current position: an order tagged "Shipped, Waiting for
-  // first payment" opens under BOTH stages, which is the point — whoever works
-  // the dispatch stage needs to see that it shipped.
-  const inStage = open ? boardOrders.filter((o) => (o.stages ?? [o.stage]).includes(open)) : [];
+  // THE TWO COHORTS OF THE OPEN STAGE, so the drawer can show either and always
+  // say which. `nowInStage` is the orders standing here — the card's headline —
+  // and `everInStage` is membership: an order tagged "Shipped, Waiting for
+  // first payment" belongs to BOTH stages, which is why the wider set exists at
+  // all.
+  const nowInStage = open ? boardOrders.filter((o) => o.stage === open) : [];
+  const everInStage = open ? boardOrders.filter((o) => (o.stages ?? [o.stage]).includes(open)) : [];
+  const scopeEff: 'now' | 'ever' = scope ?? (nowInStage.length > 0 ? 'now' : 'ever');
+  const inStage = scopeEff === 'now' ? nowInStage : everInStage;
 
   // Options are built from the orders IN THIS STAGE, so the pickers only ever
   // offer values that can actually match.
@@ -309,6 +341,10 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
     const scope = [
       `${board} pipeline`,
       open,
+      // The cohort is part of what the file IS: 40 rows exported from a stage
+      // whose card reads 0 is only accountable if the sheet says these are the
+      // orders that passed through it.
+      scopeEff === 'now' ? 'standing at this stage now' : 'listed at this stage, passed through included',
       filtersOn ? `filtered: ${openOrders.length} of ${inStage.length}` : `all ${inStage.length}`,
       data?.scopedToRep ? `rep: ${data.scopedToRep}` : 'all reps',
     ].join(' · ');
@@ -391,7 +427,8 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
               </>
             ) : (
               <>
-                {total} PI order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. Click a stage to see its orders. An order is listed at every stage its Striven labels attest to, so one can appear on more than one card.
+                {total} PI order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. Click a stage to see its orders. Each card leads with the orders <b>standing at that stage now</b>, so the cards add up to {total}.
+                {multi > 0 && <> A Striven label can also list an order at a stage it has already passed; those are counted under <i>passed through</i> on the card rather than in its figure.</>}
                 {/* WHOLE-BOOK FIGURE, so it is only quoted on the whole book.
                     `trackedCount` counts every order ever moved across the
                     pipeline; subtracting it from a month's total would print a
@@ -468,7 +505,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
           const active = open === s.stage;
           return (
             <button key={s.stage} onClick={() => setOpen(active ? null : s.stage)}
-              title={`${s.count} order${s.count === 1 ? '' : 's'} listed here${(s.current ?? s.count) !== s.count ? `, ${s.current} sitting here now` : ''}: click to ${active ? 'hide' : 'list'} them`}
+              title={`${s.current} order${s.current === 1 ? '' : 's'} standing at ${s.stage} now${s.count !== s.current ? ` · ${s.count - s.current} more have passed through it` : ''}: click to ${active ? 'hide' : 'list'} them`}
               style={{
                 textAlign: 'left', cursor: 'pointer', background: 'var(--panel)', borderRadius: 12, padding: '14px 16px',
                 border: `1px solid ${active ? stageColor(s.stage) : 'var(--panel-2)'}`,
@@ -479,18 +516,29 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                 Stage {i + 1}
               </div>
               <div style={{ fontSize: 13, fontWeight: 700, color: stageColor(s.stage), marginTop: 2 }}>{s.stage}</div>
-              <div style={{ fontSize: 28, fontWeight: 800, color: C.ink, marginTop: 4, letterSpacing: -0.5 }}>{s.count}</div>
+              {/* THE NUMBER STANDING HERE, not the number that has ever been
+                  listed here. The two differ wherever orders have moved on, and
+                  leading with the wider one put a bold 40 on a stage holding
+                  nobody — six cards summing to 180 on a board of 115. These
+                  sum to the board and match the flow bar below, which has
+                  always used this figure.
+                  A ZERO IS DRAWN MUTED rather than in ink: an empty stage
+                  should recede, and reading the row of cards should show where
+                  the work actually is. */}
+              <div style={{ fontSize: 28, fontWeight: 800, color: s.current > 0 ? C.ink : C.muted, marginTop: 4, letterSpacing: -0.5 }}>{s.current}</div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                {s.count === 0 ? 'nothing here' : <>avg {s.avgDays}d · oldest {s.oldestDays}d</>}
+                {s.current === 0 ? 'none standing here' : <>avg {s.avgDays}d · oldest {s.oldestDays}d</>}
               </div>
-              {/* The big number counts everything LISTED here, which includes
-                  orders that have since moved on. Naming how many are actually
-                  sitting here keeps the card from reading as a backlog. */}
-              {s.count > 0 && (s.current ?? s.count) !== s.count && (
+              {/* WHAT HAS PASSED THROUGH, demoted to a footnote. An order is
+                  listed at every stage its labels attest to, so this counts the
+                  ones now sitting further along — worth having (it is the
+                  stage's throughput) but never the headline. */}
+              {s.count > s.current && (
                 <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>
-                  <b style={{ color: C.sub }}>{s.current}</b> here now · {s.count - (s.current ?? 0)} moved on
+                  + <b style={{ color: C.sub }}>{s.count - s.current}</b> passed through
                 </div>
               )}
+              {/* The money of the STANDING cohort, to match the number above it. */}
               {s.revenue > 0 && <div style={{ fontSize: 12, color: C.sub, fontWeight: 600, marginTop: 3 }}>{formatCurrency(s.revenue)}</div>}
             </button>
           );
@@ -499,29 +547,30 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
       )}
 
       {/* Flow bar: share of the pipeline sitting at each stage.
-          USES `current`, NOT `count`. The cards list an order at every stage its
-          labels attest to, so those counts overlap; a bar built from them would
-          run past 100% and each slice would misstate its share. `current` is an
-          order's one position, so the slices still add up to the board. */}
+          USES `current`, NOT `count` — as the cards above now do too. `count`
+          lists an order at every stage its labels attest to, so those figures
+          overlap and a bar built from them would run past 100%, each slice
+          misstating its share. `current` is an order's one position, so the
+          slices add up to the board and agree with the cards. */}
       {board !== 'REVIEW' && total > 0 && (
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', height: 12, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)' }}>
-            {stages.filter((s) => (s.current ?? s.count) > 0).map((s) => (
-              <div key={s.stage} title={`${s.stage}: ${s.current ?? s.count} here now`} onClick={() => setOpen(open === s.stage ? null : s.stage)}
-                style={{ width: `${((s.current ?? s.count) / total) * 100}%`, background: stageColor(s.stage), cursor: 'pointer' }} />
+            {stages.filter((s) => s.current > 0).map((s) => (
+              <div key={s.stage} title={`${s.stage}: ${s.current} standing here now`} onClick={() => setOpen(open === s.stage ? null : s.stage)}
+                style={{ width: `${(s.current / total) * 100}%`, background: stageColor(s.stage), cursor: 'pointer' }} />
             ))}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 8, fontSize: 12, color: C.sub }}>
-            {stages.filter((s) => (s.current ?? s.count) > 0).map((s) => (
+            {stages.filter((s) => s.current > 0).map((s) => (
               <span key={s.stage} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 3, background: stageColor(s.stage) }} />
-                {s.stage} {Math.round(((s.current ?? s.count) / total) * 100)}%
+                {s.stage} {Math.round((s.current / total) * 100)}%
               </span>
             ))}
           </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>
-            Where each order sits <b>now</b>, so these add up to {total}.
-            {multi > 0 && <> The cards above count an order at every stage its labels attest to, so {multi} {multi === 1 ? 'order appears' : 'orders appear'} on more than one card and those counts overlap.</>}
+            Where each order sits <b>now</b>, so these add up to {total} &mdash; the same figures the cards above lead with.
+            {multi > 0 && <> {multi} {multi === 1 ? 'order also carries a label from a stage it has' : 'orders also carry labels from stages they have'} passed, shown as <i>passed through</i> there.</>}
           </div>
         </div>
       )}
@@ -671,9 +720,37 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
               {open} · {openOrders.length === inStage.length ? `${inStage.length}` : `${openOrders.length} of ${inStage.length}`} order{inStage.length === 1 ? '' : 's'}
             </h2>
             <div className="section-sub">
+              {scopeEff === 'now'
+                ? <>The orders <b>standing at this stage now</b> &mdash; the figure on the card. </>
+                : <>Every order <b>listed at this stage</b>, including {everInStage.length - nowInStage.length} now sitting further along. </>}
               Newest first: the most recent arrivals at the top, then in ascending order of time in stage.
               Anything past {STALE_DAYS} days is still flagged in red wherever it sits.
             </div>
+            {/* THE COHORT SWITCH, and the drawer cannot do without it: the card
+                headlines the standing count, so the panel it opens has to lead
+                with those orders — and the ones that have passed through still
+                have to be reachable, because "did this ship?" is asked at the
+                dispatch stage about an order that is now awaiting payment.
+                Hidden when the two sets are identical, where it would only ask
+                a question with one answer. */}
+            {everInStage.length !== nowInStage.length && (
+              <div className="no-print" style={{ display: 'inline-flex', gap: 2, marginTop: 8, padding: 2, borderRadius: 8, background: 'var(--panel-2)' }}>
+                {([['now', 'Standing here', nowInStage.length], ['ever', 'Passed through too', everInStage.length]] as const).map(([k, label, n]) => (
+                  <button key={k} onClick={() => setScope(k)}
+                    title={k === 'now'
+                      ? 'Only the orders whose furthest label puts them at this stage'
+                      : 'Every order this stage’s labels attest to, including those now further along'}
+                    style={{
+                      border: 'none', cursor: 'pointer', borderRadius: 6, padding: '4px 10px', fontSize: 12, fontWeight: 700,
+                      background: scopeEff === k ? 'var(--panel)' : 'transparent',
+                      color: scopeEff === k ? stageColor(open) : C.muted,
+                      boxShadow: scopeEff === k ? '0 1px 2px #0000001f' : 'none',
+                    }}>
+                    {label} · {n}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {/* Search and the export/close buttons are controls, not content:
               `no-print` keeps them off the PDF. */}
@@ -750,7 +827,19 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                 <th style={{ whiteSpace: 'nowrap' }}>Stage set by</th>
               </tr></thead>
               <tbody>
-                {openOrders.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders at this stage.</td></tr>}
+                {/* An empty table has three different causes here, and the
+                    reader's next move differs for each: clear the filters, or
+                    look at the orders that have passed through, or accept that
+                    the stage is genuinely empty. Saying "No orders at this
+                    stage" to all three sent people hunting for a bug. */}
+                {openOrders.length === 0 && (
+                  <tr><td colSpan={10} style={{ color: C.muted }}>
+                    {filtersOn ? <>No orders here match the current filters. <b style={{ cursor: 'pointer', color: C.brand }} onClick={resetFilters}>Reset them</b> to see all {inStage.length}.</>
+                      : scopeEff === 'now' && everInStage.length > 0
+                        ? <>Nothing is standing at this stage. <b style={{ cursor: 'pointer', color: C.brand }} onClick={() => setScope('ever')}>Show the {everInStage.length} that passed through</b>.</>
+                        : <>No orders at this stage.</>}
+                  </td></tr>
+                )}
                 {openOrders.map((o) => {
                   const stale = (o.daysInStage ?? 0) >= STALE_DAYS;
                   return (

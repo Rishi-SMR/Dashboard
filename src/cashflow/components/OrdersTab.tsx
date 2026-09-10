@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { C } from '../chartTheme';
 import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
-import { ChartCard, RankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
+import { ChartCard, RankBar, ShareRankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 import {
   fetchStrivenSO,
   fetchStrivenPO,
@@ -334,6 +334,17 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
     .slice(0, 12)
     .map((v) => ({ name: v.vendor || '-', value: v.total }));
 
+  // HOW MANY POs SIT BEHIND EACH VENDOR'S BAR, for the row's hover text: "$52k"
+  // says nothing about whether that is one large order or thirty small ones.
+  // Counted off `po.recent`, which is the FULL active PO list rather than a
+  // sample — the server builds `byVendor` from those same rows, so the count and
+  // the money can never disagree.
+  const poCountByVendor = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of po?.recent ?? []) { const v = o.vendor || '-'; m.set(v, (m.get(v) ?? 0) + 1); }
+    return m;
+  }, [po]);
+
   // Chart drill: SO rows for the clicked status (no patient: ref/type/rep/value).
   function drillSoStatus(status: string) {
     const list = (so?.recent ?? []).filter((o) => (o.status || '-') === status);
@@ -476,7 +487,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                 }} />
             </ChartCard>
 
-            <ChartCard className="g12-6" title="Sales Orders by Status" sub={`${so.count.toLocaleString()} orders · click a bar to drill in`}
+            <ChartCard className="g12-6" title="Sales Orders by Status" sub={`${so.count.toLocaleString()} orders · click a row to drill in`}
               right={<span className="deck-pill muted">by count</span>}>
               <RankBar data={statusData} colorAt={(i) => STATUS_COLOR(statusData[i]?.name ?? '')} onSelect={drillSoStatus} />
             </ChartCard>
@@ -673,11 +684,14 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
               title="Top Vendors by PO Spend"
               sub={`Active purchase orders only${po.cancelledCount ? ` · excludes ${po.cancelledCount} cancelled (${formatCurrency(po.cancelledValue ?? 0)})` : ''}${po.demoCount ? ` and ${po.demoCount} raised for DEMO orders (${formatCurrency(po.demoValue ?? 0)})` : ''} · click a bar to drill in`}
             >
-              <RankBar
+              {/* ShareRankBar, not RankBar: on a scale that reaches $52k the
+                  five smallest vendors drew as slivers a few pixels long. The
+                  share column is what makes those rows readable. */}
+              <ShareRankBar
                 data={vendorData}
-                money
-                colorAt={() => C.brand}
+                total={po.totalValue}
                 onSelect={drillPoVendor}
+                countOf={(name) => poCountByVendor.get(name) ?? null}
               />
             </ChartCard>
           </div>

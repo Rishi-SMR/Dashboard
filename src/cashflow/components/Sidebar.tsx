@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ViewKey } from '../CashflowApp';
 
 // 16px stroke icons per nav item (lucide-style, currentColor).
@@ -26,6 +26,7 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   catalog: svg(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="M12 12 20 7.5" /><path d="M12 12v9" /><path d="M12 12 4 7.5" /></>),
   accounts: svg(<><path d="m3 9 9-6 9 6" /><path d="M5 9v9" /><path d="M9.7 9v9" /><path d="M14.3 9v9" /><path d="M19 9v9" /><path d="M3 21h18" /></>),
   exceptions: svg(<><path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" /></>),
+  guide: svg(<><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H11v16H5.5A1.5 1.5 0 0 0 4 20.5z" /><path d="M20 4.5A1.5 1.5 0 0 0 18.5 3H13v16h5.5a1.5 1.5 0 0 1 1.5 1.5z" /><path d="M12 19v2" /></>),
   quickbooks: svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 8.5c-1.7 0-2.8.9-2.8 2.2 0 2.6 4.4 1.6 4.4 3.6 0 .9-.8 1.4-1.9 1.4" /><path d="M12 7v10" /></>),
   reports: svg(<><path d="M4 4v16h16" /><rect x="7" y="11" width="3" height="6" /><rect x="12" y="7" width="3" height="10" /><rect x="17" y="13" width="3" height="4" /></>),
   commission: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7v10" /><path d="M14.5 9.3c-.5-.8-1.5-1.3-2.6-1.3-1.5 0-2.6.8-2.6 1.9 0 2.4 5.2 1.4 5.2 3.9 0 1.1-1.1 1.9-2.6 1.9-1.1 0-2.1-.5-2.6-1.3" /></>),
@@ -73,6 +74,9 @@ export const COMPANY_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'exceptions', label: 'Exceptions' },
   { key: 'reports', label: 'Reports' },
   { key: 'quickbooks', label: 'QuickBooks' },
+  // Last on the company side: it explains the tabs above it, so it reads as a
+  // reference you drop out to rather than a step in the workflow.
+  { key: 'guide', label: 'User Guide' },
 ];
 /** Reps side as an ADMIN sees it: every rep, unredacted. */
 export const REPS_NAV: Array<{ key: ViewKey; label: string }> = [
@@ -109,6 +113,9 @@ export const REP_NAV: Array<{ key: ViewKey; label: string }> = [
   // board to the rep's own orders, so a rep sees their VA book and no one
   // else's — the same redaction the PI board already relies on.
   { key: 'vapipeline', label: 'VA Pipeline' },
+  // A rep gets it too: the glossary is what a new rep needs most, and it only
+  // ever links to views their own allow-list already contains.
+  { key: 'guide', label: 'User Guide' },
 ];
 
 /** Nav for a role. Until /api/me answers (role null) we show the rep nav: the
@@ -197,6 +204,48 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut, role
   const me = readIdentity();
   const ITEMS = navFor(role, mode);
 
+  // WHICH EDGE OF THE LIST IS CUT. The nav hides its scrollbar (it was a second
+  // rule down a 220px rail, and it stole its width from the rows alone), so the
+  // fade at a cut edge is what says the list carries on. Scroll position is not
+  // something a stylesheet can read, so it is reported here and the mask lives
+  // in CSS. Re-measured on scroll, on resize, and when the list itself changes:
+  // the Company/Reps switch swaps thirteen entries for five, and five fit.
+  const navRef = useRef<HTMLElement | null>(null);
+  const [fade, setFade] = useState<'' | 'top' | 'bottom' | 'both'>('');
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const measure = () => {
+      const slack = el.scrollHeight - el.clientHeight;
+      // A list that fits is drawn flat — no attribute, no mask, no fade.
+      if (slack <= 1) { setFade(''); return; }
+      const above = el.scrollTop > 1;
+      const below = el.scrollTop < slack - 1;
+      setFade(above && below ? 'both' : above ? 'top' : 'bottom');
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    // The rail's height is the viewport's, and the footer above it can grow a
+    // line: observe the box rather than trusting the first measurement.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      el.removeEventListener('scroll', measure);
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [ITEMS]);
+
+  // OPEN ON THE ROW YOU ARE ON. Landing on a deep Company tab (#quickbooks, say)
+  // on a short window used to leave the highlighted row below the fold, so the
+  // rail looked like it had lost your place. `block: 'nearest'` scrolls the
+  // minimum — a row already in view does not move the list at all.
+  useEffect(() => {
+    const el = navRef.current?.querySelector('.nav-item.active') as HTMLElement | null;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [view, mode]);
+
   function handleRefreshAll() {
     if (refreshing) return;
     setRefreshing(true);
@@ -253,6 +302,13 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut, role
         </div>
       )}
 
+      {/* THE NAV LIST IS THE ONLY PART OF THE RAIL THAT SCROLLS. The brand, the
+          Company/Reps switch and the footer stay put, so Sign out and Refresh
+          All stay reachable however long the role's nav is — Company mode has
+          thirteen entries, more than a laptop viewport fits. Before this the
+          rail was a plain 100vh flex column with no overflow, so the last
+          entries and the whole footer were simply cut off, unscrollable. */}
+      <nav ref={navRef} className="sidebar-nav" data-fade={fade || undefined} aria-label="Sections">
       {ITEMS.map((item) => (
         <button
           key={item.key}
@@ -263,6 +319,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut, role
           <span>{item.label}</span>
         </button>
       ))}
+      </nav>
 
       <div className="sidebar-footer">
         <div className="user-chip">

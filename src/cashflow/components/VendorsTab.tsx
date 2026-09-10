@@ -6,21 +6,13 @@ import {
 import { formatCurrency, formatPhone } from '../format';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
-import { ChartCard, RankBar, BarList, DrillModal, KpiR, useSyncAgo } from '../chartKit';
+import { ChartCard, RankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 
 const PAGE_SIZE = 10;
 type SortKey = 'name' | 'number' | 'status' | 'terms';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
-
-const STATUS_HUE = (name: string): string => {
-  const s = (name || '').toLowerCase();
-  if (/active/.test(s)) return '#16A34A';
-  if (/prospect/.test(s)) return '#0A369F';
-  if (/inactive|hold|blocked/.test(s)) return '#DC2626';
-  return C.muted;
-};
 
 // Windowed page list: 1 2 3 … N.
 function pageList(cur: number, total: number): (number | '…')[] {
@@ -202,20 +194,11 @@ export function VendorsTab() {
           </div>
 
           <div className="exec-grid12">
-            <ChartCard className="g12-7" title="PO Spend by Vendor" sub={`Active POs only${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar for detail`}>
+            {/* "Vendors by Status" removed on request. Its two figures are not
+                lost: the Suppliers / Active / Prospect KPI tiles above carry the
+                same counts and open the same `openStatusDrill`. */}
+            <ChartCard className="g12-12" title="PO Spend by Vendor" sub={`Active POs only${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar for detail`}>
               <RankBar data={spendData} money colorAt={() => C.brand} onSelect={openDrillFor} />
-            </ChartCard>
-
-            <ChartCard className="g12-5" title="Vendors by Status" sub={`${vendorCount.toLocaleString()} suppliers · click a row to drill in`}>
-              <BarList
-                data={byStatus.map((s) => ({ name: s.name, value: s.value, color: STATUS_HUE(s.name), meta: `${s.value} vendors` }))}
-                money={false}
-                onSelect={openStatusDrill}
-              />
-              <div className="cfoot">
-                <div className="cf-i"><div className="l">Total Suppliers</div><div className="v">{vendorCount.toLocaleString()}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">With PO Spend</div><div className="v accent">{spendData.length}</div></div>
-              </div>
             </ChartCard>
 
             <div className="section chart-card g12-12">
