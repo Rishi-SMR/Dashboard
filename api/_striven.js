@@ -20,6 +20,7 @@ import {
   REP_COMMISSION_SCHEMES,
   PI_LABEL_STAGE, PIP_STAGES, PIP_LABEL_STAGE, PIP_IDENTIFYING_LABELS, REVIEW_LABELS,
   VA_STAGES, VA_LABEL_STAGE, COMMISSION_PAID_THROUGH, canonicalStage, arExpectedFor,
+  PI_AR_RATE,
   verticalOfCommissionLine, identitiesOf,
 } from './_commission-config.js';
 import {
@@ -1351,30 +1352,109 @@ async function netOpenByInvoice(live) {
 /**
  * WHAT AN INVOICE STILL OWES — the basis the whole dashboard reports on.
  *
- * The ledger cannot answer this for PI. Striven bills the 15% lien advance and
- * books THAT as the invoice, so a PI invoice with `open = 0` is a settled
- * ADVANCE, not a settled case: the remaining 85% is still to come and the
- * ledger has no row for it.
+ * ON PI, ONLY THE 15% ADVANCE IS A RECEIVABLE. That is the client's rule, and
+ * it replaced the lien-exposure basis this function used to report. The case
+ * settles out of the patient's award on a timetable nobody here controls, so
+ * the 85% remainder is an EXPOSURE, not money the business is owed and can
+ * chase — carrying it in AR put $580,881 of PI into a $634,686 total and made
+ * every ageing bucket, DSO and collection figure a statement about liens rather
+ * than about collectable cash.
  *
- *   PI, advance not in  the whole case. Nothing has come back, so deducting an
- *                       advance that was never paid understates the exposure.
- *   PI, advance in      the case less the advance.
- *   PI, invoiced gross  nothing. Where the invoice IS the whole bill there is
- *                       no second tranche to wait for.
- *   everything else     the ledger's balance, net of customer credits. Billed
- *                       and paid in one go, so what is owed is what is unpaid.
+ *   PI              the unpaid part of the advance, capped at 15% of the ORDER.
+ *   everything else the ledger's balance, net of customer credits. Billed and
+ *                   paid in one go, so what is owed is what is unpaid.
+ *
+ * WHY A CAP AND NOT A MULTIPLICATION. Striven already bills the advance: on the
+ * live book 50 of 57 PI invoices are struck at exactly 0.150 of their order
+ * value, so their ledger balance IS the advance balance and multiplying it by
+ * 0.15 again would report 2.25% of the case. The other 7 are billed at the full
+ * price (six at 1.000, one at 0.400), and those are what the cap is for — it
+ * holds them to the same 15% the rest are billed at, instead of letting a
+ * differently-raised invoice report a larger receivable than an identical case
+ * billed correctly. min() is therefore right in both directions.
+ *
+ * NO ORDER VALUE → NO CAP. About one PI invoice in five cannot be joined to its
+ * sales order (see invoiceOrderValueMap). Guessing a gross from the invoice
+ * would re-introduce the double-discount on the majority case, so the ledger
+ * balance stands unmodified and `arBasis` says so — a figure that names the
+ * weaker rule it used beats one that silently applies a stronger one it could
+ * not justify.
  *
  * Mirrors piBalanceOf() in ArSheetTab.tsx. The two exist because this endpoint
  * feeds the Receivables tab and that one feeds the AR page; they must not
  * disagree, and the register that joins them ships `orderTotal` for both.
  */
-function arOwedOf({ vertical, total, netOpen, orderTotal }) {
+function arOwedOf({ vertical, netOpen, orderTotal }) {
   const owed = round2(Number(netOpen) || 0);
   if (vertical !== 'PI') return owed;
-  const invoiced = round2(Number(total) || 0);
-  const gross = Number.isFinite(orderTotal) && orderTotal > invoiced + 0.005 ? round2(orderTotal) : invoiced;
-  if (Math.abs(gross - invoiced) <= 0.005) return 0;
-  return owed > 0.005 ? gross : round2(gross - invoiced);
+  const cap = Number.isFinite(orderTotal) && orderTotal > 0
+    ? round2(Number(orderTotal) * PI_AR_RATE)
+    : null;
+  return cap == null ? owed : round2(Math.min(owed, cap));
+}
+/** Which rule produced an invoice's `open`, so the UI can say why it reads what
+ *  it does rather than presenting every figure as equally derived. */
+function arBasisOf({ vertical, orderTotal }) {
+  if (vertical !== 'PI') return 'ledger';
+  return Number.isFinite(orderTotal) && orderTotal > 0 ? 'pi-advance-15' : 'pi-ledger-uncapped';
+}
+
+/**
+ * ORDERS THAT HAVE NEVER BEEN INVOICED — the receivable that does not exist yet.
+ *
+ * AR reports what has been billed. Once PI is carried at the 15% advance
+ * (see arOwedOf) the billed figure is small — $63,756 across the book — and read
+ * alone it says the business is owed almost nothing. It is not: 73 PI orders
+ * worth $774,523 of case value carry no invoice at all, and the advance on them,
+ * $116,178, is money that should have been raised and has not been.
+ *
+ * That is a bigger number than the entire receivable, and nothing on the AR
+ * screens could see it, because an order with no invoice has no row in a book
+ * built from invoices. This is the missing row.
+ *
+ * THE SIGNAL IS order_chain, NOT so_detail's `invStatus`. Both were checked
+ * against the live book: they agree on all 73, and `invStatus` claims a further
+ * 43 orders are uninvoiced when the chain shows an invoice against them — it
+ * is stale in the direction that would raise false alarms. The chain never
+ * disagreed the other way, so it is the conservative source: everything it
+ * flags is genuinely unbilled.
+ *
+ * CANCELLED ORDERS ARE NOT PENDING. A cancelled order is not waiting to be
+ * invoiced, it is finished, and listing it as an action would put permanent
+ * red on a screen nobody can ever clear.
+ */
+async function getArPending() {
+  const chain = (await sbCacheRead('order_chain').catch(() => null))?.data ?? {};
+  // WHO THE ORDER IS FOR. These rows sit in the invoice register beside real
+  // invoices, which name their patient, and a column that is populated on one
+  // row and blank on the next reads as missing data rather than as a different
+  // kind of row. Same source and same masking the register itself uses —
+  // first initial + surname, never a full first name.
+  const tags = await soLabelsBySoId().catch(() => new Map());
+  const orders = [];
+  for (const [soId, c] of Object.entries(chain)) {
+    if ((c.invoices ?? []).length > 0) continue;                 // already billed
+    if (isVoidStatus(c.status) || isDemoType(c.type)) continue;  // finished, or not real
+    const vertical = soClass(c.type);
+    const value = round2(Number(c.value || 0));
+    if (!(value > 0)) continue;
+    orders.push({
+      soId, ref: c.ref || `SO-${soId}`, vertical, type: c.type || '',
+      rep: cleanRep(c.rep), payer: payerOf(c), status: c.status || '',
+      patient: tags.get(String(soId))?.patient || '',
+      /** The order the advance would be struck against. */
+      caseValue: value,
+      /** What invoicing it would ADD to AR, under the same rule arOwedOf uses. */
+      expected: round2(value * (vertical === 'PI' ? PI_AR_RATE : 1)),
+    });
+  }
+  orders.sort((a, b) => b.caseValue - a.caseValue);
+  const tot = (list) => ({
+    count: list.length,
+    caseValue: round2(list.reduce((s, o) => s + o.caseValue, 0)),
+    expected: round2(list.reduce((s, o) => s + o.expected, 0)),
+  });
+  return { ...tot(orders), pi: tot(orders.filter((o) => o.vertical === 'PI')), orders };
 }
 
 async function getAR() {
@@ -1401,6 +1481,11 @@ async function getAR() {
   // cannot be PI on one screen and VA on another.
   const vertMap = await invoiceVerticalMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
   const soValMap = await invoiceOrderValueMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
+  // WHO THE INVOICE IS FOR, as first initial + surname — see invoicePatientMap().
+  // The AR register already resolves this from these very sources; the board's
+  // own drills were left with the PT-<id>, so the same invoice read "D. Butler"
+  // on one screen and "PT-385" on the other. Same joins, one answer.
+  const patMap = await invoicePatientMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
 
   const invoices = netRows.map((r) => {
     const no = String(r.txnNumber ?? r.id);
@@ -1413,24 +1498,45 @@ async function getAR() {
     return {
       id: r.id, number: no,
       customer: maskName(r.customer?.name), customerId: r.customer?.id ?? null,
+      // `||`, not `??`: an empty name is not an answer, and falling through to
+      // the PT- reference is better than printing a blank cell.
+      patient: patMap.byInvoice[no]
+        || patMap.byCustRef.get(`PT-${r.customer?.id}`)
+        || '',
       payer: payerByInv[no] || '',
       // The programme, so the tab can filter and colour by it without a second
       // guess from the payer string.
       vertical,
       dueDate: r.dueDate ?? null, total,
-      open: arOwedOf({ vertical, total, netOpen: r.netOpen, orderTotal }),
+      open: arOwedOf({ vertical, netOpen: r.netOpen, orderTotal }),
+      /** Which rule produced `open` — 'ledger', 'pi-advance-15', or
+       *  'pi-ledger-uncapped' where the invoice has no order to cap against. */
+      arBasis: arBasisOf({ vertical, orderTotal }),
       /** The ledger's own balance, kept beside the case figure: the two differ
        *  only on PI, and a reader reconciling against Striven needs this one. */
       ledgerOpen: r.netOpen,
+      /** THE LIEN, NO LONGER A RECEIVABLE but not thrown away: the case value
+       *  behind a PI invoice, so a screen can still show the exposure that AR
+       *  deliberately stops counting. Null off PI, or where the invoice cannot
+       *  be joined to its sales order. */
+      caseValue: vertical === 'PI' && Number.isFinite(orderTotal) && orderTotal > 0 ? round2(Number(orderTotal)) : null,
       currency: r.currency?.currencyISOCode ?? 'USD',
     };
   }).filter((i) => i.open > 0.005);
   const totalOpen = round2(invoices.reduce((s, i) => s + i.open, 0));
   const aging = bucketAging(invoices, 'dueDate', 'open');
   for (const k of Object.keys(aging)) aging[k] = round2(aging[k]);
+  // Never lets AR fail: the chain is one cache away and the register above does
+  // not depend on it.
+  const pending = await getArPending().catch(() => null);
   return {
     totalOpen, count: invoices.length, aging,
     unappliedCredits, voidedExcluded,
+    /** Orders billed to nobody yet — see getArPending(). NOT added into
+     *  `totalOpen`: it is not a receivable until it is invoiced, and folding a
+     *  forecast into the ledger total is how a forecast stops being visible as
+     *  one. The UI carries it as its own figure. */
+    pending,
     invoices: invoices.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')),
   };
 }
@@ -2258,8 +2364,55 @@ async function getPayments() {
     byMonthMap[m] = e;
   }
   const byMonth = Object.entries(byMonthMap).map(([month, v]) => ({ month, amount: round2(v.amount), count: v.count })).sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
+  // ── WHO PAID, AND WHAT THEY STILL OWE ───────────────────────────────────────
+  //
+  // A payment record names only a customer id. The two things anyone actually
+  // wants beside it — the patient and their remaining balance — live in two
+  // other places, and both are joined on the same `PT-<id>` reference the
+  // payment already carries.
+  //
+  // THE NAME comes from invoicePatientMap(), the same resolver the AR register
+  // uses: the labels report first (it is the only source with a first name, and
+  // is reduced to an initial at that boundary), then report_patient_items for
+  // its surname. Between them they name 29 of the 30 latest payers; the AR side
+  // alone named 18, because it only holds customers who still owe something.
+  //
+  // THE BALANCE comes from getAR(), aggregated per customer. It is the CASE
+  // basis, exactly as the Receivables register reports it — so on PI it is the
+  // lien remainder, not the invoice's ledger balance, and the two screens agree.
+  //
+  // ABSENT MEANS ZERO, NOT UNKNOWN, and that distinction is the point. getAR
+  // returns only invoices with something still open, so a customer missing from
+  // it has settled — `0` is the honest answer and reads very differently from a
+  // dash. Twelve of these thirty are in exactly that position.
+  //
+  // Neither join is allowed to take the endpoint down: a payments list without
+  // names is worth far more than an error.
+  const [patMap, arNow] = await Promise.all([
+    invoicePatientMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() })),
+    getAR().catch(() => ({ invoices: [] })),
+  ]);
+  const openByCustomer = new Map();
+  for (const i of (arNow.invoices ?? [])) {
+    if (i.customerId == null) continue;
+    openByCustomer.set(i.customerId, round2((openByCustomer.get(i.customerId) ?? 0) + i.open));
+  }
   const recent = rows.slice().sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')).slice(0, 30)
-    .map((r) => ({ id: r.id, ref: `PMT-${r.id}`, customer: maskName(r.customer?.name), date: r.paymentDate ?? null, amount: Number(r.paymentAmount ?? 0), status: r.status?.name ?? '' }));
+    .map((r) => {
+      const cid = r.customer?.id ?? null;
+      return {
+        id: r.id, ref: `PMT-${r.id}`,
+        customer: maskName(r.customer?.name), customerId: cid,
+        // First initial + surname where it can be had, '' otherwise — the client
+        // falls back to the PT- reference, which is never blank.
+        patient: (cid != null && patMap.byCustRef.get(`PT-${cid}`)) || '',
+        date: r.paymentDate ?? null,
+        amount: Number(r.paymentAmount ?? 0),
+        // What this payer still owes across every open invoice of theirs.
+        outstanding: cid != null ? (openByCustomer.get(cid) ?? 0) : null,
+        status: r.status?.name ?? '',
+      };
+    });
   return { count: rows.length, total, byMonth, recent, phiMasked: MASK_PHI };
 }
 async function getBillPayments() {
@@ -3765,7 +3918,26 @@ export async function getArRegister() {
         || vertMap.byCustRef.get(`PT-${r.customer?.id}`)
         || verticalOfPayer(payerByInv[no])
         || '';
-      const expected = arExpectedFor({ vertical, billed: total });
+      // WHAT THE ORDER BEHIND THIS INVOICE WAS WORTH. Hoisted, because the
+      // expectation below and the `orderTotal` field further down were reading
+      // the same map to different ends and could disagree about one invoice.
+      const orderVal = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
+      const hasOrder = Number.isFinite(Number(orderVal)) && Number(orderVal) > 0;
+      // THE 15% IS TAKEN OFF THE ORDER, NOT OFF THIS INVOICE.
+      //
+      // This line passed `total` — the invoice — and on PI that is ALREADY the
+      // advance: 50 of 57 PI invoices are struck at exactly 0.150 of their
+      // order. Multiplying it again reported 2.25% of the case as "expected",
+      // which is why the AR EXPECTED column read a fraction of what the advance
+      // was actually worth. See the note above arExpectedFor.
+      //
+      // No order to read → the invoice stands as its own expectation rather
+      // than being discounted a second time. That is the majority case's truth
+      // (the invoice IS the advance) and it is the safe direction: it can only
+      // under-claim a rule, never invent one.
+      const expected = (vertical === 'PI' && !hasOrder)
+        ? { amount: total, basis: 'pi-invoice-is-advance' }
+        : arExpectedFor({ vertical, billed: vertical === 'PI' ? round2(Number(orderVal)) : total });
       return {
         no,
         // The sheet's date is the invoice date; Striven's is the created stamp.
@@ -3797,10 +3969,7 @@ export async function getArRegister() {
         // the invoice again. Null otherwise, so the client can tell "the order
         // was worth more than this invoice" from "we do not know", and never
         // has to guess which by dividing.
-        orderTotal: (() => {
-          const v = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
-          return v != null && v > total + 0.005 ? round2(v) : null;
-        })(),
+        orderTotal: hasOrder && Number(orderVal) > total + 0.005 ? round2(Number(orderVal)) : null,
         memo: d?.memo ?? '',
         gl: d?.gl ?? '',
         total,
@@ -6331,6 +6500,15 @@ export async function getPiStages(viewer = null) {
   //             labels reach). Every order has exactly one, so these DO sum to
   //             the board total — which is what the flow bar needs to stay at
   //             100%.
+  //
+  // EVERY UI NOW LEADS WITH `current`. The stage cards, the dashboard funnel
+  // and the flow bar all headline it, and `count` survives only as a
+  // "+N passed through" footnote — a card reading 40 above a stage holding
+  // nobody was the confusion that ended that. `revenue`/`units`/ageing here are
+  // still cut over the OVERLAPPING set, so they do not describe `current`; the
+  // pipeline tab recomputes its own over the standing cohort for exactly that
+  // reason. Anything new that pairs money with `current` must do the same
+  // rather than reach for these.
   const roll = (rows, names) => names.map((stage) => {
     const set = rows.filter((o) => (o.stages || [o.stage]).includes(stage));
     const aged = set.map((o) => o.daysInStage ?? 0);

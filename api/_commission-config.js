@@ -112,10 +112,19 @@ export const REP_COMMISSION_SCHEMES = {
 // ── AR EXPECTED ──────────────────────────────────────────────────────────────
 // What the business expects to RECEIVE on an invoice, as against what it billed.
 //
-//   PI      15% of billed. A PI order is billed at the full device price but is
-//           a LIEN: the claim settles out of the patient's award and only a
-//           fraction of the face value ever comes back, so a PI invoice carried
-//           at its full value overstates the receivable nearly sevenfold.
+//   PI      15% of billed, where "billed" is the ORDER — the device price the
+//           case was written for. The claim settles out of the patient's award
+//           and only the advance is money the business can chase, so a PI figure
+//           carried at case value overstates the receivable nearly sevenfold.
+//
+//           THIS COMMENT USED TO SAY "a PI order is billed at the full device
+//           price", and it was wrong. Measured against the live book, 50 of 57
+//           PI invoices are struck at exactly 0.150 of their order value:
+//           Striven raises the ADVANCE as the invoice. Six are billed at the
+//           full price and one at 0.400, which is why arOwedOf() caps rather
+//           than multiplies — see its note. Feeding an already-15% invoice into
+//           the multiplication below reports 2.25% of the case, so callers must
+//           pass the ORDER value as `billed`, never the invoice total.
 //   other   billed. Not a guess and not a placeholder: an invoice with no rule
 //           of its own is expected in full, and treating one as expecting
 //           nothing would quietly write off real billed work — the failure
