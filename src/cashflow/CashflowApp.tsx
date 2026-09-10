@@ -19,10 +19,11 @@ const AutomationHub = lazy(() => import('./components/AutomationHub').then((m) =
 const CommissionTab = lazy(() => import('./components/Commission').then((m) => ({ default: m.CommissionTab })));
 const RepsTab = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.RepsTab })));
 const TeamStandings = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.TeamStandings })));
+const UserGuideTab = lazy(() => import('./components/UserGuideTab').then((m) => ({ default: m.UserGuideTab })));
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'arsheet' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'vapipeline' | 'repsroster' | 'standings' | 'reports' | 'quickbooks';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'arsheet' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'vapipeline' | 'repsroster' | 'standings' | 'reports' | 'quickbooks' | 'guide';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -81,7 +82,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsroster', 'standings', 'reports', 'quickbooks'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsroster', 'standings', 'reports', 'quickbooks', 'guide'];
 const readHash = (): ViewKey | null => {
   const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
   return VIEW_KEYS.includes(h) ? h : null;
@@ -182,6 +183,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     standings: <TeamStandings />,
     reports: <ReportsTab />,
     quickbooks: <QuickBooksTab />,
+    guide: <UserGuideTab />,
   };
 
   return (

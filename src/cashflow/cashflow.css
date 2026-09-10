@@ -138,6 +138,12 @@ code {
   position: sticky;
   top: 0;
   height: 100vh;
+  /* Last-resort fallback for a viewport so short that the brand and the footer
+     alone overflow it: the rail scrolls rather than clipping them. In the
+     ordinary case `.sidebar-nav` below absorbs the overflow and this never
+     engages, so there is no second scrollbar. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .brand {
@@ -220,6 +226,67 @@ code {
   display: inline-flex; align-items: center; justify-content: center;
   color: currentColor;
 }
+
+/* THE RAIL SCROLLS AT THE NAV, NOT AT THE PAGE. `.sidebar` is a 100vh flex
+   column; with no overflow rule on it, a nav taller than the viewport (Company
+   mode is thirteen entries plus the brand, the switch and the footer) simply
+   ran off the bottom edge with no way to reach it — the last tabs and Sign out
+   were invisible. The list takes the leftover room and scrolls inside it, so
+   the brand stays at the top and the footer stays at the bottom.
+
+   `min-height: 0` is the load-bearing half: a flex item defaults to
+   `min-height: auto`, which refuses to shrink below its content, and an
+   `overflow-y` on an item that never shrinks scrolls nothing.
+
+   THE LIST KEEPS THE RAIL'S EDGES. A scroll container is given a scrollbar, and
+   this app's is 10px wide — down the middle of a 220px rail that reads as a
+   second vertical rule, and it takes its 10px out of the NAV ROWS ALONE, so
+   every row ends short of the brand block above it and the footer below it.
+   One rail, three different right edges. So the list bleeds out to the rail's
+   padding edges and puts that padding back on its own inside: the rows keep the
+   one left edge the whole rail is built on, and the gutter the bar would have
+   taken is the rail's own padding rather than a bite out of the rows. The bar
+   itself is hidden and costs no width, so NOTHING MOVES when a list becomes
+   scrollable — the fade at the cut edge is the affordance instead. */
+.sidebar-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  /* Reaching the end of the list must not carry on into the page behind it. */
+  overscroll-behavior: contain;
+  /* Full bleed to the rail's edges, then the rail's own padding back inside. */
+  margin-left: calc(var(--sp-3) * -1);
+  margin-right: calc(var(--sp-3) * -1);
+  padding-left: var(--sp-3);
+  padding-right: var(--sp-3);
+  scrollbar-width: none;     /* Firefox */
+  -ms-overflow-style: none;  /* legacy Edge */
+  --fade-len: var(--sp-6);
+  --fade-top: linear-gradient(180deg, transparent 0, #000 var(--fade-len));
+  --fade-bottom: linear-gradient(0deg, transparent 0, #000 var(--fade-len));
+  --fade-both: linear-gradient(180deg, transparent 0, #000 var(--fade-len),
+                               #000 calc(100% - var(--fade-len)), transparent 100%);
+}
+.sidebar-nav::-webkit-scrollbar { width: 0; height: 0; }
+
+/* THE CUT EDGE FADES, so a list that carries on past the fold says so without
+   a bar. Which edge is set by the component — scroll position is not something
+   CSS can see: `top` when there is more above, `bottom` when there is more
+   below, `both` mid-list. A list that fits gets no attribute and no mask, so a
+   rep's five entries are drawn flat, exactly as they were. */
+.sidebar-nav[data-fade='top']    { -webkit-mask-image: var(--fade-top);    mask-image: var(--fade-top); }
+.sidebar-nav[data-fade='bottom'] { -webkit-mask-image: var(--fade-bottom); mask-image: var(--fade-bottom); }
+.sidebar-nav[data-fade='both']   { -webkit-mask-image: var(--fade-both);   mask-image: var(--fade-both); }
+
+/* Fixed furniture: never squeezed to make room for the list. */
+.sidebar > .brand,
+.sidebar > .segmented.mode-switch,
+.sidebar > .sidebar-footer { flex: 0 0 auto; }
 
 .sidebar-footer {
   margin-top: auto;
@@ -704,13 +771,28 @@ code {
   gap: 12px;
   margin-bottom: 14px;
 }
+/* ── TILE HEADINGS ARE CAPS, EVERYWHERE ─────────────────────────────────────
+   This lived under `.ov-board` and was deliberately scoped there; the scope has
+   been lifted on request, so every card in the app now reads the same way.
+
+   THE SIZE STEPS DOWN AND THE TRACKING OPENS UP, and neither is decoration.
+   Caps at the old 15px/700 read as shouting and set too tight to scan — that
+   pairing is what makes uppercase legible rather than merely loud.
+
+   CARD SUBTITLES STAY SENTENCE CASE. Putting both in caps removes the very
+   hierarchy the heading exists to create, and a subtitle is a sentence. */
 .section-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
-  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 12.5px;
+  letter-spacing: 0.07em;
+  font-weight: 800;
 }
+/* A PAGE'S OWN H1 IS NOT A TILE. It keeps the size it inherits from the page
+   head, so a heading over a whole screen still outranks the cards beneath it. */
+.page-head .section-title { font-size: inherit; letter-spacing: normal; }
 .section-sub {
   color: var(--muted);
   font-size: 12px;
@@ -764,6 +846,38 @@ code {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
+/* ── A TABLE THAT SCROLLS INSTEAD OF GROWING ────────────────────────────────
+   A register with two hundred rows pushes everything under it off the page,
+   and the card it sits in stops being a card. `.scroll-y` caps the body and
+   scrolls it in place, so the table occupies the same space whether it holds
+   ten rows or a thousand.
+
+   THE STICKY HEADER IS ALREADY WRITTEN — `.data-table th` has carried
+   `position: sticky; top: 0` all along, and it has never done anything,
+   because sticky needs a scroll container and this wrapper had no height to
+   scroll inside. Capping the height is what switches it on.
+
+   The header's bottom rule is redrawn as an inset shadow: a sticky cell's own
+   border scrolls away from it in Chrome and Safari, leaving the column titles
+   sitting on the rows with nothing between them. */
+.table-wrap.scroll-y {
+  max-height: var(--table-scroll-h, 360px);
+  overflow-y: auto;
+}
+.table-wrap.scroll-y .data-table th {
+  z-index: 2;
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+/* Denser than the default 7px: the point of a scrolling table is how many rows
+   land in the box, and the row height is this padding twice over. Pills and
+   badges are centred rather than top-aligned here, since at this height the
+   1px of slack above them is visible as a wobble down the column. */
+.data-table.compact th, .data-table.compact td {
+  padding: 4px 10px;
+  vertical-align: middle;
+}
+.data-table.compact .pill-tag { padding-top: 1px; padding-bottom: 1px; }
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -937,7 +1051,9 @@ code {
 @media (max-width: 640px) {
   .main { padding: 10px; }
   .section { padding: 12px; margin-bottom: 12px; }
-  .section-title { font-size: 14px; }
+  /* Stepped against the 12.5px caps base, not the 15px sentence-case one it
+     replaced — 14px here would have been a step UP into shouting. */
+  .section-title { font-size: 12px; }
   .section-sub { font-size: 11px; }
 }
 
@@ -1001,7 +1117,8 @@ code {
   /* Sections */
   .section { padding: 14px; border-radius: 10px; }
   .section-head { flex-direction: column; align-items: flex-start; gap: 6px; padding: 0 0 10px; }
-  .section-title { font-size: 14px; }
+  /* See the note on the 640px step: measured against the caps base. */
+  .section-title { font-size: 12px; }
   .section-sub { font-size: 11.5px; }
 
   /* Tables - horizontal scroll, smaller font */
@@ -1231,6 +1348,58 @@ code {
   letter-spacing: 0.045em;
 }
 .commission-tab .data-table tbody td { border-bottom: 1px solid #f1f5f9; }
+/* ── BOOK VALUE, ABOVE THE REGISTER ─────────────────────────────────────────
+   The headline the table's own footer cannot give: what the rows are worth, and
+   how that splits into collected and still owed. Sits between the card head and
+   the table so it is read before the rows, not after eleven pages of them. */
+.ar-value { border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 14px; background: var(--panel-2); }
+.ar-value-head { display: flex; align-items: baseline; gap: 12px; }
+.ar-value-head .l { font-size: 12px; font-weight: 700; color: var(--muted-strong);
+  text-transform: uppercase; letter-spacing: .05em; }
+.ar-value-head .v { margin-left: auto; font-size: 19px; font-weight: 800;
+  color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+/* Two segments, no gap: they are the two halves of one quantity, and a gap
+   between them would read as a third thing unaccounted for. */
+.ar-value-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden;
+  margin: 9px 0 8px; background: var(--border); }
+.ar-value-bar > span { display: block; height: 100%; }
+.ar-value-key { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 12px; color: var(--muted-strong); }
+.ar-value-key > span { display: inline-flex; align-items: baseline; gap: 7px; }
+.ar-value-key i { width: 9px; height: 9px; border-radius: 3px; align-self: center; }
+.ar-value-key b { color: var(--ink); font-weight: 800; font-variant-numeric: tabular-nums; }
+.ar-value-key em { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The second cut of the same money — invoiced versus not — in prose, because it
+   partitions the value differently from the bar and cannot share its marks. */
+.ar-value-note { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border);
+  font-size: 12px; line-height: 1.55; color: var(--muted-strong); max-width: 92ch; }
+.ar-value-note b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* ── A WIDE TABLE THAT STILL FITS ON ONE SCREEN ─────────────────────────────
+   `.tbl-single` is for a data table with enough columns that the LAST ones were
+   sliding off the right edge behind the card's own overflow scroll — present,
+   but invisible unless you knew to drag.
+
+   THE FIX IS PER-CELL WRAPPING, not a smaller font. "Sep 3, 2026" in a squeezed
+   column broke into three lines, which cost width AND tripled the row height, so
+   fewer rows fitted as well as fewer columns. Holding the short cells on one
+   line lets the browser spend the width where it is actually needed.
+
+   The NAME columns keep the right to wrap and to ellipsis: a law firm can be
+   sixty characters and must not be allowed to set the table's width. */
+/* CELLS HOLD ONE LINE; HEADERS MAY WRAP. A header wrapping costs two lines ONCE
+   per table and buys back real width — "Days Past Due" is 95px on one line and
+   55px on two — while a cell wrapping costs two lines on every row. In a
+   seven-column card at half width that trade is the difference between a table
+   that fits and one that scrolls sideways. */
+.tbl-single .data-table td { white-space: nowrap; }
+.tbl-single .data-table th { white-space: normal; }
+.tbl-single .data-table td.wrap { white-space: normal; }
+.tbl-single .data-table td.clip { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+/* The row's identity and its badge belong on ONE line. Wrapped, the pill sat
+   under the number and every row in the table stood two lines tall. */
+.tbl-single .data-table td .pill-tag { margin-left: 8px; vertical-align: middle; }
+
 /* Zebra: special rows (.total-row/.subtotal-row/.group-row) paint their own
    <td> background, which covers this <tr> stripe - so no extra exclusion. */
 .commission-tab .data-table tbody tr:nth-child(even) { background: #fafbfc; }
@@ -1381,6 +1550,33 @@ code {
 .drill-foot i { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
   text-transform: uppercase; color: var(--muted); }
 .drill-foot b { font-size: 14px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+/* ── THE DRILL'S SUMMARY BAND ───────────────────────────────────────────────
+   Sits between the dialog header and the rows: what the list adds up to, before
+   the list itself. Inside the scrolling body rather than pinned under the head,
+   because a permanently fixed band would cost a 25-row dialog four rows of
+   height to repeat what the reader already took in. */
+.drill-sum { border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+  padding: 12px 14px; margin-bottom: 14px; }
+.drill-sum-stats { display: flex; flex-wrap: wrap; gap: 10px 30px; }
+.drill-sum-stats > span { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; }
+.drill-sum-stats i { font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--muted); }
+.drill-sum-stats b { font-size: 16px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.drill-sum-stats em { font-style: normal; font-size: 11px; color: var(--muted); }
+/* One bar, one segment per programme, no gaps: the segments ARE the total, and
+   a gap between them would read as money in neither. */
+.drill-sum-bar { display: flex; height: 9px; border-radius: 999px; overflow: hidden;
+  margin: 11px 0 8px; background: var(--border); }
+.drill-sum-bar > span { display: block; height: 100%; }
+.drill-sum-key { display: flex; flex-wrap: wrap; gap: 5px 20px; font-size: 12px; color: var(--muted-strong); }
+.drill-sum-key > span { display: inline-flex; align-items: baseline; gap: 7px; }
+.drill-sum-key i { width: 9px; height: 9px; border-radius: 3px; align-self: center; }
+.drill-sum-key b { color: var(--ink); font-weight: 800; font-variant-numeric: tabular-nums; }
+.drill-sum-key em { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The centred-cell rule for drill TABLES must not reach in here — this band is
+   a set of stat clusters, not a column layout. */
+.drill .drill-sum, .drill .drill-sum * { text-align: left; }
+
 /* A breakdown's two levels. The account sits one level in and reads quieter
    than the category subtotal above it — and the indent is MARKUP, because a
    label padded with spaces renders flush left: HTML collapses them, which is
@@ -1389,6 +1585,33 @@ code {
 .data-table .drill-acct { display:inline-block; padding-left:20px; color:var(--muted); }
 /* The account named on its category's own row, where it has only one. */
 .data-table .drill-in { color:var(--muted); font-weight:600; }
+
+/* ── DRILL TABLES: EVERY COLUMN CENTRED ──────────────────────────────────────
+   On request. SCOPED TO `.drill`, so the full-page tables — the AR sheet, the
+   P&L, the rep roster — keep the app default (text left, money right) and only
+   the pop-up drills read this way. One selector covers every drill in the app:
+   chartKit's DrillModal plus the Orders, QuickBooks, Auto-PO and Auto-SO tabs
+   all render the same `.drill` shell.
+
+   `.num` HAS TO BE OVERRIDDEN TWICE, and the second half is the one that makes
+   this visible at all. Its `text-align: right` is the obvious part. Its
+   `width: 1%` is the trick that shrink-wraps a money column to exactly its own
+   content — and centring inside a column no wider than its text moves nothing,
+   so the rule would have looked like it had failed. Released to `auto`, the
+   column takes a normal share of the table and the centring reads.
+
+   TABULAR FIGURES AND NOWRAP STAY. Centred amounts no longer stack by place
+   value — $9,512 sits under the middle of $31,975 rather than under its last
+   three digits — so equal-width digits are the only thing left holding a column
+   of money together vertically. Dropping them here would compound the cost. */
+.drill .data-table th,
+.drill .data-table td { text-align: center; }
+/* `th.num` is named explicitly, not left to source order. A later rule
+   (`.data-table .num, .data-table th.num`) re-asserts the right-align at the
+   same specificity as the header selector above, and winning that on position
+   alone would break the day either block moves. */
+.drill .data-table .num,
+.drill .data-table th.num { text-align: center; width: auto; }
 
 /* ---- Uniform chart grid + summary stat tiles (Overview & tabs) ---- */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
@@ -1403,6 +1626,31 @@ code {
 .main > .chart-card { margin-bottom: 14px !important; }
 .chart-card { padding: var(--sp-6); }
 .chart-card .chart-box { width: 100%; height: 260px; }
+
+/* ── ONE PERIOD, DRAWN AS A PROPORTION ──────────────────────────────────────
+   The single-month form of BarsLine. It takes the chart box's own height so the
+   card is the same size whichever view is showing — switching the period must
+   not make the row jump — and spreads its three parts down it rather than
+   sitting in a band at the top with dead space beneath.
+
+   Horizontal bars, because the quantity being compared is LENGTH against one
+   shared scale, and a horizontal track can use the card's full width where two
+   vertical bars can only use the middle of it. */
+.one-period { display: flex; flex-direction: column; justify-content: center; gap: var(--sp-3); }
+.op-rows { display: flex; flex-direction: column; gap: 10px; }
+.op-row { display: grid; grid-template-columns: 74px 1fr auto; align-items: center; gap: 10px; }
+.op-name { font-size: 11.5px; font-weight: 700; color: var(--muted-strong); white-space: nowrap; }
+.op-track { height: 14px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+/* A floor on the fill so a small-but-real figure still reads as a bar rather
+   than vanishing — $0 is the only thing that should render as nothing. */
+.op-fill { display: block; height: 100%; border-radius: 999px; transition: width .35s cubic-bezier(.22,.75,.3,1); }
+.op-val { font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The net sits under a rule, the way a total does on a statement. */
+.op-net { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
+  padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+.op-net-l { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.op-net b { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.op-net em { font-style: normal; font-size: 11.5px; color: var(--muted); margin-left: auto; }
 
 /* Section-summary mini stat tiles: one per app area. */
 .mini-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 20px; }
@@ -1907,6 +2155,37 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 .ov-board .exec-grid12 > .section > .cfoot { margin-top: auto; }
 .exec-grid12 .chart-card .chart-box { height:240px; flex:none; }
 .exec-grid12 .card-body { flex:1 1 auto; display:flex; flex-direction:column; justify-content:center; }
+
+/* ── DENSER TILES, EACH CLEARLY OUTLINED ────────────────────────────────────
+   On request: the board's cards were tall enough that four of them filled a
+   screen, so reading it meant scrolling past cards to compare cards. Every
+   figure and every chart survives — only the whitespace around them goes.
+
+   THE FOUR NUMBERS THAT SET A TILE'S HEIGHT, all cut together so the row still
+   lands flush: the chart box, the head's reserved two lines, the card padding,
+   and the AR Due list's own cap. Changing one alone just moves which card is
+   tallest and leaves the rest padded out to match it.
+
+   THE HEAD KEEPS A FLOOR, not zero. It reserves space for a two-line subtitle
+   so four cards abreast start their dividers at the same y; dropping the floor
+   entirely would ragged the row the moment one subtitle wrapped.
+
+   OUTLINED WITH `--border-strong`. The cards already carried a border, but at
+   `--border` on a white panel over a near-white page the edge was there and not
+   readable — which is exactly the complaint. One step darker draws the box
+   without turning the board into a grid of ruled cells.
+
+   SCOPED TO THE COMPANY BOARD. Every other tab lays out tables and full-width
+   panels where this density would crowd rather than tighten. */
+.ov-board .exec-grid12 > .section { padding: var(--sp-4); border-color: var(--border-strong); }
+.ov-board .exec-grid12 .section-head { min-height: var(--sp-8); margin-bottom: var(--sp-3); }
+.ov-board .exec-grid12 .chart-card .chart-box { height: 192px; }
+/* Kept equal to the chart box beside it — see the note on `.ar-exp`: it holds no
+   chart, so it has to be told the height its neighbours derive. */
+.ov-board .exec-grid12 .ar-exp { height: 192px; }
+/* The board's cards are the denser ones, so the floor comes down with them —
+   the list still fills whatever height the row settles at. */
+.ov-board .exec-grid12 .rank-list.is-scroll { min-height: 112px; }
 @media (max-width:1360px){
   .exec-grid12 { grid-template-columns: repeat(6, minmax(0,1fr)); }
   .g12-3, .g12-4 { grid-column: span 3; }
@@ -2218,6 +2497,40 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 
 /* Ranked entity list (top customers / vendors) + insights + card footer link. */
 .rank-list { display:flex; flex-direction:column; }
+/* ── A LIST THAT SCROLLS INSTEAD OF SETTING THE ROW HEIGHT ──────────────────
+   AR Due renders one row per PAYER and does not slice — that is deliberate, a
+   collections list that hides its tail is worse than one you scroll — so on a
+   busy month it ran to a dozen rows and became the tallest card in its row.
+   Every sibling stretches to the tallest, so one long list was inflating the
+   cards either side of it and leaving them half empty.
+
+   `flex-basis:0` IS WHAT DOES THE WORK, not a max-height. A fixed cap made the
+   card short AND left a gap: the row is sized by the tallest card in it, so once
+   AR Due was capped below that height the space between its last row and its
+   footer was simply dead. With a zero basis the list contributes NOTHING to the
+   card's intrinsic height — so the card never drives the row — and then grows
+   into every pixel between the header and the footer, however tall the row turns
+   out to be. The list ends exactly above Total due, by construction.
+
+   `min-height` REPLACES `min-height:0` AND DOES ITS JOB. A flex item's automatic
+   minimum is its content size, which would defeat the zero basis; overriding it
+   with a real floor both frees the shrink and stops the list collapsing to a
+   sliver in a row of short cards.
+
+   `overflow-x:hidden` WITH MATCHING PADDING. Setting overflow on one axis makes
+   the other compute to `auto`, and `.rk-row` carries `margin:0 -6px` to bleed its
+   hover behind the card padding — 12px wider than the container, which is enough
+   to raise a horizontal scrollbar under the list. The padding gives that bleed
+   somewhere legitimate to go instead of clipping it flat.
+
+   A MODIFIER, NOT THE BASE RULE. `.rank-list` is also Top Vendors, Top Payers
+   and two lists on the Receivables tab, all of which slice to five and must
+   keep sizing themselves. */
+.rank-list.is-scroll {
+  flex: 1 1 0; min-height: 128px;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  padding: 0 6px; margin: 0 -6px;
+}
 .rank-list .rk-row { display:flex; align-items:center; gap:10px; padding:7px 6px; margin:0 -6px; border-radius:8px; border-bottom:1px solid var(--panel-2); transition:background .14s ease; }
 .rank-list .rk-row:hover { background:var(--panel-2); }
 .rank-list .rk-row:last-child { border-bottom:0; }
@@ -2396,7 +2709,12 @@ body, .shell {
 
 /* Type: a little more air between lines, and headings that do not break awkwardly. */
 body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-.page-title, .section-title { text-wrap: balance; letter-spacing: -.01em; }
+/* THE NEGATIVE TRACKING IS FOR SENTENCE CASE ONLY, so `.section-title` is no
+   longer in it. This rule sits ~1700 lines below the caps rule at the same
+   specificity, so it won its -.01em and set every tile heading tight — the one
+   thing uppercase cannot survive. Balanced wrapping still applies to both. */
+.page-title, .section-title { text-wrap: balance; }
+.page-title { letter-spacing: -.01em; }
 .section-sub, .page-sub { max-width: 78ch; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2529,8 +2847,11 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   /* Charts must not be clipped by a page edge. */
   .recharts-wrapper, .recharts-surface { break-inside: avoid; }
 
-  /* Wide tables scroll on screen; on paper they must shrink to fit instead. */
+  /* Wide tables scroll on screen; on paper they must shrink to fit instead.
+     A capped table has to give up its cap too, or printing it yields one
+     screenful of rows and silently drops the rest. */
   .table-wrap, [style*="overflow-x"] { overflow: visible !important; }
+  .table-wrap.scroll-y { max-height: none !important; }
 
   /* Content that exists only on paper: a statement header, since the modal's
      own title bar and the page around it are gone. */
@@ -2887,114 +3208,120 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   background: var(--panel); color: var(--text); font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .ov-viewas select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* ── DUE DATES ──────────────────────────────────────────────────────────────
+   Two columns, one per direction, each a stack of three states. Rows are real
+   buttons: every one of them opens the list behind it, and an empty state is
+   `disabled` rather than hidden so the three states stay in the same place on
+   both sides and can be compared across at a glance. */
+.due-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 26px; }
+@media (max-width: 780px) { .due-panel { grid-template-columns: 1fr; } }
+.due-col { min-width: 0; }
+.due-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 800;
+  color: var(--ink); text-transform: uppercase; letter-spacing: .04em; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.due-head i { font-style: normal; font-size: 10.5px; font-weight: 600; letter-spacing: 0;
+  text-transform: none; color: var(--muted); }
+.due-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center;
+  gap: 10px; width: 100%; padding: 7px 6px; margin: 0 -6px; border: 0; background: none;
+  font: inherit; text-align: left; border-radius: 8px; cursor: pointer; transition: background .14s ease; }
+.due-row:hover:not(:disabled) { background: var(--panel-2); }
+.due-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.due-row:disabled { cursor: default; }
+.due-row .dot { width: 9px; height: 9px; border-radius: 999px; }
+.due-row .l { font-size: 12.5px; font-weight: 600; color: var(--text); min-width: 0; }
+.due-row .n { font-size: 11px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+.due-row .v { font-size: 13.5px; font-weight: 800; font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; }
+.due-row.is-empty .l { color: var(--muted); font-weight: 500; }
+/* The label cell now holds a badge beside the text, so it lays its two children
+   out rather than being a bare string. */
+.due-row .l { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+
+/* ── DUE TODAY: THE ONE ROW THAT PULSES ────────────────────────────────────
+   Today is the only bucket whose deadline expires while you are looking at the
+   screen. Overdue has already passed and can wait for a chase list; anything
+   inside seven days will still be there tomorrow. So exactly one row moves, and
+   only when it has something in it — see `urgent` in OverviewCharts.
+
+   NOTHING FLASHES AND NO TEXT MOVES. The pulse is a ring leaving the dot and a
+   slow tint under the badge, on a 1.8s cycle — about 0.55Hz, comfortably under
+   the three-per-second ceiling that makes flashing content a seizure risk.
+   Animating the label's own opacity would have been the obvious way to "blink"
+   and is the wrong one: text that fades is text you cannot read at the moment
+   it matters most. */
+@keyframes due-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.55); }
+  70%  { box-shadow: 0 0 0 7px rgba(217, 119, 6, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0); }
+}
+@keyframes due-badge-pulse {
+  0%, 100% { background: rgba(217, 119, 6, 0.14); }
+  50%      { background: rgba(217, 119, 6, 0.30); }
+}
+
+.due-row.is-urgent { background: rgba(217, 119, 6, 0.06); }
+.due-row.is-urgent:hover:not(:disabled) { background: rgba(217, 119, 6, 0.12); }
+.due-row.is-urgent .dot { animation: due-ring 1.8s ease-out infinite; }
+
+.due-badge {
+  font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--warn); background: rgba(217, 119, 6, 0.14);
+  border-radius: 999px; padding: 2px 7px; white-space: nowrap;
+  animation: due-badge-pulse 1.8s ease-in-out infinite;
+}
+
+/* STILL OBVIOUS WITHOUT MOTION. Reduced-motion readers keep the tinted row, the
+   badge and the ring — they simply stop moving. The urgency was never carried
+   by the animation alone; the badge spells it out in words. */
+@media (prefers-reduced-motion: reduce) {
+  .due-row.is-urgent .dot { animation: none; box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.30); }
+  .due-badge { animation: none; background: rgba(217, 119, 6, 0.22); }
+}
+
+/* Visually hidden, still read aloud. Used for the polite announcement on the
+   due-today row; kept generic because it is the standard pattern. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+  white-space: nowrap; border: 0;
+}
+
 /* ── UNITS BY DEVICE ────────────────────────────────────────────────────────
-   Vertical hatched bars in the primary tint, the leader solid. Every colour is
-   a :root token: --accent for the primary, --warn for the hold dot, --border
-   for the dashed gridlines. Counts only — this component never renders money. */
+   A TABLE, in the portal's shared table furniture, so there is almost nothing
+   to define here: `.table-wrap.scroll-y`, `.data-table.compact`, `.num`,
+   `.total-row` and `th.sortable` are existing rules this card simply uses, and
+   a table on this board therefore behaves exactly like the AR and AP registers
+   do. What remains is the card's own frame plus the two marks the shared table
+   idiom has no opinion about: the held column's amber and the leader's accent.
+
+   It replaces the bars — vertical columns up to ten devices, horizontal tracks
+   above that, each with a scaled fill, an animation and an internal scroll —
+   which came to some seventy lines of stylesheet for a length you could not
+   read a number off. Counts only: no money reaches this card. */
 .ubd { display: flex; flex-direction: column; min-width: 0; }
 .ubd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .ubd-sub { font-size: 12px; color: var(--muted); }
-.ubd-sortr { margin-left: auto; }
 
-/* Plot area. The gridlines are positioned against this box, so they sit at the
-   true 0 / 50% / 100% of the bar heights rather than of the whole card. */
-.ubd-plot { position: relative; height: 178px; margin-bottom: 46px; }
-.ubd-grid { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border-strong); opacity: .75; pointer-events: none; }
-.ubd-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 12px; }
-@media (max-width: 640px) {
-  /* Mobile: scroll sideways rather than crushing bars below their labels. */
-  .ubd-bars { overflow-x: auto; overflow-y: visible; padding-bottom: 2px; }
-  .ubd-b { min-width: 62px; }
-}
+/* Taller than the shared 360px default: a full catalogue is a dozen devices,
+   and this card sits at the foot of the board where that room exists. */
+.ubd .table-wrap.scroll-y { --table-scroll-h: 460px; }
 
-.ubd-b { flex: 1 1 0; min-width: 0; height: 100%; position: relative;
-  display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
-  cursor: pointer; transition: opacity .18s ease; }
-.ubd-b:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
-.ubd-b.dim { opacity: .30; }
+/* WHAT SELLS MOST, now that no solid bar says it. The accent goes on the
+   figure alone — a whole tinted row would read as selected instead. */
+.ubd .data-table tr.lead td.u { color: var(--accent); font-weight: 800; }
 
-.ubd-b .ct { font-size: 13px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums;
-  margin-bottom: 5px; transition: color .15s ease, transform .15s ease; }
-.ubd-b .ct.up { color: var(--accent); transform: translateY(-1px); }
-
-/* Hatch: the primary at a tint, striped. The leader overrides to solid. */
-.ubd-b .col, .ubd-hrow .track i {
-  background: var(--accent-soft);
-  background-image: repeating-linear-gradient(45deg, rgba(10, 54, 159, .22) 0 3px, transparent 3px 7px);
-  border: 1px solid var(--accent-soft);
-}
-.ubd-b .col { width: 100%; max-width: 54px; border-radius: 8px 8px 0 0; position: relative;
-  transform-origin: bottom center; animation: ubdRise .6s cubic-bezier(.16,.84,.44,1) both; }
-.ubd-b .col.solid, .ubd-hrow .track i.solid { background: var(--accent); border-color: var(--accent); background-image: none; }
-.ubd-b:hover .col { border-color: var(--accent); }
-
-/* Hold marker: --warn, ringed in the card colour so it reads on both fills. */
-.ubd-b .col .hold, .ubd-hrow .track .hold {
-  position: absolute; width: 9px; height: 9px; border-radius: 50%;
-  background: var(--warn); border: 2px solid var(--panel); box-sizing: content-box;
-}
-.ubd-b .col .hold { top: -5px; right: -5px; }
-.ubd-hrow .track .hold { top: 50%; right: -5px; transform: translateY(-50%); }
-
-/* Two-line device label, pinned below the plot so bars keep a common baseline. */
-.ubd-b .lb { position: absolute; top: calc(100% + 7px); left: -4px; right: -4px;
-  display: flex; flex-direction: column; align-items: center; gap: 1px; text-align: center; }
-.ubd-b .lb b, .ubd-b .lb em {
-  font-size: 10.5px; line-height: 1.25; font-style: normal; max-width: 100%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.ubd-b .lb b { color: var(--muted-strong); font-weight: 700; }
-.ubd-b .lb em { color: var(--muted); font-weight: 500; }
-.ubd-b.pinned .lb b { color: var(--accent); }
-
-/* ── Horizontal mode: >10 devices, or >6 on a narrow screen ──────────────── */
-.ubd-hlist { display: flex; flex-direction: column; gap: 2px; max-height: 268px; overflow-y: auto; padding-right: 4px; }
-.ubd-hrow { display: flex; align-items: center; gap: 10px; padding: 5px 4px; border-radius: 7px;
-  cursor: pointer; transition: background-color .15s ease, opacity .18s ease; min-width: 0; }
-.ubd-hrow:hover { background: var(--panel-2); }
-.ubd-hrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.ubd-hrow.dim { opacity: .32; }
-.ubd-hrow.pinned { background: var(--accent-soft-2); }
-.ubd-hrow .nm { flex: 0 0 40%; max-width: 40%; font-size: 12.5px; font-weight: 600; color: var(--muted-strong);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ubd-hrow.pinned .nm { color: var(--accent); }
-.ubd-hrow .track { flex: 1 1 auto; position: relative; height: 15px; min-width: 30px; }
-.ubd-hrow .track i { display: block; height: 100%; border-radius: 0 5px 5px 0;
-  transform-origin: left center; animation: ubdGrow .6s cubic-bezier(.16,.84,.44,1) both; }
-.ubd-hrow .ct { flex: none; min-width: 34px; text-align: right; font-size: 12.5px; font-weight: 800;
-  color: var(--text); font-variant-numeric: tabular-nums; }
-
-/* ── Pinned detail line ──────────────────────────────────────────────────── */
-.ubd-detail { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  margin-top: 16px; padding: 10px 12px; border-radius: 9px;
-  background: var(--accent-soft-2); border: 1px solid var(--border);
-  font-size: 12.5px; color: var(--muted-strong); }
-.ubd-detail b { color: var(--text); font-weight: 800; }
-.ubd-detail .pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-  background: var(--accent-soft); color: var(--accent); }
-.ubd-detail .held { color: var(--warn); font-weight: 700; }
+/* Units standing on a held order: the portal's warn amber, on the figure it
+   qualifies rather than on a dot you had to hover over to decode. */
+.ubd .data-table td.held { color: var(--warn); font-weight: 700; }
 
 .ubd-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4px; padding: 26px 12px; text-align: center; color: var(--muted); font-size: 12.5px; }
 .ubd-empty .ic { font-size: 22px; opacity: .5; }
 .ubd-empty b { color: var(--muted-strong); }
 
-/* ── Company board: tile headings in caps ───────────────────────────────────
-   Scoped to .ov-board, NOT to .exec-deck — a dozen tabs share that class and
-   would all be restyled.
-
-   Caps at the inherited 15px/700 read as shouting and set too tight, so the
-   size steps down and letter-spacing opens up: that pairing is what makes
-   uppercase legible rather than merely loud. Card SUBTITLES stay sentence case;
-   putting both in caps removes the hierarchy the heading is there to create. */
-.ov-board .section-title {
-  text-transform: uppercase;
-  font-size: 12.5px;
-  letter-spacing: 0.07em;
-  font-weight: 800;
-}
-/* The page's own H1 keeps its size — it is a page title, not a tile heading. */
-.ov-board .page-head .section-title { font-size: inherit; letter-spacing: normal; }
+/* The company board's tile headings are no longer special: caps moved to the
+   base `.section-title` rule, so this board and every other tab share one
+   treatment. Kevin's surface below still adds its own mark and tracking. */
 
 /* ── KEVIN'S FINANCIAL OVERVIEW — the same board, its own surface ───────────
    Asked for explicitly: the tiles keep their names and their figures, and only
@@ -3170,13 +3497,46 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 /* The tile stacks: label row, then the vertical split rail beneath it. */
 .lbl-cat { flex-direction: column; align-items: stretch; gap: 7px; }
 .lbl-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.lbl-cat .pi-label { flex: 1 1 auto; min-width: 0; }
+/* ── THE LABEL WRAPS HERE, AND ONLY HERE ────────────────────────────────────
+   `.pi-label` truncates by design: in an order row it sits inline with four
+   other columns, and a wrapping pill there would push every row to two lines.
+   This card is the one place a label is the SUBJECT rather than an annotation —
+   the tile exists to name it — so "Waiting for first payment" reading as
+   "Waiting for f…" defeats the card's whole purpose. Sixteen of the twenty-one
+   labels were being cut.
+
+   THE FOUR PROPERTIES ARE ONE CHANGE. Undoing `white-space` alone does nothing
+   while `overflow:hidden`, `text-overflow` and the 190px cap still apply; each
+   has to be released or the text simply clips at a different point.
+
+   `overflow-wrap:anywhere` is the guard: "Lienstar" or a hyphen-free label
+   longer than the tile would otherwise push out of its own pill rather than
+   break. Breaking mid-word is ugly; overflowing the tile is broken.
+
+   RADIUS DROPS FROM THE PILL SHAPE. A 999px radius on a two-line box curves so
+   hard at the ends that the second line's first and last characters sit inside
+   the curve. 10px keeps it reading as a tag and never clips. */
+.lbl-cat .pi-label {
+  flex: 1 1 auto; min-width: 0; max-width: none;
+  white-space: normal; overflow: visible; text-overflow: clip;
+  overflow-wrap: anywhere;
+  align-items: flex-start;
+  line-height: 1.35; padding: 3px 9px; border-radius: 10px;
+}
 .lbl-cat .n { flex: none; font-size: 15px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
 .lbl-cat .v { flex: none; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 54px; text-align: right; }
 /* Which verticals a label spans, at a glance. Uses VERTICAL_COLORS, so PI/VA/
    TriCare read the same here as on every other surface. */
 .lbl-vert { display: flex; height: 4px; border-radius: 999px; overflow: hidden; background: var(--panel-2); }
 .lbl-vert > span { display: block; height: 100%; }
+/* The reconciling sentence under a card whose table is a SLICE of its footer.
+   Sits below the totals bar, not above it, because it explains that bar. */
+.pay-gist { margin-top: 10px; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+.pay-gist b { color: var(--muted-strong); font-weight: 700; font-variant-numeric: tabular-nums; }
+.pay-gist-link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent);
+  font-weight: 700; cursor: pointer; }
+.pay-gist-link:hover { text-decoration: underline; }
+
 .lbl-note { margin-top: 12px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .lbl-note b { color: var(--muted-strong); font-weight: 700; }
 /* The untagged-orders count, which OPENS the list of them.
@@ -3321,12 +3681,7 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   .cmb-row { transition: none; }
 }
 
-@keyframes ubdRise { from { transform: scaleY(0); opacity: .4; } to { transform: scaleY(1); opacity: 1; } }
 @keyframes ubdGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-@media (prefers-reduced-motion: reduce) {
-  .ubd-b .col, .ubd-hrow .track i { animation: none !important; }
-  .ubd-b, .ubd-hrow, .ubd-b .ct { transition: none; }
-}
 
 /* Commission tab: the state card and the headline tiles on ONE row.
    `stretch`, not `start`: the tile strip is the shorter side and is meant to
@@ -3507,6 +3862,10 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
     padding: 8px 8px 16px !important; margin: 0 0 12px !important; flex-direction: row;
   }
   .sidebar .nav-item { flex: 0 0 auto; width: 100%; }
+  /* The drawer scrolls at its list too, so the footer — Sign out lives there —
+     stays on screen instead of sitting below a long nav. Overrides the blanket
+     `.sidebar > * { flex-shrink: 0 }` from the ≤768 block above. */
+  .sidebar > .sidebar-nav { flex: 1 1 auto !important; min-height: 0; overflow-y: auto; }
   .sidebar-footer { display: flex !important; }
   .sidebar-backdrop {
     display: block; position: fixed; inset: 0;
@@ -3636,15 +3995,16 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 /* ── UNITS BY DEVICE: the DEMO rows ──────────────────────────────────────────
    Demo device lines come from `report_demo_items`, a cache nothing else reads,
    so they can be listed without reaching commission or the leaderboard. On the
-   card they have to read as a footnote, not as product: muted bar, muted
-   figure, and a small tag on the name. Sorted last by the component, so the
-   colour is reinforcing an order the data already has rather than carrying the
-   distinction on its own. */
-.ubd-hrow.demo .nm, .ubd-b.demo .lb { color: var(--muted); }
-.ubd-hrow.demo .ct, .ubd-b.demo .ct { color: var(--muted); font-weight: 700; }
-.ubd-hrow.demo .track > i, .ubd-b.demo .col { background: var(--muted); opacity: .38; }
+   card they have to read as a footnote, not as product: the whole row goes
+   muted, and the name carries a small tag. Sorted last by the component and
+   left out of the total row, so the colour is reinforcing a separation the
+   data already has rather than carrying it on its own. */
+.ubd .data-table tr.demo td { color: var(--muted); }
+.ubd .data-table tr.demo td strong { color: var(--muted); font-weight: 700; }
 .ubd-demo {
-  margin-left: 7px; padding: 1px 6px; border-radius: 999px;
+  /* A tag on the name, so it needs the space a flex gap used to give it. */
+  margin-left: 7px;
+  padding: 1px 6px; border-radius: 999px;
   background: var(--panel-2); color: var(--muted);
   font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
   vertical-align: middle;
@@ -3739,4 +4099,489 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   background: var(--accent-soft-2, rgba(10,54,159,.10)); color: var(--accent);
   font-size: 10.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+}
+
+/* ── SHARE RANK BAR ────────────────────────────────────────────────────────
+   The ranked spend list (see ShareRankBar in chartKit). Four columns on one
+   grid so name, bar, value and share line up down the whole list rather than
+   each row setting its own widths — a ranked list is read DOWN the value
+   column, and figures that do not share an edge cannot be compared at a
+   glance. `tabular-nums` holds that edge as digits change.
+
+   It replaces a fixed-height `.chart-box`: this is flow content, and pinning it
+   to 260px would either clip a long list or strand a short one in white space. */
+.srb { display: flex; flex-direction: column; gap: 10px; }
+
+.srb-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.srb-total {
+  font-size: 22px; font-weight: 800; color: var(--text);
+  letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+}
+.srb-head-sub { font-size: 12.5px; color: var(--muted); }
+.srb-head-sub b { color: var(--text); font-weight: 700; }
+
+.srb-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.srb-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 168px) 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  /* The hit target is the whole row, not the bar — a $996 bar is 3% wide and
+     nobody can aim at it. */
+  transition: background 120ms ease;
+}
+.srb-row.is-clickable { cursor: pointer; }
+.srb-row.is-clickable:hover { background: var(--panel-2); }
+.srb-row.is-clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  background: var(--panel-2);
+}
+
+.srb-name {
+  font-size: 12.5px; color: var(--text); font-weight: 600;
+  /* Ellipsis rather than truncation in JS: the full name is on the row's
+     `title` and its aria-label, so nothing is lost to a screen reader. */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.srb-track {
+  height: 16px;
+  background: var(--panel-2);
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 40px;
+}
+.srb-fill {
+  display: block; height: 100%;
+  background: var(--accent);
+  /* 4px data-end, square at the baseline: the bar grows from a fixed origin. */
+  border-radius: 0 4px 4px 0;
+  transition: width 260ms cubic-bezier(.22,.61,.36,1);
+}
+.srb-row:hover .srb-fill { background: var(--accent-hover); }
+
+.srb-val {
+  font-size: 12.5px; font-weight: 700; color: var(--text);
+  font-variant-numeric: tabular-nums; text-align: right; min-width: 52px;
+}
+.srb-share {
+  font-size: 11.5px; font-weight: 600; color: var(--muted);
+  font-variant-numeric: tabular-nums; text-align: right; min-width: 34px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .srb-fill { transition: none; }
+}
+@media (max-width: 560px) {
+  .srb-row { grid-template-columns: minmax(72px, 1fr) 1fr auto auto; gap: 8px; padding: 5px 4px; }
+  .srb-name { font-size: 12px; }
+}
+
+/* ── YET TO BE INVOICED ────────────────────────────────────────────────────
+   The unbilled-orders card on the AR tab. Red because it is an ACTION — every
+   row is an invoice somebody has to raise — and it sits above the aging chart
+   because with PI carried at the 15% advance this figure is larger than the
+   receivable it sits over. Read without it, AR understates the book.
+
+   It is a panel, not a `.chart-card`: it carries no chart, and the card shell's
+   fixed chart-box height would strand it. The left rule is the only borrowed
+   device — the same one `.flag` uses elsewhere for "this needs attention". */
+.ar-pending {
+  background: var(--panel);
+  border: 1px solid var(--danger-soft);
+  border-left: 3px solid var(--danger);
+  border-radius: 10px;
+  padding: 16px 18px 18px;
+  margin-bottom: 16px;
+}
+.ar-pending-head { display: flex; align-items: flex-start; gap: 10px; }
+.ar-pending-head > div { flex: 1; min-width: 0; }
+.ar-pending-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--danger);
+  flex: none; margin-top: 7px;
+}
+.ar-pending-title {
+  margin: 0; font-size: 15px; font-weight: 800; color: var(--text);
+  letter-spacing: -0.01em;
+}
+.ar-pending-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; max-width: 70ch; }
+
+/* auto-fit, so three figures fill the row and two do not leave a gap. */
+.ar-pending-figs {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px; margin-top: 14px;
+}
+.ar-pending-fig {
+  display: flex; flex-direction: column; gap: 1px;
+  background: var(--panel-2); border-radius: 8px; padding: 10px 12px 11px;
+}
+.ar-pending-fig .l {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.ar-pending-fig .v {
+  font-size: 19px; font-weight: 800; color: var(--text);
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+}
+/* Only the headline figure is red. Colouring all three would make none of them
+   read as the urgent one. */
+.ar-pending-fig .v.is-red { color: var(--danger); }
+.ar-pending-fig .f { font-size: 11px; color: var(--muted); }
+
+/* A tint, not a fill: the row must stay readable, and the Not invoiced pill is
+   already carrying the state. */
+.data-table tbody tr.is-pending-row { background: var(--danger-soft); }
+.data-table tbody tr.is-pending-row:hover { background: rgba(220,38,38,0.16); }
+
+@media (max-width: 560px) {
+  .ar-pending { padding: 13px 13px 15px; }
+  .ar-pending-figs { grid-template-columns: 1fr; }
+}
+
+/* ══ USER GUIDE ════════════════════════════════════════════════════════════
+   A REFERENCE MANUAL, NOT A DECK OF CARDS.
+
+   This was an auto-fill grid of tiles, then a masonry column of them, and both
+   were wrong for the same reason: a card packs content into an arbitrary shape,
+   so no two entries lined up and the eye had to re-find the definition on every
+   one. An owner scanning forty terms for "how is that number worked out" is
+   reading DOWN one column, and a layout that will not let them do that is
+   failing at the only job it has.
+
+   So every entry is one row on a shared three-column track — name, meaning,
+   locations — and the column edges hold from the first term to the last. That
+   alignment is the feature. Cards are kept only for the locations, where a
+   variable-length list genuinely wants a box around it. */
+
+.ug-lead {
+  background: var(--accent-soft-2);
+  border: 1px solid var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px 13px;
+  font-size: 13px; color: var(--muted-strong); line-height: 1.6;
+  margin-bottom: 14px;
+  /* THREE INSTRUCTIONS ACROSS THE BAR, EVENLY. This was one paragraph capped
+     at `max-width: 96ch`, which left the right third of the row empty under a
+     full-width A-Z bar and made the short measure look like a mistake. Simply
+     dropping the cap is not the fix either: at 1500px one paragraph becomes a
+     230-character measure and the eye loses its line coming back from the
+     right edge.
+
+     CSS `columns` fixed the measure but broke the sense — a single paragraph
+     flowed across columns is cut wherever the text happens to run out, and it
+     landed mid-phrase ('Collection Rate and A/R Health | Score are two
+     different...'), which reads as a rendering fault rather than a column.
+
+     A grid of whole blocks instead: `auto-fit` fits as many equal 1fr tracks
+     as the row holds and collapses the empty ones, so three items spread
+     evenly across a wide monitor, reflow to two on a laptop and stack on a
+     phone — and each column is one complete instruction with a sentence that
+     starts and ends inside it. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(28ch, 1fr));
+  gap: var(--sp-3) var(--sp-8);
+  align-items: start;
+}
+/* A grid track refuses to shrink below its content's minimum width, so one
+   long unbroken token would push a column wider than its share and unbalance
+   the row. This lets the text wrap instead. */
+.ug-lead-item { min-width: 0; }
+.ug-lead-item b { color: var(--accent); font-weight: 800; }
+.ug-lead strong { color: var(--text); }
+
+/* ── SEARCH SUGGESTIONS ──────────────────────────────────────────────────────
+   The matches, under the box that asked for them. The page below already
+   filters to the same set, but only once the reader looks away from what they
+   are typing and scrolls — and it never says WHY a term matched. "AR" is a
+   headword in AR Open, a term inside the Collection Rate formula, and a tab
+   name for half a dozen others; those are three different reasons to click,
+   and the panel labels each one.
+
+   Anchored to the input rather than to the page, so it stays put while the
+   list behind it re-renders on every keystroke. */
+/* WIDER THAN THE HOUSE SEARCH BOX, because of what is typed into it: the
+   other tables are searched for a number or a surname, this one for a term,
+   a formula or a tab name, and its own placeholder — "Search a term, a
+   formula, or a tab" — did not fit the field it was sitting in. */
+.ug-search { position: relative; }
+.ug-search .tbl-search { width: 340px; max-width: 100%; }
+.ug-sug {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+  /* Wider than the 240px box it hangs from — a term, its category and the
+     screens it appears on do not fit the width of the field, and this panel
+     exists to show exactly those. Capped against the viewport so it cannot
+     run off the right edge on a laptop. */
+  width: min(560px, calc(100vw - 48px));
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: 10px; box-shadow: 0 18px 40px -18px rgba(20,36,58,.45);
+  overflow: hidden;
+}
+.ug-sug-head {
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--panel-2); color: var(--muted);
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+}
+/* EVERY MATCH IS LISTED, so the panel scrolls rather than truncating: a cut
+   list leaves the reader wondering what was left out of a glossary they came
+   to precisely because they did not know the word they wanted. */
+.ug-sug-list { list-style: none; margin: 0; padding: 4px; max-height: 58vh; overflow-y: auto; }
+.ug-sug-opt {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 9px; border-radius: 7px; cursor: pointer;
+}
+/* ONE HIGHLIGHT, shared by the mouse and the keyboard: `on` is set on hover
+   and by the arrow keys alike, so the two can never both look current. */
+.ug-sug-opt.on { background: var(--accent-soft-2); box-shadow: inset 2px 0 0 var(--accent); }
+.ug-sug-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ug-sug-term { font-size: 13px; font-weight: 700; color: var(--text); }
+.ug-sug-f { color: var(--accent); font-weight: 800; font-size: 12px; }
+/* Why this row is in the list, when the headword does not show it. */
+.ug-sug-where { font-size: 10.5px; font-weight: 700; color: var(--muted); font-style: italic; }
+.ug-sug-def {
+  font-size: 12px; color: var(--muted-strong); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* THE NAVIGATION DETAIL: every screen the term appears on, each its own link
+   out of the glossary. Chips rather than a sentence, because they are targets
+   and have to look struck-at-able. */
+.ug-sug-locs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.ug-sug-loc {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 2px 7px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  font-size: 10.5px; text-decoration: none; color: var(--accent);
+}
+.ug-sug-loc:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+.ug-sug-loc b { font-weight: 700; }
+.ug-sug-loc i { font-style: normal; color: var(--muted); }
+.ug-sug-warn { color: var(--warn); font-weight: 800; }
+/* The matched run itself. `mark` is the right element and the wrong colour by
+   default — browsers paint it school-highlighter yellow, which on this palette
+   reads as an error state. */
+.ug-hl { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; font-weight: 800; }
+
+@media (max-width: 640px) {
+  /* The field is full-width on a phone, so the panel is too. */
+  .ug-search { position: static; flex: 1 1 100%; }
+  .ug-search .tbl-search { width: 100%; }
+  .ug-sug { left: 0; right: 0; width: auto; }
+}
+/* ── A–Z index ──────────────────────────────────────────────────────────── */
+.ug-az {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 9px 10px; margin-bottom: 18px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  position: sticky; top: 0; z-index: 3;
+}
+.ug-az a {
+  min-width: 26px; text-align: center;
+  padding: 4px 6px; border-radius: 5px;
+  font-size: 12px; font-weight: 700; color: var(--accent);
+  text-decoration: none; font-variant-numeric: tabular-nums;
+}
+.ug-az a:hover { background: var(--accent-soft); }
+.ug-az a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* THE LETTER YOU ARE IN, FILLED. The bar is a run of twenty identical blue
+   capitals, and a tint at hover weight was not enough to pick one out of them,
+   so the current letter inverts instead: accent ground, white glyph. It is the
+   only filled thing on the bar, which is what makes it findable at a glance.
+
+   Driven by scroll position rather than by the click (see `activeLetter` in
+   UserGuideTab), so it marks the letter being READ. A click is covered for
+   free, because clicking scrolls; scrolling on past that letter moves the mark
+   rather than leaving it behind on a letter the reader has left.
+
+   `:hover` is restated alongside it: without that, pointing at the current
+   letter swapped the fill for the pale hover wash and the mark appeared to
+   vanish under the cursor. */
+.ug-az a[aria-current='true'],
+.ug-az a[aria-current='true']:hover {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 1px 5px -1px rgba(10,54,159,.55);
+}
+/* Pushed to the far end of the bar: it acts on the whole list, not on any one
+   letter, so it should not sit in the run of them. */
+.ug-az-all {
+  margin-left: auto; border: 1px solid var(--border);
+  background: var(--panel); color: var(--accent);
+  font: inherit; font-size: 11.5px; font-weight: 700;
+  padding: 4px 10px; border-radius: 6px; cursor: pointer;
+}
+.ug-az-all:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+.ug-az-all:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── letter groups ──────────────────────────────────────────────────────── */
+.ug-letter-block { margin-bottom: 22px; }
+.ug-letter {
+  margin: 0 0 8px; font-size: 13px; font-weight: 800;
+  letter-spacing: .12em; color: var(--muted);
+  border-bottom: 2px solid var(--border-strong); padding-bottom: 5px;
+  /* Cleared by the sticky index above, so an anchor jump does not park the
+     heading underneath it. */
+  scroll-margin-top: 64px;
+}
+
+.ug-rows { display: flex; flex-direction: column; gap: 1px; background: var(--border); }
+
+/* ── THE COLLAPSED LINE ─────────────────────────────────────────────────────
+   Each entry is a <details>. Closed, it is exactly ONE row tall and still holds
+   the three-column track the page was aligned on — name, one-line meaning, what
+   is inside — so the reader can scan a column of forty terms and open only the
+   ones they want. Collapsing to bare headwords would have been tidier and much
+   less useful.
+
+   The row is the click target, so `summary` carries the grid rather than a
+   wrapper inside it. */
+.ug-row { background: var(--panel); }
+.ug-row:first-child { border-radius: 8px 8px 0 0; }
+.ug-row:last-child { border-radius: 0 0 8px 8px; }
+
+.ug-sum {
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr) auto 18px;
+  gap: 0 22px;
+  align-items: center;
+  padding: 11px 16px;
+  cursor: pointer;
+  list-style: none;                 /* the default triangle, gone */
+  transition: background 120ms ease;
+}
+.ug-sum::-webkit-details-marker { display: none; }
+.ug-sum:hover { background: var(--panel-2); }
+/* The focus ring goes on the summary, which IS the button here. */
+.ug-sum:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+.ug-row[open] > .ug-sum { background: var(--panel-2); }
+
+.ug-sum-term { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ug-term {
+  margin: 0; font-size: 14px; font-weight: 800; color: var(--text);
+  letter-spacing: -0.01em; line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ug-cat {
+  font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft);
+  padding: 2px 6px; border-radius: 999px; white-space: nowrap; flex: none;
+}
+
+/* ONE LINE, ALWAYS. A definition that wrapped would make some closed rows two
+   lines and others one, and the column of terms would stop being scannable —
+   which is the only thing the collapsed state is for. */
+.ug-sum-def {
+  font-size: 12.5px; color: var(--muted); line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ug-row[open] > .ug-sum > .ug-sum-def { color: var(--muted-strong); }
+
+.ug-sum-meta { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+/* A one-glyph mark for "this one has a formula" — the reason most people open a
+   row, so it is worth knowing before you do. */
+.ug-sum-basis {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; font-weight: 700; font-style: italic;
+  color: var(--accent); background: var(--accent-soft);
+  border-radius: 4px; padding: 1px 6px;
+}
+.ug-sum-n { font-size: 10.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.ug-chev {
+  font-size: 11px; color: var(--muted); text-align: center;
+  transition: transform 160ms ease;
+}
+.ug-row[open] > .ug-sum > .ug-chev { transform: rotate(180deg); }
+
+/* ── THE EXPANDED BODY ──────────────────────────────────────────────────────
+   Indented to the second column so it lines up under the definition it belongs
+   to, rather than starting back at the term. */
+.ug-body {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 2px 16px 16px calc(216px + 22px + 16px);
+}
+.ug-body > .ug-aka { font-size: 11.5px; color: var(--muted); font-style: italic; margin: 0; }
+
+/* The formula. Tinted and monospaced so it reads as arithmetic rather than as
+   another sentence — this is the block an owner opens a row for, which is also
+   why the collapsed line flags its presence with a marker. */
+.ug-basis {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 11px 9px;
+}
+.ug-basis-h {
+  display: block; font-size: 9.5px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 4px;
+}
+.ug-basis-body {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px; line-height: 1.65; color: var(--text);
+  white-space: pre-wrap;      /* keep the authored line breaks, still wrap */
+  overflow-wrap: anywhere;    /* a long formula must never widen the row */
+}
+
+.ug-note {
+  margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted);
+  border-left: 2px solid var(--border-strong); padding-left: 10px; max-width: 74ch;
+}
+
+/* ── column 3: where it appears ─────────────────────────────────────────── */
+.ug-locs { min-width: 0; }
+.ug-locs-h {
+  display: block; font-size: 9.5px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
+}
+.ug-locs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+
+.ug-loc {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 6px 9px; border-radius: 6px;
+  background: var(--panel-2); text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.ug-loc:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+.ug-loc:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The tab is the destination and reads as the link; the section says where to
+   look once you land, so it is quieter. */
+.ug-loc-tab { font-size: 12px; font-weight: 700; color: var(--accent); }
+.ug-loc-sec { font-size: 11px; color: var(--muted); line-height: 1.4; }
+
+.ug-differs {
+  display: block; font-size: 11px; color: var(--warn);
+  background: var(--warn-soft); border-radius: 5px;
+  padding: 5px 8px; margin-top: 3px; line-height: 1.45;
+}
+
+.ug-hidden {
+  margin-top: 16px; font-size: 12.5px; color: var(--muted);
+  border-top: 1px solid var(--border); padding-top: 12px; max-width: 80ch;
+}
+
+/* ── narrower viewports ─────────────────────────────────────────────────── */
+/* The collapsed line drops columns as it narrows, in the order they can be
+   spared: first the screen count and the formula marker (both repeated in the
+   body a click away), then the one-line definition — the term itself is the
+   last thing to go, because it is what the reader is scanning for. */
+@media (max-width: 1180px) {
+  .ug-sum { grid-template-columns: 200px minmax(0, 1fr) auto 18px; gap: 0 16px; }
+  .ug-body { padding-left: calc(200px + 16px + 16px); }
+}
+@media (max-width: 820px) {
+  .ug-sum { grid-template-columns: minmax(0, 1fr) auto 18px; }
+  .ug-sum-def { display: none; }
+  /* No term column left to line up under, so the body returns to the edge. */
+  .ug-body { padding-left: 16px; }
+}
+@media (max-width: 560px) {
+  .ug-sum { grid-template-columns: minmax(0, 1fr) 18px; padding: 10px 13px; }
+  .ug-sum-meta { display: none; }
+  .ug-body { padding: 2px 13px 14px; }
+  .ug-az { position: static; }
 }

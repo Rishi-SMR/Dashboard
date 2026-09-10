@@ -63,8 +63,16 @@ const KEVIN_HIDDEN: string[] = [
   // breakdown on his own board, so the tile it totals has to be visible too.
   // Leaving the tile hidden would put a breakdown on the page with no headline
   // figure to reconcile it against.
-  'overview.topVendors',        // duplicated on the Vendors tab
-  'overview.poSpendTop5',       // duplicate of Top Vendors
+  // 'overview.topVendors' is GONE, not hidden: the Top Vendors (by Spend) card
+  // was removed from OverviewCharts entirely, so there is no longer a panel for
+  // this id to switch off. Listing a dead id here would read as a panel someone
+  // is still choosing to hide.
+  //
+  // 'overview.poSpendTop5' stays hidden for this board, but its reason has
+  // changed: it was "duplicate of Top Vendors", and Top Vendors no longer
+  // exists. It is now simply a vendor-spend card this board does not want —
+  // and on every OTHER board it is the only one left.
+  'overview.poSpendTop5',
   // Reverses the original brief, which kept this as a "data-trust signal".
   // Dropped on request. NOTE: it is only the Overview PREVIEW that goes — the
   // Exceptions tab itself is untouched and still reachable from the nav and the

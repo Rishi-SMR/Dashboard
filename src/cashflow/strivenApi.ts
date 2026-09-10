@@ -59,7 +59,15 @@ export type ItemsResult = { count: number; items: Item[] };
 export type TrendPoint = { month: string; revenue: number; expenses: number; net: number; invoices?: number; bills?: number };
 export type TrendsResult = { series: TrendPoint[] };
 
-export type Payment = { id: number; ref: string; customer: string; date: string | null; amount: number; status: string };
+/**
+ * `patient`     first initial + surname, or '' — never a full first name.
+ * `outstanding` what this payer still owes across all their open invoices, on
+ *               the same basis the Receivables register reports — so on PI it is
+ *               the unpaid part of the 15% advance, NOT the lien remainder,
+ *               which is no longer counted as a receivable. `0` means settled;
+ *               `null` means the payment carries no customer to ask about.
+ */
+export type Payment = { id: number; ref: string; customer: string; customerId?: number | null; patient?: string; date: string | null; amount: number; outstanding?: number | null; status: string };
 /** `count` at the top level is every payment ever taken; the per-month `count`
  *  is what belongs beside a period-scoped total. */
 export type PaymentsResult = { count: number; total: number; byMonth: { month: string; amount: number; count?: number }[]; recent: Payment[]; phiMasked: boolean };
@@ -98,11 +106,33 @@ export type SoDetail = {
 
 export type Aging = { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
 
-/** `open` is what the CASE still owes, not what the invoice does — the two
- *  differ on PI, where Striven invoices only the 15% lien advance. See
- *  arOwedOf() in _striven.js; `ledgerOpen` keeps Striven's own figure beside it. */
-export type ArInvoice = { id: number; number: string; customer: string; customerId: number | null; payer: string; dueDate: string | null; total: number; open: number; vertical?: string; ledgerOpen?: number; currency: string; memo: string };
-export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number };
+/** `patient` is FIRST INITIAL + SURNAME ("D. Butler") or '' — never a full
+ *  first name, never a DOB. `customer` stays the de-identified PT-<id>. */
+/**
+ * `total`      what THIS invoice billed. On PI that is the 15% lien advance —
+ *              Striven raises the advance as the invoice on 50 of 57 PI rows.
+ * `open`       WHAT IS COLLECTABLE. On PI that is the unpaid part of the
+ *              advance, capped at 15% of the order; the 85% lien remainder is
+ *              exposure, not a receivable, and is no longer counted. It used to
+ *              be, which is why this field once EXCEEDED `total` on PI rows —
+ *              it no longer can. See arOwedOf() in _striven.js.
+ * `ledgerOpen` Striven's own balance for the invoice, kept beside `open` for
+ *              anyone reconciling against Striven. Off PI the two are equal;
+ *              on PI they differ only where the cap bites.
+ * `caseValue`  the order behind a PI invoice — the exposure `open` excludes.
+ */
+export type ArInvoice = { id: number; number: string; customer: string; customerId: number | null; patient?: string; payer: string; dueDate: string | null; total: number; open: number; vertical?: string; ledgerOpen?: number; currency: string; memo: string;
+  /** Which rule produced `open`: 'ledger', 'pi-advance-15', or
+   *  'pi-ledger-uncapped' where a PI invoice has no order to cap against. */
+  arBasis?: string;
+  /** The PI case behind this invoice. Deliberately NOT a receivable — only the
+   *  15% advance is — but carried so a screen can show the exposure. */
+  caseValue?: number | null };
+/** A sales order carrying no invoice at all: money that should be billed and
+ *  is not. Never part of `totalOpen` — it is not a receivable until raised. */
+export type ArPendingOrder = { soId: string; ref: string; vertical: string; type: string; rep: string; payer: string; status: string; patient?: string; caseValue: number; expected: number };
+export type ArPending = { count: number; caseValue: number; expected: number; pi: { count: number; caseValue: number; expected: number }; orders: ArPendingOrder[] };
+export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number; pending?: ArPending | null };
 
 export type ApBill = { id: number; number: string; vendor: string; vendorId: number | null; dueDate: string | null; total: number; open: number; currency: string };
 export type ApResult = { totalOpen: number; count: number; aging: Aging; bills: ApBill[] };

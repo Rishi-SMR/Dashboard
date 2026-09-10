@@ -257,11 +257,68 @@ export function LegendDots({ items }: { items: { name: string; color: string }[]
 
 // Monthly bars (up to 2 series) + an overlay line (e.g. net cash / profit),
 // the executive "flows + running result" combo chart.
+/**
+ * ONE PERIOD IS NOT A TIME SERIES, and drawing it as one is what made this card
+ * look broken.
+ *
+ * With a single month selected, the monthly chart below has nothing to trend:
+ * two 22px bars strand themselves in a 400px plot, the axis reserves room for
+ * twelve categories and fills one, and the LINE — which needs two points to be a
+ * line — renders as a single unexplained dot. Every mark on it was either empty
+ * space or a mark that could not do its job.
+ *
+ * SO THE ONE-PERIOD CASE GETS ITS OWN VIEW, and it answers a question the
+ * footer cannot: the PROPORTION. "In $5,773, out $1,494" is two numbers already
+ * printed three inches below; "26% of what came in went straight back out" is
+ * the shape those numbers make, and it is the reason to draw anything at all.
+ *
+ * Bars are scaled to the LARGER of the two, not to each other's sum, so the
+ * lengths are directly comparable and the smaller one is not crushed to a stub.
+ */
+function OnePeriodSplit({ row, bars, line }: {
+  row: Record<string, number | string>;
+  bars: { key: string; name: string; color: string }[];
+  line: { key: string; name: string; color: string };
+}) {
+  const vals = bars.map((b) => ({ ...b, value: Number(row[b.key]) || 0 }));
+  const top = Math.max(...vals.map((v) => v.value), 0);
+  const net = Number(row[line.key]) || 0;
+  const [inflow, outflow] = vals;
+  // Share of the INFLOW that left again. Meaningless without an inflow, so it is
+  // simply not stated then rather than printed as 0% or NaN.
+  const outPct = inflow && inflow.value > 0 && outflow ? Math.round((outflow.value / inflow.value) * 100) : null;
+  return (
+    <div className="chart-box one-period">
+      <div className="op-rows">
+        {vals.map((v) => (
+          <div key={v.key} className="op-row">
+            <span className="op-name">{v.name}</span>
+            <span className="op-track">
+              <span className="op-fill"
+                style={{ width: `${v.value > 0 && top > 0 ? Math.max(1.5, (v.value / top) * 100) : 0}%`, background: v.color }} />
+            </span>
+            <span className="op-val" style={{ color: v.color }}>{formatCurrency(v.value)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="op-net">
+        <span className="op-net-l">{line.name}</span>
+        <b style={{ color: net < 0 ? C.negative : line.color }}>{formatCurrency(net)}</b>
+        {outPct != null && (
+          <em>{outPct}% of {inflow.name.toLowerCase()} went back out</em>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function BarsLine({ data, bars, line }: {
   data: Record<string, number | string>[];
   bars: { key: string; name: string; color: string }[];
   line: { key: string; name: string; color: string };
 }) {
+  // See OnePeriodSplit: a trend of one point is not a trend.
+  if (data.length === 1) return <OnePeriodSplit row={data[0]} bars={bars} line={line} />;
   return (
     <div className="chart-box">
       <ResponsiveContainer width="100%" height="100%">
@@ -271,7 +328,11 @@ export function BarsLine({ data, bars, line }: {
           <YAxis {...axisProps} width={54} tickFormatter={compactMoney} />
           <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.08)' }} formatter={(v: number | string, n: string) => [formatCurrency(Number(v)), n]} />
           {bars.map((b) => (
-            <Bar key={b.key} {...NOANIM} dataKey={b.key} name={b.name} fill={b.color} radius={[4, 4, 0, 0]} maxBarSize={22} />
+            // A FEW MONTHS GET FATTER BARS. `maxBarSize` is a cap, not a width,
+            // so at two or three categories the 22px cap left hairlines adrift in
+            // a wide plot while the category slots either side sat empty.
+            <Bar key={b.key} {...NOANIM} dataKey={b.key} name={b.name} fill={b.color} radius={[4, 4, 0, 0]}
+              maxBarSize={data.length <= 3 ? 46 : data.length <= 6 ? 32 : 22} />
           ))}
           <Line {...NOANIM} type="monotone" dataKey={line.key} name={line.name} stroke={line.color} strokeWidth={2.5} dot={{ r: 3, fill: line.color, strokeWidth: 0 }} />
         </ComposedChart>
@@ -444,8 +505,24 @@ export function AgingBar({ aging, onSelect, money = true }: { aging: Record<stri
 }
 
 // Generic drill modal: dark header + a rows table. Use for chart/row click-throughs.
-export function DrillModal({ title, sub, columns, rows, total, onClose }: {
-  title: string; sub?: string; columns: { key: string; label: string; num?: boolean }[];
+export function DrillModal({ title, sub, summary, columns, rows, total, onClose }: {
+  title: string; sub?: string;
+  /**
+   * A BLOCK ABOVE THE ROWS, for what the list as a whole says.
+   *
+   * The header's `sub` is one line and gets a count and a total; anything with
+   * a shape — a split by programme, an age, a concentration — will not fit in
+   * it. This slot takes that, and it sits at the TOP because a reader who opens
+   * an 84-row dialog should not have to scroll to the end to find out what they
+   * are looking at. The foot's `total` bar answers a different question (what do
+   * these columns add to) and both can be present.
+   *
+   * A ReactNode rather than a data shape: the drills that use it know their own
+   * subject far better than this component can, and `.drill-sum*` in
+   * cashflow.css gives them a house style to build in.
+   */
+  summary?: ReactNode;
+  columns: { key: string; label: string; num?: boolean }[];
   rows: Record<string, ReactNode>[];
   /**
    * COLUMN TOTALS, PINNED TO THE FOOT OF THE DIALOG. Keyed by column; only the
@@ -474,6 +551,7 @@ export function DrillModal({ title, sub, columns, rows, total, onClose }: {
           <button className="drill-close" onClick={onClose} aria-label="Close">×</button>
         </div>
         <div className="drill-body">
+          {summary}
           <div className="section" style={{ margin: 0 }}>
             <div className="table-wrap">
               <table className="data-table">
@@ -559,6 +637,105 @@ export function GaugeRing({ value, max = 100, color, centerValue, centerLabel, h
         <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text)' }}>{centerValue}</div>
         <div style={{ fontSize: 10.5, color: 'var(--muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2, textAlign: 'center' }}>{centerLabel}</div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A RANKED SPEND BAR THAT SURVIVES A LONG TAIL.
+ *
+ * `RankBar` above draws one Recharts bar per row against a shared linear scale,
+ * which is the right thing when the values are of a similar order. PO spend is
+ * not: two vendors carry $52k and $49k and the remaining five sit between $996
+ * and $4k. On a scale that has to reach $52k, those five render as slivers two
+ * or three pixels long — present in the data, absent on screen, and too small
+ * to aim a click at. The chart answered "who is biggest" and nothing else.
+ *
+ * SO THE SCALE IS NOT THE ONLY ENCODING HERE. Every row carries its share of
+ * the total as a figure, which is readable at $996 exactly as it is at $52k,
+ * and the header states the concentration outright rather than leaving it to be
+ * inferred from two long bars.
+ *
+ * THE BAR HAS A FLOOR WIDTH, AND THE FLOOR HAS A COST worth stating. Below 2%
+ * of the largest value every bar draws the same length, so two small vendors
+ * can look equal when one is half the other — on the live book that is EBI at
+ * $1,500 against Wholesale at $996. The floor buys a tail that is visible at
+ * all; the share column is what tells those two apart, which is the reason it
+ * is a figure on every row rather than a tooltip. A floored bar can never read
+ * as LONGER than a genuinely larger one, so the ranking itself stays honest.
+ *
+ * ONE HUE, NOT A RAMP. Every bar is the brand blue. Shading rows by size would
+ * colour them by their RANK, which breaks the moment a filter reorders the list
+ * — the survivors would repaint and the reader would think the data changed.
+ * Magnitude is the bar's job; colour carries no information here, and the value
+ * and share labels wear text tokens rather than the series colour.
+ *
+ * Plain HTML rather than Recharts: the floor width, the full vendor name and
+ * the two-part label are all trivial in flow layout and all fights inside a
+ * cartesian chart.
+ *
+ * @param total The TRUE denominator for the share column — pass the full spend,
+ *   not the sum of `data`, or a top-N list will report shares that add to 100%
+ *   while excluding everything below the cut.
+ */
+export function ShareRankBar({ data, total, onSelect, countOf }: {
+  data: { name: string; value: number }[];
+  total?: number;
+  onSelect?: (name: string) => void;
+  countOf?: (name: string) => number | null;
+}) {
+  const rows = data.filter((d) => d.value > 0);
+  const max = Math.max(1, ...rows.map((d) => d.value));
+  const denom = total && total > 0 ? total : rows.reduce((s, d) => s + d.value, 0);
+  const pct = (v: number) => (denom > 0 ? (v / denom) * 100 : 0);
+  // How few vendors it takes to reach 80% of spend — the concentration figure
+  // the header reports. Counted on the rows shown, against the true total.
+  let acc = 0; let k = 0;
+  for (const r of rows) { if (acc / denom >= 0.8) break; acc += r.value; k += 1; }
+  const topShare = rows.slice(0, k).reduce((s, d) => s + d.value, 0);
+
+  if (!rows.length) return <div className="muted-note" style={{ margin: 0 }}>No spend to rank.</div>;
+
+  return (
+    <div className="srb">
+      <div className="srb-head">
+        <span className="srb-total">{formatCurrency(denom)}</span>
+        <span className="srb-head-sub">
+          across {rows.length} vendor{rows.length === 1 ? '' : 's'}
+          {k > 0 && k < rows.length && <>
+            {' · '}<b>top {k}</b> carr{k === 1 ? 'ies' : 'y'} <b>{Math.round(pct(topShare))}%</b>
+          </>}
+        </span>
+      </div>
+      <ol className="srb-list">
+        {rows.map((d) => {
+          const share = pct(d.value);
+          const n = countOf?.(d.name) ?? null;
+          const label = `${d.name}: ${formatCurrency(d.value)}, ${share.toFixed(1)}% of spend${n != null ? `, ${n} purchase order${n === 1 ? '' : 's'}` : ''}`;
+          return (
+            <li key={d.name}>
+              <div
+                className={`srb-row${onSelect ? ' is-clickable' : ''}`}
+                role={onSelect ? 'button' : undefined}
+                tabIndex={onSelect ? 0 : undefined}
+                aria-label={onSelect ? `${label} — open details` : label}
+                title={label}
+                onClick={onSelect ? () => onSelect(d.name) : undefined}
+                onKeyDown={onSelect ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(d.name); } } : undefined}
+              >
+                <span className="srb-name">{d.name}</span>
+                <span className="srb-track">
+                  {/* The floor keeps the tail visible. It is a minimum, not a
+                      scale change: max(proportion, floor). */}
+                  <span className="srb-fill" style={{ width: `max(2%, ${(d.value / max) * 100}%)` }} />
+                </span>
+                <span className="srb-val">{compactMoney(d.value)}</span>
+                <span className="srb-share">{share < 1 ? '<1' : Math.round(share)}%</span>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
