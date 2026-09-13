@@ -99,7 +99,7 @@ async function resolveUsers() {
   const now = Date.now();
   if (_usersCache.users && now - _usersCache.at < 60_000) return _usersCache.users;
   const users = (await readUsersTable()) ?? [];
-  if (!users.length) console.error('[auth] dashboard_users empty or unreachable — refusing all logins (fail closed)');
+  if (!users.length) console.error('[auth] dashboard_users empty or unreachable - refusing all logins (fail closed)');
   _usersCache = { at: now, users };
   return users;
 }
@@ -437,7 +437,7 @@ async function searchAll(endpoint, filter = {}, cap = 2000) {
     if (data.length < pageSize || rows.length >= total || rows.length >= cap) break;
   }
   // Surface (don't silently swallow) a cap-hit so undercounting is visible in logs.
-  if (rows.length >= cap) console.warn(`[searchAll] ${endpoint}: hit ${cap}-row cap — dataset may be truncated. Raise the cap if this business exceeds it.`);
+  if (rows.length >= cap) console.warn(`[searchAll] ${endpoint}: hit ${cap}-row cap - dataset may be truncated. Raise the cap if this business exceeds it.`);
   return rows;
 }
 
@@ -907,7 +907,7 @@ export async function refreshReportItems({ budgetMs = 20_000, maxOrders = 400, l
   // Never bootstrap from nothing: writing a fresh blob here would replace a
   // report the generator builds from EVERY order with one built from whatever
   // happened to be missing, and silently drop the patient aggregates.
-  if (!blob) return { skipped: 'report_patient_items is empty — run scripts/gen-reports.mjs first' };
+  if (!blob) return { skipped: 'report_patient_items is empty - run scripts/gen-reports.mjs first' };
 
   const orders = [...(blob.orders || [])];
   const patients = blob.patients || [];
@@ -942,7 +942,7 @@ export async function refreshReportItems({ budgetMs = 20_000, maxOrders = 400, l
       // eslint-disable-next-line no-await-in-loop
       try { d = await striven('GET', `/v1/sales-orders/${so.id}`); } catch { /* retry */ }
     }
-    if (!d) { failed += 1; log?.(`  FAIL  SO ${so.id} — detail unavailable after 3 attempts`); continue; }
+    if (!d) { failed += 1; log?.(`  FAIL  SO ${so.id} - detail unavailable after 3 attempts`); continue; }
     if (isDemoType(d.customer?.name)) { skippedDemo += 1; continue; }
 
     const custRef = d.customer?.id ? `PT-${d.customer.id}` : '(unassigned)';
@@ -1070,7 +1070,7 @@ export async function refreshDemoItems({ budgetMs = 12_000, maxOrders = 200, log
     orders.sort((a, b) => a.soId - b.soId);
     await sbCacheWrite('report_demo_items', {
       orders, orderCount: orders.length, generatedAt: new Date().toISOString(),
-      note: 'DEMO / test sales orders and their device lines. Read ONLY by the Units by Device card — deliberately absent from report_patient_items, which feeds commission and the leaderboard. No patient identifier is stored.',
+      note: 'DEMO / test sales orders and their device lines. Read ONLY by the Units by Device card - deliberately absent from report_patient_items, which feeds commission and the leaderboard. No patient identifier is stored.',
     });
   }
   return {
@@ -1423,7 +1423,12 @@ function arBasisOf({ vertical, orderTotal }) {
  * invoiced, it is finished, and listing it as an action would put permanent
  * red on a screen nobody can ever clear.
  */
-async function getArPending() {
+/**
+ * @param billedSoIds  Orders an invoice in the live book resolves to. See the
+ *   "THE CHAIN GOES STALE" note below: this is the correction for it, and it can
+ *   only ever REMOVE an order from the list.
+ */
+async function getArPending(billedSoIds = new Set()) {
   const chain = (await sbCacheRead('order_chain').catch(() => null))?.data ?? {};
   // WHO THE ORDER IS FOR. These rows sit in the invoice register beside real
   // invoices, which name their patient, and a column that is populated on one
@@ -1434,6 +1439,40 @@ async function getArPending() {
   const orders = [];
   for (const [soId, c] of Object.entries(chain)) {
     if ((c.invoices ?? []).length > 0) continue;                 // already billed
+    /**
+     * THE CHAIN GOES STALE, AND IT GOES STALE IN ONE DIRECTION.
+     *
+     * `order_chain` is derived from the `so_detail` cache, and that cache is
+     * TOPPED UP rather than re-read: an order's detail is fetched once and then
+     * keeps whatever it said. So an order invoiced after its first fetch still
+     * carries `invoices: []` and `invStatus: "No"` forever. SO-229 is the
+     * example — the cache has it "In Progress, not invoiced" while Striven has
+     * it "Completed, Partial" and invoice #251 sits against it for $7,794.00,
+     * exactly 15% of its $51,960.
+     *
+     * Twenty-two PI orders were in that state, and every one of them was being
+     * reported here as "yet to be invoiced" while its advance had already been
+     * raised and, in most cases, collected. On an ACTION LIST that is the
+     * expensive kind of wrong: it sends someone to raise an invoice that exists.
+     * It also made the PI book's four sections contradict each other, counting
+     * the same case as both unbilled and billed.
+     *
+     * THE INVOICE BOOK IS THE FRESHER SOURCE — hours old against a chain that
+     * may never be re-read — so an invoice resolving to this order overrules the
+     * chain's silence. Resolved by getAR from the same two joins it uses for the
+     * case value, chain first and customer reference second.
+     *
+     * IT CAN ONLY EVER REMOVE AN ORDER FROM THIS LIST, which is the safe
+     * direction for both failure modes. A missed exclusion leaves the list as it
+     * was; a wrong one drops an order from an action list — so getAR gates it on
+     * the invoice being no larger than the order, which no genuine mismatch
+     * survives and all twenty-two pass.
+     *
+     * This is a WORKAROUND FOR A STALE CACHE, not a fix for one. The real repair
+     * is re-reading so_detail for orders whose status can still change; until
+     * then this keeps the screens honest.
+     */
+    if (billedSoIds.has(String(soId))) continue;
     if (isVoidStatus(c.status) || isDemoType(c.type)) continue;  // finished, or not real
     const vertical = soClass(c.type);
     const value = round2(Number(c.value || 0));
@@ -1455,6 +1494,160 @@ async function getArPending() {
     expected: round2(list.reduce((s, o) => s + o.expected, 0)),
   });
   return { ...tot(orders), pi: tot(orders.filter((o) => o.vertical === 'PI')), orders };
+}
+
+/**
+ * THE PI BOOK, SPLIT INTO THE FOUR THINGS A LIEN CASE CAN BE.
+ *
+ * A personal-injury case does not have a balance; it has TRANCHES, and the AR
+ * tab could only ever show one of them. Every figure on that page is the unpaid
+ * part of the 15% advance (see arOwedOf), which is one quarter of the story and
+ * the smallest quarter at that. The other three were each visible somewhere
+ * else, or nowhere:
+ *
+ *   1  ADVANCE RECEIVED     the 15% is banked. INVISIBLE on the AR tab, because
+ *                           getAR drops any invoice with nothing left open — a
+ *                           collected advance leaves no balance, so the rows
+ *                           that represent the programme WORKING were the only
+ *                           ones the page could not show.
+ *   2  ADVANCE OUTSTANDING  the 15% was raised and has not arrived. This is the
+ *                           receivable, and the one tranche AR already reported.
+ *   3  NOT INVOICED         no invoice exists at all — getArPending() above.
+ *   4  CASE BALANCE         the 85% that only bills when the case settles. Not
+ *                           a receivable and never counted as one, but it is
+ *                           the largest number on the book and a screen that
+ *                           omits it describes a business a sixth of its size.
+ *
+ * THE FOUR PARTITION THE MONEY, which is the property that makes them worth
+ * shipping as one structure rather than four unrelated filters:
+ *
+ *     advanceReceived + advanceOpen + remainder  ===  caseValue
+ *
+ * on every invoiced row, and (3) is the same arithmetic over orders that have
+ * no invoice yet. So the sections can be read against each other and against
+ * the programme total without a reconciliation step.
+ *
+ * ROWS MAY APPEAR IN MORE THAN ONE SECTION; the MONEY never does. A part-paid
+ * advance is genuinely both received and outstanding, for different amounts,
+ * and listing it in both is the honest answer — the alternative is picking one
+ * and hiding the other half of the row. Nothing in the book is part-paid today.
+ *
+ * WHY IT IS NOT `advanceIn` (ArSheetTab's test: is the invoice settled?). That
+ * test cannot see a part-payment and says so in its own comment; it was right
+ * for a status pill, which has to choose one word. Splitting money does not
+ * have to choose, so this works off the amounts directly and the blind spot
+ * does not carry over.
+ */
+export function piBookOf(rows, orderByInv = {}) {
+  const out = [];
+  for (const i of rows) {
+    if (i.vertical !== 'PI') continue;
+    const invoiced = round2(Number(i.total) || 0);
+    /**
+     * IS THERE A CASE BEHIND THIS INVOICE AT ALL?
+     *
+     * `caseValue` is null where the invoice joins to no sales order — about one
+     * PI invoice in five. Without an order there is no case value, and the only
+     * honest reading is that the invoice IS the bill: it is billed in full, it
+     * has no advance tranche, and nothing rides behind it. Inventing a gross by
+     * dividing by 0.15 would put an 85% lien on the book that no order supports.
+     *
+     * SO THE 15% RULE APPLIES ONLY TO JOINED ROWS. This is also what keeps
+     * section 2 tying to the AR Open tile on the same page: arOwedOf() caps at
+     * 15% only where it has an order to cap against and lets the ledger balance
+     * stand otherwise, and the two must not report different receivables for
+     * one invoice one panel apart.
+     */
+    const joined = Number.isFinite(i.caseValue) && i.caseValue > 0;
+    const caseValue = joined ? round2(i.caseValue) : invoiced;
+    if (!(caseValue > 0.005)) continue;        // billed nothing: no tranche to report
+    /** Banked against this invoice — cash or an applied credit, the ledger does
+     *  not distinguish and neither does the lien. */
+    const received = round2(Math.max(0, invoiced - (Number(i.ledgerOpen) || 0)));
+    /**
+     * THE ADVANCE: 15% of the case, never more than was invoiced, never less
+     * than has demonstrably arrived.
+     *
+     * CAPPED, NOT MULTIPLIED, for the reason arOwedOf sets out at length:
+     * Striven already raises the advance AS the invoice on most PI rows, so
+     * multiplying those by 0.15 a second time would report 2.25% of the case.
+     * The cap is what holds the handful billed at the full price to the same
+     * 15% the rest are billed at.
+     *
+     * FLOORED AT WHAT WAS RECEIVED, which is the one guard the rule needs.
+     * Two rows in the live book are settled for more than 15% of their order;
+     * reporting those at the cap would put more in section 1 than section 1's
+     * own definition allows, and money in the bank outranks a projection.
+     * Mirrors piAdvanceOf() in ArSheetTab.
+     *
+     * WHERE THIS PARTS FROM arOwedOf, and it is one case that does not exist:
+     * an invoice booked at the FULL case price and then PART paid. This reports
+     * the advance net of what arrived (the advance is genuinely that much closer
+     * to settled); arOwedOf caps the remaining ledger balance and would still
+     * read the whole 15%. Nothing in the live book is part-paid, and when one
+     * appears this is the figure that answers "how much of the advance is left".
+     */
+    const advance = joined
+      ? round2(Math.min(invoiced, Math.max(caseValue * PI_AR_RATE, received)))
+      : invoiced;
+    const advanceReceived = round2(Math.min(received, advance));
+    const advanceOpen = round2(Math.max(0, advance - advanceReceived));
+    const remainder = round2(Math.max(0, caseValue - advance));
+    const ord = orderByInv[i.number] || null;
+    out.push({
+      id: i.id, number: i.number,
+      soId: ord ? ord.soId : null, ref: ord ? ord.ref : '',
+      patient: i.patient || '', payer: i.payer || '', rep: (ord && ord.rep) || '',
+      dueDate: i.dueDate ?? null,
+      /** Whether `caseValue` is the ORDER or the invoice standing in for it —
+       *  the sections say so per row, because a case value that is really an
+       *  invoice total has no 85% behind it and the reader should know which
+       *  rows those are rather than wondering why their remainder is zero. */
+      joined,
+      /**
+       * STRIVEN BILLED MORE THAN THE LIEN RATE ALLOWS — the invoice is above
+       * 15% of the order behind it.
+       *
+       * Either it is the whole bill rather than the advance, or it is matched
+       * to the wrong sales order; a row cannot say which, which is exactly why
+       * it is marked rather than quietly averaged into a section total. Same
+       * test as advanceOverRate() in ArSheetTab, and a cent of tolerance for
+       * rounding. Only meaningful on a joined row: without an order there is no
+       * rate to be over.
+       */
+      overRate: joined && invoiced > round2(caseValue * PI_AR_RATE) + 0.01,
+      caseValue, invoiced, advance, advanceReceived, advanceOpen, remainder,
+    });
+  }
+  /** A section: its rows sorted by its OWN figure, and the totals under them.
+   *  `amount` is whichever tranche the section is about; `caseValue` is the
+   *  exposure those same cases carry, which is the context the panel needs and
+   *  is deliberately not summed into any receivable. */
+  const section = (key) => {
+    const list = out.filter((r) => r[key] > 0.005).sort((a, b) => b[key] - a[key]);
+    return {
+      count: list.length,
+      amount: round2(list.reduce((s, r) => s + r[key], 0)),
+      caseValue: round2(list.reduce((s, r) => s + r.caseValue, 0)),
+      invoices: list,
+    };
+  };
+  return {
+    received: section('advanceReceived'),
+    awaiting: section('advanceOpen'),
+    balance: section('remainder'),
+    /** The whole invoiced PI book, so a reader can check the three sections
+     *  close against it rather than taking it on trust. */
+    totals: {
+      count: out.length,
+      caseValue: round2(out.reduce((s, r) => s + r.caseValue, 0)),
+      invoiced: round2(out.reduce((s, r) => s + r.invoiced, 0)),
+      advance: round2(out.reduce((s, r) => s + r.advance, 0)),
+      advanceReceived: round2(out.reduce((s, r) => s + r.advanceReceived, 0)),
+      advanceOpen: round2(out.reduce((s, r) => s + r.advanceOpen, 0)),
+      remainder: round2(out.reduce((s, r) => s + r.remainder, 0)),
+    },
+  };
 }
 
 async function getAR() {
@@ -1486,8 +1679,44 @@ async function getAR() {
   // own drills were left with the PT-<id>, so the same invoice read "D. Butler"
   // on one screen and "PT-385" on the other. Same joins, one answer.
   const patMap = await invoicePatientMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
+  // The order behind each invoice — reference, id and rep — so the PI book's
+  // sections can name their cases the way the uninvoiced-orders panel beside
+  // them does. Never fatal: without it those rows lose three display columns
+  // and keep every figure.
+  const ordMap = await invoiceOrderMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
+  /**
+   * RESOLVED ONCE, HERE, so the order a row is NAMED after is the order its
+   * `caseValue` was taken from. Both resolve chain-then-custRef off the same
+   * invoice number and customer id; doing it in two places with the same two
+   * lines is what keeps them from drifting into naming different orders.
+   */
+  const orderOf = {};
+  /**
+   * ORDERS AN INVOICE ACTUALLY CLAIMS — the correction for a stale order_chain,
+   * handed to getArPending() below, which carries the full reasoning.
+   *
+   * GATED ON THE INVOICE FITTING INSIDE THE ORDER. The customer-reference join
+   * is patient-level: where someone has more than one order it cannot say which
+   * invoice belongs to which, and this set can only ever strike an order OFF an
+   * action list, so a bad join here quietly hides real work. An invoice larger
+   * than the order it claims is not an invoice against that order, whatever the
+   * join says. Every one of the twenty-two this is for passes — each is struck
+   * at exactly 15.00% of the order it names.
+   */
+  const billedSoIds = new Set();
+  for (const r of netRows) {
+    const no = String(r.txnNumber ?? r.id);
+    const ord = ordMap.byInvoice[no] || ordMap.byCustRef.get(`PT-${r.customer?.id}`) || null;
+    if (!ord) continue;
+    orderOf[no] = ord;
+    const orderTotal = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
+    const billed = Number(r.invoiceTotal ?? 0);
+    if (Number.isFinite(orderTotal) && orderTotal > 0 && billed > 0 && billed <= round2(orderTotal) + 0.01) {
+      billedSoIds.add(String(ord.soId));
+    }
+  }
 
-  const invoices = netRows.map((r) => {
+  const allRows = netRows.map((r) => {
     const no = String(r.txnNumber ?? r.id);
     const total = round2(Number(r.invoiceTotal ?? 0));
     const vertical = vertMap.byInvoice[no]
@@ -1522,13 +1751,23 @@ async function getAR() {
       caseValue: vertical === 'PI' && Number.isFinite(orderTotal) && orderTotal > 0 ? round2(Number(orderTotal)) : null,
       currency: r.currency?.currencyISOCode ?? 'USD',
     };
-  }).filter((i) => i.open > 0.005);
+  });
+  /**
+   * THE REGISTER STILL CARRIES ONLY WHAT IS OWED, and that filter has to stay:
+   * `count` is the "Open Invoices" tile, `aging` buckets what is outstanding,
+   * and letting settled invoices into either would restate both.
+   *
+   * But the rows it drops are exactly the ones the PI book needs — an advance
+   * that has been collected leaves no balance — so the split is taken off
+   * `allRows`, above the filter, rather than off this list.
+   */
+  const invoices = allRows.filter((i) => i.open > 0.005);
   const totalOpen = round2(invoices.reduce((s, i) => s + i.open, 0));
   const aging = bucketAging(invoices, 'dueDate', 'open');
   for (const k of Object.keys(aging)) aging[k] = round2(aging[k]);
   // Never lets AR fail: the chain is one cache away and the register above does
   // not depend on it.
-  const pending = await getArPending().catch(() => null);
+  const pending = await getArPending(billedSoIds).catch(() => null);
   return {
     totalOpen, count: invoices.length, aging,
     unappliedCredits, voidedExcluded,
@@ -1537,6 +1776,17 @@ async function getAR() {
      *  forecast into the ledger total is how a forecast stops being visible as
      *  one. The UI carries it as its own figure. */
     pending,
+    /**
+     * THE PI LIEN, IN ITS FOUR TRANCHES — see piBookOf(). Advance received,
+     * advance outstanding and the 85% case balance; `pending.pi` above is the
+     * fourth, the orders that carry no invoice at all.
+     *
+     * NONE OF IT IS ADDED INTO `totalOpen`. Section 2 is already there (it is
+     * the receivable, reported per-invoice in `invoices`); sections 1 and 4 are
+     * money that has arrived and money that is not owed yet, and folding either
+     * into an AR total is how an AR total stops meaning anything.
+     */
+    piBook: piBookOf(allRows, orderOf),
     invoices: invoices.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')),
   };
 }
@@ -1625,7 +1875,7 @@ async function getAccounts() {
     count: accounts.length,
     accounts,
     balancesAvailable: false,
-    note: "Striven's API does not expose GL account balances — running balances live only inside Striven's Report Builder. Shown here is the complete chart of accounts with every field the API returns.",
+    note: "Striven's API does not expose GL account balances - running balances live only inside Striven's Report Builder. Shown here is the complete chart of accounts with every field the API returns.",
   };
 }
 /**
@@ -1868,6 +2118,68 @@ async function invoicePayerMap() {
     for (const inv of (o.invoices || [])) { const num = String(inv.ref || '').replace(/^#/, ''); if (num) out[num] = payer; }
   }
   return out;
+}
+
+/**
+ * INVOICE → THE SALES ORDER BEHIND IT: its reference, its id and its rep.
+ *
+ * The other three joins off `order_chain` each pull one field (payer, value,
+ * programme) because that is all their caller needed. The PI book needs the
+ * order's IDENTITY as well: its sections sit beside the uninvoiced-orders panel,
+ * which lists orders by SO reference and names the rep who sold them, and a
+ * neighbouring table that could only say "#241" would be describing the same
+ * cases in a vocabulary the panel above it does not use.
+ *
+ * `soId` rides along because the reference alone is not clickable — SoLink needs
+ * the Striven id to build the deep link.
+ *
+ * TWO PATHS, AND THEY ARE invoiceOrderValueMap's OWN TWO. The chain reaches only
+ * the invoices Striven has linked to their order; the patient-items report
+ * reaches the rest through the customer reference. Built off the chain alone
+ * this map missed 22 of the 78 PI invoices — and it missed them where
+ * `caseValue` did NOT, because that figure comes from the value map's custRef
+ * fallback. The section would then have printed a case value for a case it could
+ * not name, which reads as a bug in the row rather than a gap in the join.
+ *
+ * SAME PRECEDENCE AND SAME COLLISION RULE as that map, deliberately: chain
+ * first, custRef second, and where a patient has several orders the last one
+ * wins in both. They must resolve to the SAME order — a reference naming one
+ * order beside a case value taken from another would be worse than no reference
+ * at all.
+ *
+ * THE REPORT CARRIES NO REP, so that comes from the chain, keyed by the order id
+ * the report does carry. An order the chain has never seen keeps its reference
+ * and shows no rep, which is the honest reading: the column is empty because
+ * nothing knows the answer.
+ */
+async function invoiceOrderMap() {
+  const [sb, rc] = await Promise.all([
+    sbCacheRead('order_chain').catch(() => null),
+    sbCacheRead('report_patient_items').catch(() => null),
+  ]);
+  const chain = (sb && sb.data) || {};
+  const byInvoice = {};
+  const repBySo = new Map();
+  for (const [soId, o] of Object.entries(chain)) {
+    repBySo.set(String(soId), cleanRep(o.rep));
+    for (const inv of (o.invoices || [])) {
+      const num = String(inv.ref || '').replace(/^#/, '');
+      if (num) byInvoice[num] = { soId: String(soId), ref: o.ref || `SO-${soId}`, rep: cleanRep(o.rep) };
+    }
+  }
+  const byCustRef = new Map();
+  for (const o of ((rc && rc.data && rc.data.orders) || [])) {
+    if (!o.custRef || o.soId == null) continue;
+    const soId = String(o.soId);
+    // `so`, NEVER `ref`. The report carries both and they are not the same
+    // field: `so` is the reference ("SO-229"), while `ref` is whatever Striven
+    // has in the order's own name — a bare "3" on most rows and the patient's
+    // squashed name ("EPerez") on 22 of them. Reading `ref` put a patient name
+    // in the Order column of 22 PI rows, next to the Patient column carrying the
+    // same name in a different spelling.
+    byCustRef.set(String(o.custRef), { soId, ref: o.so || `SO-${soId}`, rep: repBySo.get(soId) || '' });
+  }
+  return { byInvoice, byCustRef };
 }
 // TriCare/VA checked before PI, and PI is word-bounded, so a type merely
 // containing "pi" (e.g. "Shipping") can't be misbooked as Personal Injury.
@@ -2450,7 +2762,7 @@ async function getExceptions() {
   push({ key: 'unapplied_payments', severity: 'warn', title: 'Unapplied customer payments (excl. PI advances)', count: unapplied.length, value: round2(unapplied.reduce((s, p) => s + Number(p.openBalance || 0), 0)), note: 'VA / other payments should apply one-for-one, so an unapplied balance is a real anomaly. PI advances (15% retainer) always leave a residual by design and are excluded here.', columns: ['ref', 'paid', 'unapplied', 'date'], rows: unapplied.slice(0, 25).map((p) => ({ ref: `PMT-${p.id}`, paid: round2(Number(p.paymentAmount || 0)), unapplied: round2(Number(p.openBalance || 0)), date: (p.paymentDate || p.dateCreated || '').slice(0, 10) })) });
 
   const voidedOpen = invs.filter((r) => Number(r.openBalance || 0) > 0 && isVoidStatus(INVOICE_STATUS[r.id]));
-  push({ key: 'voided_open_invoices', severity: 'high', title: 'Voided invoices still carrying an open balance', count: voidedOpen.length, value: round2(voidedOpen.reduce((s, r) => s + Number(r.openBalance || 0), 0)), note: 'Voided in Striven but still shows open — excluded from AR here. Should be cleared in Striven.', columns: ['ref', 'open', 'status'], rows: voidedOpen.slice(0, 25).map((r) => ({ ref: `#${r.txnNumber || r.id}`, open: round2(Number(r.openBalance || 0)), status: 'Voided' })) });
+  push({ key: 'voided_open_invoices', severity: 'high', title: 'Voided invoices still carrying an open balance', count: voidedOpen.length, value: round2(voidedOpen.reduce((s, r) => s + Number(r.openBalance || 0), 0)), note: 'Voided in Striven but still shows open - excluded from AR here. Should be cleared in Striven.', columns: ['ref', 'open', 'status'], rows: voidedOpen.slice(0, 25).map((r) => ({ ref: `#${r.txnNumber || r.id}`, open: round2(Number(r.openBalance || 0)), status: 'Voided' })) });
 
   // (Per client SOW) Cancelled POs and active POs not linked to a sales order
   // are intentionally NOT flagged here: cancelled POs are correctly excluded
@@ -2468,7 +2780,7 @@ async function getExceptions() {
   // whether a demo order is distorting a figure they are looking at.
   push({ key: 'demo_orders', severity: 'warn', title: 'DEMO / test sales orders', count: demo.length, value: round2(demo.reduce((s, r) => s + Number(det[r.id]?.total || 0), 0)), note: 'Counted in the order book (volume, value and the DEMO vertical) so it matches Striven\'s own list; excluded from PO spend, commission and the rep leaderboard. Should be archived in Striven.', columns: ['ref', 'type', 'value'], rows: demo.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '', value: round2(Number(det[r.id]?.total || 0)) })) });
   const noRep = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && repIsUnassigned(det[r.id]?.rep); });
-  push({ key: 'missing_rep', severity: 'warn', title: 'Sales orders with no sales rep', count: noRep.length, note: 'Rep is blank or "House Account" — needed for rep reporting.', columns: ['ref', 'rep', 'type'], rows: noRep.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, rep: cleanRep(det[r.id]?.rep) || '(none)', type: det[r.id]?.type || '' })) });
+  push({ key: 'missing_rep', severity: 'warn', title: 'Sales orders with no sales rep', count: noRep.length, note: 'Rep is blank or "House Account" - needed for rep reporting.', columns: ['ref', 'rep', 'type'], rows: noRep.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, rep: cleanRep(det[r.id]?.rep) || '(none)', type: det[r.id]?.type || '' })) });
   const unclassified = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && soClass(t) === 'Other'; });
   push({ key: 'missing_pi_va', severity: 'warn', title: 'Sales orders not classified PI / VA / Tri-Care', count: unclassified.length, note: 'Order type does not map to PI, VA or Tri-Care.', columns: ['ref', 'type'], rows: unclassified.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '(none)' })) });
 
@@ -2516,10 +2828,10 @@ async function getExceptions() {
 
   const items = await allItems();
   const noPrice = items.filter((i) => (i.active ?? false) && (Number(i.price || 0) === 0 || Number(i.cost || 0) === 0));
-  push({ key: 'item_price', severity: 'info', title: 'Active items missing a cost or price', count: noPrice.length, note: 'Needed for margin / COGS. Not every missing value is an error.', columns: ['item', 'cost', 'price'], rows: noPrice.slice(0, 25).map((i) => ({ item: i.name || '—', cost: round2(Number(i.cost || 0)), price: round2(Number(i.price || 0)) })) });
+  push({ key: 'item_price', severity: 'info', title: 'Active items missing a cost or price', count: noPrice.length, note: 'Needed for margin / COGS. Not every missing value is an error.', columns: ['item', 'cost', 'price'], rows: noPrice.slice(0, 25).map((i) => ({ item: i.name || '-', cost: round2(Number(i.cost || 0)), price: round2(Number(i.price || 0)) })) });
 
   const totalOpen = groups.reduce((s, g) => s + g.count, 0);
-  return { totalOpen, groups, note: 'Reconciliation with bank/card, QuickBooks, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources — pending client input.' };
+  return { totalOpen, groups, note: 'Reconciliation with bank/card, QuickBooks, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources - pending client input.' };
 }
 async function getTasks() {
   const rows = await allTasks();
@@ -4132,7 +4444,7 @@ async function getAutoSoCandidates() {
     const lastMs = last.date ? new Date(last.date).getTime() : NaN;
     const daysSince = Number.isFinite(lastMs) ? Math.floor((now - lastMs) / 86_400_000) : null;
     candidates.push({
-      patient: key, lastName: last.lastName || '', program: last.program || '—',
+      patient: key, lastName: last.lastName || '', program: last.program || '-',
       orderCount: os.length, lastSo: last.so, lastSoId: last.soId, lastDate: last.date || null, daysSince,
       due: daysSince != null && daysSince >= DUE_DAYS,
       items: (last.items || []).map((i) => ({ item: i.item, qty: i.qty })),
@@ -4281,7 +4593,7 @@ async function trackingList() {
     const st = await shippoTrack(carrier, e.tn);
     return {
       id: e.id, patient: e.patient || '', vendor: e.vendor || '', tn: e.tn, addedAt: e.addedAt || null,
-      carrier, carrierName: CARRIER_NAME[carrier] || (carrier ? carrier.toUpperCase() : '—'),
+      carrier, carrierName: CARRIER_NAME[carrier] || (carrier ? carrier.toUpperCase() : '-'),
       trackingUrl: (CARRIER_URL[carrier] || (() => ''))(e.tn),
       status: st.status, statusRaw: st.raw || '', detail: st.detail || '', eta: st.eta || null,
       statusUpdatedAt: st.updatedAt || null, location: st.location || '', lookupError: st.ok ? null : st.error,
@@ -6329,7 +6641,7 @@ async function readStageStore() {
 export async function setPiStage({ soId, stage: requested, user }) {
   const id = String(soId ?? '').trim();
   if (!id) throw new Error('soId is required');
-  if (!isPiStage(requested)) throw new Error(`unknown stage "${requested}" — expected one of: ${PI_STAGES.join(', ')}`);
+  if (!isPiStage(requested)) throw new Error(`unknown stage "${requested}" - expected one of: ${PI_STAGES.join(', ')}`);
   // Written under the CURRENT name, so a caller still sending an old one does
   // not seed the store with a string the next rename has to alias too.
   const stage = canonicalStage(requested);
@@ -6754,7 +7066,7 @@ async function autoPoProcessSo(soId, mode) {
     const qty = Number(l.quantity ?? l.qty ?? 0);
     if (!itemId || qty <= 0) { entry.unmatched.push({ itemName, qty, reason: 'missing item id or quantity' }); continue; }
     const prev = await previousPoForItem(itemId);
-    if (!prev) { entry.unmatched.push({ itemId, itemName, qty, reason: 'no vendor — this item has no prior purchase order to copy from' }); continue; }
+    if (!prev) { entry.unmatched.push({ itemId, itemName, qty, reason: 'no vendor - this item has no prior purchase order to copy from' }); continue; }
     const vName = prev.po.vendor?.name ?? '';
     const vKey = String(prev.po.vendor?.id ?? vName);
     if (!groups.has(vKey)) groups.set(vKey, { vendor: prev.po.vendor ?? { name: vName }, template: prev.po, items: [] });
@@ -6799,7 +7111,7 @@ async function autoPoCandidates() {
       soId,
       ref: safeRef('SO', soId, r.number ?? r.orderNumber),
       date: r.dateCreated ?? r.orderDate ?? null,
-      kind: testy ? 'DEMO / test' : (type ? soClass(type) : '—'),
+      kind: testy ? 'DEMO / test' : (type ? soClass(type) : '-'),
       testy,
       hasPo: (c.pos ?? []).length > 0,
     };
@@ -6854,7 +7166,7 @@ async function autoPoPreview(soId) {
   const vendorGroups = [...groups.entries()].map(([vendor, items]) => ({ vendor, items }));
   return {
     ok: true, soId: Number(soId), ref: safeRef('SO', soId, soNumber),
-    type: testy ? 'DEMO / test' : (typeName ? soClass(typeName) : '—'), testy,
+    type: testy ? 'DEMO / test' : (typeName ? soClass(typeName) : '-'), testy,
     demoOnly: autoPoDemoOnly(), orderDate: so.orderDate ?? so.dateCreated ?? null,
     lineCount, vendorGroups, pending,
   };
@@ -6900,7 +7212,7 @@ function autoPoEmailHtml(po, poId) {
     const name = esc(l.item?.name ?? l.itemName ?? 'Item');
     const qty = esc(l.quantity ?? l.qty ?? '');
     const unit = l.unitPrice ?? l.price ?? null;
-    const unitStr = unit != null ? `$${Number(unit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+    const unitStr = unit != null ? `$${Number(unit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-';
     return `<tr><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${i + 1}</td><td style="padding:10px;border:1px solid #d6d6d6"><b>${name}</b></td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center;font-weight:bold">${qty}</td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${unitStr}</td></tr>`;
   }).join('');
   return `<div style="margin:0;padding:24px;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#222">
@@ -6937,14 +7249,14 @@ function autoPoEmailHtml(po, poId) {
 // Recipient is passed per-call and is editable in the UI.
 async function autoPoEmail({ poId, to, subject, body }) {
   const key = process.env.RESEND_API_KEY || '';
-  if (!key) return { ok: false, error: 'Email not configured yet — set RESEND_API_KEY (see the Auto-PO email note).' };
+  if (!key) return { ok: false, error: 'Email not configured yet - set RESEND_API_KEY (see the Auto-PO email note).' };
   if (!to || !/.+@.+\..+/.test(String(to))) return { ok: false, error: 'A valid recipient email is required.' };
   let po = {};
   try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal template fallback */ }
   const pdf = await autoPoFetchPdf(poId);
   const from = process.env.AUTO_PO_EMAIL_FROM || 'SMR Auto-PO <onboarding@resend.dev>';
   const html = body || autoPoEmailHtml(po, poId);
-  const subj = subject || `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` — ${po.vendor.name}` : ''}`;
+  const subj = subject || `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` - ${po.vendor.name}` : ''}`;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
@@ -6994,7 +7306,7 @@ async function autoPoSoPos(soId) {
 async function autoPoEmailPreview(poId) {
   let po = {};
   try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal fallback */ }
-  const subject = `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` — ${po.vendor.name}` : ''}`;
+  const subject = `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` - ${po.vendor.name}` : ''}`;
   const vendorEmail = await vendorContactEmail(po.vendor?.name ?? '');
   return { ok: true, poId: Number(poId), subject, vendor: po.vendor?.name ?? '', vendorEmail, html: autoPoEmailHtml(po, poId) };
 }
@@ -7025,7 +7337,7 @@ export async function autoPoRun(params = {}) {
       // cancelled in Striven, the order genuinely has no PO — let it run again.
       const prior = await autoPoSoPos(soId);
       if (prior.pos.length) {
-        return { ok: true, mode, note: `SO ${soId} already processed — idempotency guard`, checkpoint: state.lastSoId };
+        return { ok: true, mode, note: `SO ${soId} already processed - idempotency guard`, checkpoint: state.lastSoId };
       }
       state.processed = state.processed.filter((n) => Number(n) !== soId);
     }
@@ -7040,7 +7352,7 @@ export async function autoPoRun(params = {}) {
     if (!state.lastSoId) {
       state.lastSoId = Math.max(...ids);
       await sbCacheWrite('auto_po_state', state);
-      return { ok: true, mode, note: `baselined checkpoint at SO id ${state.lastSoId} — nothing processed, older orders are safe` };
+      return { ok: true, mode, note: `baselined checkpoint at SO id ${state.lastSoId} - nothing processed, older orders are safe` };
     }
     const fresh = ids.filter((n) => n > state.lastSoId && !state.processed.includes(n)).sort((a, b) => a - b).slice(0, 3);
     for (const soId of fresh) {

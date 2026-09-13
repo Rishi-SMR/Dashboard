@@ -82,7 +82,7 @@ export async function qbCallback(q) {
   const { code, state, realmId } = q;
   if (!code || !realmId) throw new Error('missing code/realmId in callback');
   const saved = (await sbCacheRead('qb_oauth_state'))?.data?.state;
-  if (!saved || saved !== state) throw new Error('state mismatch — restart the connect flow');
+  if (!saved || saved !== state) throw new Error('state mismatch - restart the connect flow');
   const t = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: (await qbCreds()).redirect });
   await writeTokens({
     realmId: String(realmId),
@@ -104,7 +104,7 @@ export async function qbCallback(q) {
 
 async function accessToken() {
   const t = await readTokens();
-  if (!t?.refreshToken) throw new Error('QuickBooks not connected — open /api/qb/connect first');
+  if (!t?.refreshToken) throw new Error('QuickBooks not connected - open /api/qb/connect first');
   if (Date.now() < (t.accessExpiresAt ?? 0) - 120_000) return t;
   const r = await tokenRequest({ grant_type: 'refresh_token', refresh_token: t.refreshToken });
   const next = {
@@ -131,7 +131,7 @@ export async function qbApi(pathname, { method = 'GET', body } = {}) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const f = json?.Fault?.Error?.[0];
-    throw new Error(`QuickBooks ${res.status}: ${f ? `${f.Message}${f.Detail ? ` — ${f.Detail}` : ''}` : JSON.stringify(json).slice(0, 300)}`);
+    throw new Error(`QuickBooks ${res.status}: ${f ? `${f.Message}${f.Detail ? ` - ${f.Detail}` : ''}` : JSON.stringify(json).slice(0, 300)}`);
   }
   return json;
 }
@@ -154,7 +154,7 @@ export async function qbStatus() {
   }
   if (!info) {
     return { connected: false, env, configured, realmId: t.realmId,
-      error: 'ApplicationAuthorizationFailed — this token works with neither the sandbox nor the production API. Confirm the app keys (Development vs Production) match the company you authorized.' };
+      error: 'ApplicationAuthorizationFailed - this token works with neither the sandbox nor the production API. Confirm the app keys (Development vs Production) match the company you authorized.' };
   }
   const c = info.CompanyInfo ?? {};
   return { connected: true, env, configured, realmId: t.realmId, company: c.CompanyName || c.LegalName || '', country: c.Country || '', connectedAt: t.connectedAt ?? null };
@@ -199,7 +199,7 @@ async function defaultIncomeAccountRef() {
   if (_incomeAcct) return _incomeAcct;
   const accts = (await qbQuery("select Id, Name from Account where AccountType = 'Income' and Active = true")).Account ?? [];
   const pick = accts.find((a) => /sales|service|revenue|fees/i.test(a.Name)) ?? accts[0];
-  if (!pick) throw new Error('No active Income account in QuickBooks — create one first (e.g. "Services").');
+  if (!pick) throw new Error('No active Income account in QuickBooks - create one first (e.g. "Services").');
   _incomeAcct = { value: pick.Id, name: pick.Name };
   return _incomeAcct;
 }
@@ -439,8 +439,8 @@ export async function qbPostInvoiceDoc(invId, { force = false } = {}) {
   const prior = (await postedInvMap())[String(invId)];
   if (prior && !force) return { ok: false, alreadyPosted: prior, message: `Invoice ${prior.docNumber || invId} was already posted to QuickBooks.` };
   const inv = await strivenInvoiceRaw(invId);
-  if (!inv.customer.name) throw new Error('Invoice has no customer — cannot post.');
-  if (!inv.lines.length) throw new Error('Invoice has no line items — cannot post.');
+  if (!inv.customer.name) throw new Error('Invoice has no customer - cannot post.');
+  if (!inv.lines.length) throw new Error('Invoice has no line items - cannot post.');
   const steps = [];
   let cust = await qbFindCustomer(inv.customer.ref);
   if (cust) steps.push({ step: 'customer', action: 'matched', name: inv.customer.ref, id: cust.Id });
