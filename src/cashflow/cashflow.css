@@ -4859,3 +4859,63 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   vertical-align: 1px; opacity: .75;
 }
 .ug-loc.is-precise:hover .ug-loc-precise { opacity: 1; }
+
+/* ── "Please Wait Its Loading......." ────────────────────────────────────────
+   The wait notice for a fetch slow enough to look like a broken page. Rendered
+   by WaitPopup.tsx, which owns the rule about WHEN it appears — these are only
+   the looks. Same backdrop tint and radius as the drill modal so it reads as
+   part of the same set rather than as a system dialog that escaped.
+
+   z-index sits ABOVE the modals (1000). A refresh can be started with a rep's
+   drill open, and a wait notice that rendered behind the thing the reader is
+   looking at would be telling them nothing. */
+.wait-pop-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(15, 27, 46, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(10px, 3vw, 20px);
+  animation: waitPopFade .18s ease;
+}
+.wait-pop {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 14px;
+  border-top: 4px solid var(--accent);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.3);
+  /* Never wider than a small phone's screen, and never so narrow that the
+     message wraps mid-word on one. */
+  width: max-content;
+  max-width: min(420px, 100%);
+  padding: 18px 22px;
+}
+.wait-pop-text {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.wait-pop-spinner {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  /* The track, then one lit quadrant that does the turning. */
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: waitPopSpin .7s linear infinite;
+}
+@keyframes waitPopFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes waitPopSpin { to { transform: rotate(360deg); } }
+
+/* A spinner is decoration; the words are the message. Someone who has asked for
+   less motion still gets the notice, just without the turning. */
+@media (prefers-reduced-motion: reduce) {
+  .wait-pop-backdrop { animation: none; }
+  .wait-pop-spinner { animation: none; opacity: .55; }
+}
