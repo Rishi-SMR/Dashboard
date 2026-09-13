@@ -25,7 +25,7 @@ import {
 } from './_commission-config.js';
 import {
   commissionForOrder, splitByState, resolveIdentity,
-  redactCommissionPayload, isCancelledStatus, reconcileToWorkbook,
+  redactCommissionPayload, isCancelledStatus, reconcileToWorkbook, fillVerticalFromSiblings,
 } from './_commission-core.js';
 import { INVOICE_STATUS } from './invoice-status.js';
 
@@ -3593,6 +3593,25 @@ export async function getCommissionWorkbooks() {
     const soBlob = await sbCacheRead('so').catch(() => null);
     const soRows = Array.isArray(soBlob?.data) ? soBlob.data : [];
     const soById = new Map(soRows.map((o) => [String(o.id), o]));
+    // ── THE VERTICAL BELONGS TO THE ORDER, NOT TO THE BOOK ────────────────────
+    // `w.vertical` is one value for a whole workbook, which is only true of a
+    // single-rep book. The Team book is not one: Alle Ann's rows are VA and
+    // Jillian's are PI, so ANY per-book value mislabels one of them — and the
+    // vertical is not cosmetic here. It picks the COMMISSION_PAID_THROUGH entry
+    // that decides paid-vs-due (isPaidLine), and it drives the TriCare/VA/PI
+    // split and `byProgram`, so a wrong one moves real money into the wrong
+    // column and can call it paid a cycle early.
+    //
+    // report_patient_items carries `program` per sales order, which is the same
+    // source getCommission() buckets the order book by — so a workbook line
+    // that joins to an order is labelled exactly as that order is everywhere
+    // else on the page. `w.vertical` stays as the fallback for a line that
+    // matched no order, which is what it was always doing for Maylon's PI book.
+    let progBySoId = new Map();
+    try {
+      const rpi = (await sbCacheRead('report_patient_items'))?.data?.orders || [];
+      progBySoId = new Map(rpi.map((o) => [String(o.soId), String(o.program || '')]).filter(([, p]) => p));
+    } catch { /* optional: falls back to the book's own vertical */ }
     // patient (initial + surname) → order(s). These workbooks carry no order
     // number at all, so the patient is the only join available; a name shared
     // by two orders stays unresolved rather than guessing which one paid.
@@ -3605,6 +3624,10 @@ export async function getCommissionWorkbooks() {
     }
 
     const byRep = new Map();
+    // rep → the vertical of the book their rows came from, the last resort for
+    // a line that matched no order. Kept OFF the line objects, which are
+    // serialized into the response: a scratch field there would leak.
+    const repFallback = new Map();
     // EVERY WORKBOOK DOWNLOADED AT ONCE. These are ~2.2s Google Sheets exports
     // apiece and were fetched in sequence, so two books cost 4.4s on the single
     // slowest endpoint the dashboard has. They are independent files; nothing in
@@ -3632,11 +3655,14 @@ export async function getCommissionWorkbooks() {
         const so = hit && hit.length === 1 ? hit[0] : null;
 
         const e = byRep.get(row.rep) ?? { rep: row.rep, payableTotal: 0, lines: [] };
-        e.lines.push({
+        // The matched order's own programme. Empty where nothing matched — the
+        // pass after this loop fills those in from the rep's own siblings.
+        const prog = so ? (progBySoId.get(String(so.id)) || '') : '';
+        const line = {
           ref: so ? safeRef('SO', so.id, so.number) : '',
           patient: row.patient,
           date: so?.dateCreated ?? null,
-          prog: String(w.vertical || 'PI'),
+          prog,
           item: row.item,
           cycle: `Paid ~${row.cycle}`,
           month: row.month,
@@ -3654,11 +3680,19 @@ export async function getCommissionWorkbooks() {
           unmatched: !so && !row.bonus,
           bonus: Boolean(row.bonus),
           fromWorkbook: true,
-        });
+        };
+        e.lines.push(line);
+        if (!repFallback.has(row.rep)) repFallback.set(row.rep, String(w.vertical || 'PI'));
         e.payableTotal = round2(e.payableTotal + row.comm);
         byRep.set(row.rep, e);
       }
     }
+
+    // A line that matched no order has no programme yet — fillVerticalFromSiblings()
+    // gives it its own rep-month's, and explains why the book's `vertical` is
+    // not the right answer for a shared book.
+    for (const e of byRep.values()) fillVerticalFromSiblings(e.lines, repFallback.get(e.rep) || 'PI');
+
     return {
       ok: true,
       configured: true,

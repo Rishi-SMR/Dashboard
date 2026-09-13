@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   rateForDevice, classifyOrderLabel, commissionForOrder, splitByState,
   resolveIdentity, redactCommissionPayload, isCancelledStatus, reconcileToWorkbook,
+  fillVerticalFromSiblings,
 } from './_commission-core.js';
 import { COMMISSION_PAID_THROUGH } from './_commission-config.js';
 
@@ -649,4 +650,69 @@ test('PI for every other rep is unchanged', () => {
   // until the business supplies a rule — see FALLBACK_VERTICAL_RATES.
   assert.equal(res.commission, 650, 'Genesys is on the house card, so it prices as a device');
   assert.ok(!('pi' in (res.lines[0] || {})), 'no percentage model for a house-card rep');
+});
+
+
+// ── fillVerticalFromSiblings ─────────────────────────────────────────────────
+// A workbook records no programme, so a line that matched no sales order has no
+// vertical of its own. These cover the rule that gives it one, because the
+// wrong answer moves money between the TriCare/VA/PI columns and can mark it
+// paid a cycle early (COMMISSION_PAID_THROUGH is keyed by vertical).
+
+const wbLine = (prog, comm, month = '2026-08') => ({ prog, month, comm });
+
+test('an unmatched line takes the vertical of its own rep-month', () => {
+  const lines = [wbLine('PI', 900), wbLine('PI', 550), wbLine('', 405)];
+  assert.equal(fillVerticalFromSiblings(lines, 'VA'), 1);
+  assert.deepEqual(lines.map((l) => l.prog), ['PI', 'PI', 'PI']);
+});
+
+test('the book vertical is NOT used when a sibling can answer', () => {
+  // Jillian's live August case: the book she is in is shared, so its own
+  // vertical is another rep's. Taking it would have read as $405.10 of VA.
+  const lines = [wbLine('PI', 1457.59), wbLine('', 405.10)];
+  fillVerticalFromSiblings(lines, 'VA');
+  assert.equal(lines[1].prog, 'PI');
+});
+
+test('dominant by MONEY, not by row count', () => {
+  // Three cheap braces must not outvote the cycle they sit in.
+  const lines = [wbLine('VA', 5200), wbLine('TriCare', 80), wbLine('TriCare', 80),
+    wbLine('TriCare', 80), wbLine('', 650)];
+  fillVerticalFromSiblings(lines, 'PI');
+  assert.equal(lines[4].prog, 'VA');
+});
+
+test('months do not borrow from each other', () => {
+  const lines = [wbLine('VA', 5200, '2026-07'), wbLine('PI', 900, '2026-08'), wbLine('', 650, '2026-08')];
+  fillVerticalFromSiblings(lines, 'TriCare');
+  assert.equal(lines[2].prog, 'PI');
+});
+
+test('the book vertical is the last resort when nothing in the month resolved', () => {
+  const lines = [wbLine('', 650), wbLine('', 425)];
+  assert.equal(fillVerticalFromSiblings(lines, 'PI'), 2);
+  assert.deepEqual(lines.map((l) => l.prog), ['PI', 'PI']);
+});
+
+test('a line with no month falls to the book vertical rather than guessing', () => {
+  // An unresolvable cycle belongs to no month, so it has no siblings to learn
+  // from — the same reason such a line is never marked paid.
+  const lines = [wbLine('VA', 5200), { prog: '', month: null, comm: 650 }];
+  fillVerticalFromSiblings(lines, 'PI');
+  assert.equal(lines[1].prog, 'PI');
+});
+
+test('a line that already has a programme is never overwritten', () => {
+  const lines = [wbLine('VA', 5200), wbLine('PI', 900)];
+  assert.equal(fillVerticalFromSiblings(lines, 'TriCare'), 0);
+  assert.deepEqual(lines.map((l) => l.prog), ['VA', 'PI']);
+});
+
+test('a money tie resolves the same way whatever order the books were read in', () => {
+  const a = [wbLine('PI', 500), wbLine('VA', 500), wbLine('', 100)];
+  const b = [wbLine('VA', 500), wbLine('PI', 500), wbLine('', 100)];
+  fillVerticalFromSiblings(a, 'TriCare');
+  fillVerticalFromSiblings(b, 'TriCare');
+  assert.equal(a[2].prog, b[2].prog);
 });

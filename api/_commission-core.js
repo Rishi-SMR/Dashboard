@@ -328,6 +328,58 @@ export function splitByState(orders) {
  *   real lines from them, because only it knows how to resolve a Striven
  *   reference. `delta` is the money this changes, corrections plus additions.
  */
+/**
+ * Give a workbook line that matched no sales order the vertical of its own
+ * rep-month.
+ *
+ * A commission workbook records a patient, a device and an amount — never a
+ * programme. The vertical is read off the SALES ORDER a line matches, so a line
+ * that matched none has nothing to read, and the only value on hand is the
+ * book's own `vertical` — one value for a whole file. That is fine for a
+ * single-rep book and wrong for a shared one: the Team book carries Alle Ann's
+ * VA rows and Jillian's PI rows together, so whichever value it is given
+ * mislabels somebody.
+ *
+ * THE VERTICAL IS NOT COSMETIC. It picks the COMMISSION_PAID_THROUGH entry that
+ * decides paid-vs-due, and it drives the TriCare/VA/PI split, so a wrong one
+ * puts money in the wrong column and can call it settled a cycle early.
+ *
+ * The rule is the one reconcileToWorkbook() already uses for a row the sheet is
+ * missing: a sibling from the same rep-month is the only honest source for a
+ * field the workbook does not record. DOMINANT BY MONEY rather than by row
+ * count, so one cheap brace cannot outvote the cycle it sits in.
+ *
+ * Jillian's August 2026 cycle is the live case: nine PI rows, one of which does
+ * not join to an order, and under the book's own vertical that single row read
+ * as $405.10 of VA against $1,457.59 of PI for the same rep in the same month.
+ *
+ * @param {Array<{prog?:string, month?:string|null, comm:number}>} lines one
+ *   rep's workbook lines. Mutated in place: a line with a falsy `prog` gets one.
+ * @param {string} fallback the book's own vertical, used only for a rep-month
+ *   where NOTHING resolved and there is no sibling to learn from.
+ * @returns {number} how many lines were filled in.
+ */
+export function fillVerticalFromSiblings(lines, fallback = '') {
+  const byMonth = new Map();                   // month → vertical → money
+  for (const l of lines || []) {
+    if (!l.prog || !l.month) continue;
+    const m = byMonth.get(l.month) ?? new Map();
+    m.set(l.prog, (m.get(l.prog) || 0) + Number(l.comm || 0));
+    byMonth.set(l.month, m);
+  }
+  let filled = 0;
+  for (const l of lines || []) {
+    if (l.prog) continue;
+    const m = l.month ? byMonth.get(l.month) : null;
+    // Ties break on the vertical that sorts first, so the result does not
+    // depend on the order the books happened to be read in.
+    const top = m ? [...m].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0] : null;
+    l.prog = top ? top[0] : String(fallback || '');
+    filled += 1;
+  }
+  return filled;
+}
+
 export function reconcileToWorkbook(lines, wbRows, opts = {}) {
   const keyOf = opts.keyOf || ((x) => x.patient);
   const pool = (lines || []).map((line) => ({ line, taken: false }));
