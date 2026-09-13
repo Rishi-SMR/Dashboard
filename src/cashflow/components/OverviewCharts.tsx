@@ -852,7 +852,7 @@ export function OverviewCharts() {
         // "SO-451" alone identifies nothing to a reader.
         patient: o.patient
           ? <strong>{o.patient}</strong>
-          : <span style={{ color: C.muted }}>—</span>,
+          : <span style={{ color: C.muted }}>-</span>,
         type: o.type,
         rep: o.rep || '-',
         status: o.status,
@@ -861,7 +861,7 @@ export function OverviewCharts() {
         // the very fact the drill was opened to show.
         labels: (o.labels ?? []).length
           ? (o.labels ?? []).join(', ')
-          : <span style={{ color: C.muted }}>—</span>,
+          : <span style={{ color: C.muted }}>-</span>,
         value: formatCurrency(o.value || 0),
       })),
     });
@@ -1615,7 +1615,7 @@ export function OverviewCharts() {
 
                   <div className="pos-note">
                     Balances, not cash: commission falls due as orders settle, and AR arrives on its own schedule
-                    {piDso != null ? ` — PI is collecting in about ${piDso} days` : ''}.
+                    {piDso != null ? ` - PI is collecting in about ${piDso} days` : ''}.
                   </div>
                 </div>
               </ChartCard>
@@ -1677,12 +1677,12 @@ export function OverviewCharts() {
                   <div className="ard-facts">
                     <div className="ard-f">
                       <div className="l">Oldest</div>
-                      <div className={`v${arDetail.oldest > 30 ? ' warn' : ''}`}>{arDetail.oldest > 0 ? `${arDetail.oldest}d` : '—'}</div>
+                      <div className={`v${arDetail.oldest > 30 ? ' warn' : ''}`}>{arDetail.oldest > 0 ? `${arDetail.oldest}d` : '-'}</div>
                       <div className="n">past due</div>
                     </div>
                     <div className="ard-f">
                       <div className="l">PI DSO</div>
-                      <div className="v">{piDso != null ? `${piDso}d` : '—'}</div>
+                      <div className="v">{piDso != null ? `${piDso}d` : '-'}</div>
                       <div className="n">to collect</div>
                     </div>
                     {arDetail.top && (
@@ -1706,7 +1706,7 @@ export function OverviewCharts() {
                       and is invisible in the AR total. */}
                   {prog === 'All' && (ar?.unappliedCredits ?? 0) > 0 && (
                     <div className="ard-note">
-                      <b style={{ color: C.warning }}>{formatCurrency(ar.unappliedCredits)}</b> sits in unapplied credits —
+                      <b style={{ color: C.warning }}>{formatCurrency(ar.unappliedCredits)}</b> sits in unapplied credits -
                       payments received but not matched to an invoice, so the true collectable balance is lower than the figure above.
                     </div>
                   )}
@@ -1764,7 +1764,7 @@ export function OverviewCharts() {
                     {apDetail.overdue > 0 && <> · <b style={{ color: C.warning }}>{formatCurrency(apDetail.overdue)}</b> already overdue</>}</>}
                   rail={apDetail.rail}
                   facts={[
-                    { label: 'Oldest', value: apDetail.oldest > 0 ? `${apDetail.oldest}d` : '—', note: 'past due', warn: apDetail.oldest > 30 },
+                    { label: 'Oldest', value: apDetail.oldest > 0 ? `${apDetail.oldest}d` : '-', note: 'past due', warn: apDetail.oldest > 30 },
                     ...(apDetail.top ? [{
                       label: 'Top vendor',
                       value: `${Math.round((apDetail.top.value / Math.max(1, apOpenF)) * 100)}%`,
@@ -1815,7 +1815,7 @@ export function OverviewCharts() {
                     { label: 'Avg invoice', value: invCountP ? formatCurrency(fRev / invCountP) : formatCurrency(pl.avgInvoice ?? 0), note: 'per invoice' },
                     ...(bestRev ? [{ label: 'Best month', value: monthLabel(bestRev.month), note: formatCurrency(bestRev.value) }] : []),
                     { label: 'Expenses', value: formatCurrency(fExp), note: 'billed in period' },
-                    { label: 'Margin', value: fRev > 0 ? `${Math.round(((fRev - fExp) / fRev) * 100)}%` : '—', note: formatCurrency(fRev - fExp) },
+                    { label: 'Margin', value: fRev > 0 ? `${Math.round(((fRev - fExp) / fRev) * 100)}%` : '-', note: formatCurrency(fRev - fExp) },
                   ]}
                 />
               </ChartCard>
@@ -1832,12 +1832,12 @@ export function OverviewCharts() {
                   sub={<>{payCountP != null ? `${payCountP} payment${payCountP === 1 ? '' : 's'}` : `${payments.count} payments · all time`} in this period</>}
                   rail={monthRail(cashSeries, C.positive)}
                   facts={[
-                    { label: 'Collected', value: collectedPct != null ? `${collectedPct}%` : '—', note: 'of invoiced', warn: collectedPct != null && collectedPct < 60 },
-                    { label: 'Avg payment', value: payCountP ? formatCurrency(cashFY / payCountP) : '—', note: 'per payment' },
+                    { label: 'Collected', value: collectedPct != null ? `${collectedPct}%` : '-', note: 'of invoiced', warn: collectedPct != null && collectedPct < 60 },
+                    { label: 'Avg payment', value: payCountP ? formatCurrency(cashFY / payCountP) : '-', note: 'per payment' },
                     ...(bestCash ? [{ label: 'Best month', value: monthLabel(bestCash.month), note: formatCurrency(bestCash.value) }] : []),
                   ]}
                   note={collectedPct != null && collectedPct > 100
-                    ? <>Over 100% because payments in this period settle invoices raised earlier — cash and revenue are not the same cohort.</>
+                    ? <>Over 100% because payments in this period settle invoices raised earlier - cash and revenue are not the same cohort.</>
                     : undefined}
                 />
               </ChartCard>
@@ -2057,11 +2057,11 @@ export function OverviewCharts() {
                   <>
                     {' '}
                     <button type="button" className="lbl-untagged" onClick={() => drillLabel(NO_LABEL)}
-                      title="List these orders — they carry no Striven label, so no pipeline can place them past stage 1">
+                      title="List these orders - they carry no Striven label, so no pipeline can place them past stage 1">
                       <b>{labelStats.untagged.toLocaleString()}</b> order{labelStats.untagged === 1 ? '' : 's'}
                       {' '}({formatCurrency(labelStats.untaggedValue)}) carr{labelStats.untagged === 1 ? 'ies' : 'y'} no label at all
                     </button>
-                    {' — click to see them.'}
+                    {' - click to see them.'}
                   </>
                 )}
               </div>

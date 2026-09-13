@@ -614,7 +614,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                           status here instead would dress a gap up as data. */}
                       <td>
                         {(o.labels ?? []).length === 0
-                          ? <span className="muted-note" title="Striven carries no label on this order">—</span>
+                          ? <span className="muted-note" title="Striven carries no label on this order">-</span>
                           : <span className="pi-labels">
                               {(o.labels ?? []).map((l) => (
                                 <span key={l} className="pi-label" title={l}

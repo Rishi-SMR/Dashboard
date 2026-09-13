@@ -440,7 +440,7 @@ export function MonthOverMonth({ months, rep, team, reps }: {
         // month, and saying so beats an empty strip that reads as a broken load.
         <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 14 }}>
           {complete.length === 1
-            ? <>{monthLabel(complete[0].month)} is the first complete month on this book — there is nothing yet to compare it against.</>
+            ? <>{monthLabel(complete[0].month)} is the first complete month on this book - there is nothing yet to compare it against.</>
             : <>No complete month on the book yet. The comparison appears once one closes.</>}
         </div>
       )}
@@ -514,12 +514,12 @@ export function MonthOverMonth({ months, rep, team, reps }: {
       {best && best.orders > 0 && (
         <div style={{ marginTop: 10, fontSize: 12.5, color: C.muted }}>
           Best month so far: <b style={{ color: C.sub }}>{monthLabel(best.month)}</b>
-          {' — '}<b style={{ color: C.sub }}>{best.orders}</b> order{best.orders === 1 ? '' : 's'}
+          {' - '}<b style={{ color: C.sub }}>{best.orders}</b> order{best.orders === 1 ? '' : 's'}
           {best.units != null && <>, <b style={{ color: C.sub }}>{best.units}</b> device{best.units === 1 ? '' : 's'}</>}
           {/* CENTS, as everywhere commission is printed on this page — the rates
               are not whole dollars and the figure is reconciled line by line. */}
           {best.money != null && best.money > 0 && <>, <b style={{ color: C.sub }}>{formatCurrency(best.money, true)}</b> {moneyName.toLowerCase()}</>}
-          {cur && best.month === cur.month && <> — the month just closed.</>}
+          {cur && best.month === cur.month && <> - the month just closed.</>}
         </div>
       )}
     </div>
@@ -654,7 +654,7 @@ function MoMTooltip({ active, payload, label, moneyName }: {
       {p.orders === 0 && p.money != null && p.money > 0 && (
         <div style={{ marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C.grid}`, fontSize: 11.5, color: C.muted, maxWidth: 230, lineHeight: 1.45 }}>
           Settled in this payout cycle, but no order in the book is dated this
-          month — pay is cut by cycle, orders by order date.
+          month - pay is cut by cycle, orders by order date.
         </div>
       )}
     </div>

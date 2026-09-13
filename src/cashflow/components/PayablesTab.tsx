@@ -286,8 +286,8 @@ export function PayablesTab() {
       // The other book, named as such and BELOW the total so it cannot read as
       // part of it. Whoever remembers $11,422 finds it here with the reason.
       ...(useLedger ? [
-        { k: `— Striven records ${strivenBills} open bill${strivenBills === 1 ? '' : 's'}`, v: formatCurrency(strivenOpen, true) },
-        { k: '— difference: bills tracked only in the sheet', v: formatCurrency(r2(apOpen - strivenOpen), true) },
+        { k: `- Striven records ${strivenBills} open bill${strivenBills === 1 ? '' : 's'}`, v: formatCurrency(strivenOpen, true) },
+        { k: '- difference: bills tracked only in the sheet', v: formatCurrency(r2(apOpen - strivenOpen), true) },
       ] : []),
     ]),
   });
@@ -321,7 +321,7 @@ export function PayablesTab() {
       sub: `Value of ACTIVE purchase orders · ${po?.count ?? 0} POs across ${vend.length} vendor${vend.length === 1 ? '' : 's'} · cancelled, voided and demo POs are excluded and listed below the total for reference`,
       ...kv([
         ...vend.map(([v, t]) => ({ k: v, v: formatCurrency(t, true) })),
-        ...(Math.abs(gap) >= 0.005 ? [{ k: 'Unallocated — vendors not itemised', v: formatCurrency(gap, true) }] : []),
+        ...(Math.abs(gap) >= 0.005 ? [{ k: 'Unallocated - vendors not itemised', v: formatCurrency(gap, true) }] : []),
         { k: 'Active total', v: formatCurrency(total, true) },
         // BELOW the total and named as excluded, not above it in the same
         // column. "Cancelled (excluded)" used to sit between the vendors and
@@ -438,7 +438,7 @@ export function PayablesTab() {
               role="button" tabIndex={0}
               onClick={explainPaid}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); explainPaid(); } }}
-              aria-label={`Bills Paid — open bill payment details, ${paidRows.length} payments`}>
+              aria-label={`Bills Paid - open bill payment details, ${paidRows.length} payments`}>
               <div className="section-head">
                 {/* NO SUBTITLE. It said where the figures come from and how the
                     card is grouped — both of which the card itself now shows:
@@ -578,7 +578,7 @@ export function PayablesTab() {
                     error in one of the two figures. */}
                 {creditNoteCount > 0 && (
                   <span className="pgn-info" style={{ marginLeft: 'auto', paddingLeft: 12 }}>
-                    Excludes {creditNoteCount} credit note{creditNoteCount === 1 ? '' : 's'} ({formatCurrency(creditNoteAmount)}) —
+                    Excludes {creditNoteCount} credit note{creditNoteCount === 1 ? '' : 's'} ({formatCurrency(creditNoteAmount)}) -
                     netted into AP Open, which reads {formatCurrency(apOpen)} against {formatCurrency(billsOnlyOpen)} of bills.
                   </span>
                 )}

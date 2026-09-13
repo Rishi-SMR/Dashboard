@@ -327,8 +327,8 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
             <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 14, background: 'var(--panel-2)', borderRadius: 10, padding: '9px 13px' }}>
               Every figure on this page covers the <b style={{ color: C.sub }}>producing reps</b> only. A further{' '}
               <b style={{ color: C.sub }}>{data.unattributed.orders} orders</b> ({formatCurrency(data.unattributed.revenue)}) are
-              booked in Striven to house/clinic accounts, ops staff, departed names or nobody at all — so{' '}
-              <b style={{ color: C.sub }}>Orders &amp; Revenue reports {data.bookTotals?.orders ?? '—'}</b> against this page's{' '}
+              booked in Striven to house/clinic accounts, ops staff, departed names or nobody at all - so{' '}
+              <b style={{ color: C.sub }}>Orders &amp; Revenue reports {data.bookTotals?.orders ?? '-'}</b> against this page's{' '}
               <b style={{ color: C.sub }}>{t?.orders}</b>. Where any excluded name does earn commission it is still paid: see My
               Commission, which reports the full book.
             </div>
@@ -389,7 +389,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                       <tr key={r.rep} className={nested ? 'tr-nested' : undefined} onClick={() => setSel(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}
                         title={[
                           r.own ? `Full detail for ${r.rep}` : `${r.rep}'s volume: their pay is confidential`,
-                          r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
+                          r.subRepOf ? `Sub-rep of ${r.subRepOf} - SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
                         ].filter(Boolean).join(' · ')}>
                         {/* Blank on a nested row, for the reason spelled out on
                             the board tile's rank cell: she is drawn under Alle
@@ -585,7 +585,7 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
     // COUNTED, NOT SPELLED OUT. It said "the four names" and the roster is
     // seven; a hard-coded count is a caption that goes stale the day someone is
     // hired.
-    reps: { title: 'Reps', sub: `The ${reps.length} names on the commission sheet, by order volume. A sub-rep is folded into the rep who pays them — open the caret to split them out.`, col: 'Orders', tint: C.brand },
+    reps: { title: 'Reps', sub: `The ${reps.length} names on the commission sheet, by order volume. A sub-rep is folded into the rep who pays them - open the caret to split them out.`, col: 'Orders', tint: C.brand },
     orders: { title: 'Orders by rep', sub: 'Cancelled and $0-value orders are excluded from every figure.', col: 'Orders', tint: V_C.PI },
     units: { title: 'Devices by rep', sub: 'Units shipped on those orders.', col: 'Units', tint: V_C.DOL },
     // "Vendors" is the client's term for the billed party. Note it is NOT
@@ -704,7 +704,7 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
                     <tr key={r.rep} className={nested ? 'tr-nested' : undefined} onClick={() => onPickRep(r)} style={{ cursor: 'pointer', background: r.isSelf ? 'var(--panel-2)' : undefined }}
                       title={[
                         `Open ${r.rep}'s detail`,
-                        r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
+                        r.subRepOf ? `Sub-rep of ${r.subRepOf} - SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
                       ].filter(Boolean).join(' · ')}>
                       <td style={{ color: C.muted }}>{nested ? '' : rank}</td>
                       <td className="rep-cell" style={{ fontWeight: 700, color: C.brand }}>
@@ -725,7 +725,7 @@ function KpiDrill({ metric, reps, data, onClose, onPickRep }: {
                             this row is two people's work under one name; silently
                             is exactly how a number stops being trusted. */}
                         {subs.length > 0 && !open && (
-                          <div className="lb-subline" title={`Includes ${subs.map((x) => x.rep).join(', ')} — click the caret to split them out`}>
+                          <div className="lb-subline" title={`Includes ${subs.map((x) => x.rep).join(', ')} - click the caret to split them out`}>
                             <span className="lb-subline-el" aria-hidden="true" />
                             incl. {subs.map((x) => x.rep).join(', ')}
                           </div>
@@ -875,7 +875,7 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
               {rows.length === 0 && !loading && <tr><td colSpan={4} style={{ color: C.muted }}>No reps yet.</td></tr>}
               {rows.map(({ r, rank, nested }) => (
                 <tr key={r.rep} className={nested ? 'tr-nested' : undefined} style={{ background: r.isSelf ? 'var(--panel-2)' : undefined, borderLeft: r.isSelf ? `3px solid ${C.brand}` : '3px solid transparent' }}
-                  title={r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : undefined}>
+                  title={r.subRepOf ? `Sub-rep of ${r.subRepOf} - SMR pays ${r.subRepOf}, who pays ${r.rep}` : undefined}>
                   {/* Blank on a nested row — and no medal either: a 🥉 beside a
                       rep who is not standing in the ranking would be handing out
                       a place the numbering has just taken away. */}
@@ -1219,7 +1219,7 @@ function BoardTile({ rows, leader, totalOrders, pct, canOpen, openableCount, onP
                 open ? `${r.rep}'s full breakdown` : `${r.rep}'s figures are confidential to them`,
                 // The reporting line, spelled out where there is room for the
                 // whole sentence rather than the badge's two words.
-                r.subRepOf ? `Sub-rep of ${r.subRepOf} — SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
+                r.subRepOf ? `Sub-rep of ${r.subRepOf} - SMR pays ${r.subRepOf}, who pays ${r.rep}` : '',
               ].filter(Boolean).join(' · ')}
               style={{
                 // 46%, up from 34%. The names are full names now — "Alle Ann
@@ -1598,7 +1598,7 @@ function RepModal({ rep, subs = [], onPickRep, onClose }: {
           )}
           {/* ── WHOSE ORDERS ARE THESE ────────────────────────────────────────
               Only where this rep actually has someone under them. Three lines:
-              their own book, each sub-rep's, and the pair — which is the figure
+              their own book, each sub-rep's, and the pair - which is the figure
               the folded row on the drill was showing, now accounted for.
 
               MONEY FOLLOWS THE SAME RULE AS EVERYWHERE ELSE: a sub-rep's pay is

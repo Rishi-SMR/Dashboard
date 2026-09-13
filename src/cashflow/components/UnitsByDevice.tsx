@@ -109,13 +109,13 @@ export function UnitsByDevice({ rows, subtitle, onOpen }: {
                   <strong>{d.device}</strong>
                   {d.demo && <span className="ubd-demo">demo</span>}
                 </td>
-                <td>{d.demo ? 'DEMO / test' : (d.vertical || '—')}</td>
+                <td>{d.demo ? 'DEMO / test' : (d.vertical || '-')}</td>
                 <td className="num">{d.orders.toLocaleString()}</td>
                 <td className="num u">{d.units.toLocaleString()}</td>
                 <td className="num">{perOrder(d).toFixed(1)}</td>
                 <td className={`num${d.heldUnits > 0 ? ' held' : ''}`}
                   title={d.heldUnits > 0 ? `${d.heldUnits} unit${d.heldUnits === 1 ? '' : 's'} on ${d.heldOrders || 1} held order${(d.heldOrders || 1) === 1 ? '' : 's'}` : undefined}>
-                  {d.heldUnits > 0 ? d.heldUnits.toLocaleString() : '—'}
+                  {d.heldUnits > 0 ? d.heldUnits.toLocaleString() : '-'}
                 </td>
               </tr>
             ))}
@@ -129,10 +129,10 @@ export function UnitsByDevice({ rows, subtitle, onOpen }: {
             <tr className="total-row">
               <td><strong>Total</strong></td>
               <td>{live.length} device{live.length === 1 ? '' : 's'}</td>
-              <td className="num" title="Orders do not total: an order carrying two devices would be counted twice">—</td>
+              <td className="num" title="Orders do not total: an order carrying two devices would be counted twice">-</td>
               <td className="num"><strong>{totalUnits.toLocaleString()}</strong></td>
-              <td className="num" title="An average of per-device averages is not the fleet average">—</td>
-              <td className="num">{totalHeld > 0 ? totalHeld.toLocaleString() : '—'}</td>
+              <td className="num" title="An average of per-device averages is not the fleet average">-</td>
+              <td className="num">{totalHeld > 0 ? totalHeld.toLocaleString() : '-'}</td>
             </tr>
           </tfoot>
         </table>

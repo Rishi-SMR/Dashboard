@@ -284,7 +284,7 @@ export function CommissionTab() {
             // between "you are owed nothing" and "it has not been run".
             note={sel
               ? (sel.reconciled === false
-                ? `${monthLabel(sel.month)} is still being booked. Commission settles in the ${payRunFor(sel.month)} payout run, so nothing is payable yet — what is shown is earned and pending.`
+                ? `${monthLabel(sel.month)} is still being booked. Commission settles in the ${payRunFor(sel.month)} payout run, so nothing is payable yet - what is shown is earned and pending.`
                 : `Signed off in the ${payRunFor(sel.month)} payout run, from the reconciliation sheet.`)
               : undefined}
             // The money above IS month-scoped: `own` comes from the selected
@@ -371,7 +371,7 @@ export function CommissionTab() {
               </button>
             ))}
             <button className="btn ghost" style={segStyle(month === 'all')} onClick={() => setMonthPick('all')}
-              title="Every month added together — a running lifetime total, not a pay period">
+              title="Every month added together - a running lifetime total, not a pay period">
               All months
             </button>
           </div>
@@ -410,7 +410,7 @@ export function CommissionTab() {
                       than EARNED NOTHING, which is the one distinction this
                       table exists to make. `paidTotal` has always been on the
                       payload; only the column was missing. */}
-                  <th className="num" title="Already paid out. Part of Commission, and deliberately not part of Payable / Due — a rep is not owed money they have had.">Paid</th>
+                  <th className="num" title="Already paid out. Part of Commission, and deliberately not part of Payable / Due - a rep is not owed money they have had.">Paid</th>
                   <th className="num">Payable / Due</th><th className="num">Waiting</th>
                   <th className="num">Commission</th>
                   {/* The 18% sparkbar column is gone. It was scaled to the top
@@ -447,7 +447,7 @@ export function CommissionTab() {
                               and flagging every empty row would bury the one
                               that matters. */}
                           {r.reconciled === false && num(r.orders) > 0 && (
-                            <span className="cm-unrecon" title={`${r.rep} has ${num(r.orders)} orders in Striven but no rows in the reconciliation sheet, so nothing here is signed off. Their commission is paid from a workbook source — see COMMISSION_WORKBOOKS.`}>
+                            <span className="cm-unrecon" title={`${r.rep} has ${num(r.orders)} orders in Striven but no rows in the reconciliation sheet, so nothing here is signed off. Their commission is paid from a workbook source - see COMMISSION_WORKBOOKS.`}>
                               not in the sheet
                             </span>
                           )}
@@ -678,9 +678,9 @@ function StateSplit({ payable, waiting, held, zeroValue, who, scope, note, paid,
         </h2>
         <div className="section-sub">
           {note && <div style={{ marginBottom: 4 }}>{note}</div>}
-          Paid has already gone out — still counted in the total, no longer owed{through ? ` (${through})` : ''}.
+          Paid has already gone out - still counted in the total, no longer owed{through ? ` (${through})` : ''}.
           {' '}Payable/Due is signed off and owed. Total is Paid + Payable: the whole signed-off figure.
-          {w ? ' Waiting is the current cycle, which has no payout run yet — estimated from the order book, not signed off, and NOT in the total.' : ''}
+          {w ? ' Waiting is the current cycle, which has no payout run yet - estimated from the order book, not signed off, and NOT in the total.' : ''}
           {held ? ` ${held} order${held === 1 ? '' : 's'} on hold are not payable.` : ''}
           {zeroValue ? ` ${zeroValue} order${zeroValue === 1 ? '' : 's'} with $0 order value earn no commission and are excluded too.` : ''}
         </div>
@@ -866,7 +866,7 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
                         against it and state a missing record that was never
                         expected to exist. */}
                     <td style={{ fontWeight: 600, color: ln.patient ? C.ink : C.muted }}>
-                      {ln.bonus ? '—' : (ln.patient || ln.ref || 'no SO')}
+                      {ln.bonus ? '-' : (ln.patient || ln.ref || 'no SO')}
                     </td>
                     <td style={{ color: C.sub, fontSize: 12.5 }}>
                       {ln.bonus
@@ -886,7 +886,7 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
                         out. It also keeps the by-vertical figures above summing
                         to the rep's total, which they would stop doing if this
                         one line belonged to nothing. */}
-                    <td style={{ color: ln.bonus ? C.muted : undefined }}>{ln.bonus ? '—' : ln.prog}</td>
+                    <td style={{ color: ln.bonus ? C.muted : undefined }}>{ln.bonus ? '-' : ln.prog}</td>
                     <td className="num">{ln.units}</td>
                     <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(ln.comm, true)}</td>
                     {/* The remark rides the EXISTING rightmost column rather than
@@ -913,8 +913,8 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
             </table>
           </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            🔒 Patient shown as first initial + surname, on your own orders only. Commission = units × per-device rate — except a <b>Bonus</b>, which is a flat amount tied to no order, no patient and no programme. A bonus still counts toward the totals above, under the programme it was paid against. Orders on hold are excluded and do not appear here.
-            {' '}The date is when the <b>sales order</b> was raised, not the payout cycle — it reads “-” on a row the sheet could not tie to a Striven order.
+            🔒 Patient shown as first initial + surname, on your own orders only. Commission = units × per-device rate - except a <b>Bonus</b>, which is a flat amount tied to no order, no patient and no programme. A bonus still counts toward the totals above, under the programme it was paid against. Orders on hold are excluded and do not appear here.
+            {' '}The date is when the <b>sales order</b> was raised, not the payout cycle - it reads “-” on a row the sheet could not tie to a Striven order.
           </div>
         </>
       )}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchMe } from '../strivenApi';
 import { allowedViews } from './Sidebar';
 import type { ViewKey } from '../CashflowApp';
+import { trailHref, termSlug, registerTrailLabels, splitHash } from '../guideTrail';
 
 /**
  * THE GLOSSARY — every term this portal puts on screen, what it means, how it
@@ -44,8 +45,21 @@ type Loc = {
   view: ViewKey;
   /** How the sidebar labels that tab, so the link matches what the user reads. */
   tab: string;
-  /** The section within it. Named, not linked: sections carry no anchors yet. */
+  /** The section within it, as the screen labels it. */
   section: string;
+  /**
+   * THE SECTION'S ANCHOR ON THAT SCREEN, where it has declared one.
+   *
+   * This is what makes a location LINK rather than merely name: the destination
+   * scrolls to the section and points at it (see GuideLanding in guideTrail.tsx)
+   * instead of dropping the reader at the top of a page with five charts on it.
+   *
+   * OPTIONAL, AND HONEST ABOUT IT. Most screens have not declared anchors yet,
+   * and those locations still open the right tab exactly as before — the link
+   * says so by not drawing the ▸ that marks a precise one. The alternative, a
+   * required field, would mean inventing anchors that scroll nowhere.
+   */
+  anchor?: string;
   /** Set only where the term means something DIFFERENT here. */
   differs?: string;
 };
@@ -80,9 +94,9 @@ const GLOSSARY: Entry[] = [
     term: 'Aging bucket', aka: ['Current', '1–30', '31–60', '61–90', '90+'], cat: 'Receivables',
     def: 'How overdue a balance is, measured in days past its due date.',
     basis: 'days past due = today − due date\nCurrent ≤ 0 · 1–30 · 31–60 · 61–90 · 90+',
-    note: 'An order with no invoice has no due date and therefore no bucket — which is why the red not-invoiced rows disappear when an ageing filter is applied, rather than being filed under an age they do not have.',
+    note: 'An order with no invoice has no due date and therefore no bucket - which is why the red not-invoiced rows disappear when an ageing filter is applied, rather than being filed under an age they do not have.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'AR Aging' },
+      { view: 'receivables', tab: 'AR / AP', section: 'AR Aging', anchor: 'ar-aging' },
       { view: 'payables', tab: 'AR / AP › Payables', section: 'AP Aging' },
       { view: 'apsheet', tab: 'AP Register', section: 'AP Aging' },
       { view: 'overview', tab: 'Overview', section: 'AR Due · AP Due' },
@@ -111,15 +125,15 @@ const GLOSSARY: Entry[] = [
     basis: 'PI      min(unpaid on invoice, 15% × order value)\nothers  unpaid on invoice, net of unapplied credit\ntotal   Σ over non-void invoices with a balance',
     note: 'On PI the 85% lien remainder is NOT counted. It settles out of an award on nobody’s timetable, so it is exposure rather than money that can be chased.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'AR Open tile · Open Invoices · AR Aging' },
+      { view: 'receivables', tab: 'AR / AP', section: 'AR Open tile · Open Invoices · AR Aging', anchor: 'ar-kpis' },
       { view: 'overview', tab: 'Overview', section: 'AR Due · Receivables and Dues this month' },
-      { view: 'arsheet', tab: 'AR Register', section: 'AR Receivable', differs: 'Reads the accountant’s Google Sheet, not Striven — the two books will not tie exactly.' },
+      { view: 'arsheet', tab: 'AR Register', section: 'AR Receivable', differs: 'Reads the accountant’s Google Sheet, not Striven - the two books will not tie exactly.' },
     ],
   },
   {
     term: 'AR Register', cat: 'Accounting',
     def: 'The accountant’s own invoice workbook, read directly from their Google Sheet.',
-    note: 'Not Striven. It will not reconcile exactly with the AR / AP tab, because they are two different books — which is what the “in Striven but not in the sheet” section exists to show.',
+    note: 'Not Striven. It will not reconcile exactly with the AR / AP tab, because they are two different books - which is what the “in Striven but not in the sheet” section exists to show.',
     locs: [{ view: 'arsheet', tab: 'AR Register', section: 'Invoice Book · in Striven but not in the sheet' }],
   },
   {
@@ -127,7 +141,7 @@ const GLOSSARY: Entry[] = [
     def: 'How much of everything billed has actually turned into cash.',
     basis: 'cash received ÷ (cash received + AR open)\n≥90% Excellent · ≥75% Good · ≥60% Fair · else Low',
     note: 'NOT the same calculation as Collection Rate, despite both sounding like collection performance. This one divides by cash plus what is still owed; Collection Rate divides by revenue billed in the period. Compare the two bases before quoting either.',
-    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'A/R Health Score' }],
+    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'A/R Health Score', anchor: 'ar-health' }],
   },
   {
     term: 'Auto-PO', cat: 'Data & status',
@@ -145,7 +159,7 @@ const GLOSSARY: Entry[] = [
     term: 'Bills Paid', cat: 'Payables',
     def: 'Vendor bills that have been settled.',
     basis: 'Σ of the AP ledger sheet’s Debit column\n(Striven’s own figure = Σ credit-card charges only)',
-    note: 'Striven’s record is CARD CHARGES ONLY — a bill paid by cheque or ACH never appears in it. That is why the totals come from the ledger sheet, which records all of them.',
+    note: 'Striven’s record is CARD CHARGES ONLY - a bill paid by cheque or ACH never appears in it. That is why the totals come from the ledger sheet, which records all of them.',
     locs: [
       { view: 'payables', tab: 'AR / AP › Payables', section: 'Bills Paid' },
       { view: 'accounts', tab: 'Accounts', section: 'Bill Payments: Paid', differs: 'Same figure, reached from the accounting side.' },
@@ -153,21 +167,21 @@ const GLOSSARY: Entry[] = [
   },
   {
     term: 'Case value', aka: ['order value', 'gross', 'lien exposure'], cat: 'Receivables',
-    def: 'The full value of the sales order behind a PI invoice — the device price the case was written for.',
+    def: 'The full value of the sales order behind a PI invoice - the device price the case was written for.',
     basis: 'read from the sales order · never derived from the invoice\nlien exposure = case value − invoiced',
     note: 'Shown for context and never added into a receivable total. Real money, but not money you can invoice for today.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Total Amount column)' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Total Amount column)', anchor: 'open-invoices' },
       { view: 'arsheet', tab: 'AR Register', section: 'TOTAL column' },
     ],
   },
   {
     term: 'Cash Received', aka: ['collections', 'payments received'], cat: 'Receivables',
-    def: 'Customer payments recorded in Striven — money actually in the door.',
+    def: 'Customer payments recorded in Striven - money actually in the door.',
     basis: 'Σ payment amount, gross\nvoided / cancelled / denied payments excluded\nincludes credits not yet applied to an invoice',
     note: 'Read the period carefully: the AR tile is ALL-TIME while the arrow beneath it compares the last two complete months, and the P&L tile is year-to-date because the payments endpoint takes no period.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Cash Received tile · Cash Received by Month', differs: 'The tile is all-time; the chart beside it is monthly.' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Cash Received tile · Cash Received by Month', anchor: 'cash-received', differs: 'The tile is all-time; the chart beside it is monthly.' },
       { view: 'accounts', tab: 'Accounts', section: 'Payments Received by Month · Recent Payments Received' },
       { view: 'pl', tab: 'P&L', section: 'Cash Received tile', differs: 'Year to date, not all-time.' },
       { view: 'overview', tab: 'Overview', section: 'Cash Received · Collection Rate' },
@@ -176,20 +190,20 @@ const GLOSSARY: Entry[] = [
   {
     term: 'Chart of accounts', aka: ['GL', 'general ledger'], cat: 'Accounting',
     def: 'Every general-ledger account, by type.',
-    note: 'No running balances, and that is correct rather than missing: Striven’s API does not expose them — they exist only inside Striven’s own Report Builder — so no balance is invented here.',
+    note: 'No running balances, and that is correct rather than missing: Striven’s API does not expose them - they exist only inside Striven’s own Report Builder - so no balance is invented here.',
     locs: [{ view: 'accounts', tab: 'Accounts', section: 'Chart of Accounts · Accounts by Type' }],
   },
   {
     term: 'Collection Rate', cat: 'Receivables',
     def: 'How much of what was billed in a period has come in as cash.',
     basis: 'cash received (period) ÷ revenue billed (period)\ncapped at 100%',
-    note: 'Deliberately mixes two bases — cash over accrual — and that ratio is the point of the card. It is a DIFFERENT calculation from the A/R Health Score; see that entry.',
+    note: 'Deliberately mixes two bases - cash over accrual - and that ratio is the point of the card. It is a DIFFERENT calculation from the A/R Health Score; see that entry.',
     locs: [{ view: 'overview', tab: 'Overview', section: 'Collection Rate' }],
   },
   {
     term: 'Commission payable', aka: ['commission due'], cat: 'Commission',
     def: 'What a rep has earned and is owed, before the payout run.',
-    basis: 'the signed-off reconciliation sheet, auto-matched rows only\na rep absent from the sheet reads 0 — never their computed figure',
+    basis: 'the signed-off reconciliation sheet, auto-matched rows only\na rep absent from the sheet reads 0 - never their computed figure',
     note: 'Falling back to the computed figure would mix two bases in one column and make the total reconcile to nothing. A rep with no sheet row is marked “not in the reconciliation” rather than shown a bare zero.',
     locs: [
       { view: 'commission', tab: 'Commission', section: 'Payable / Due · per-rep breakdown' },
@@ -200,13 +214,13 @@ const GLOSSARY: Entry[] = [
   {
     term: 'Data sync', aka: ['cache', 'refresh', 'freshness'], cat: 'Data & status',
     def: 'How current the figures are. Base data is pulled from Striven on a six-hourly cycle and served from a cache in between.',
-    note: 'Figures are not live to the second, and one or two derived datasets are rebuilt by hand rather than on the cycle — the sync panel reports the age of each.',
+    note: 'Figures are not live to the second, and one or two derived datasets are rebuilt by hand rather than on the cycle - the sync panel reports the age of each.',
     locs: [{ view: 'automation', tab: 'Automation', section: 'Data sync' }],
   },
   {
     term: 'DEMO order', aka: ['test order'], cat: 'Programmes',
     def: 'A sales order raised for a demonstration or a test, not a real sale.',
-    note: 'Counted in the order book — volume, value and its own DEMO vertical — so the portal matches Striven’s own list, but excluded from PO spend, commission and the rep leaderboard.',
+    note: 'Counted in the order book - volume, value and its own DEMO vertical - so the portal matches Striven’s own list, but excluded from PO spend, commission and the rep leaderboard.',
     locs: [
       { view: 'exceptions', tab: 'Exceptions', section: 'DEMO / test sales orders' },
       { view: 'orders', tab: 'Orders', section: 'Sales Orders by Status' },
@@ -214,14 +228,14 @@ const GLOSSARY: Entry[] = [
   },
   {
     term: 'DSO', aka: ['Days Sales Outstanding'], cat: 'Receivables',
-    def: 'How long money sits out before it comes in — the average age of open receivables, weighted by amount.',
+    def: 'How long money sits out before it comes in - the average age of open receivables, weighted by amount.',
     basis: 'Σ(open × days overdue) ÷ Σ(open)\nover OPEN PI invoices only',
     note: 'PI only, by design. VA and TriCare pay on fixed cycles, so a DSO for them measures the cycle rather than performance.',
-    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'PI Days Sales Outstanding tile' }],
+    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'PI Days Sales Outstanding tile', anchor: 'ar-kpis' }],
   },
   {
     term: 'Exception', cat: 'Data & status',
-    def: 'A data anomaly worth someone’s attention — a voided invoice still carrying a balance, an order with no rep, an item with no price.',
+    def: 'A data anomaly worth someone’s attention - a voided invoice still carrying a balance, an order with no rep, an item with no price.',
     note: 'Each group states its own rule, including what it deliberately excludes.',
     locs: [
       { view: 'exceptions', tab: 'Exceptions', section: 'All groups' },
@@ -243,7 +257,7 @@ const GLOSSARY: Entry[] = [
     basis: 'advance = order value × 0.15',
     note: 'The single most important rule in this portal. It is why a PI invoice total is far smaller than the order behind it, why AR Open is a fraction of the order book, and why a PI invoice at zero balance is not a settled case. Measured against the live book, 50 of 57 PI invoices sit at exactly 0.150 of their order.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Invoiced column) · PI orders yet to be invoiced' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Invoiced column) · PI orders yet to be invoiced', anchor: 'pi-1' },
       { view: 'arsheet', tab: 'AR Register', section: 'INVOICED column · the advance-vs-billed check' },
     ],
   },
@@ -262,13 +276,13 @@ const GLOSSARY: Entry[] = [
     def: 'Striven’s own unpaid balance for the invoice itself, kept beside the reported receivable.',
     basis: 'Striven open balance − unapplied credit applied to it',
     note: 'This is the figure to reconcile against Striven. Off PI it equals AR Open; on PI the two differ wherever the 15% cap bites.',
-    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Received column is derived from it)' }],
+    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Received column is derived from it)', anchor: 'open-invoices' }],
   },
   {
     term: 'Margin', aka: ['net', 'profit'], cat: 'Accounting',
     def: 'What is left after costs, as a share of revenue.',
     basis: 'net = revenue − expenses\nmargin = net ÷ revenue',
-    note: 'Only meaningful when revenue and costs come from the same book — which is why the growth card reads the P&L rather than the order book.',
+    note: 'Only meaningful when revenue and costs come from the same book - which is why the growth card reads the P&L rather than the order book.',
     locs: [
       { view: 'pl', tab: 'P&L', section: 'Income Statement' },
       { view: 'overview', tab: 'Overview', section: 'Cash Flow Overview (Profit · Margin)' },
@@ -279,10 +293,10 @@ const GLOSSARY: Entry[] = [
     term: 'Not invoiced', aka: ['yet to be invoiced', 'pending invoice', 'unbilled'], cat: 'Receivables',
     def: 'A sales order that exists in Striven and has never had an invoice raised against it. Nothing on it is receivable yet.',
     basis: 'orders with zero linked invoices, cancelled and DEMO excluded\nwould add to AR = case value × 0.15  (PI)',
-    note: 'Flagged in red and deliberately kept OUT of every AR total — it is not a receivable until it is raised. On the current book this is larger than the entire open receivable, which is exactly why it is shown.',
+    note: 'Flagged in red and deliberately kept OUT of every AR total - it is not a receivable until it is raised. On the current book this is larger than the entire open receivable, which is exactly why it is shown.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'PI orders yet to be invoiced (the red panel)' },
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices — red rows and the NOT INVOICED subtotal' },
+      { view: 'receivables', tab: 'AR / AP', section: 'PI orders yet to be invoiced (the red panel)', anchor: 'pi-3' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices - red rows and the NOT INVOICED subtotal', anchor: 'open-invoices' },
     ],
   },
   {
@@ -296,10 +310,10 @@ const GLOSSARY: Entry[] = [
   },
   {
     term: 'Payer', cat: 'Programmes',
-    def: 'Who actually pays the bill: Veterans Affairs, TriCare, or — on PI — the individual law firm handling the claim.',
+    def: 'Who actually pays the bill: Veterans Affairs, TriCare, or - on PI - the individual law firm handling the claim.',
     note: 'Never the Striven customer, which on this book is a patient. The programme rule is taken from the VERTICAL, never from the payer text, because there are dozens of PI law firms and only one PI rule.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices · Top Customers by Balance' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices · Top Customers by Balance', anchor: 'top-customers' },
       { view: 'overview', tab: 'Overview', section: 'AR Due (by payer)' },
       { view: 'repsorders', tab: 'Orders & Revenue', section: 'Accounts filter', differs: 'On the rep boards this is called the ACCOUNT.' },
     ],
@@ -314,7 +328,7 @@ const GLOSSARY: Entry[] = [
     def: 'A de-identified stand-in for a patient, e.g. PT-385. Where a name is shown it is a first INITIAL and a surname, never a full first name.',
     note: 'Minimum-necessary by design: full first names, dates of birth and addresses are never stored or cached anywhere in this portal, and access is audit-logged.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices · Recent Payments' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices · Recent Payments', anchor: 'recent-payments' },
       { view: 'accounts', tab: 'Accounts', section: 'Recent Payments Received' },
       { view: 'reports', tab: 'Reports', section: 'Patient items' },
     ],
@@ -324,7 +338,7 @@ const GLOSSARY: Entry[] = [
     def: 'Personal Injury. The device is supplied against a lien on the patient’s legal claim, so the bill settles out of an eventual award rather than by an insurer on a cycle.',
     note: 'PI is the reason so much of this portal has a special case. Striven raises only the 15% advance as the invoice, so an invoice showing no balance means the ADVANCE is settled, not the case.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'AR Aging · Open Invoices · PI orders yet to be invoiced' },
+      { view: 'receivables', tab: 'AR / AP', section: 'AR Aging · Open Invoices · PI orders yet to be invoiced', anchor: 'pi-book' },
       { view: 'arsheet', tab: 'AR Register', section: 'Invoice Book · AR Receivable' },
       { view: 'orders', tab: 'Orders', section: 'Order Value by Type · All Sales Orders' },
       { view: 'repspipeline', tab: 'PI & PIP', section: 'The PI stage board', differs: 'Here PI is a pipeline of stages, not a money basis.' },
@@ -334,7 +348,7 @@ const GLOSSARY: Entry[] = [
   {
     term: 'PIP', cat: 'Programmes',
     def: 'Personal Injury Protection. Reports as PI in the order book but settles through the patient’s own motor policy rather than a lien, so it never reaches a settlement negotiation.',
-    note: 'It has its own three-stage board because its journey genuinely differs — Order received, Waiting on PIP Payment, Bill settled — against PI’s six.',
+    note: 'It has its own three-stage board because its journey genuinely differs - Order received, Waiting on PIP Payment, Bill settled - against PI’s six.',
     locs: [
       { view: 'repspipeline', tab: 'PI & PIP', section: 'PIP board (beside the PI board)' },
       { view: 'commission', tab: 'Commission', section: 'Counted inside the PI vertical' },
@@ -379,7 +393,7 @@ const GLOSSARY: Entry[] = [
   },
   {
     term: 'Stage', cat: 'Orders',
-    def: 'Where an order sits on its programme’s journey — Order received, LOP requested, Waiting for settlement, and so on.',
+    def: 'Where an order sits on its programme’s journey - Order received, LOP requested, Waiting for settlement, and so on.',
     note: 'Seeded from the order’s Striven LABEL and then overridable by hand. A manual move is stored in this portal and does NOT write back to Striven. PI, PIP and VA each have their own stage list.',
     locs: [
       { view: 'repspipeline', tab: 'PI & PIP', section: 'The stage columns' },
@@ -390,19 +404,19 @@ const GLOSSARY: Entry[] = [
     term: 'Striven payable', cat: 'Commission',
     def: 'What the portal’s own engine calculates a rep is owed, carried beside the signed-off sheet figure.',
     basis: 'Σ (units × per-device rate) across the rep’s orders',
-    note: 'It disagrees with the reconciliation sheet by roughly $98k. Both are shown on purpose — a page that shows one without the other cannot explain itself.',
+    note: 'It disagrees with the reconciliation sheet by roughly $98k. Both are shown on purpose - a page that shows one without the other cannot explain itself.',
     locs: [{ view: 'commission', tab: 'Commission', section: 'Beside the payable total' }],
   },
   {
     term: 'Sub-ledger', cat: 'Payables',
-    def: 'One vendor’s block of the AP ledger sheet — their bills, their payments and their running outstanding.',
+    def: 'One vendor’s block of the AP ledger sheet - their bills, their payments and their running outstanding.',
     note: 'Payments with no invoice on the sheet to account for them are surfaced rather than netted away: obtain the bill and the row reconciles.',
     locs: [{ view: 'apsheet', tab: 'AP Register', section: 'SUB-LEDGER SUMMARY' }],
   },
   {
     term: 'System of record', cat: 'Accounting',
     def: 'QuickBooks Online. The books an accountant would close the year on.',
-    note: 'It can only report on documents posted to it, and this portal posts invoices one at a time on request — so a QuickBooks figure can be missing revenue the Striven view already has.',
+    note: 'It can only report on documents posted to it, and this portal posts invoices one at a time on request - so a QuickBooks figure can be missing revenue the Striven view already has.',
     locs: [
       { view: 'pl', tab: 'P&L', section: 'Source toggle' },
       { view: 'quickbooks', tab: 'QuickBooks', section: 'Connection · reconciliation' },
@@ -433,7 +447,7 @@ const GLOSSARY: Entry[] = [
     basis: 'netted against that customer’s open invoices, oldest due first',
     note: 'Exactly as Striven does it. PI advances always leave a residual by design, so they are excluded from the anomaly report.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Insights · netted out of AR' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Insights · netted out of AR', anchor: 'ar-insights' },
       { view: 'exceptions', tab: 'Exceptions', section: 'Unapplied customer payments' },
     ],
   },
@@ -448,6 +462,26 @@ const GLOSSARY: Entry[] = [
   },
 ];
 
+/**
+ * THE SLUG → HEADWORD MAP, HANDED TO THE TRAIL.
+ *
+ * The return chip on every other tab names the entry a reader came from, and all
+ * it has is the slug out of the hash. De-slugging gives "Ar open" where the
+ * glossary says "AR Open" — close enough to look like a typo and wrong enough to
+ * be one. The glossary is the authority on its own spelling, so it publishes it.
+ *
+ * AT MODULE SCOPE, NOT IN AN EFFECT, so the labels are there the moment this
+ * chunk loads rather than after it has rendered once.
+ *
+ * THIS TAB IS LAZY, AND THAT IS FINE HERE: a trail can only be created BY the
+ * guide, so following one guarantees this chunk is already loaded and the label
+ * is already right. The single case it does not cover is a reload directly onto
+ * a trail URL — a pasted link — where the chip falls back to the de-slugged
+ * "Ar open" until the guide is opened. A cosmetic miss on a hand-shared link,
+ * and not worth eagerly loading the whole glossary on every page to avoid.
+ */
+registerTrailLabels(GLOSSARY.map((e) => e.term));
+
 /** The letter a term files under. Non-letters would all collapse into one
  *  bucket, so they are given their own — none exist today, and a silent
  *  mis-file later is worse than an obvious '#'. */
@@ -459,7 +493,11 @@ const letterOf = (t: string) => {
 /** A term's own anchor, so the suggestion list can jump to one entry rather
  *  than only to its letter. Slugged because a term carries spaces and slashes
  *  ("P&L", "A/R Health Score") and an id has to survive both. */
-const termId = (t: string) => `ug-t-${t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+/** The anchor a term's row carries, and the target every link into this page
+ *  aims at. Delegates to `termSlug` so the id and the hash that asks for it are
+ *  built by ONE function — they were two copies of the same expression, which is
+ *  exactly the pair that drifts and leaves a link scrolling nowhere. */
+const termId = (t: string) => `ug-t-${termSlug(t)}`;
 
 /** The matched run, marked in place. WHICH WORD CARRIES THE MATCH is the whole
  *  question when the hit is inside a formula or a definition rather than in the
@@ -693,6 +731,47 @@ export function UserGuideTab() {
     });
   };
 
+  /**
+   * ARRIVING ON A TERM — `#guide~ar-open`, from a screen's ⓘ or from the return
+   * chip on a page the guide sent the reader to.
+   *
+   * IT IS THE SAME THREE STEPS `choose` DOES, and deliberately so: open the row,
+   * scroll to it, mark it. A reader coming back from a dense finance page needs
+   * to land on the definition itself, not on the letter it happens to sit under
+   * — the browser's native `#id` jump would do the last part only, and would
+   * leave the row folded shut.
+   *
+   * THE FLASH IS NOT DECORATION. The reader did not scroll here, so nothing in
+   * the motion told them which of forty rows is the answer; the highlight is
+   * what points at it. Two seconds, then it clears itself.
+   *
+   * RUNS ON MOUNT AND ON EVERY HASHCHANGE, because the guide tab stays mounted
+   * once opened — a second visit from a different ⓘ changes only the hash, and
+   * a mount-only effect would never hear about it.
+   */
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    const land = () => {
+      const trail = splitHash(location.hash).trail;
+      if (!trail) return;
+      const hit = GLOSSARY.find((e) => termSlug(e.term) === trail);
+      if (!hit) return;
+      setTermOpen(hit.term, true);
+      setFlash(hit.term);
+      requestAnimationFrame(() => {
+        document.getElementById(termId(hit.term))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      });
+    };
+    land();
+    window.addEventListener('hashchange', land);
+    return () => window.removeEventListener('hashchange', land);
+  }, []);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 2000);
+    return () => clearTimeout(t);
+  }, [flash]);
+
   // Clicking anywhere outside the box closes the panel. Pointer-down, not
   // click, so it closes on the way down like every other menu in the app.
   useEffect(() => {
@@ -792,13 +871,13 @@ export function UserGuideTab() {
                       <span className="ug-sug-locs">
                         {s.e.locs.map((l, li) => (
                           <a
-                            key={`${l.view}-${li}`} className="ug-sug-loc" href={`#${l.view}`}
-                            title={`Open ${l.tab} · ${l.section}${l.differs ? ` — differs here: ${l.differs}` : ''}`}
+                            key={`${l.view}-${li}`} className="ug-sug-loc" href={trailHref(l.view, s.e.term, l.anchor)}
+                            title={`Open ${l.tab} · ${l.section}${l.differs ? ` - differs here: ${l.differs}` : ''}`}
                             onMouseDown={(ev) => ev.stopPropagation()}
                             onClick={(ev) => { ev.stopPropagation(); setSugOpen(false); }}
                           >
                             <b>{hl(l.tab, q)}</b>
-                            <i>{hl(l.section, q)}</i>
+                            <i>{l.anchor && <span className="ug-loc-precise" aria-hidden>▸</span>}{hl(l.section, q)}</i>
                             {l.differs && <span className="ug-sug-warn" title={l.differs}>⚠</span>}
                           </a>
                         ))}
@@ -827,7 +906,7 @@ export function UserGuideTab() {
       <div className="ug-lead">
         <div className="ug-lead-item">
           <strong>Read the basis, not just the name.</strong> Several figures here change meaning
-          between tabs — Cash Received is all-time in one place and year-to-date in another, and
+          between tabs - Cash Received is all-time in one place and year-to-date in another, and
           Collection Rate and A/R Health Score are two different calculations that sound like one.
         </div>
         <div className="ug-lead-item">
@@ -835,13 +914,13 @@ export function UserGuideTab() {
               on "every entry states how its number is worked out" without being
               told that the second part is behind a click. */}
           <strong>Every entry has two parts.</strong> The line on the row is what the term
-          <em> means</em>. Open the row for its <em>basis of calculation</em> — the arithmetic the
+          <em> means</em>. Open the row for its <em>basis of calculation</em> - the arithmetic the
           figure is actually produced by. Terms that have one are marked <b>ƒ</b>; the rest are
           definitions with no formula behind them, and say so by carrying no mark.
         </div>
         <div className="ug-lead-item">
           <strong>And where it appears.</strong> Every entry lists <em>all</em> the screens that
-          use the term, so you can check the same figure elsewhere — with a ⚠ on any screen where
+          use the term, so you can check the same figure elsewhere - with a ⚠ on any screen where
           that same name is worked out differently.
         </div>
       </div>
@@ -892,7 +971,7 @@ export function UserGuideTab() {
                 key={e.term}
                 /* The anchor the suggestion list jumps to. */
                 id={termId(e.term)}
-                className="ug-row"
+                className={`ug-row${flash === e.term ? ' is-landed' : ''}`}
                 open={openTerms.has(e.term)}
                 onToggle={(ev) => setTermOpen(e.term, (ev.currentTarget as HTMLDetailsElement).open)}
               >
@@ -933,9 +1012,27 @@ export function UserGuideTab() {
                     <ul>
                       {e.locs.map((l, i) => (
                         <li key={`${l.view}-${i}`}>
-                          <a className="ug-loc" href={`#${l.view}`}>
+                          {/* CARRIES THE TERM, not just the tab. `#receivables`
+                              opened the right page and abandoned the reader
+                              there; `#receivables~ar-open` says which definition
+                              they were reading, and the destination shows a way
+                              back to it. See guideTrail.tsx. */}
+                          <a className={`ug-loc${l.anchor ? ' is-precise' : ''}`} href={trailHref(l.view, e.term, l.anchor)}
+                            title={l.anchor
+                              ? `Opens ${l.tab} and goes straight to ${l.section}`
+                              : `Opens ${l.tab}. This screen has not named an anchor for ${l.section} yet, so it lands at the top of the tab.`}>
                             <span className="ug-loc-tab">{l.tab}</span>
-                            <span className="ug-loc-sec">{l.section}</span>
+                            {/* ▸ MEANS "THIS ONE IS PRECISE". The reader is about
+                                to leave the page, and the difference between
+                                landing ON the section and landing on a tab that
+                                contains it somewhere is worth knowing BEFORE the
+                                click, not after it. Its absence is equally
+                                informative and is why the mark is drawn per
+                                location rather than on all of them. */}
+                            <span className="ug-loc-sec">
+                              {l.anchor && <span className="ug-loc-precise" aria-hidden>▸</span>}
+                              {l.section}
+                            </span>
                           </a>
                           {l.differs && <span className="ug-differs">⚠ {l.differs}</span>}
                         </li>

@@ -142,11 +142,11 @@ function BillCard({ bill, onClose }: { bill: Bill; onClose: () => void }) {
           <div style={{ padding: 18 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 16 }}>
               <BillKV label="Status">{statusTag(bill.status, bill.kind)}</BillKV>
-              <BillKV label="Invoice date">{bill.date ? fmtDate(bill.date) : <span style={{ color: C.muted }}>—</span>}</BillKV>
-              <BillKV label="Due date">{bill.due ? fmtDate(bill.due) : <span style={{ color: C.muted }}>—</span>}</BillKV>
+              <BillKV label="Invoice date">{bill.date ? fmtDate(bill.date) : <span style={{ color: C.muted }}>-</span>}</BillKV>
+              <BillKV label="Due date">{bill.due ? fmtDate(bill.due) : <span style={{ color: C.muted }}>-</span>}</BillKV>
               {/* The two the sheet carries and no table column prints. */}
               <BillKV label="Payment terms"><Terms days={bill.termsDays} source={bill.termsSource} /></BillKV>
-              <BillKV label="Aging">{bill.aging || <span style={{ color: C.muted }}>—</span>}</BillKV>
+              <BillKV label="Aging">{bill.aging || <span style={{ color: C.muted }}>-</span>}</BillKV>
               <BillKV label="Days past due">
                 {late == null ? <span style={{ color: C.muted }}>settled</span>
                   : late > 0 ? <span style={{ color: C.negative }}>{late} days</span>
@@ -160,7 +160,7 @@ function BillCard({ bill, onClose }: { bill: Bill; onClose: () => void }) {
               <BillKV label="Invoice amount">{formatCurrency(bill.faceValue, true)}</BillKV>
               <BillKV label="Counts toward payable">
                 {bill.kind === 'cancelled'
-                  ? <span style={{ color: C.muted }}>$0 — cancelled</span>
+                  ? <span style={{ color: C.muted }}>$0 - cancelled</span>
                   : formatCurrency(bill.total, true)}
               </BillKV>
               <BillKV label="Open balance">
@@ -398,7 +398,7 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
         // as on screen, so the workbook and the table cannot read differently.
         b.termsDays == null ? '' : `Net ${b.termsDays}${b.termsSource === 'agreed' ? ' °' : ''}`,
         b.due, money(b.faceValue), money(b.total), money(b.open),
-        b.kind === 'cancelled' ? 'Cancelled — excluded' : b.kind === 'credit-note' ? 'Credit note' : b.status,
+        b.kind === 'cancelled' ? 'Cancelled - excluded' : b.kind === 'credit-note' ? 'Credit note' : b.status,
       ]),
       [],
       // Blank under "Face value": summing face values would re-add the very
@@ -507,14 +507,14 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                     does not count, and both facts are visible at once. */}
                 <td className={b.kind === 'credit-note' ? 'num cell-pos' : 'num'}
                   style={b.kind === 'cancelled' ? { textDecoration: 'line-through', color: C.muted } : undefined}
-                  title={b.kind === 'cancelled' ? 'Cancelled — excluded from every total on this page' : undefined}>
+                  title={b.kind === 'cancelled' ? 'Cancelled - excluded from every total on this page' : undefined}>
                   {formatCurrency(b.faceValue, true)}
                 </td>
                 {/* A settled bill shows an em-dash, not $0.00: nothing is owed,
                     and a column of zeroes reads as an amount rather than as the
                     absence of one. */}
                 <td className={b.open > 0 ? 'num cell-neg' : 'num'}>
-                  {b.open > 0 ? formatCurrency(b.open, true) : <span style={{ color: C.muted }}>—</span>}
+                  {b.open > 0 ? formatCurrency(b.open, true) : <span style={{ color: C.muted }}>-</span>}
                 </td>
                 <td>{statusTag(b.status, b.kind)}</td>
               </tr>
@@ -816,9 +816,9 @@ export function ApSheetTab() {
         // the days-past-due the row cannot print.
         n: <BillLink bill={b} />,
         v: b.vendor,
-        d: b.date ? fmtDate(b.date) : <span style={{ color: C.muted }}>—</span>,
+        d: b.date ? fmtDate(b.date) : <span style={{ color: C.muted }}>-</span>,
         tm: <Terms days={b.termsDays} source={b.termsSource} />,
-        due: b.due ? fmtDate(b.due) : <span style={{ color: C.muted }}>—</span>,
+        due: b.due ? fmtDate(b.due) : <span style={{ color: C.muted }}>-</span>,
         o: formatCurrency(b.open, true),
       }))
       // The credit notes, then the net — so the rows above add to the figure on
@@ -1044,7 +1044,7 @@ export function ApSheetTab() {
                 {unexplained.length > 0 && (() => {
                   // TWO DIFFERENT FAULTS, and they were being reported as one
                   // sentence. A NEGATIVE check means we paid more than the
-                  // invoices on file account for — the paperwork is missing, and
+                  // invoices on file account for - the paperwork is missing, and
                   // the fix is to obtain those bills. A POSITIVE one means the
                   // opposite: a bill's balance was never reduced for a payment
                   // already made, which is a correction to the sheet. Telling
@@ -1054,14 +1054,14 @@ export function ApSheetTab() {
                   return (
                     <>
                       {missingBills.length > 0 && (
-                        <> <b>Bills required</b> — we have paid{' '}
+                        <> <b>Bills required</b> - we have paid{' '}
                           <b style={{ color: C.warning }}>{formatCurrency(billsRequiredTotal, true)}</b> that no invoice on this
                           sheet accounts for: {missingBills.map((v) => `${v.vendor} ${formatCurrency(v.billsRequired, true)}`).join(', ')}.
-                          {' '}These are not overpayments — they are invoices we do not yet hold. Obtain them from the supplier,
+                          {' '}These are not overpayments - they are invoices we do not yet hold. Obtain them from the supplier,
                           enter them in the sheet, and each block ties on its own.</>
                       )}
                       {unapplied.length > 0 && (
-                        <> {unapplied.map((v) => `${v.vendor} ${formatCurrency(v.check, true)}`).join(', ')} — a bill's balance
+                        <> {unapplied.map((v) => `${v.vendor} ${formatCurrency(v.check, true)}`).join(', ')} - a bill's balance
                           has not been reduced for a payment already made; that is a correction to the sheet, not a missing invoice.</>
                       )}
                     </>
@@ -1072,7 +1072,7 @@ export function ApSheetTab() {
           })()}
         </div>
 
-        {/* ONE REGISTER. It was two cards — "Unpaid Bills" then "Paid Bills" —
+        {/* ONE REGISTER. It was two cards - "Unpaid Bills" then "Paid Bills" -
             which split every supplier's history in half: answering "what has
             Doctors Medical billed us and where does it stand" meant reading one
             table, scrolling past a second, and re-applying the same sub-ledger

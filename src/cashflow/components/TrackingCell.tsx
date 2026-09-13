@@ -55,7 +55,7 @@ export function TrackingCell({ shipments, compact = false }: {
                   title={`Track ${s.tn} with ${s.carrier.name}`}
                   style={{ color: C.brand, fontWeight: 600 }}>{num}</a>
               )
-              : <span title={`Tracking number ${s.tn} — Striven names no carrier and the format matches none`} style={{ color: C.sub }}>{num}</span>}
+              : <span title={`Tracking number ${s.tn} - Striven names no carrier and the format matches none`} style={{ color: C.sub }}>{num}</span>}
           </span>
         );
       })}

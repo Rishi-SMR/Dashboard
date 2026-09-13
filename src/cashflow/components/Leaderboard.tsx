@@ -70,7 +70,7 @@ const badgeFor = (orders: number) => [...MILESTONES].reverse().find((m) => order
  */
 function chaseLine(gap: number, name: string, nextRank: number) {
   const o = `${gap} order${gap === 1 ? '' : 's'}`;
-  if (gap <= 2) return { icon: '🔥', text: <>Just <b>{o}</b> behind <b>{name}</b> — one good day and #{nextRank} is yours.</> };
+  if (gap <= 2) return { icon: '🔥', text: <>Just <b>{o}</b> behind <b>{name}</b> - one good day and #{nextRank} is yours.</> };
   if (gap <= 5) return { icon: '⚡', text: <><b>{o}</b> from overtaking <b>{name}</b>. That is this week's work.</> };
   if (gap <= 15) return { icon: '🎯', text: <><b>{o}</b> to take #{nextRank} off <b>{name}</b>. Well within range.</> };
   if (gap <= 40) return { icon: '📈', text: <><b>{name}</b> is <b>{o}</b> ahead. Close it steadily and #{nextRank} is on.</> };
@@ -81,7 +81,7 @@ const REDUCED = typeof window !== 'undefined'
   && typeof window.matchMedia === 'function'
   && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/** Podium tints. Not in the token set — they are medals, not brand colours. */
+/** Podium tints. Not in the token set - they are medals, not brand colours. */
 const MEDAL = [
   { ring: '#D4A017', soft: 'rgba(212,160,23,.14)', glyph: '🥇', label: '1st' },
   { ring: '#8E9BAE', soft: 'rgba(142,155,174,.16)', glyph: '🥈', label: '2nd' },
@@ -706,7 +706,7 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
         <div className="lbx-gap is-first">
           <span className="lbx-gap-i" aria-hidden="true">🏆</span>
           <span>
-            Top of the board — <b>{self.orders}</b> orders.
+            Top of the board - <b>{self.orders}</b> orders.
             {/* `board`, not `ranked`: naming a rep who is not on screen — a
                 sub-rep folded into this very card — would read as a phantom. */}
             {board[1]

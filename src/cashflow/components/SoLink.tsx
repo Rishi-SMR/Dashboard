@@ -89,7 +89,7 @@ const fmtDate = (s: string | null | undefined) =>
  * screen and read as a broken page rather than as a figure they may not see.
  */
 const money = (v: number | null | undefined) =>
-  (typeof v === 'number' && Number.isFinite(v) ? formatCurrency(v) : '—');
+  (typeof v === 'number' && Number.isFinite(v) ? formatCurrency(v) : '-');
 
 function SoDetailModal({ soId, label, canOpenInStriven, onClose }: {
   soId: number; label: string; canOpenInStriven: boolean; onClose: () => void;
@@ -193,7 +193,7 @@ function SoDetailModal({ soId, label, canOpenInStriven, onClose }: {
 
                 {detail.moneyMasked && (
                   <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
-                    Order value and line prices are not shown on a rep login — your own commission is the one dollar figure on your board.
+                    Order value and line prices are not shown on a rep login - your own commission is the one dollar figure on your board.
                   </div>
                 )}
                 {detail.phiMasked && (

@@ -779,7 +779,7 @@ export function PLTab() {
                   them is how much of the book has been posted across. */}
               <div className="muted-note">
                 {source === 'quickbooks'
-                  ? <>{qb?.basis ?? 'Accrual'} basis · {period.label} · QuickBooks' own monthly Profit &amp; Loss, one column per month — it reports only what has been posted to it. Switch <b>Source</b> to <b>Striven</b> for the operational view of the same period.</>
+                  ? <>{qb?.basis ?? 'Accrual'} basis · {period.label} · QuickBooks' own monthly Profit &amp; Loss, one column per month - it reports only what has been posted to it. Switch <b>Source</b> to <b>Striven</b> for the operational view of the same period.</>
                   : <>Accrual basis · {period.label} · computed from {pl.invoiceCount} invoices &amp; {pl.billCount} bills. Striven's API has no P&amp;L report endpoint, so this statement is derived live from the underlying transactions.</>}
               </div>
             </div>

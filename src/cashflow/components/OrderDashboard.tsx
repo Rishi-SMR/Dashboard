@@ -1228,7 +1228,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
                   cheaper than the wrong total. */}
               {byAcct.length > ACCT_CAP && (
                 <div style={{ fontSize: 11.5, color: C.muted, marginTop: 7 }}>
-                  Top {ACCT_CAP} of {byAcct.length} accounts by revenue — the other{' '}
+                  Top {ACCT_CAP} of {byAcct.length} accounts by revenue - the other{' '}
                   {byAcct.length - ACCT_CAP} carry {formatCurrency(byAcct.slice(ACCT_CAP).reduce((t, a) => t + a.revenue, 0))} between them.
                 </div>
               )}
@@ -1241,7 +1241,7 @@ function TotalsDrill({ metric, orders, onClose, onPickAccount, onPickDevice }: {
               lines at the foot of it. The exclusions note applies to every
               figure here and stays on all of them. */}
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10 }}>
-            {showList && '🔒 Patient SURNAME only — never a first name, date of birth or address. '}
+            {showList && '🔒 Patient SURNAME only - never a first name, date of birth or address. '}
             Cancelled orders are excluded from every figure.
           </div>
         </div>
@@ -1401,7 +1401,7 @@ function DeviceModal({ device, orders, onClose }: { device: string; orders: Anal
             </table>
           </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            🔒 Patient SURNAME only — never a first name, date of birth or address. Units are this device's own count on each order, not the order's total.
+            🔒 Patient SURNAME only - never a first name, date of birth or address. Units are this device's own count on each order, not the order's total.
           </div>
         </div>
       </div>
@@ -1483,7 +1483,7 @@ function AccountModal({ account, orders, onClose }: { account: string; orders: A
             </table>
           </div>
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-            🔒 Patient SURNAME only — never a first name, date of birth or address. "Account" is the vendor billed on the order.
+            🔒 Patient SURNAME only - never a first name, date of birth or address. "Account" is the vendor billed on the order.
           </div>
         </div>
       </div>

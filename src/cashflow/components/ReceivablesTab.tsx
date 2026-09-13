@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   fetchStrivenAR, fetchStrivenPayments, fetchStrivenCustomers,
   type ArResult, type ArInvoice, type ArPendingOrder, type Payment, type PaymentsResult, type CustomersResult,
+  type PiBookInvoice,
 } from '../strivenApi';
 import { formatCurrency, pageList, clickableProps } from '../format';
 import { StatusPill } from './StatusPill';
@@ -9,6 +10,7 @@ import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTh
 import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo, pctText } from '../chartKit';
 import { SoLink } from './SoLink';
 import { soIdFromRef } from '../soRef';
+import { GuideMark, currentAnchor } from '../guideTrail';
 
 const fmtDate = (s: string | null) =>
   s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
@@ -86,6 +88,212 @@ const receivedOf = (i: ArInvoice) => (i.total || 0) - (i.ledgerOpen ?? i.open ??
  */
 const valueOf = (i: ArInvoice) =>
   (typeof i.caseValue === 'number' && i.caseValue > 0 ? i.caseValue : receivedOf(i) + (i.open || 0));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE PI BOOK, IN FOUR SECTIONS.
+//
+// A lien case does not have a balance, it has TRANCHES, and until now this tab
+// could show exactly one of them. Every figure above is the unpaid part of the
+// 15% advance — the smallest quarter of the story — and the other three were
+// either somewhere else entirely or nowhere at all:
+//
+//   1  ADVANCE RECEIVED     the 15% is banked. It could not appear on this tab
+//                           at all: a collected advance leaves no balance, and
+//                           the invoice register is built from what is owed. The
+//                           rows showing the programme WORKING were the only
+//                           ones the page could not show.
+//   2  ADVANCE OUTSTANDING  raised and not arrived. The receivable, and the one
+//                           tranche AR already reported — this section is the PI
+//                           part of the AR Open tile, named as such.
+//   3  NOT INVOICED         no invoice exists yet. The red panel, which was the
+//                           only one of the four on this page before.
+//   4  CASE BALANCE         the 85% that bills on settlement. Not a receivable
+//                           and never counted as one, but it is the largest
+//                           figure on the book, and a page that omits it
+//                           describes a business a sixth of its size.
+//
+// THE FOUR PARTITION THE MONEY: received + outstanding + balance is the case
+// value of the invoiced book, and (3) is the same arithmetic over orders with no
+// invoice. That is the property that lets them be read against each other, and
+// it is asserted on the server (see _pi-book.test.js) rather than hoped for.
+//
+// A ROW CAN BE IN TWO SECTIONS; THE MONEY IS IN ONE. A case whose advance is in
+// is in (1) for the 15% and (4) for the 85%, which is what it is: two tranches
+// of one case, at different stages, and collapsing it into a single row would
+// have to hide one of them.
+//
+// ONE TABLE, FOUR TABS. They were four stacked panels first, and that buried the
+// only comparison the split exists to make: section 1 and section 4 sat two
+// thousand pixels apart, so how the case value actually divides could not be
+// seen without scrolling and remembering. The strip puts the four figures on one
+// line, and the table below answers "which cases?" for whichever is pressed —
+// which also means the four rows sets must share ONE shape, hence `PiRow`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The four accents, in the order the sections run. Green is money in, amber is
+ *  being chased, red is not even asked for, slate is not owed yet — the same
+ *  severity ladder the pills use, so a colour means one thing on this page. */
+type PiTone = 'ok' | 'warn' | 'danger' | 'info';
+
+/**
+ * ONE ROW SHAPE FOR ALL FOUR SECTIONS.
+ *
+ * Three of the four are invoices and the fourth is an order that has none, so
+ * they arrive in two different shapes from two different places. Normalising
+ * them here is what lets a SINGLE table render any section: the table takes
+ * `PiRow[]` and knows nothing about which section it is showing, so the four
+ * cannot drift into four subtly different tables.
+ *
+ * `amount` IS THE SECTION'S OWN TRANCHE — advance received, advance owed, what
+ * invoicing would raise, or the balance to come. The column header names which,
+ * because the figure means something different in each and an unlabelled money
+ * column would be four different numbers under one word.
+ */
+type PiRow = {
+  key: string;
+  /** STRING OR NUMBER, because the two sources disagree and SoLink takes either:
+   *  the PI book ships the id as a string, while section 3's orders are keyed by
+   *  reference and parsed to a number by `soIdFromRef`. Coercing one to match
+   *  the other here would only move the cast, not remove it. */
+  soId: string | number | null; ref: string; rep: string;
+  /** Null where no invoice has been raised — section 3, and only section 3. */
+  invoiceNo: string | null;
+  patient: string; payer: string;
+  caseValue: number; amount: number;
+  joined: boolean; overRate: boolean;
+  status: ReactNode;
+};
+
+/** What the tab strip and the table need to know about one section. */
+type PiSectionDef = {
+  n: 1 | 2 | 3 | 4;
+  tone: PiTone;
+  /** The tab's label, the table's money-column header, and the prose under the
+   *  strip. Three different lengths for three different jobs. */
+  tab: string; amountLabel: string; title: string; sub: ReactNode;
+  unit: string;
+  /** This section's headword in the User Guide — the ⓘ beside its title goes
+   *  there. Each section gets its OWN term rather than all four pointing at
+   *  "Fifteen percent advance": the reader pressing ⓘ on section 3 is asking
+   *  what "not invoiced" means, not what the lien rate is. */
+  guide: string;
+  amount: number; count: number; caseValue: number;
+  rows: PiRow[];
+};
+
+/**
+ * THE BADGES A PI ROW CAN CARRY, and both are about the JOIN, not the money.
+ *
+ * A reader looking at a case value wants to know whether it is the order or a
+ * stand-in, because that decides whether the 85% beside it means anything. Two
+ * rows can carry the same figures for opposite reasons, and the badge is the
+ * only thing that tells them apart.
+ */
+function PiRowFlags({ r }: { r: PiRow }) {
+  return (
+    <>
+      {!r.joined && (
+        <span className="pill-tag tag-muted" style={{ marginLeft: 6 }}
+          title="No sales order joins to this invoice, so the case value is the invoice itself. There is no 15% split and nothing riding behind it.">
+          no order
+        </span>
+      )}
+      {r.overRate && (
+        <span className="pill-tag tag-warn" style={{ marginLeft: 6 }}
+          title="Striven billed more than 15% of the order behind this invoice. Either the whole bill was raised instead of the advance, or the invoice is matched to the wrong order - both are worth checking in Striven.">
+          over 15%
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * THE TAB STRIP: four sections, side by side, each one a button.
+ *
+ * IT IS A SUMMARY AND A CONTROL AT ONCE, which is the point. Four stacked panels
+ * put two thousand pixels between section 1 and section 4, so the one comparison
+ * the split exists to make — how the case value divides between banked, owed,
+ * unbilled and not-yet-due — could not be made without scrolling. Side by side,
+ * the four figures are read in one glance and the table below answers "which
+ * cases?" for whichever one you press.
+ *
+ * EVERY TAB KEEPS ITS OWN ACCENT WHEN INACTIVE, at low strength. Greying the
+ * three you are not on would throw away the severity ladder exactly when it is
+ * most useful — the strip is meant to be read as four figures, not as one
+ * selected figure and three dormant controls.
+ */
+function PiTabs({ sections, active, onPick }: {
+  sections: PiSectionDef[]; active: number; onPick: (n: PiSectionDef['n']) => void;
+}) {
+  return (
+    <div className="pi-tabs" role="tablist" aria-label="Personal Injury book sections">
+      {sections.map((s) => (
+        <button key={s.n} type="button" role="tab"
+          id={`pi-tab-${s.n}`} aria-controls="pi-book-table" aria-selected={active === s.n}
+          className={`pi-tab is-${s.tone}${active === s.n ? ' active' : ''}`}
+          onClick={() => onPick(s.n)}>
+          <span className="pi-tab-top">
+            <span className="pi-tab-n" aria-hidden>{s.n}</span>
+            <span className="pi-tab-l">{s.tab}</span>
+          </span>
+          <strong className="pi-tab-v">{formatCurrency(s.amount)}</strong>
+          <span className="pi-tab-f">{s.count} {s.unit}{s.count === 1 ? '' : 's'} · {formatCurrency(s.caseValue)} case value</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * THE ONE TABLE. It renders whichever section is selected and knows nothing else
+ * about them.
+ *
+ * THE INVOICE COLUMN STAYS FOR SECTION 3, reading "not raised" rather than
+ * vanishing. In four separate tables that column could simply be absent, because
+ * each table was its own thing; in one table the columns must not move under the
+ * reader when they change tab — a header that shifts sideways between sections
+ * makes the four impossible to compare, which is the whole reason they were
+ * merged. And "not raised" is the actual answer for those rows: it is the
+ * subject of the section, not a gap in the data.
+ */
+function PiTable({ section }: { section: PiSectionDef }) {
+  return (
+    <table className="data-table compact" id="pi-book-table"
+      role="tabpanel" aria-labelledby={`pi-tab-${section.n}`}>
+      <thead>
+        <tr>
+          <th>Order</th><th>Invoice</th><th>Patient</th><th>Payer</th><th>Rep</th>
+          <th className="num">Case value</th><th className="num">{section.amountLabel}</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {section.rows.map((r) => (
+          // TINTED ONLY ON SECTION 3, as it always was. That section is an action
+          // list — every row is an invoice somebody has to raise — and the tint
+          // is what says so at a glance. Tinting all four would make the tint
+          // mean "this is a PI row", which is not worth a colour.
+          <tr key={r.key} className={section.n === 3 ? 'is-pending-row' : undefined}>
+            {/* The order leads in every section, so the four read as one book cut
+                four ways rather than as four tables that happen to be adjacent. */}
+            <td>{r.ref ? <SoLink soId={r.soId} label={r.ref} /> : <span style={{ color: C.muted }}>-</span>}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>
+              {r.invoiceNo
+                ? <>#{r.invoiceNo}<PiRowFlags r={r} /></>
+                : <span style={{ color: C.muted }}>not raised</span>}
+            </td>
+            <td className="clip">{r.patient || '-'}</td>
+            <td className="clip" title={r.payer || undefined}>{trunc(r.payer || '-', 22)}</td>
+            <td>{r.rep || '-'}</td>
+            <td className="num">{formatCurrency(r.caseValue)}</td>
+            <td className="num">{formatCurrency(r.amount)}</td>
+            <td>{r.status}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 export function ReceivablesTab() {
   const [ar, setAr] = useState<ArResult | null>(null);
@@ -275,6 +483,126 @@ export function ReceivablesTab() {
     () => (ar?.pending?.orders ?? []).filter((o) => o.vertical === 'PI'),
     [ar],
   );
+  /**
+   * THE OTHER THREE TRANCHES — see the block comment above the component.
+   *
+   * Split server-side (piBookOf), because section 1 is built from invoices this
+   * endpoint's own register deliberately drops: an advance that has been
+   * collected leaves no balance, and `invoices` carries only what is owed.
+   *
+   * OPTIONAL ON PURPOSE. An open tab across a deploy holds a payload with no
+   * `piBook`, and the four sections then degrade to the one the page has always
+   * had rather than rendering "$NaN" under three empty tables.
+   */
+  const piBook = ar?.piBook ?? null;
+
+  /**
+   * THE FOUR SECTIONS, BUILT ONCE — figures, prose and rows together.
+   *
+   * They are assembled in one place because the tab strip and the table have to
+   * agree about every one of them: the strip shows a section's total, the table
+   * shows the rows that total was summed from, and deriving those separately is
+   * how a strip comes to disagree with the table under it.
+   *
+   * A SECTION WITH NO ROWS IS DROPPED, not shown empty. Each is a real state a
+   * case can be in, and an empty one is a state nothing is currently in — a tab
+   * that opens on "no rows" is a dead end, and four tabs where one never
+   * answers teaches a reader to distrust the other three.
+   */
+  const piSections = useMemo<PiSectionDef[]>(() => {
+    const fromInvoice = (r: PiBookInvoice, amount: number, status: ReactNode): PiRow => ({
+      key: `i${r.id}`, soId: r.soId, ref: r.ref, rep: r.rep,
+      invoiceNo: r.number, patient: r.patient, payer: r.payer,
+      caseValue: r.caseValue, amount, joined: r.joined, overRate: r.overRate, status,
+    });
+    const out: PiSectionDef[] = [];
+    if (piBook && piBook.received.count > 0) out.push({
+      n: 1, tone: 'ok', tab: 'Advance received', amountLabel: 'Advance received', unit: 'case', guide: 'Fifteen percent advance',
+      title: 'PI advance received (the 15%)',
+      sub: <>The 15% lien advance has been collected on these cases. This is cash in the door, so it is <b>not</b> in
+        AR Open above — there is nothing left owed on it. The 85% behind them is still to come, and is section 4.</>,
+      amount: piBook.received.amount, count: piBook.received.count, caseValue: piBook.received.caseValue,
+      rows: piBook.received.invoices.map((r) => fromInvoice(r, r.advanceReceived, r.advanceOpen > 0.005
+        // A part-paid advance is in this section AND in section 2, for its own
+        // halves. Saying so on the row is what stops a reader finding the same
+        // invoice under two tabs and assuming the page has double-counted it.
+        ? <span className="pill-tag tag-warn" title="Part of the advance has arrived. The rest is in section 2.">Part received</span>
+        : <span className="pill-tag tag-ok">✓ Advance in</span>)),
+    });
+    if (piBook && piBook.awaiting.count > 0) out.push({
+      n: 2, tone: 'warn', tab: 'Advance owed', amountLabel: 'Advance outstanding', unit: 'case', guide: 'AR Open',
+      title: 'PI advance invoiced, not yet received',
+      sub: <>The 15% advance is on an invoice that has not been paid. This <b>is</b> the PI receivable — the part of
+        AR Open above that PI accounts for, and the only one of the four that is money the business can chase today.</>,
+      amount: piBook.awaiting.amount, count: piBook.awaiting.count, caseValue: piBook.awaiting.caseValue,
+      rows: piBook.awaiting.invoices.map((r) => fromInvoice(r, r.advanceOpen, r.advanceReceived > 0.005
+        ? <span className="pill-tag tag-warn" title="Part of the advance has arrived. What landed is in section 1.">Part received</span>
+        : <span className="pill-tag tag-danger">Awaiting payment</span>)),
+    });
+    if (piPending.length > 0) out.push({
+      n: 3, tone: 'danger', tab: 'Not invoiced', amountLabel: 'Would invoice', unit: 'order', guide: 'Not invoiced',
+      title: 'PI orders yet to be invoiced',
+      sub: <>These sales orders carry no invoice at all. Not counted in AR Open above - nothing is receivable until it
+        is raised, so every row here is an invoice somebody has to go and raise.
+        {ar?.pending && ar.pending.count > piPending.length && (
+          <> A further {ar.pending.count - piPending.length} uninvoiced orders sit on other programmes and are not shown here.</>
+        )}</>,
+      amount: ar?.pending?.pi.expected ?? 0, count: piPending.length, caseValue: ar?.pending?.pi.caseValue ?? 0,
+      rows: piPending.map((o) => ({
+        key: `p${o.soId}`, soId: soIdFromRef(o.ref), ref: o.ref, rep: o.rep,
+        invoiceNo: null, patient: o.patient || '', payer: o.payer,
+        caseValue: o.caseValue, amount: o.expected, joined: true, overRate: false,
+        status: <span className="pill-tag tag-danger">Not invoiced</span>,
+      })),
+    });
+    if (piBook && piBook.balance.count > 0) out.push({
+      n: 4, tone: 'info', tab: 'Case balance (85%)', amountLabel: 'Balance to come', unit: 'case', guide: 'Case value',
+      title: 'PI case balance still to come (the 85%)',
+      sub: <>The part of each invoiced case beyond the 15% advance. It bills when the case settles out of the patient's
+        award, so it is <b>not</b> a receivable and sits outside AR Open above — but it is the largest figure on the PI
+        book, and the one an AR total cannot see. Cases with no sales order behind them are not here: the invoice is the
+        whole bill and nothing follows it.</>,
+      amount: piBook.balance.amount, count: piBook.balance.count, caseValue: piBook.balance.caseValue,
+      rows: piBook.balance.invoices.map((r) => fromInvoice(r, r.remainder, r.advanceOpen > 0.005
+        ? <span className="pill-tag tag-danger" title="The 15% advance has not arrived either - this case has returned nothing at all so far.">Advance also due</span>
+        : <span className="pill-tag tag-muted" title="The 15% advance has been received. This is the remainder, which settles out of the award.">Awaiting settlement</span>)),
+    });
+    return out;
+  }, [piBook, piPending, ar]);
+
+  /**
+   * WHICH SECTION IS OPEN. Held as the NUMBER, not an index, so it survives a
+   * refresh that changes which sections have rows — an index would silently
+   * point at a different section the moment one emptied.
+   */
+  const [piTab, setPiTab] = useState<PiSectionDef['n']>(1);
+  /**
+   * THE GUIDE CAN OPEN ONE OF THE FOUR — `#receivables~not-invoiced~pi-3`.
+   *
+   * THIS IS THE ONE THING THE SHELL'S LANDING CODE CANNOT DO FOR ITSELF. It
+   * finds a `data-guide-anchor` and scrolls to it, which is enough for a chart
+   * card but not for a section behind a tab: sections 1, 2 and 4 are not in the
+   * DOM at all while section 3 is open, so there is nothing to find and the
+   * reader is delivered to the right panel showing the wrong section. Only this
+   * component can press its own tab, so it does, and the shell then lands on the
+   * `pi-book` anchor as usual.
+   *
+   * MOUNT AND HASHCHANGE, because the tab stays mounted between visits — a
+   * second link from the guide changes only the hash.
+   */
+  useEffect(() => {
+    const pick = () => {
+      const m = /^pi-([1-4])$/.exec(currentAnchor() ?? '');
+      if (m) setPiTab(Number(m[1]) as PiSectionDef['n']);
+    };
+    pick();
+    window.addEventListener('hashchange', pick);
+    return () => window.removeEventListener('hashchange', pick);
+  }, []);
+  /** Falls back to the first section that exists, so the panel can never open on
+   *  a tab that is not there. Derived rather than corrected in an effect: an
+   *  effect would render one empty frame before it fixed itself. */
+  const piActive = piSections.find((s) => s.n === piTab) ?? piSections[0] ?? null;
   const fTotal = filtered.reduce((s, i) => s + (i.total || 0), 0);
   const fOpen = filtered.reduce((s, i) => s + (i.open || 0), 0);
   // Both live at module scope now, because the sort comparator above needs them
@@ -327,25 +655,32 @@ export function ReceivablesTab() {
     title: 'Cash Received', sub: 'Customer payments recorded in Striven: money actually in the door',
     ...kv([{ k: 'Payments recorded', v: String(payments?.count ?? 0) }, { k: 'Total received', v: formatCurrency(collected) }]),
   });
-  /** Every unbilled PI order, largest first — the full list behind the red card.
-   *  PI-scoped like the card itself: a "View all" that widened to programmes the
-   *  card does not show would answer a question nobody asked it. */
-  const explainPending = () => setDrill({
-    title: 'PI orders yet to be invoiced',
-    sub: `${piPending.length} PI sales orders with no invoice · ${formatCurrency(ar?.pending?.pi.expected ?? 0)} of advance would enter AR once raised`,
+  /**
+   * "VIEW ALL" FOR WHICHEVER SECTION IS OPEN — the same rows, in a window that
+   * is not sharing the page with the KPI strip and five charts.
+   *
+   * ONE BUILDER OVER THE NORMALISED ROWS, so a column cannot appear in the drill
+   * and not in the table that opened it, and the money column is named by the
+   * section exactly as it is on screen.
+   */
+  const explainPiSection = (sec: PiSectionDef) => setDrill({
+    title: sec.title,
+    sub: `${sec.count} PI ${sec.unit}${sec.count === 1 ? '' : 's'} · ${formatCurrency(sec.amount)} · ${formatCurrency(sec.caseValue)} of case value behind them`,
     columns: [
-      { key: 'ref', label: 'Order' }, { key: 'patient', label: 'Patient' },
-      { key: 'payer', label: 'Payer' }, { key: 'rep', label: 'Rep' },
-      { key: 'caseValue', label: 'Order value', num: true },
-      { key: 'expected', label: 'Would invoice', num: true },
+      { key: 'ref', label: 'Order' }, { key: 'inv', label: 'Invoice' },
+      { key: 'patient', label: 'Patient' }, { key: 'payer', label: 'Payer' },
+      { key: 'rep', label: 'Rep' },
+      { key: 'caseValue', label: 'Case value', num: true },
+      { key: 'amount', label: sec.amountLabel, num: true },
     ],
-    rows: piPending.map((o) => ({
-      ref: <strong>{o.ref}</strong>,
-      patient: o.patient || '-',
-      payer: trunc(o.payer || '-', 28),
-      rep: o.rep || '-',
-      caseValue: formatCurrency(o.caseValue),
-      expected: formatCurrency(o.expected),
+    rows: sec.rows.map((r) => ({
+      ref: <strong>{r.ref || '-'}</strong>,
+      inv: r.invoiceNo ? `#${r.invoiceNo}` : 'not raised',
+      patient: r.patient || '-',
+      payer: trunc(r.payer || '-', 28),
+      rep: r.rep || '-',
+      caseValue: formatCurrency(r.caseValue),
+      amount: formatCurrency(r.amount),
     })),
   });
   const explainDso = () => setDrill({
@@ -413,7 +748,7 @@ export function ReceivablesTab() {
 
       {ar && payments && customers && (
         <>
-          <div className="kpi-r-strip">
+          <div className="kpi-r-strip" data-guide-anchor="ar-kpis">
             <KpiR ico="doc" tint="#0A369F" label="AR Open" value={ar.totalOpen} format={formatCurrency}
               deltaText={`${ar.count} open invoices`} foot="excludes voided invoices" onClick={explainAr} />
             <KpiR ico="clip" tint="#16A34A" label="Open Invoices" value={ar.count}
@@ -426,84 +761,64 @@ export function ReceivablesTab() {
               format={(n) => `${Math.round(n)} days`} deltaText="PI only · fixed-cycle payers excluded" foot="avg age of open PI receivables" onClick={explainDso} />
           </div>
 
-          {/* ── YET TO BE INVOICED ─────────────────────────────────────────
-              Orders Striven has never billed. Deliberately ABOVE the aging
-              chart and outside every AR total: with PI carried at the 15%
-              advance the receivable is small, and read alone it says the
-              business is owed almost nothing. It is not — this is the money
-              that has not been asked for yet, and on PI it outweighs the whole
-              open book. Red because it is an action, not a statistic. */}
-          {piPending.length > 0 && (
-            <div className="ar-pending">
-              <div className="ar-pending-head">
-                <span className="ar-pending-dot" aria-hidden />
-                <div>
-                  <h2 className="ar-pending-title">PI orders yet to be invoiced</h2>
-                  <div className="ar-pending-sub">
-                    {piPending.length} PI sales order{piPending.length === 1 ? '' : 's'} in Striven carry no invoice.
-                    Not counted in AR Open above — nothing is receivable until it is raised.
-                    {ar.pending && ar.pending.count > piPending.length && (
-                      <> A further {ar.pending.count - piPending.length} uninvoiced orders sit on other programmes and are not shown here.</>
-                    )}
+          {/* ── THE PI BOOK, IN FOUR SECTIONS ───────────────────────────────
+              See the block comment above the component for what the four are
+              and why they are four. It sits ABOVE the aging chart and outside
+              every AR total: with PI carried at the 15% advance the receivable
+              is small, and read alone it says the business is owed almost
+              nothing. It is not — three of the four tranches are invisible to an
+              AR total by construction, and together they are most of the money.
+
+              ONE TABLE, FOUR TABS, rather than four stacked panels. Stacked, the
+              comparison the split exists to make could not be made: section 1
+              and section 4 were two thousand pixels apart, so nobody could see
+              how the case value actually divides. The strip puts all four
+              figures on one line and the table answers "which cases?" for
+              whichever is pressed. */}
+          {piActive && (
+            <div className="pi-book" data-guide-anchor="pi-book">
+              <div className="pi-book-head">
+                <h2 className="pi-book-title">Personal Injury · the book in four parts<GuideMark term="PI" /></h2>
+                <div className="pi-book-sub">
+                  A lien case is billed in two tranches, so it is never simply open or paid.
+                  These four sections are where every PI case sits: the 15% advance banked,
+                  the 15% raised and still owed, the orders that carry no invoice at all, and
+                  the 85% that only bills when the case settles.
+                  {piBook && (
+                    <> Across the {piBook.totals.count} invoiced case{piBook.totals.count === 1 ? '' : 's'},
+                      sections 1, 2 and 4 split {formatCurrency(piBook.totals.caseValue)} of case value between them.</>
+                  )}
+                  {' '}Only section 2 is a receivable, and it is the PI part of AR Open above.
+                </div>
+              </div>
+
+              <PiTabs sections={piSections} active={piActive.n} onPick={setPiTab} />
+
+              {/* The prose for the OPEN section, between the strip and the rows.
+                  It belongs to the table, not to the tab: a tab has room for a
+                  figure and three words, and every one of these sections needs a
+                  sentence to say what its number does and does not mean. */}
+              <div className={`pi-book-panel is-${piActive.tone}`}>
+                <div className="pi-panel-head">
+                  <div>
+                    <h3 className="pi-panel-title">
+                      <span className="pi-sec-n" aria-hidden>{piActive.n}</span>
+                      {piActive.title}
+                      <GuideMark term={piActive.guide} label={piActive.title} />
+                    </h3>
+                    <div className="ar-pending-sub">{piActive.sub}</div>
                   </div>
+                  <button className="btn ghost" onClick={() => explainPiSection(piActive)}>View all</button>
                 </div>
-                <button className="btn ghost" onClick={explainPending}>View all</button>
-              </div>
-              {/* THREE FIGURES, ALL PI. The middle tile used to be a "PI orders"
-                  count sitting inside an all-programme panel — the one place the
-                  PI number was visible. Now the panel IS PI, so that tile would
-                  have restated the heading, and the count moves here where the
-                  other two describe the same 72 orders. */}
-              <div className="ar-pending-figs">
-                <div className="ar-pending-fig">
-                  <span className="l">Would add to AR</span>
-                  <strong className="v is-red">{formatCurrency(ar.pending?.pi.expected ?? 0)}</strong>
-                  <span className="f">the 15% advance, once raised</span>
+                <div className="table-wrap scroll-y" style={{ marginTop: 12 }}>
+                  <PiTable section={piActive} />
                 </div>
-                <div className="ar-pending-fig">
-                  <span className="l">Orders</span>
-                  <strong className="v">{piPending.length}</strong>
-                  <span className="f">PI only · flagged in the register below</span>
-                </div>
-                <div className="ar-pending-fig">
-                  <span className="l">Case value behind it</span>
-                  <strong className="v">{formatCurrency(ar.pending?.pi.caseValue ?? 0)}</strong>
-                  <span className="f">the lien, not a receivable</span>
-                </div>
-              </div>
-              <div className="table-wrap scroll-y" style={{ marginTop: 12 }}>
-                <table className="data-table compact">
-                  <thead>
-                    {/* PATIENT, WHERE PROGRAMME USED TO BE. Every row is PI now,
-                        so a Programme column would print the same word 72 times
-                        and earn none of its width. Patient is what the invoice
-                        register beside it shows, and it is how anyone actually
-                        identifies one of these orders. */}
-                    <tr>
-                      <th>Order</th><th>Patient</th><th>Payer</th><th>Rep</th>
-                      <th className="num">Order value</th><th className="num">Would invoice</th><th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {piPending.map((o) => (
-                      <tr key={o.soId} className="is-pending-row">
-                        <td><SoLink soId={soIdFromRef(o.ref)} label={o.ref} /></td>
-                        <td className="clip">{o.patient || '-'}</td>
-                        <td className="clip" title={o.payer || undefined}>{trunc(o.payer || '-', 22)}</td>
-                        <td>{o.rep || '-'}</td>
-                        <td className="num">{formatCurrency(o.caseValue)}</td>
-                        <td className="num">{formatCurrency(o.expected)}</td>
-                        <td><span className="pill-tag tag-danger">Not invoiced</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </div>
           )}
 
           <div className="exec-grid12">
-            <ChartCard className="g12-5" title="AR Aging" sub="Open receivables by days past due · click a bar"
+            <ChartCard className="g12-5" title="AR Aging" guide="Aging bucket" anchor="ar-aging" sub="Open receivables by days past due · click a bar"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={agingMode === 'amount' ? 'active' : ''} onClick={() => setAgingMode('amount')}>By Amount</button>
@@ -513,7 +828,7 @@ export function ReceivablesTab() {
               <AgingBar aging={agingMode === 'amount' ? agingEff : agingCount} money={agingMode === 'amount'} onSelect={drillBucket} />
             </ChartCard>
 
-            <ChartCard className="g12-4" title="Cash Received by Month" sub="Customer payments collected"
+            <ChartCard className="g12-4" title="Cash Received by Month" guide="Cash Received" anchor="cash-received" sub="Customer payments collected"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={payRange === 'year' ? 'active' : ''} onClick={() => setPayRange('year')}>12 mo</button>
@@ -523,7 +838,7 @@ export function ReceivablesTab() {
               <TrendArea data={payData} idPrefix="rc-pay" series={[{ key: 'amount', name: 'Received', color: C.brand }]} />
             </ChartCard>
 
-            <ChartCard className="g12-3" title="A/R Health Score" sub="Collected ÷ (collected + open AR)">
+            <ChartCard className="g12-3" title="A/R Health Score" guide="A/R Health Score" anchor="ar-health" sub="Collected ÷ (collected + open AR)">
               <div className="card-body">
                 <GaugeRing arc="semi" value={healthPct} centerValue={String(healthPct)} centerLabel={healthBand} color={healthColor} height={150} />
               </div>
@@ -552,8 +867,8 @@ export function ReceivablesTab() {
               </div>
             </div>
 
-            <div className="section chart-card g12-4">
-              <div className="section-head"><div><h2 className="section-title">Top Customers (by Balance)</h2><div className="section-sub">Payer · largest open balances</div></div></div>
+            <div className="section chart-card g12-4" data-guide-anchor="top-customers">
+              <div className="section-head"><div><h2 className="section-title">Top Customers (by Balance)<GuideMark term="Payer" /></h2><div className="section-sub">Payer · largest open balances</div></div></div>
               <div className="rank-list">
                 {topPayers.map((c) => (
                   <div key={c.name} className="rk-row" style={{ cursor: 'pointer' }}
@@ -569,8 +884,8 @@ export function ReceivablesTab() {
                 onClick={() => tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>View all customers →</button>
             </div>
 
-            <div className="section chart-card g12-4 g12-w">
-              <div className="section-head"><div><h2 className="section-title">Insights</h2><div className="section-sub">Computed from live data</div></div></div>
+            <div className="section chart-card g12-4 g12-w" data-guide-anchor="ar-insights">
+              <div className="section-head"><div><h2 className="section-title">Insights<GuideMark term="Unapplied credit" /></h2><div className="section-sub">Computed from live data</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 <div className="ins-list">
                   {insights.map((ins, i) => (
@@ -587,10 +902,10 @@ export function ReceivablesTab() {
                 columns overflowed the card and Open Balance / Days Past Due sat
                 off the right edge behind a scrollbar nobody looks for. A
                 nine-column register is a full-width object. */}
-            <div className="section chart-card g12-12 tbl-single" ref={tableRef}>
+            <div className="section chart-card g12-12 tbl-single" ref={tableRef} data-guide-anchor="open-invoices">
               <div className="section-head">
                 <div>
-                  <h2 className="section-title">Open Invoices</h2>
+                  <h2 className="section-title">Open Invoices<GuideMark term="AR Open" /></h2>
                   <div className="section-sub">
                     Unpaid invoices with a remaining balance: matches Striven's A/R aging
                     {pendingRows.length > 0 && <> · <span style={{ color: C.negative, fontWeight: 700 }}>{pendingRows.length} PI orders</span> with no invoice are flagged in red and excluded from the total</>}
@@ -679,7 +994,7 @@ export function ReceivablesTab() {
                           row reads left to right as the story it is: this much is
                           owed on the case, this much has been invoiced of it,
                           this much came in, this much is still out. Derived from
-                          the row's own two figures — see valueOf — so unlike the
+                          the row's own two figures - see valueOf - so unlike the
                           Case Value column it replaces, it is never a dash. */}
                       <th className="num sortable" onClick={() => setSortKey('value')}>Total Amount {sortInd('value')}</th>
                       <th className="num sortable" onClick={() => setSortKey('total')}>Invoiced {sortInd('total')}</th>
@@ -714,14 +1029,14 @@ export function ReceivablesTab() {
                             </td>
                             <td className="clip">{o.patient || '-'}</td>
                             <td className="clip" title={o.payer || undefined}>{o.payer || '-'}</td>
-                            <td><span style={{ color: C.muted }}>—</span></td>
+                            <td><span style={{ color: C.muted }}>-</span></td>
                             <td className="num" style={{ fontWeight: 700 }}>{formatCurrency(o.caseValue)}</td>
                             <td className="num cell-neg">{formatCurrency(0)}</td>
-                            <td className="num"><span style={{ color: C.muted }}>—</span></td>
+                            <td className="num"><span style={{ color: C.muted }}>-</span></td>
                             <td className="num" title={`${formatCurrency(o.expected)} would enter AR once this is invoiced`}>
-                              <span style={{ color: C.muted }}>—</span>
+                              <span style={{ color: C.muted }}>-</span>
                             </td>
-                            <td className="num"><span style={{ color: C.muted }}>—</span></td>
+                            <td className="num"><span style={{ color: C.muted }}>-</span></td>
                           </tr>
                         );
                       }
@@ -766,12 +1081,12 @@ export function ReceivablesTab() {
                     {pendingRows.length > 0 && (
                       <tr className="subtotal-row is-pending-row">
                         <td colSpan={4}>
-                          NOT INVOICED — {pendingRows.length} PI order{pendingRows.length === 1 ? '' : 's'}
+                          NOT INVOICED - {pendingRows.length} PI order{pendingRows.length === 1 ? '' : 's'}
                           <span style={{ fontWeight: 400, color: C.muted }}> · excluded from the total below</span>
                         </td>
                         <td className="num">{formatCurrency(pendingCase)}</td>
                         <td className="num">{formatCurrency(0)}</td>
-                        <td className="num"><span style={{ color: C.muted }}>—</span></td>
+                        <td className="num"><span style={{ color: C.muted }}>-</span></td>
                         <td className="num" title="What these orders would add to AR once raised">
                           {formatCurrency(pendingExpected)} <span style={{ fontWeight: 400, color: C.muted }}>if raised</span>
                         </td>
@@ -808,9 +1123,9 @@ export function ReceivablesTab() {
               </div>
             </div>
 
-            <div className="section chart-card g12-12">
+            <div className="section chart-card g12-12" data-guide-anchor="recent-payments">
               <div className="section-head">
-                <div><h2 className="section-title">Recent Payments</h2><div className="section-sub">Latest customer payments received</div></div>
+                <div><h2 className="section-title">Recent Payments<GuideMark term="PHI masking" /></h2><div className="section-sub">Latest customer payments received</div></div>
                 <button className="card-link" style={{ marginTop: 0 }} onClick={viewAllPayments}>View All →</button>
               </div>
               <div className="table-wrap">

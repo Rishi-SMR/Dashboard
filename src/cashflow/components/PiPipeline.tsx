@@ -409,20 +409,20 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
             {board === 'VA' ? (
               <>
                 {total} VA order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. Billed to the Department of Veterans Affairs and paid in full off the
-                invoice — no attorney, no lien and no settlement, so this board has none of the PI board's chasing stages. It does
+                invoice - no attorney, no lien and no settlement, so this board has none of the PI board's chasing stages. It does
                 have a terminal <b>Paid</b> stage, which PI does not: most of the VA book has already been paid, and a stage named
                 for waiting would be the wrong place to put it.
               </>
             ) : board === 'REVIEW' ? (
               <>
-                Orders whose labels place them in no stage. Two kinds: <b>exceptions</b> — HOLD, Attorney Denied, Case Dropped —
+                Orders whose labels place them in no stage. Two kinds: <b>exceptions</b> - HOLD, Attorney Denied, Case Dropped -
                 which say an order has stopped rather than progressed and are cases to chase; and <b>unrecognised</b> labels,
                 which nobody has mapped yet, so they count for nothing and their order silently falls back to stage 1.
               </>
             ) : board === 'PIP' ? (
               <>
                 {total} PIP order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. A PIP order never goes to Lienstar: it is billed through the
-                customer to the auto insurer at the full billed amount and paid in full — no advance, no settlement.
+                customer to the auto insurer at the full billed amount and paid in full - no advance, no settlement.
                 {pipCount === 0 && <> Nothing here yet: the PIP order type is still being created in Striven, and orders will appear as soon as it exists.</>}
               </>
             ) : (
@@ -432,7 +432,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                 {/* WHOLE-BOOK FIGURE, so it is only quoted on the whole book.
                     `trackedCount` counts every order ever moved across the
                     pipeline; subtracting it from a month's total would print a
-                    nonsense number — negative on most months. */}
+                    nonsense number - negative on most months. */}
                 {month === ALL_TIME && data && data.trackedCount < total && (
                   <> Ageing is measured from the first time an order is moved: <b>{total - data.trackedCount}</b> {total - data.trackedCount === 1 ? 'order has' : 'orders have'} never
                   been moved, so {total - data.trackedCount === 1 ? 'its' : 'their'} age falls back to the order date and is marked <i>est.</i></>
@@ -597,7 +597,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                   {reviewLabels.length} label{reviewLabels.length === 1 ? '' : 's'} carrying no stage
                 </h2>
                 <div className="section-sub">
-                  Unrecognised labels first — those are a mapping gap. Exceptions below them are working as intended and are cases to chase.
+                  Unrecognised labels first - those are a mapping gap. Exceptions below them are working as intended and are cases to chase.
                 </div>
               </div></div>
               <div className="table-wrap">
@@ -620,7 +620,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                           <td className="num" style={{ fontWeight: 700 }}>{l.count}</td>
                           <td style={{ fontSize: 12.5, color: C.muted }}>
                             {bad
-                              ? 'Nobody has mapped this label, so it counts for nothing — map it to a stage.'
+                              ? 'Nobody has mapped this label, so it counts for nothing - map it to a stage.'
                               : 'The order has stopped rather than progressed, so it holds no stage by design.'}
                           </td>
                         </tr>
@@ -702,7 +702,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                 </table>
               </div>
               <div style={{ fontSize: 11.5, color: C.muted, marginTop: 8 }}>
-                🔒 Patient shown as first INITIAL + surname. An order still appears on its board wherever its other labels place it —
+                🔒 Patient shown as first INITIAL + surname. An order still appears on its board wherever its other labels place it -
                 only its exception label carries no stage. Exceptions are listed in <b>REVIEW_LABELS</b>, mappings in{' '}
                 {kind === 'VA' ? <b>VA_LABEL_STAGE</b> : <><b>PI_LABEL_STAGE</b> / <b>PIP_LABEL_STAGE</b></>};
                 a backend restart is needed after either changes.
@@ -913,27 +913,27 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                 when the Patient column was added — and a downloaded file makes
                 the claim worse, not academic. It now says what actually leaves
                 the portal. */}
-            🔒 Patient shown as first INITIAL + surname — no full first name, date of birth or address. A download carries the same, so treat the file as PHI.
+            🔒 Patient shown as first INITIAL + surname - no full first name, date of birth or address. A download carries the same, so treat the file as PHI.
             Stages are read from Striven and cannot be set here; “in stage” is measured from the order date, so it is marked est.
             {/* Stated outright, because a column of dashes otherwise reads as a
                 broken feed. It is not: Striven simply holds a number for a small
                 share of the book. */}
-            {' '}Tracking # is Striven's own field on the sales order — a dash means none has been entered there, not that the order has not shipped.
+            {' '}Tracking # is Striven's own field on the sales order - a dash means none has been entered there, not that the order has not shipped.
           </div>
         </div>
       )}
 
-      {/* This used to say the stages were set by hand. They are not any more —
-          Striven's labels decide them — so the note now says where a stage
+      {/* This used to say the stages were set by hand. They are not any more -
+          Striven's labels decide them - so the note now says where a stage
           comes from and how to change it. */}
       {data && board !== 'REVIEW' && (
         <div className="qb-flash warn" style={{ marginTop: 14 }}>
-          ⚠️ Stages are read from each order's <b>Striven labels</b>, so they cannot be moved here — change the label in Striven and it
+          ⚠️ Stages are read from each order's <b>Striven labels</b>, so they cannot be moved here - change the label in Striven and it
           follows on the next refresh. An order is listed at <b>every stage its labels attest to</b>; the furthest of them is where it counts as sitting now.
           {byLabel > 0 && <> {byLabel} of {boardOrders.length} order{boardOrders.length === 1 ? '' : 's'} on this board {byLabel === 1 ? 'is' : 'are'} set this way; the rest carry no label yet and sit in stage 1 until one is added in Striven.</>}
           {canReview && reviewOrders.length > 0 && (
             <> {reviewOrders.length} order{reviewOrders.length === 1 ? '' : 's'} carry a label that holds no
-            stage{unknownCount > 0 ? `, including ${unknownCount} unrecognised label${unknownCount === 1 ? '' : 's'}` : ''} — see{' '}
+            stage{unknownCount > 0 ? `, including ${unknownCount} unrecognised label${unknownCount === 1 ? '' : 's'}` : ''} - see{' '}
             <button onClick={() => setBoard('REVIEW')} style={{ border: 'none', background: 'none', padding: 0, color: C.brand, fontWeight: 700, cursor: 'pointer', font: 'inherit' }}>Review</button>.</>
           )}
         </div>

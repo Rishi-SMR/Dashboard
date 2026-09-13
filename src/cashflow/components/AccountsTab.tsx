@@ -200,7 +200,7 @@ export function AccountsTab() {
                   ...bpByVendor.map((v) => ({ k: v.name, v: formatCurrency(v.value, true) })),
                   { k: 'Total paid', v: formatCurrency(paidTotal, true) },
                   ...(useLedgerPaid && (bp?.count ?? 0) > 0
-                    ? [{ k: `— Striven separately records ${bp!.count} payment${bp!.count === 1 ? '' : 's'} (included above)`, v: formatCurrency(bp!.total, true) }]
+                    ? [{ k: `- Striven separately records ${bp!.count} payment${bp!.count === 1 ? '' : 's'} (included above)`, v: formatCurrency(bp!.total, true) }]
                     : []),
                 ]),
               })} />
@@ -236,7 +236,7 @@ export function AccountsTab() {
                 above, not additional to it. */}
             {(bp?.count ?? 0) > 0 && (
               <div style={{ fontSize: 12, color: C.muted, marginTop: 14, marginBottom: -4 }}>
-                Striven&rsquo;s own bill-payment records — {bp!.count} of the {paidRowCount} above, {formatCurrency(bp!.total)}.
+                Striven&rsquo;s own bill-payment records - {bp!.count} of the {paidRowCount} above, {formatCurrency(bp!.total)}.
                 The rest are recorded only in the AP ledger sheet, which carries no reference or bank account.
               </div>
             )}
@@ -312,8 +312,8 @@ export function AccountsTab() {
               </span>
             </div>
             {/* Capped and scrolled, like the payments register above. Unlike it,
-                this table holds the WHOLE list — `sortedAccounts` is every
-                account, not a slice — so scrolling here really does reach the
+                this table holds the WHOLE list - `sortedAccounts` is every
+                account, not a slice - so scrolling here really does reach the
                 end, and the sub's count is the row count. */}
             <div className="table-wrap scroll-y">
               <table className="data-table compact">

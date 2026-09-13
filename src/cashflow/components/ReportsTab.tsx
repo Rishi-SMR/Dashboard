@@ -41,7 +41,7 @@ export function ReportsTab() {
   useEffect(() => { load(); }, []);
 
   // The device view is the vendor report pivoted, so it carries the vendor
-  // report's own timestamp — not a second one that could imply fresher data.
+  // report's own timestamp - not a second one that could imply fresher data.
   const generatedAt = tab === 'patients' ? (pat?.generatedAt ?? null) : (vend?.generatedAt ?? null);
 
   return (
@@ -76,23 +76,23 @@ export function ReportsTab() {
 }
 
 /**
- * DEVICE PURCHASES — the same purchase history, read from the other end.
+ * DEVICE PURCHASES - the same purchase history, read from the other end.
  *
  * "Vendor purchases" below answers "what do we buy from EvoHealth". This answers
- * the question a buyer actually arrives with: I want to look up a DEVICE — who
+ * the question a buyer actually arrives with: I want to look up a DEVICE - who
  * did we buy it from, how many did we take, and what did we spend on it? The
  * vendor report cannot answer that without opening all seven vendors in turn and
  * adding the rows up by hand, and a device bought from more than one supplier is
  * exactly the case hand-addition gets wrong.
  *
- * PIVOTED IN THE BROWSER, from `report_vendor_items` — the very report the other
+ * PIVOTED IN THE BROWSER, from `report_vendor_items` - the very report the other
  * two tabs read. No second endpoint and no second generator run: one source
  * means the two views cannot disagree about the same purchase, and a device's
  * total here is by construction the sum of the vendor rows shown under it.
  *
  * SPLIT SUPPLIERS ARE THE POINT, not an edge case. Three devices are bought from
- * more than one vendor today — "PI Tens/NMES" comes from ManaMed, WMD and
- * Wholesale Medical Devices — and a per-device unit cost is the quickest way to
+ * more than one vendor today - "PI Tens/NMES" comes from ManaMed, WMD and
+ * Wholesale Medical Devices - and a per-device unit cost is the quickest way to
  * see the same thing being bought at different prices from different people. So
  * the row carries a unit cost and flags a multi-vendor device.
  */
@@ -120,8 +120,8 @@ function DeviceReport({ data }: { data: VendorItemsReport }) {
           // stock by programme ("PI Genesys Universal", "VA SofPulse Lumbar",
           // "DEMO Genesys Lumbar"), and a purchase order carries no vertical
           // field of its own to read instead. `deviceVertical` is the app's one
-          // definition of that parse — the same one the order boards and the
-          // device chips use — so this column cannot drift from what a device
+          // definition of that parse - the same one the order boards and the
+          // device chips use - so this column cannot drift from what a device
           // reads as everywhere else.
           vertical: deviceVertical(key),
           qty: 0, cost: 0, poCount: 0, vendors: [],
@@ -133,14 +133,14 @@ function DeviceReport({ data }: { data: VendorItemsReport }) {
         m.set(key, e);
       }
     }
-    // Dearest first — the spend a buyer wants to interrogate is the big one, and
+    // Dearest first - the spend a buyer wants to interrogate is the big one, and
     // each device's own suppliers are ranked the same way.
     return [...m.values()]
       .map((d) => ({ ...d, vendors: d.vendors.sort((a, b) => b.cost - a.cost) }))
       .sort((a, b) => b.cost - a.cost);
   }, [data]);
 
-  /** Spend and volume per vertical — the filter chips, and the answer to "what
+  /** Spend and volume per vertical - the filter chips, and the answer to "what
    *  are we actually buying for each programme" without opening a single row. */
   const byVertical = useMemo(() => {
     const m = new Map<string, { vertical: string; devices: number; qty: number; cost: number }>();
@@ -162,7 +162,7 @@ function DeviceReport({ data }: { data: VendorItemsReport }) {
     return devices.filter((d) => {
       if (vert && d.vertical !== vert) return false;
       if (!t) return true;
-      // Matches the DEVICE, its VERTICAL, or any supplier of it — so typing a
+      // Matches the DEVICE, its VERTICAL, or any supplier of it - so typing a
       // vendor narrows to what we buy from them without leaving this view.
       return d.item.toLowerCase().includes(t)
         || d.vertical.toLowerCase().includes(t)
@@ -206,7 +206,7 @@ function DeviceReport({ data }: { data: VendorItemsReport }) {
       </div>
 
       {/* SPEND BY PROGRAMME, and the filter in the same control. Each chip
-          carries its own spend, so the split is readable without clicking —
+          carries its own spend, so the split is readable without clicking -
           and clicking scopes the table, the tiles and the CSV together. */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
         <button className={`ov-tab ${vert === null ? 'active' : ''}`} onClick={() => setVert(null)}>
@@ -462,13 +462,13 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
 
   // NEWEST FIRST, by order date. The server serves these grouped by patient
   // reference, which is why the list read SO-3, SO-5, SO-6 … and then jumped to
-  // SO-479 — an order that is meaningful to the report's other tab and
+  // SO-479 - an order that is meaningful to the report's other tab and
   // meaningless in a chronological list.
   //
   // Date, not the SO number, even though the two agree today: every one of the
   // 472 orders carries a date and walking the numbers in order produces zero
   // date inversions, so both keys give the identical sequence. They agree
-  // because Striven issues numbers in order — an accident of the numbering, not
+  // because Striven issues numbers in order - an accident of the numbering, not
   // a rule about it. The date is the fact being asked for, so it is the key,
   // and the SO id breaks a tie so the order is stable rather than dependent on
   // the sort's internals.
@@ -494,14 +494,14 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
   function exportCsv() {
     // `sorted`, not `all`: the file comes out in the order the screen shows it,
     // newest first. It still exports every order rather than the search
-    // results — that is the existing behaviour and a separate decision.
+    // results - that is the existing behaviour and a separate decision.
     //
     // The date is a COLUMN here, not just a sort key. A spreadsheet is where
     // someone re-sorts, and a file ordered by a field it does not contain
     // cannot be put back the way it came.
     const rows = sorted.flatMap((o) => (o.items.length ? o.items : [{ item: '-', qty: 0, value: 0 }])
       .map((i) => [o.so, o.ref || '', o.lastName || '', o.program || '', o.date?.slice(0, 10) || '', i.item, i.qty, i.value]));
-    // "Patient (initial + surname)", matching what the column actually carries —
+    // "Patient (initial + surname)", matching what the column actually carries -
     // a file that leaves the portal labelled "Last name" while holding an
     // initial misstates the PHI in it.
     downloadCsv('patient-orders.csv', ['Sales order', 'Reference', 'Patient (initial + surname)', 'Program', 'Order date', 'Item', 'Qty', 'Value'], rows);
@@ -555,7 +555,7 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
                 too, and a header that says otherwise is a claim about PHI. */}
             <th>#</th><th>Sales order</th><th>Reference</th><th>Patient</th><th>Program</th>
             {/* THE COLUMN THE LIST IS SORTED BY. Ordering rows by a field that
-                is nowhere on screen leaves a reader unable to check the claim —
+                is nowhere on screen leaves a reader unable to check the claim -
                 and here it would read as "sorted by SO number descending",
                 which is a different rule that happens to agree. */}
             <th>Order date</th>
@@ -590,7 +590,7 @@ function OrdersReport({ data }: { data: PatientItemsReport }) {
                       for sequence is noise. */}
                   <td style={{ color: 'var(--muted-strong)' }} title={o.date || undefined}>{fmtOrderDate(o.date)}</td>
                   {/* DEVICE NAMES, not a count. The names were already in the
-                      payload — the row expanded to show them, so the top level
+                      payload - the row expanded to show them, so the top level
                       made you click to learn what "5" meant.
 
                       Capped at three: past that the chips wrapped and took the
