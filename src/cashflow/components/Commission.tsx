@@ -6,6 +6,7 @@ import { C } from '../chartTheme';
 import { KpiR, useSyncAgo } from '../chartKit';
 import { isKevinLogin } from '../viewProfile';
 import { Portal } from './Portal';
+import { WaitPopup } from './WaitPopup';
 import { StatStrip } from './StatStrip';
 
 const PROG_C: Record<string, string> = { TriCare: '#0D9488', PI: '#0A369F', VA: '#16A34A', DOL: '#7C3AED' };
@@ -238,7 +239,16 @@ export function CommissionTab() {
         </div>
       </div>
 
+      {/* Commission reads the workbooks live — three Google exports at roughly
+          two seconds each since the August 2026 cycle — so a cold load is slow
+          enough to look broken. `loading` is false on the silent two-minute
+          poll, which is what keeps this off the screen of someone mid-read. */}
+      <WaitPopup active={loading} />
+
       {error && <div className="error" style={{ marginBottom: 14 }}>{error}</div>}
+      {/* Kept underneath the popup, and NOT redundant with it: this is what the
+          empty page says during the grace period before the popup is due, and
+          what it still says if someone has asked for reduced motion. */}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
 
       {data && !s?.available && !loading && (
