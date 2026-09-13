@@ -11,6 +11,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { formatCurrency } from './format';
 import { C, SERIES, SEVERITY, AGING_LABELS, gridProps, axisProps, tooltipStyle, compactMoney, monthLabel, statusTone } from './chartTheme';
+import { GuideMark } from './guideTrail';
 
 // Skip animations for reduced-motion users AND automated (webdriver/headless)
 // sessions: Recharts mount animations are flaky under headless capture.
@@ -235,10 +236,18 @@ export function StatCards({ data, total, onSelect }: {
   );
 }
 
-export function ChartCard({ title, sub, span, right, className, children }: { title: string; sub?: string; span?: number; right?: ReactNode; className?: string; children: ReactNode }) {
+/** `guide` names this card's term in the User Guide and draws the ⓘ beside the
+ *  title. A PROP, NOT A WIDENED `title`: every card that wants the mark then
+ *  gets it in exactly the same place, at the same size, with the same label —
+ *  where letting callers pass a node would have produced a different-looking
+ *  mark per card. See guideTrail.tsx. */
+export function ChartCard({ title, sub, span, right, className, guide, anchor, children }: { title: string; sub?: string; span?: number; right?: ReactNode; className?: string; guide?: string; anchor?: string; children: ReactNode }) {
   return (
-    <div className={`section chart-card${span ? ` span-${span}` : ''}${className ? ` ${className}` : ''}`}>
-      <div className="section-head"><div><h2 className="section-title">{title}</h2>{sub && <div className="section-sub">{sub}</div>}</div>{right}</div>
+    /* `data-guide-anchor` is how the User Guide lands ON this card rather than
+       merely on the tab containing it — see GuideLanding in guideTrail.tsx. One
+       attribute, read from the shell, so nothing else here has to know. */
+    <div className={`section chart-card${span ? ` span-${span}` : ''}${className ? ` ${className}` : ''}`} data-guide-anchor={anchor}>
+      <div className="section-head"><div><h2 className="section-title">{title}{guide && <GuideMark term={guide} />}</h2>{sub && <div className="section-sub">{sub}</div>}</div>{right}</div>
       {children}
     </div>
   );
@@ -718,7 +727,7 @@ export function ShareRankBar({ data, total, onSelect, countOf }: {
                 className={`srb-row${onSelect ? ' is-clickable' : ''}`}
                 role={onSelect ? 'button' : undefined}
                 tabIndex={onSelect ? 0 : undefined}
-                aria-label={onSelect ? `${label} — open details` : label}
+                aria-label={onSelect ? `${label} - open details` : label}
                 title={label}
                 onClick={onSelect ? () => onSelect(d.name) : undefined}
                 onKeyDown={onSelect ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(d.name); } } : undefined}

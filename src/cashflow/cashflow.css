@@ -37,6 +37,10 @@
   --info: #0E7490;
   --info-soft: rgba(8,145,178,0.10);
   --positive: #16A34A;
+  /* The tint that pairs with --positive, matching --warn-soft / --danger-soft /
+     --info-soft. Added for the PI book's "advance received" panel, which needed
+     the green equivalent of the soft grounds the other three already had. */
+  --positive-soft: rgba(22,163,74,0.12);
   --negative: #DC2626;
   --gauge-track: #E9EEF5;
   --chart-payroll: #0A369F;
@@ -4210,27 +4214,145 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 }
 .ar-pending-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; max-width: 70ch; }
 
-/* auto-fit, so three figures fill the row and two do not leave a gap. */
-.ar-pending-figs {
+/* THE SAME CALLOUT IN AMBER. An invoice raised above the advance is a question
+   to settle in Striven, not money that has gone missing, so it must not wear
+   the red of the "never invoiced" block: same layout, different severity, and
+   the amber matches the row tint the book already gives these invoices. */
+.ar-pending.is-warn { border-color: var(--warn-soft); border-left-color: var(--warn); }
+.ar-pending.is-warn .ar-pending-dot { background: var(--warn); }
+
+/* ══ THE PI BOOK, IN FOUR SECTIONS ═══════════════════════════════════════════
+   A lien case is billed in two tranches, so it is never simply open or paid.
+   The four sections are the four states a PI case can be in, and the ACCENT is
+   what makes them readable as a ladder rather than as four similar panels:
+
+     1  green   the 15% is banked. Money in the door.
+     2  amber   the 15% is raised and unpaid. Being chased.
+     3  red     no invoice exists. An action somebody has to take.
+     4  slate   the 85%, waiting on a settlement nobody here controls.
+
+   THE FOURTH IS DELIBERATELY THE QUIETEST, and it is the biggest number on the
+   page. Nothing in it is late, overdue or anyone's fault — it is not billable
+   yet — so giving it red, or the same weight as section 3, would turn the one
+   section that represents the business working as designed into the one that
+   looks most alarming. Slate says "context", which is what it is. */
+.pi-book { margin-bottom: var(--sp-4); }
+.pi-book-head { margin-bottom: var(--sp-3); }
+.pi-book-title {
+  margin: 0; font-size: 16px; font-weight: 800; color: var(--text);
+  letter-spacing: -0.01em;
+}
+.pi-book-sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; max-width: 88ch; line-height: 1.55; }
+
+/* ── THE TAB STRIP ──────────────────────────────────────────────────────────
+   Four sections, side by side, each a button that swaps the table below it.
+
+   IT IS A SUMMARY AND A CONTROL AT ONCE, and that is what earns it the space.
+   Stacked as four panels these figures were two thousand pixels apart, so the
+   one comparison the split exists to make — how the case value divides between
+   banked, owed, unbilled and not-yet-due — could not be made without scrolling
+   and remembering. On one line it is a glance.
+
+   auto-fit with a 190px floor, so the four sit in a row on a laptop, fold to two
+   by two on a tablet and stack on a phone, without a breakpoint per layout. */
+.pi-tabs {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 10px; margin-top: 14px;
+  gap: var(--sp-2); margin-bottom: var(--sp-3);
 }
-.ar-pending-fig {
-  display: flex; flex-direction: column; gap: 1px;
-  background: var(--panel-2); border-radius: 8px; padding: 10px 12px 11px;
+
+/* EVERY TAB KEEPS ITS OWN ACCENT WHEN INACTIVE, at low strength: the strip is
+   meant to read as four figures, not as one live figure and three dormant
+   controls. Selection is carried by the ground, the border weight and the left
+   rule — three signals, because colour alone would be the one thing the accent
+   is already spending itself on. */
+.pi-tab {
+  display: flex; flex-direction: column; gap: 3px;
+  text-align: left; cursor: pointer;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-1); padding: 10px 12px 11px;
+  transition: background .12s ease, border-color .12s ease, transform .12s ease;
 }
-.ar-pending-fig .l {
-  font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+.pi-tab:hover { background: var(--panel-2); }
+.pi-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pi-tab-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pi-tab-n {
+  flex: none; width: 17px; height: 17px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.pi-tab-l {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
   text-transform: uppercase; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ar-pending-fig .v {
+/* The figure at --fs-5's weight but one step down in size: four of them in a row
+   at headline size would out-shout the KPI strip above, which is the page's
+   actual headline. */
+.pi-tab-v {
   font-size: 19px; font-weight: 800; color: var(--text);
   font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
 }
-/* Only the headline figure is red. Colouring all three would make none of them
-   read as the urgent one. */
-.ar-pending-fig .v.is-red { color: var(--danger); }
-.ar-pending-fig .f { font-size: 11px; color: var(--muted); }
+.pi-tab-f { font-size: 11px; color: var(--muted); }
+
+/* Per-tone accents. The number badge and the left rule carry the colour; the
+   ACTIVE tab additionally takes the tinted ground, so which one is open is
+   legible without relying on the hue to be distinguishable. */
+.pi-tab.is-ok     .pi-tab-n { background: var(--positive-soft); color: var(--positive); }
+.pi-tab.is-warn   .pi-tab-n { background: var(--warn-soft);     color: var(--warn); }
+.pi-tab.is-danger .pi-tab-n { background: var(--danger-soft);   color: var(--danger); }
+.pi-tab.is-info   .pi-tab-n { background: var(--info-soft);     color: var(--info); }
+
+.pi-tab.active { transform: translateY(-1px); }
+.pi-tab.active .pi-tab-l { color: var(--muted-strong); }
+.pi-tab.is-ok.active     { background: var(--positive-soft); border-color: var(--positive); border-left-color: var(--positive); }
+.pi-tab.is-warn.active   { background: var(--warn-soft);     border-color: var(--warn);     border-left-color: var(--warn); }
+.pi-tab.is-danger.active { background: var(--danger-soft);   border-color: var(--danger);   border-left-color: var(--danger); }
+.pi-tab.is-info.active   { background: var(--info-soft);     border-color: var(--info);     border-left-color: var(--info); }
+.pi-tab.is-ok.active     .pi-tab-v { color: var(--positive); }
+.pi-tab.is-warn.active   .pi-tab-v { color: var(--warn); }
+.pi-tab.is-danger.active .pi-tab-v { color: var(--danger); }
+.pi-tab.is-info.active   .pi-tab-v { color: var(--info); }
+
+/* ── THE PANEL UNDER THE STRIP ──────────────────────────────────────────────
+   The open section's prose and its rows. It takes the same left rule the four
+   stacked panels used to, so the strip and the panel are visibly the same
+   object: press a tab, the rule under it changes colour to match. */
+.pi-book-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+}
+.pi-book-panel.is-ok     { border-color: var(--positive-soft); border-left-color: var(--positive); }
+.pi-book-panel.is-warn   { border-color: var(--warn-soft);     border-left-color: var(--warn); }
+.pi-book-panel.is-danger { border-color: var(--danger-soft);   border-left-color: var(--danger); }
+.pi-book-panel.is-info   { border-color: var(--info-soft);     border-left-color: var(--info); }
+
+.pi-panel-head { display: flex; align-items: flex-start; gap: 10px; }
+.pi-panel-head > div { flex: 1; min-width: 0; }
+.pi-panel-head > .btn { flex: none; align-self: center; }
+.pi-panel-title {
+  margin: 0; display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 800; color: var(--text); letter-spacing: -0.01em;
+}
+.pi-panel-title .pi-sec-n {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 11.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.pi-book-panel.is-ok     .pi-sec-n { background: var(--positive-soft); color: var(--positive); }
+.pi-book-panel.is-warn   .pi-sec-n { background: var(--warn-soft);     color: var(--warn); }
+.pi-book-panel.is-danger .pi-sec-n { background: var(--danger-soft);   color: var(--danger); }
+.pi-book-panel.is-info   .pi-sec-n { background: var(--info-soft);     color: var(--info); }
+
+/* TALLER THAN THE 360px DEFAULT, because there is now only ONE table where
+   there were four. With four stacked, height was a budget to spend carefully;
+   with one, the constraint is gone and the rows are what the reader came for.
+   It still scrolls the full list under a sticky header, and "View all" opens the
+   whole thing in a window. */
+.pi-book-panel .table-wrap.scroll-y { --table-scroll-h: 420px; }
 
 /* A tint, not a fill: the row must stay readable, and the Not invoiced pill is
    already carrying the state. */
@@ -4585,3 +4707,155 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   .ug-body { padding: 2px 13px 14px; }
   .ug-az { position: static; }
 }
+
+/* ══ THE GUIDE TRAIL ════════════════════════════════════════════════════════
+   Two affordances that connect the User Guide to the screens it describes, in
+   both directions. See src/cashflow/guideTrail.tsx for the reasoning; this is
+   only how they look.
+
+   ── ⓘ, BESIDE A SECTION TITLE ─────────────────────────────────────────────
+   MUTED UNTIL IT IS WANTED. It sits next to every documented section heading on
+   the page, so at full strength it would be a row of small blue dots pulling the
+   eye across a screen whose actual subject is the figures. It is a footnote
+   mark: legible if you look for it, invisible if you do not. It comes up to full
+   accent on hover and on focus, where it has been looked for. */
+.guide-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 5px; vertical-align: middle;
+  font-size: 11px; line-height: 1; font-weight: 600;
+  color: var(--muted); opacity: .55;
+  text-decoration: none; border-radius: 50%;
+  transition: color .12s ease, opacity .12s ease;
+}
+.guide-mark:hover { color: var(--accent); opacity: 1; }
+.guide-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; opacity: 1; color: var(--accent); }
+/* Never carries the heading's weight or size: it annotates the title, and a
+   mark that inherited 800/19px would read as part of the name. */
+.section-title .guide-mark,
+.pi-book-title .guide-mark,
+.pi-panel-title .guide-mark { font-weight: 600; font-size: 11px; }
+
+/* ── THE RETURN CHIP ───────────────────────────────────────────────────────
+   Shown only when the reader arrived from the glossary, and mounted once for
+   the whole app.
+
+   BOTTOM LEFT, FIXED. The destination is usually a long scrolling page and the
+   reader may be anywhere down it when they want the definition back, so a chip
+   at the top of the document is one they would have to scroll to find. Left,
+   because bottom-right is where this app's drill modals and toasts sit. */
+.guide-return {
+  position: fixed; left: 18px; bottom: 18px; z-index: 60;
+  display: flex; align-items: stretch; gap: 0;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-1);
+  box-shadow: 0 6px 20px rgba(14,27,46,.14);
+  max-width: min(320px, calc(100vw - 36px));
+  animation: guide-return-in .18s ease-out;
+}
+@keyframes guide-return-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .guide-return { animation: none; } }
+.guide-return-link {
+  display: flex; align-items: center; gap: 9px; min-width: 0;
+  padding: 9px 4px 9px 11px; text-decoration: none; color: inherit;
+}
+.guide-return-link:hover { background: var(--accent-soft-2); }
+.guide-return-i { flex: none; font-size: 15px; color: var(--accent); line-height: 1; }
+.guide-return-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.guide-return-txt .l {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+/* The TERM is the chip's real content — "back to the glossary" does not say
+   which definition, and a reader three links deep needs to know. */
+.guide-return-txt .v {
+  font-size: 12.5px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.guide-return-x {
+  flex: none; background: none; border: 0; cursor: pointer;
+  padding: 0 9px 0 6px; font-size: 15px; line-height: 1; color: var(--muted);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+}
+.guide-return-x:hover { color: var(--text); background: var(--panel-2); }
+.guide-return-x:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 560px) { .guide-return { left: 10px; right: 10px; bottom: 10px; max-width: none; } }
+
+/* ── LANDING ON A TERM ─────────────────────────────────────────────────────
+   The row the reader was sent to, marked for two seconds.
+
+   NOT DECORATION. They did not scroll here, so nothing in the motion told them
+   which of forty rows is the answer — the flash is what points at it. It fades
+   rather than switching off, so the row settles into the page instead of
+   blinking out of it. */
+.ug-row.is-landed {
+  animation: ug-landed 2s ease-out;
+  border-radius: var(--r-1);
+}
+@keyframes ug-landed {
+  0%, 55% { background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-soft); }
+  100%    { background: transparent; box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The point is "this is the row", not the animation: hold the tint instead of
+     moving it, and let the 2s timer remove the class. */
+  .ug-row.is-landed { animation: none; background: var(--accent-soft); }
+}
+
+/* ── LANDING ON THE SECTION, not merely on the tab ─────────────────────────
+   The guide now says WHICH section, and the destination points at it.
+
+   THE RING IS DRAWN OUTSIDE THE BOX, as an outline with an offset rather than a
+   border: these targets are chart cards and panels with their own borders and
+   their own left rules, and a border would either fight them or shift the
+   layout by a pixel at the moment the reader is looking straight at it. */
+.is-guide-landed {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--r-1);
+  animation: guide-land-ring 8s ease-out forwards;
+}
+@keyframes guide-land-ring {
+  0%   { outline-color: var(--accent); }
+  70%  { outline-color: var(--accent); }
+  100% { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .is-guide-landed { animation: none; } }
+
+/* THE ARROW ITSELF. A second chip, above the return chip, naming the entry that
+   sent the reader. The two stack rather than overlap: they answer different
+   questions ("why am I here" and "how do I get back") and a reader who has just
+   been teleported into a dense page needs the first one answered first. */
+.guide-land {
+  position: fixed; left: 18px; bottom: 76px; z-index: 61;
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 13px 9px 11px;
+  background: var(--accent); color: #fff;
+  border-radius: var(--r-1);
+  box-shadow: 0 6px 20px rgba(10,54,159,.28);
+  max-width: min(320px, calc(100vw - 36px));
+  animation: guide-land-in .2s ease-out;
+}
+@keyframes guide-land-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .guide-land { animation: none; } }
+.guide-land-arrow { flex: none; font-size: 15px; line-height: 1; }
+.guide-land-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.guide-land-txt .l {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; opacity: .8;
+}
+.guide-land-txt .v {
+  font-size: 12.5px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 560px) { .guide-land { left: 10px; right: 10px; bottom: 68px; max-width: none; } }
+
+/* ▸ ON A LOCATION LINK: this one lands on the section, not just the tab. Sized
+   and coloured as a mark rather than as text — it qualifies the location, and a
+   reader who never notices it loses nothing. */
+.ug-loc-precise {
+  color: var(--accent); font-size: 9px; margin-right: 4px;
+  vertical-align: 1px; opacity: .75;
+}
+.ug-loc.is-precise:hover .ug-loc-precise { opacity: 1; }

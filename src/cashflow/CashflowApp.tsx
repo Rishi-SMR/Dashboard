@@ -2,6 +2,7 @@ import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Sidebar, DEFAULT_VIEW, allowedViews, defaultViewFor, type Mode } from './components/Sidebar';
 import { fetchStrivenStatus, fetchMe, type StrivenStatus } from './strivenApi';
 import { setProfileIdentity } from './viewProfile';
+import { GuideReturn, GuideLanding, splitHash } from './guideTrail';
 
 // Lazy-loaded so recharts (heavy) only downloads when a chart tab is opened.
 const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m) => ({ default: m.OverviewCharts })));
@@ -83,8 +84,21 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
 }
 
 const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsroster', 'standings', 'reports', 'quickbooks', 'guide'];
+/**
+ * THE VIEW ON THE CURRENT HASH.
+ *
+ * SPLIT, BECAUSE THE HASH NOW CARRIES A TRAIL. A link out of the User Guide is
+ * `#receivables~ar-open` — the tab, plus the entry that sent the reader there,
+ * so the destination can offer a way back (see guideTrail.tsx). Matching the
+ * whole fragment against VIEW_KEYS rejected every one of those, and the guide's
+ * own links silently stopped navigating.
+ *
+ * The trail half is not this function's business: the router routes on the view,
+ * and anything after the separator is read by whoever cares about it.
+ */
 const readHash = (): ViewKey | null => {
-  const h = (typeof location !== 'undefined' ? location.hash.replace('#', '') : '') as ViewKey;
+  const raw = typeof location !== 'undefined' ? location.hash : '';
+  const h = splitHash(raw).view as ViewKey;
   return VIEW_KEYS.includes(h) ? h : null;
 };
 
@@ -207,6 +221,18 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
             {view === k && <Suspense fallback={<LazyLoading />}>{TABS[k]}</Suspense>}
           </div>
         ))}
+        {/* THE WAY BACK TO THE GLOSSARY, mounted ONCE for every tab.
+            It reads the trail off the hash, so no tab has to be modified to
+            support it and none can be forgotten — a per-tab chip would have been
+            twenty edits and would have gone stale the first time someone added a
+            twenty-first tab. It renders nothing at all unless the reader
+            actually arrived from the guide. */}
+        <GuideReturn />
+        {/* Finds the section the guide named, scrolls to it and points at it.
+            Mounted here for the same reason the chip is: it works off a
+            `data-guide-anchor` attribute anywhere in the tree, so no tab has to
+            be wired for it and none can be missed. */}
+        <GuideLanding />
       </main>
     </div>
   );

@@ -132,7 +132,35 @@ export type ArInvoice = { id: number; number: string; customer: string; customer
  *  is not. Never part of `totalOpen` — it is not a receivable until raised. */
 export type ArPendingOrder = { soId: string; ref: string; vertical: string; type: string; rep: string; payer: string; status: string; patient?: string; caseValue: number; expected: number };
 export type ArPending = { count: number; caseValue: number; expected: number; pi: { count: number; caseValue: number; expected: number }; orders: ArPendingOrder[] };
-export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number; pending?: ArPending | null };
+
+/** ONE PI INVOICE, SPLIT INTO ITS TRANCHES — see piBookOf() on the server.
+ *  `advanceReceived + advanceOpen + remainder === caseValue` on every row. */
+export type PiBookInvoice = {
+  id: number; number: string;
+  /** The sales order behind it. Empty / null where the invoice joins to none. */
+  soId: string | null; ref: string; rep: string;
+  patient: string; payer: string; dueDate: string | null;
+  /** False where no order was found: `caseValue` is then the invoice standing
+   *  in for the case, and `remainder` is 0 because nothing rides behind it. */
+  joined: boolean;
+  /** Striven billed above 15% of the order — the whole bill, or a bad join. */
+  overRate: boolean;
+  caseValue: number; invoiced: number;
+  /** The 15% tranche, and how it splits between banked and still owed. */
+  advance: number; advanceReceived: number; advanceOpen: number;
+  /** The 85% that only bills when the case settles. NOT a receivable. */
+  remainder: number;
+};
+/** `amount` is whichever tranche the section is about; `caseValue` is the
+ *  exposure the same cases carry, reported beside it and never added to AR. */
+export type PiBookSection = { count: number; amount: number; caseValue: number; invoices: PiBookInvoice[] };
+export type PiBook = {
+  received: PiBookSection; awaiting: PiBookSection; balance: PiBookSection;
+  totals: { count: number; caseValue: number; invoiced: number; advance: number; advanceReceived: number; advanceOpen: number; remainder: number };
+};
+export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number; pending?: ArPending | null;
+  /** The PI lien in its four tranches. `pending.pi` above is the fourth. */
+  piBook?: PiBook | null };
 
 export type ApBill = { id: number; number: string; vendor: string; vendorId: number | null; dueDate: string | null; total: number; open: number; currency: string };
 export type ApResult = { totalOpen: number; count: number; aging: Aging; bills: ApBill[] };
