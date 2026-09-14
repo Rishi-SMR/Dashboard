@@ -420,9 +420,14 @@ export function CommissionTab() {
                       than EARNED NOTHING, which is the one distinction this
                       table exists to make. `paidTotal` has always been on the
                       payload; only the column was missing. */}
-                  <th className="num" title="Already paid out. Part of Commission, and deliberately not part of Payable / Due - a rep is not owed money they have had.">Paid</th>
+                  {/* THE "PAID" COLUMN WAS HERE, and it was removed the day
+                      Commission came to mean paid: the two printed the same
+                      number on every row, which is not a second fact about the
+                      rep, it is the same fact twice. Commission is kept over
+                      Paid because the tile above the table is named for it and
+                      the two must not drift apart again. */}
                   <th className="num">Payable / Due</th><th className="num">Waiting</th>
-                  <th className="num">Commission</th>
+                  <th className="num" title="Commission already paid out. Money still owed is in Payable / Due and is deliberately NOT counted here.">Commission</th>
                   {/* The 18% sparkbar column is gone. It was scaled to the top
                       rep, so with Alle Ann at $63,025 and Maylon at $4,490 the
                       bottom of the table rendered as a stub — and the table is
@@ -430,7 +435,7 @@ export function CommissionTab() {
                       the row order and took a fifth of the width to do it. */}
                 </tr></thead>
                 <tbody>
-                  {reps.length === 0 && <tr><td colSpan={11} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+                  {reps.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders in this period.</td></tr>}
                   {reps.map((r, i) => {
                     const mine = myRep === r.rep;
                     const open = isAdmin || mine;
@@ -465,10 +470,6 @@ export function CommissionTab() {
                         <OrderCountCells t={num(r.nTricare)} v={num(r.nVa)} p={num(r.nPi)} />
                         <td className="num">{num(r.orders)}</td>
                         <td className="num">{num(r.units)}</td>
-                        {/* Muted, not green: paid money is settled history, and
-                            colouring it like the owed column would have two
-                            figures competing to be the one that matters. */}
-                        <td className="num" style={{ color: C.muted, fontWeight: 700 }}>{money(r.paidTotal)}</td>
                         <td className="num" style={{ color: r.payableTotal == null ? C.muted : C.positive, fontWeight: 700 }}>{money(r.payableTotal)}</td>
                         <td className="num" style={{ color: r.waitingTotal == null ? C.muted : C.warning, fontWeight: 700 }}>{money(r.waitingTotal)}</td>
                         <td className="num" style={{ fontWeight: 800 }}>
@@ -498,11 +499,6 @@ export function CommissionTab() {
                         printed the whole book's $133,729 and $28,768 over five
                         rows summing to $75,320 and $0. Same sums as the card
                         above now, so the two cannot drift apart either. */}
-                    {/* `paidSum` was already computed for the card above and
-                        simply had no column to land in down here — so the foot
-                        summed to a Total the three columns beside it could not
-                        account for the moment anything was paid. */}
-                    <td className="num" style={{ color: C.muted, fontWeight: 700 }}>{money(paidSum)}</td>
                     <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(payableSum)}</td>
                     <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(waitingSum)}</td>
                     <td className="num" style={{ fontWeight: 800 }}>{money(total)}</td>
@@ -661,12 +657,21 @@ function OrderCountCells({ t, v, p }: { t: number; v: number; p: number }) {
 
 // Paid / Payable-Due / Waiting.
 //
-// TOTAL IS PAID + PAYABLE, and Waiting sits OUTSIDE it. That is the server's
-// own rule (striven.grandTotal), and this card used to add all three, so it
-// printed a Total $29,507 above the headline on the same screen. Waiting is the
-// in-flight payout cycle — a month with no run yet, estimated from the order
-// book rather than signed off — so adding it to a signed-off total would mix an
-// estimate into the figure the business pays on.
+// THIS CARD'S LAST TILE IS NOT THE COMMISSION TOTAL, and it is labelled "Paid +
+// Due" rather than "Total" so that it cannot be read as one. Commission now
+// means PAID (see r.total on the server); paid + due is a different, larger
+// figure — everything signed off, whether or not it has gone out. Both belong
+// on this page: one says what a rep has been given, the other what the sheet
+// has agreed they are owed in the end.
+//
+// The word "Total" was the whole risk. It sat here beside a "Total commission"
+// tile carrying a different number — $90,838.27 against $0.00 for August — and
+// nothing on screen said the two were answering different questions. A named
+// figure cannot be mistaken for the headline; an unnamed "Total" always will be.
+//
+// WAITING IS IN NEITHER. It is the in-flight payout cycle — a month with no run
+// yet, estimated from the order book rather than signed off — so adding it to
+// either figure would mix an estimate into money the business has committed to.
 function StateSplit({ payable, waiting, held, zeroValue, who, scope, note, paid, paidThrough }: { payable?: number | null; waiting?: number | null; held?: number; zeroValue?: number; who?: string | null; scope?: string; note?: string; paid?: number | null; paidThrough?: Record<string, string> }) {
   if (payable == null && waiting == null) return null;
   const p = payable ?? 0, w = waiting ?? 0, d = paid ?? 0, tot = p + d;
@@ -688,9 +693,10 @@ function StateSplit({ payable, waiting, held, zeroValue, who, scope, note, paid,
         </h2>
         <div className="section-sub">
           {note && <div style={{ marginBottom: 4 }}>{note}</div>}
-          Paid has already gone out - still counted in the total, no longer owed{through ? ` (${through})` : ''}.
-          {' '}Payable/Due is signed off and owed. Total is Paid + Payable: the whole signed-off figure.
-          {w ? ' Waiting is the current cycle, which has no payout run yet - estimated from the order book, not signed off, and NOT in the total.' : ''}
+          Paid has already gone out{through ? ` (${through})` : ''}, and it is what the <b>Commission</b> figure on this page counts.
+          {' '}Payable/Due is signed off and owed but not yet paid, so it is deliberately NOT in that figure.
+          {' '}Paid + Due is the two together: everything the sheet has agreed, whether or not it has gone out.
+          {w ? ' Waiting is the current cycle, which has no payout run yet - estimated from the order book, not signed off, and in neither figure.' : ''}
           {held ? ` ${held} order${held === 1 ? '' : 's'} on hold are not payable.` : ''}
           {zeroValue ? ` ${zeroValue} order${zeroValue === 1 ? '' : 's'} with $0 order value earn no commission and are excluded too.` : ''}
         </div>
@@ -703,13 +709,13 @@ function StateSplit({ payable, waiting, held, zeroValue, who, scope, note, paid,
         {/* Not "waiting for reimbursement" any more — that named a label on an
             order, and this figure is now the unsettled CYCLE. */}
         <Stat label="Waiting · current cycle" value={money(w)} tint={C.warning} />
-        <Stat label="Total" value={money(tot)} tint={C.brand} />
+        <Stat label="Paid + Due" value={money(tot)} tint={C.brand} />
       </div>
-      {/* The bar is the TOTAL broken down, so only what the total contains is in
-          it. Waiting used to take a third segment, which drew it as a share of
-          a figure it is not part of. */}
+      {/* The bar breaks down PAID + DUE, so only what that contains is in it.
+          Waiting used to take a third segment, which drew it as a share of a
+          figure it is not part of. */}
       <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)', margin: '12px 2px 2px' }}
-        title={`Paid ${money(d)} · Payable ${money(p)}${w ? ` · Waiting ${money(w)}, outside the total` : ''}`}>
+        title={`Paid ${money(d)} · Payable ${money(p)}${w ? ` · Waiting ${money(w)}, outside both` : ''}`}>
         {d > 0 && <div style={{ width: `${(d / (tot || 1)) * 100}%`, background: C.muted }} />}
         {p > 0 && <div style={{ width: `${(p / (tot || 1)) * 100}%`, background: C.positive }} />}
       </div>
@@ -772,7 +778,12 @@ function Stat({ label, value, tint }: { label: string; value: string; tint?: str
 // (or by an admin), so the dollar columns are always populated here.
 function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }) {
   const lines: StrivenOrderLine[] = rep.lines || [];
-  const cpo = num(rep.orders) ? num(rep.total) / num(rep.orders) : 0;
+  // EVERYTHING SIGNED OFF, not `total`. `total` is the PAID figure now, so a
+  // month that has not been through its payout run would divide $0 by 43 orders
+  // and print "$0.00 per order" for a rep who earned $52,000 — a rate of pay
+  // that is not a fact about their work, only about the calendar.
+  const signedOff = num(rep.paidTotal) + num(rep.payableTotal);
+  const cpo = num(rep.orders) ? signedOff / num(rep.orders) : 0;
   const progs: [string, number | null, number, string][] = [
     ['TriCare', rep.tricare, num(rep.nTricare), PROG_C.TriCare],
     ['VA', rep.va, num(rep.nVa), PROG_C.VA],
@@ -784,11 +795,13 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
   // needs no extra fetch or permission check of its own.
   const sheetRef = useRef<HTMLDivElement>(null);
 
-  // The order count came out of the subtitle: the strip below states it, and the
-  // two sat four lines apart saying the same number. The TOTAL stays — the strip
-  // carries Payable and Waiting, which do not add up to it.
+  // THE SUBTITLE NAMES BOTH HALVES. It used to read "Final commission $X" off
+  // `total`, and once that became the PAID figure it announced "$0.00" above a
+  // table itemising $52,000 the rep is owed — the one place on this page where
+  // the reader is looking at the lines themselves, so the one place the
+  // contradiction is impossible to miss.
   return (
-    <Modal title={rep.rep} sub={`Final commission ${money(rep.total)} · ${num(rep.units)} units`} onClose={onClose}>
+    <Modal title={rep.rep} sub={`Paid ${money(rep.paidTotal)} · Owed ${money(rep.payableTotal)} · ${num(rep.units)} units`} onClose={onClose}>
       <div ref={sheetRef}>
       {/* Statement header: only on paper, where the modal's own title bar and
           the surrounding page are gone. */}
@@ -808,7 +821,9 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
         { label: 'Payable / Due', value: money(rep.payableTotal), tint: C.positive },
         { label: 'Waiting', value: money(rep.waitingTotal), tint: C.warning },
         { label: 'Orders', value: String(num(rep.orders)) },
-        { label: 'Per order', value: money(cpo) },
+        // Named for what it divides, since 'per order' alone no longer says
+        // which of the two money figures on this strip it came from.
+        { label: 'Paid + due per order', value: money(cpo) },
       ]} />
 
       <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 8 }}>
