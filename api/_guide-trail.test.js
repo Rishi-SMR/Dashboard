@@ -185,3 +185,53 @@ test('parseTrail splits the entry from the section it landed on', () => {
 test('the landing marker is mounted once in the shell', () => {
   assert.match(read('CashflowApp.tsx'), /<GuideLanding \/>/);
 });
+
+// ── THE ROUTER'S ALLOW-LIST ──────────────────────────────────────────────────
+// `VIEW_KEYS` is a runtime array that has to list the whole `ViewKey` union.
+// Nothing checks that: the union is a TYPE and is erased at build time, so a
+// key missing from the array is not a type error, a build error, or a render
+// error. `readHash` just returns null for it and the router ignores the hash.
+//
+// `arsheet` was missing, and the damage was invisible from the tab itself — the
+// sidebar calls setView directly and never reads this list, so the AR Register
+// opened perfectly. Only HASH navigation to it was dead, which is to say: the
+// seven User Guide entries that link to it, and any bookmarked #arsheet URL.
+
+const app = read('CashflowApp.tsx');
+const listOf = (re) => [...(re.exec(app)?.[1] ?? '').matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+const UNION = listOf(/export type ViewKey =([^;]+);/);
+const ROUTABLE = listOf(/const VIEW_KEYS: ViewKey\[\] = \[([^\]]+)\]/);
+
+test('the ViewKey union parsed at all', () => {
+  assert.ok(UNION.length > 20, `expected the view union, found ${UNION.length}`);
+  assert.ok(ROUTABLE.length > 20, `expected VIEW_KEYS, found ${ROUTABLE.length}`);
+});
+
+test('every ViewKey is routable by hash', () => {
+  const missing = UNION.filter((k) => !ROUTABLE.includes(k));
+  assert.deepEqual(missing, [], `in the ViewKey union but absent from VIEW_KEYS, so #${missing[0]} is ignored by the router:\n  ${missing.join('\n  ')}`);
+});
+
+test('VIEW_KEYS invents no view the union does not declare', () => {
+  const extra = ROUTABLE.filter((k) => !UNION.includes(k));
+  assert.deepEqual(extra, [], `routable but not a real ViewKey:\n  ${extra.join('\n  ')}`);
+});
+
+test('every screen the glossary links to is reachable by hash', () => {
+  // The user-facing half of the same contract: a guide entry naming a view the
+  // router will not follow is a link that does nothing when clicked.
+  const targets = [...new Set([...guide.matchAll(/view: '([a-z]+)'/g)].map((m) => m[1]))];
+  assert.ok(targets.length > 10, `expected glossary locations, found ${targets.length}`);
+  const dead = targets.filter((v) => !ROUTABLE.includes(v));
+  assert.deepEqual(dead, [], `the User Guide links to these, and the router ignores them:\n  ${dead.join('\n  ')}`);
+});
+
+test('the return chip stands down on the User Guide itself', () => {
+  // `#guide~ar-open` still carries a trail, so without an explicit test on the
+  // view the chip follows the reader home and offers to take them where they
+  // already are — and its href equals the current hash, so it cannot even fire
+  // a hashchange. Asserted on the source because there is no DOM here.
+  const src = read('guideTrail.tsx');
+  const fn = src.slice(src.indexOf('export function GuideReturn'), src.indexOf('export function GuideLanding'));
+  assert.match(fn, /view === 'guide'/, 'GuideReturn must not render on the guide view');
+});
