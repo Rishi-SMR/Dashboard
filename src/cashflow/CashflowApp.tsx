@@ -83,7 +83,26 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
   );
 }
 
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsroster', 'standings', 'reports', 'quickbooks', 'guide'];
+/**
+ * EVERY ROUTABLE VIEW — the hash allow-list, and it must list the whole ViewKey
+ * union. A key missing here is not a type error, because this is a runtime
+ * array and the union is erased: `readHash` simply returns null for it and the
+ * router ignores the hash.
+ *
+ * `arsheet` WAS MISSING, and the shape of that bug is worth keeping in mind for
+ * the next one. The AR Register worked perfectly from the sidebar — that calls
+ * setView directly and never consults this list — so nothing looked broken. It
+ * was only unreachable BY HASH, which meant the seven User Guide entries that
+ * link to it did nothing at all: the hash changed to `#arsheet~<term>`, readHash
+ * rejected it, the view never moved, and the only visible effect was the "Back
+ * to User Guide" chip appearing on the User Guide itself, because the trail had
+ * been written to a hash the router had declined to follow.
+ *
+ * `api/_guide-trail.test.js` now asserts this list against the union and against
+ * every destination the glossary names, so the next omission fails a test
+ * instead of quietly deadening a link.
+ */
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'arsheet', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsroster', 'standings', 'reports', 'quickbooks', 'guide'];
 /**
  * THE VIEW ON THE CURRENT HASH.
  *

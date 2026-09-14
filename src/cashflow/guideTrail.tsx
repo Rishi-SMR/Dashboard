@@ -90,6 +90,7 @@ export const currentAnchor = () =>
   (typeof location === 'undefined' ? null : parseTrail(splitHash(location.hash).trail).anchor);
 
 const currentTrail = () => (typeof location === 'undefined' ? null : splitHash(location.hash).trail);
+const currentView = () => (typeof location === 'undefined' ? '' : splitHash(location.hash).view);
 
 /**
  * THE TRAIL ON THE CURRENT HASH, kept live.
@@ -113,6 +114,19 @@ function useTrail(): string | null {
   return trail;
 }
 
+/** The view half of the hash, watched the same way and for the same reason —
+ *  `replaceState` fires no event. See useTrail above. */
+function useHashView(): string {
+  const [view, setView] = useState<string>(currentView);
+  useEffect(() => {
+    const read = () => setView((prev) => { const now = currentView(); return prev === now ? prev : now; });
+    window.addEventListener('hashchange', read);
+    const t = setInterval(read, 250);
+    return () => { window.removeEventListener('hashchange', read); clearInterval(t); };
+  }, []);
+  return view;
+}
+
 /**
  * THE WAY BACK. Mounted once, in the app shell, for every tab at once.
  *
@@ -131,10 +145,18 @@ function useTrail(): string | null {
  */
 export function GuideReturn() {
   const trail = useTrail();
+  const view = useHashView();
   const [hidden, setHidden] = useState<string | null>(null);
   // Dismissal is per-trail: closing the chip for "AR Open" must not suppress the
   // one that appears after the reader follows a different entry.
   useEffect(() => { if (trail && hidden && trail !== hidden) setHidden(null); }, [trail, hidden]);
+  // NEVER ON THE GUIDE ITSELF. Following the chip lands on `#guide~ar-open`,
+  // which still carries a trail — so without this test the chip survived the
+  // trip and sat on the User Guide offering to take the reader back to the User
+  // Guide. Worse than redundant: the href equals the current hash, so clicking
+  // it fires no hashchange and does nothing at all, which reads as a dead
+  // control on the one screen that is supposed to explain the others.
+  if (view === 'guide') return null;
   if (!trail || hidden === trail) return null;
   // The TERM half only: the anchor is where the reader landed, not what they
   // were reading, and "AR Open ar aging" is not the name of anything.
