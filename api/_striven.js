@@ -5252,14 +5252,28 @@ export async function getCommission(viewer = null) {
     const { paid, due } = splitPaid(r.lines || []);
     r.paidTotal = paid;
     r.payableTotal = due;
-    r.total = round2(paid + due);
+    // ── COMMISSION MEANS PAID, NOT EARNED ────────────────────────────────────
+    // By instruction (2026-09-14): money still sitting in Payable / Due must not
+    // be counted in a commission total. `total` is therefore the PAID figure
+    // alone, and what is owed is reported by `payableTotal` beside it.
+    //
+    // THIS REVERSES THE EARLIER RULE, and the earlier reasoning is worth keeping
+    // visible rather than deleting: `total` used to be paid + due, so that a
+    // rep's figure did not shrink on payday. The cost of that was a headline
+    // which counted money nobody had received — on All months, $90,838.27 of
+    // unpaid August inside a $265,237.33 "Total commission" — and a reader has
+    // no way to tell the two apart in a single number. The business would rather
+    // the total understate than imply a payment that has not happened.
+    //
+    // NOTHING IS LOST OR HIDDEN. Every line is still on the row; `payableTotal`
+    // carries the unpaid half and the table prints it in its own column. This
+    // changes which of two existing figures the word "commission" names.
+    r.total = paid;
   }
   striven.paidTotal = round2(striven.byRep.reduce((t, r) => t + (r.paidTotal || 0), 0));
   striven.payableTotal = round2(striven.byRep.reduce((t, r) => t + (r.payableTotal || 0), 0));
-  // The headline stays the WHOLE signed-off figure. Paying a rep does not
-  // reduce what they earned, and a "Total commission" tile that fell every
-  // payday would be reporting the wrong thing.
-  striven.grandTotal = round2(striven.paidTotal + striven.payableTotal);
+  // The headline is the paid figure — see the note on `r.total` above.
+  striven.grandTotal = striven.paidTotal;
   striven.paidThrough = paidThrough;
 
   // ── THE MONTHS ARE THE PAYOUT CYCLES ────────────────────────────────────────
@@ -5321,12 +5335,18 @@ export async function getCommission(viewer = null) {
         const { paid, due } = splitPaid(lines);
         row.paidTotal = paid;
         row.payableTotal = due;
-        row.total = round2(paid + due);
+        row.total = paid;                      // paid only — see r.total above
         row.reconciled = true;
         row.lines = lines.slice().sort((a, b) => b.comm - a.comm);
         // Per vertical, off the SHEET's own Vertical column rather than the
         // engine's programme — same source as the money beside it.
-        const prog = (re) => round2(lines.filter((l) => re.test(String(l.prog || ''))).reduce((s, l) => s + l.comm, 0));
+        //
+        // PAID LINES ONLY, because the total beside it is now the paid figure
+        // and the three tiles above the table each print a "% of total" against
+        // it. Summing every line here while the total counted only the paid ones
+        // would put parts of $90,838.27 over a total of $0 — percentages past
+        // 100% on a strip whose whole job is to decompose that total.
+        const prog = (re) => round2(lines.filter((l) => l.state === 'paid' && re.test(String(l.prog || ''))).reduce((s, l) => s + l.comm, 0));
         row.tricare = prog(/tri.?care/i);
         row.va = prog(/\bva\b|veteran/i);
         row.pi = prog(/\bpi\b|personal injury/i);
@@ -5336,7 +5356,7 @@ export async function getCommission(viewer = null) {
       for (const row of M.reps) if (!reps.has(row.rep)) zeroMoney(row);
       M.paidTotal = round2(M.reps.reduce((s, r) => s + (r.paidTotal || 0), 0));
       M.payableTotal = round2(M.reps.reduce((s, r) => s + (r.payableTotal || 0), 0));
-      M.total = round2(M.paidTotal + M.payableTotal);
+      M.total = M.paidTotal;                   // paid only — see r.total above
       M.TriCare = round2(M.reps.reduce((s, r) => s + (r.tricare || 0), 0));
       M.VA = round2(M.reps.reduce((s, r) => s + (r.va || 0), 0));
       M.PI = round2(M.reps.reduce((s, r) => s + (r.pi || 0), 0));
@@ -5431,6 +5451,11 @@ export async function getCommission(viewer = null) {
     for (const r of striven.byRep) {
       const v = { TriCare: 0, VA: 0, PI: 0 };
       for (const l of r.lines || []) {
+        // PAID LINES ONLY — the same rule as the month rows, and for the same
+        // reason: this split decomposes `total`, which is now the paid figure.
+        // A split summing more than the total it belongs to is the exact defect
+        // this block was written to fix, only in the other direction.
+        if (l.state !== 'paid') continue;
         const k = verticalOfCommissionLine(l.prog);
         if (k) v[k] = round2(v[k] + (l.comm || 0));
         else unassigned = round2(unassigned + (l.comm || 0));

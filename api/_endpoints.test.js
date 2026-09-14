@@ -745,8 +745,13 @@ test('every month is the reconciliation, and the months sum to what is paid', op
   // what has to reconcile.
   const owed = (x) => (x.paidTotal || 0) + (x.payableTotal || 0);
   assert.equal(sum(s.months.map(owed)), sum(s.byRep.map(owed)),
-    'the months add up to the signed-off headline');
-  assert.equal(sum(s.byRep.map(owed)), s.grandTotal, 'and that is the headline');
+    'the months add up to the signed-off figure');
+  assert.equal(sum(s.byRep.map(owed)), sum([s.paidTotal, s.payableTotal]),
+    'and the rows add up to the two aggregates');
+  // THE HEADLINE IS THE PAID FIGURE, not paid + due. Commission counts money
+  // that has actually gone out (2026-09-14 instruction); what is still owed is
+  // reported alongside it and deliberately excluded from the total.
+  assert.equal(s.grandTotal, s.paidTotal, 'the headline is what has been paid');
 
   for (const r of s.byRep) {
     const perMonth = sum(s.months.map((m) => { const x = m.reps.find((y) => y.rep === r.rep); return x ? (x.paidTotal || 0) + (x.payableTotal || 0) : 0; }));
@@ -786,8 +791,10 @@ test('workbook commission merges without ever double-counting the sheet', opts, 
   // The headline still equals the rows behind it, and the months still equal
   // the headline — the two invariants a second source could quietly break.
   const owed = (x) => (x.paidTotal || 0) + (x.payableTotal || 0);
-  assert.equal(sum(s.byRep.map(owed)), s.grandTotal, 'rows sum to the headline');
-  assert.equal(sum(s.months.map(owed)), s.grandTotal, 'months sum to the headline');
+  const signedOff = sum([s.paidTotal, s.payableTotal]);
+  assert.equal(sum(s.byRep.map(owed)), signedOff, 'rows sum to the signed-off figure');
+  assert.equal(sum(s.months.map(owed)), signedOff, 'months sum to it too');
+  assert.equal(s.grandTotal, s.paidTotal, 'and the headline is the paid half');
 
   for (const r of s.byRep) {
     const lines = r.lines || [];
@@ -809,21 +816,30 @@ test('workbook commission merges without ever double-counting the sheet', opts, 
 });
 
 // ── PAID vs STILL OWED ───────────────────────────────────────────────────────
-// "Payable / Due" used to mean every signed-off dollar a rep had ever earned,
-// months after the money left the bank. COMMISSION_PAID_THROUGH names the last
-// paid month per vertical; those lines are `paid` — still the rep's, still in
-// the total, no longer owed.
+// COMMISSION_PAID_THROUGH names the last paid month per vertical; lines at or
+// before it are `paid`, the rest are owed.
 //
-// The invariant that matters is that nothing MOVES: splitting a total in two
-// must not change it, or a rep's year-to-date shifts on payday.
-test('paid commission leaves the total alone and only the owed figure moves', opts, async () => {
+// COMMISSION MEANS PAID (2026-09-14 instruction). `total` is the paid figure
+// alone and `payableTotal` carries what is still owed, so the two no longer add
+// up to `total` — they add up to everything signed off, which is a different
+// and larger number. The invariant that survives is that NOTHING IS LOST: every
+// line lands in exactly one of the two halves, so paid + due must still equal
+// the lines on the row.
+test('commission counts paid money, and the split loses nothing', opts, async () => {
   const c = await getCommission(ADMIN);
   const s = c.striven;
   const sum = (ns) => Math.round(ns.reduce((a, b) => a + (b || 0), 0) * 100) / 100;
 
-  assert.equal(sum([s.paidTotal, s.payableTotal]), s.grandTotal, 'paid + due is the whole figure');
+  assert.equal(s.grandTotal, s.paidTotal, 'the headline is the paid figure');
   for (const r of s.byRep) {
-    assert.equal(sum([r.paidTotal, r.payableTotal]), r.total ?? 0, `${r.rep}: paid + due is their total`);
+    assert.equal(r.total ?? 0, r.paidTotal || 0, `${r.rep}: their commission is what they were paid`);
+    // Nothing fell between the two halves on the way.
+    assert.equal(sum((r.lines || []).map((l) => l.comm)), sum([r.paidTotal, r.payableTotal]),
+      `${r.rep}: every line is in exactly one of paid / due`);
+  }
+  // A month's total follows the same rule as a rep's.
+  for (const m of s.months) {
+    assert.equal(m.total ?? 0, m.paidTotal || 0, `${m.month}: the month total is what was paid`);
   }
 
   // Every paid line is one the cut-off actually covers, and every line the
