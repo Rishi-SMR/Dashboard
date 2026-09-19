@@ -12,6 +12,7 @@ import {
   getOrderAnalytics, getRepOverview, getCommission, getPiStages,
   viewerFor, setPiStage, PI_STAGES, monthOfPayoutCycle,
   saveDashboardView, listDashboardViews, deleteDashboardView, shipmentsOf,
+  ROUTES,
 } from './_striven.js';
 import { isCancelledStatus } from './_commission-core.js';
 import {
@@ -863,3 +864,202 @@ test('commission counts paid money, and the split loses nothing', opts, async ()
   const undatedPaid = s.byRep.flatMap((r) => (r.lines || []).filter((l) => !l.month && l.state === 'paid'));
   assert.deepEqual(undatedPaid, [], 'an undated line is never marked paid');
 });
+
+// ── AN ORDER IS DATED WHEN IT WAS BOOKED ─────────────────────────────────────
+// Striven carries two dates: `orderDate`, which its own sales-order list shows
+// and filters on, and `dateCreated`, which is when somebody typed the order in.
+// They are routinely days apart — a weekend's orders get keyed on the Monday —
+// so counting by `dateCreated` puts those orders in the following month.
+//
+// THE BUG THIS CAUGHT: Christy's September read 23 on the dashboard against 17
+// in Striven. Six orders dated 28-31 Aug had been entered on 1 Sep. Alle Ann had
+// nine more of the same. A rep sees that as the board disagreeing with the
+// system of record about their own work, and no screen could explain it.
+//
+// Checked on the SOURCE, because the field is chosen in one expression and the
+// damage is invisible in any single number: a month count that is wrong by six
+// still looks like a perfectly ordinary month count.
+test('orders are dated by orderDate, not by when they were keyed in', () => {
+  const src = readFileSync(new URL('./_striven.js', import.meta.url), 'utf8');
+
+  // The one helper every consumer goes through.
+  assert.match(src, /const soDate = \(r\) => \(r\?\.d\?\.orderDate \?\? r\?\.dateCreated \?\? null\)/,
+    'soDate() must prefer the order date and fall back to dateCreated');
+
+  // The row every downstream board reads.
+  assert.match(src, /invStatus: r\.d\.invStatus \|\| '', date: soDate\(r\),/,
+    "getSO's `recent` rows must carry soDate(), not r.dateCreated");
+
+  // orderDate only exists on the detail endpoint, so it has to be cached...
+  assert.match(src, /orderDate: d\?\.orderDate \?\? null,/,
+    'the so_detail writer must persist orderDate');
+
+  // ...and the staleness test is the only thing that backfills a NEW field onto
+  // entries written before it existed. Without this the whole back catalogue
+  // keeps falling back to dateCreated for ever, silently.
+  assert.match(src, /!\('orderDate' in \(detail\[id\] \|\| \{\}\)\)/,
+    'refreshDerived must treat a missing orderDate key as stale, or no old order is ever backfilled');
+});
+
+// ── EVERY ORDER IS ACCOUNTED FOR, EXACTLY ONCE ───────────────────────────────
+// Verified against a live per-order fetch of all 653 sales orders on
+// 2026-09-15: 36 cancelled, 617 counted, 507 to the seven roster reps and 110
+// to names off it — and every rep x month cell equal to Striven.
+//
+// The invariant that keeps it true is this: the roster total and the
+// unattributed bucket must add up to the whole book. An order can only be in
+// one or the other, so any drift means orders are being double-counted or
+// dropped — and a dropped order is invisible, which is the failure that let
+// Christy's September be wrong by six for as long as it was.
+test('the rep roster and the unattributed bucket account for the whole book', opts, async () => {
+  const ov = await getRepOverview(ADMIN);
+  if (!ov?.bookTotals) return;                    // rep viewer: these are admin-only
+
+  assert.equal(
+    (ov.teamTotals?.orders ?? 0) + (ov.unattributed?.orders ?? 0),
+    ov.bookTotals.orders,
+    'roster orders + unattributed orders must equal the whole book',
+  );
+  assert.equal(
+    (ov.teamTotals?.units ?? 0) + (ov.unattributed?.units ?? 0),
+    ov.bookTotals.units,
+    'and the same for units, or the Devices KPI drifts from Orders',
+  );
+
+  // A rep's months must sum to their own lifetime figure. The leaderboard ranks
+  // on the month rows and the podium on the total; if they can disagree, one
+  // screen contradicts the other about the same rep.
+  for (const r of ov.reps ?? []) {
+    const summed = (r.byMonth ?? []).reduce((s, m) => s + (m.orders || 0), 0);
+    assert.equal(summed, r.orders, `${r.rep}: months must sum to the lifetime order count`);
+  }
+});
+
+// ── THE VERTICAL SPLIT MUST ACCOUNT FOR EVERY ORDER ──────────────────────────
+// `byVertical` decomposes the rep's order count, and a decomposition that drops
+// rows is not a smaller truth — it is a card that contradicts itself. Maylon's
+// read 40 orders at the top over a table summing to 37, with PI at "100% of
+// orders" because the share was taken against the table's own total. The three
+// missing were two "Other" orders worth $13,898 and one DEMO.
+//
+// It hid because it only bites a rep who works OUTSIDE the four real
+// programmes. Alle Ann is pure VA and Christy pure VA, so their tables summed
+// perfectly; Cami's one order is "Other", so hers was empty on a rep with an
+// order to her name.
+test('every order is in exactly one vertical row, all-time and per month', opts, async () => {
+  const ov = await getRepOverview(ADMIN);
+  for (const r of ov.reps ?? []) {
+    const sum = (r.byVertical ?? []).reduce((s, v) => s + (v.orders || 0), 0);
+    assert.equal(sum, r.orders,
+      `${r.rep}: By-vertical rows sum to ${sum} against ${r.orders} orders — the card would contradict itself`);
+
+    // A month's split has to hold too, or the contradiction just moves behind
+    // the period selector.
+    for (const m of r.byMonth ?? []) {
+      const ms = (m.byVertical ?? []).reduce((s, v) => s + (v.orders || 0), 0);
+      assert.equal(ms, m.orders, `${r.rep} ${m.month}: vertical rows ${ms} vs ${m.orders} orders`);
+    }
+  }
+});
+
+// ── THE UPCOMING PAYCHECK TILE ───────────────────────────────────────────────
+// The rep dashboard's tile reads `commissionByCycle`, picking the cycle that a
+// run on the 15th of the selected month settles — the month BEFORE it, because
+// the 15 Sep run pays August. The tile is only as honest as that array, so the
+// invariant worth holding is that the cycles account for every owed dollar:
+// if they sum to less than the rep's payable, money the rep is owed appears on
+// no period at all and the tile under-reports a paycheck.
+test('a rep\'s payout cycles account for every dollar they are owed', opts, async () => {
+  const ov = await getRepOverview(ADMIN);
+  const r2 = (n) => Math.round(n * 100) / 100;
+  for (const r of ov.reps ?? []) {
+    if (r.payable == null || !Array.isArray(r.commissionByCycle)) continue;
+    const summed = r2(r.commissionByCycle.reduce((s, c) => s + (c.payable || 0), 0));
+    assert.equal(summed, r2(r.payable),
+      `${r.rep}: cycles sum to ${summed} against ${r.payable} payable — a cycle is missing or double-counted`);
+
+    // Paid must reconcile the same way, or "Commission" and the tile beside it
+    // are drawing on sources that can drift.
+    const paid = r2(r.commissionByCycle.reduce((s, c) => s + (c.paid || 0), 0));
+    if (r.commission != null) {
+      assert.equal(paid, r2(r.commission),
+        `${r.rep}: cycles paid ${paid} against commission ${r.commission}`);
+    }
+  }
+});
+
+
+// ── THE PATIENT ON AN UNINVOICED ORDER ───────────────────────────────────────
+// "PI orders yet to be invoiced" is an action list — someone reads it to decide
+// which case to go and raise an invoice for — and its Patient column was a dash
+// on every row. The labels report, which every other patient field is read
+// from, does not carry these orders at all: it is scoped to orders that have
+// shipped or billed, which is exactly what these have not done.
+//
+// So the surname comes from report_patient_items (authoritative, and the only
+// source that has these rows) and the first initial from the sales order's
+// NUMBER — written "RRobinson", "TJones2" — but ONLY where the number can be
+// shown to end with that same surname. That proof is the whole safety of it: a
+// number that does not match yields the surname alone rather than a guessed
+// initial, so the displayed surname is never the derivation's to change.
+test('an uninvoiced order names its patient as initial + surname, never more', opts, async () => {
+  const ar = await ROUTES['/api/ar']();
+  const pending = (ar?.pending?.orders ?? []).filter((o) => o.vertical === 'PI');
+  if (!pending.length) return;                       // nothing uninvoiced today
+
+  // ALL FOUR SECTIONS, not just this one. Sections 1, 2 and 4 are invoices and
+  // read their name from invoicePatientMap; section 3 is an order and reads it
+  // from getArPending. Two code paths, one rule — and they printed different
+  // shapes ("Perez" against "T. Perez") on the same panel until both went
+  // through initialLastFromOrderNumber().
+  const pb = ar?.piBook;
+  const everyRow = [
+    ...(pb?.received?.invoices ?? []), ...(pb?.awaiting?.invoices ?? []),
+    ...(pb?.balance?.invoices ?? []), ...pending,
+  ];
+  for (const o of everyRow) {
+    const v = o.patient ?? '';
+    if (!v) continue;
+    assert.match(v, /^(?:[A-Z]\. )?[A-Za-z][A-Za-z\-']*$/,
+      `${o.ref ?? o.number}: "${v}" is not initial + surname`);
+    assert.ok(v.split(' ').length <= 2,
+      `${o.ref ?? o.number}: "${v}" carries more than an initial and a surname`);
+  }
+
+  for (const o of pending) {
+    const v = o.patient ?? '';
+    if (!v) continue;
+    // "X. Surname" or a bare surname. Anything else means a first name got out.
+    assert.match(v, /^(?:[A-Z]\. )?[A-Za-z][A-Za-z\-']*$/,
+      `${o.ref}: "${v}" is not initial + surname`);
+    const [head] = v.split(' ');
+    if (head.endsWith('.')) assert.equal(head.length, 2, `${o.ref}: "${head}" is more than one initial`);
+    assert.ok(v.split(' ').length <= 2, `${o.ref}: "${v}" carries more than an initial and a surname`);
+  }
+
+  // THE SURNAME IS NEVER THE DERIVATION'S TO CHANGE. Whatever the order number
+  // says, the surname on screen must still be the one the patient report gives.
+  // This is what stops a clever match quietly renaming somebody.
+  const rpi = (await sbCacheReadForTest('report_patient_items'))?.orders ?? [];
+  const surnameBySo = new Map(rpi.filter((o) => o?.soId != null)
+    .map((o) => [String(o.soId), String(o.lastName || '').replace(/[^A-Za-z\-']/g, '')]));
+  for (const o of pending) {
+    const expect = surnameBySo.get(String(o.soId));
+    if (!expect || !o.patient) continue;
+    const shown = String(o.patient).split(' ').pop();
+    assert.equal(shown.toLowerCase(), expect.toLowerCase(),
+      `${o.ref}: shows surname "${shown}" against the patient report's "${expect}"`);
+  }
+});
+
+/** The `report_patient_items` cache, read the way the server reads it. */
+async function sbCacheReadForTest(key) {
+  const url = process.env.SUPABASE_URL, k = process.env.SUPABASE_SERVICE_KEY;
+  if (!url || !k) return null;
+  try {
+    const r = await fetch(`${url}/rest/v1/striven_cache?select=data&key=eq.${key}`,
+      { headers: { apikey: k, Authorization: `Bearer ${k}` } });
+    if (!r.ok) return null;
+    return (await r.json())[0]?.data ?? null;
+  } catch { return null; }
+}

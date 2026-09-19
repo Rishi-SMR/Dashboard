@@ -811,7 +811,14 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
   // the KEY (not a truthy value) is the difference: an order Striven has no
   // tracking number for stores '' and is then left alone, so this converges
   // instead of re-fetching the same orders every cycle for ever.
-  const stale = (id) => !(id in detail) || !('tracking' in (detail[id] || {}));
+  // `orderDate` joins `tracking` here for exactly the reason the note above
+  // gives: entries are written once, so a field added today reaches new orders
+  // only until the staleness test asks for it by name. Testing the KEY means
+  // each old entry is re-fetched once and then left alone — an order Striven has
+  // no order date for stores null and still satisfies `'orderDate' in`.
+  const stale = (id) => !(id in detail)
+    || !('tracking' in (detail[id] || {}))
+    || !('orderDate' in (detail[id] || {}));
   const missing = soRows.map((r) => r.id).filter(stale);
   const todo = missing.slice(0, maxOrders);
 
@@ -825,6 +832,17 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
         const d = await striven('GET', `/v1/sales-orders/${id}`);
         detail[id] = {
           type: d?.type?.name ?? '', rep: d?.salesRep?.name ?? '', payer: soPayerOf(d),
+          // ── THE DATE THE ORDER WAS BOOKED, not the date it was keyed in ────
+          // Striven carries both and they are routinely days apart: SO-599 has
+          // orderDate 28 Aug and dateCreated 1 Sep, because the weekend's orders
+          // were entered on the Monday. `orderDate` is the one Striven's own
+          // sales-order list shows and filters on, so it is the one the business
+          // means by "booked in September".
+          //
+          // ONLY THE DETAIL ENDPOINT HAS IT. /v1/sales-orders/search returns
+          // dateCreated and no order date at all, which is how the dashboard
+          // came to count by the wrong field: it was using the only date it had.
+          orderDate: d?.orderDate ?? null,
           total: Number(d?.orderTotal ?? 0), invStatus: d?.invoiceStatus?.name ?? '',
           status: d?.status?.name ?? '', stage: String(soCustomField(d, 'Stage') || '').trim(),
           // Carrier tracking number, straight off the sales order in Striven —
@@ -1436,6 +1454,43 @@ async function getArPending(billedSoIds = new Set()) {
   // kind of row. Same source and same masking the register itself uses —
   // first initial + surname, never a full first name.
   const tags = await soLabelsBySoId().catch(() => new Map());
+  // ── THE PATIENT ON AN ORDER NOBODY HAS INVOICED YET ──────────────────────
+  // `tags` is the labels report, and it does not carry these rows at ALL: it is
+  // scoped to orders that have shipped or billed, which is precisely what an
+  // uninvoiced order has not done. Checked, not assumed — neither labels report
+  // holds a PatientName for a single one of the 33 PI orders on this list, so
+  // the column rendered a dash on every row of a table whose whole purpose is
+  // to tell somebody which case to go and raise an invoice for.
+  //
+  // TWO SOURCES, AND NEITHER ALONE IS ENOUGH:
+  //   · report_patient_items carries the SURNAME for every one of them, and no
+  //     first name — it drops it at ingest.
+  //   · the sales order's NUMBER is written "RRobinson", "TJones2" — a first
+  //     initial, the surname, and sometimes a sequence digit.
+  //
+  // So the initial is taken from the number ONLY WHERE THE NUMBER PROVES IT:
+  // the surname from the report must actually be the tail of the number. That
+  // is the whole safety of it — the surname is authoritative and comes from the
+  // report either way, and the leading letter is used only when the number
+  // demonstrably ends with that same surname. A number that does not match
+  // yields a surname on its own rather than a guessed initial. Of the 33 live
+  // rows, 29 prove out, 3 carry no order number and 1 has no initial in it.
+  //
+  // NO FULL FIRST NAME IS EVER FORMED, here or anywhere on the path: the number
+  // holds one letter to begin with, and the report holds no first name at all.
+  const [soBlobP, rpiBlobP] = await Promise.all([
+    sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
+    sbCacheRead('report_patient_items').then((b) => b?.data?.orders ?? []).catch(() => []),
+  ]);
+  const numberBySo = new Map((Array.isArray(soBlobP) ? soBlobP : [])
+    .map((o) => [String(o?.id), String(o?.number ?? '')]));
+  const surnameBySo = new Map((Array.isArray(rpiBlobP) ? rpiBlobP : [])
+    .filter((o) => o?.soId != null).map((o) => [String(o.soId), commLastDisp(o.lastName)]));
+  const patientFor = (soId) => {
+    const tagged = tags.get(String(soId))?.patient;
+    if (tagged) return tagged;                       // the labels report, where it has the row
+    return initialLastFromOrderNumber(numberBySo.get(String(soId)), surnameBySo.get(String(soId)) || '');
+  };
   const orders = [];
   for (const [soId, c] of Object.entries(chain)) {
     if ((c.invoices ?? []).length > 0) continue;                 // already billed
@@ -1480,7 +1535,7 @@ async function getArPending(billedSoIds = new Set()) {
     orders.push({
       soId, ref: c.ref || `SO-${soId}`, vertical, type: c.type || '',
       rep: cleanRep(c.rep), payer: payerOf(c), status: c.status || '',
-      patient: tags.get(String(soId))?.patient || '',
+      patient: patientFor(soId),
       /** The order the advance would be struck against. */
       caseValue: value,
       /** What invoicing it would ADD to AR, under the same rule arOwedOf uses. */
@@ -2009,19 +2064,33 @@ async function invoiceVerticalMap() {
  * boundary above.
  */
 async function invoicePatientMap() {
-  const [sb, tags, rc] = await Promise.all([
+  const [sb, tags, rc, soBlobP] = await Promise.all([
     sbCacheRead('order_chain').catch(() => null),
     soLabelsBySoId().catch(() => new Map()),
     sbCacheRead('report_patient_items').catch(() => null),
+    sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
   ]);
   const rcOrders = rc?.data?.orders || [];
+  // The sales order NUMBER, which is where a first initial can be recovered
+  // from — see initialLastFromOrderNumber().
+  const numberBySo = new Map((Array.isArray(soBlobP) ? soBlobP : [])
+    .map((o) => [String(o?.id), String(o?.number ?? '')]));
 
   // soId → the best name available for it.
   const bySo = new Map();
-  // Surname-only first, so the labels report overwrites it where it has the row.
+  // ── INITIAL + SURNAME WHEREVER IT CAN BE HAD ──────────────────────────────
+  // This used to store the SURNAME ALONE and rely on the labels report to
+  // upgrade it, which meant the PI book's four sections printed "Perez",
+  // "Wright", "Cadena" on every row the report does not reach — and it reaches
+  // 87 of 416. Section 3 was already taking the initial off the order number;
+  // doing it here puts the other three sections, and every other patient the
+  // invoice book names, into the same shape. The labels report still wins where
+  // it has the row: it carries the real first name rather than a recovered one.
   for (const o of rcOrders) {
     const ln = commLastDisp(o.lastName);
-    if (ln && o.soId != null) bySo.set(String(o.soId), ln);
+    if (ln && o.soId != null) {
+      bySo.set(String(o.soId), initialLastFromOrderNumber(numberBySo.get(String(o.soId)), ln));
+    }
   }
   for (const [soId, tag] of tags) if (tag?.patient) bySo.set(String(soId), tag.patient);
 
@@ -2256,6 +2325,27 @@ const soGroupOf = (status) => {
   if (/\b(?:complete|completed|closed|done|delivered|fulfilled)\b/.test(s)) return 'completed';
   return 'active';
 };
+/**
+ * WHEN AN ORDER WAS BOOKED.
+ *
+ * Striven carries two dates and they mean different things: `orderDate` is the
+ * sales order's own date — what its list shows, sorts and filters on — and
+ * `dateCreated` is when somebody typed it in. They are routinely days apart,
+ * because a weekend's orders get entered on the Monday.
+ *
+ * COUNTING BY dateCreated PUT ORDERS IN THE WRONG MONTH. Christy's September
+ * read 23 on the dashboard against 17 in Striven: six orders dated 28-31 August
+ * were keyed in on 1 September and the board called them September's. Every
+ * month boundary has this, in both directions, and the rep sees it as the board
+ * disagreeing with the system of record about their own work.
+ *
+ * FALLS BACK TO dateCreated, deliberately. `orderDate` reaches the cache only
+ * once refreshDerived() has re-fetched that order (see the staleness test), and
+ * an order genuinely without one must still land in a month rather than
+ * vanishing from every count while the backfill runs.
+ */
+const soDate = (r) => (r?.d?.orderDate ?? r?.dateCreated ?? null);
+
 async function getSO() {
   // Collapse any repeated SO id before anything counts it.
   //
@@ -2365,8 +2455,8 @@ async function getSO() {
     // entered in Striven this morning is on the board now.
     soTrackingBySoId().catch(() => new Map()),
   ]);
-  const recent = live.slice().sort((a, b) => (b.dateCreated || '').localeCompare(a.dateCreated || ''))
-    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: soStatusOf(r), invStatus: r.d.invStatus || '', date: r.dateCreated ?? null, updated: r.d.lastUpdatedDate ?? null, stage: r.d.stage || '', labels: soTags.get(String(r.id))?.labels ?? [],
+  const recent = live.slice().sort((a, b) => String(soDate(b) || '').localeCompare(String(soDate(a) || '')))
+    .map((r) => ({ id: r.id, ref: safeRef('SO', r.id, r.number), type: soClass(r.d.type), rep: cleanRep(r.d.rep), payer: payerOf(r.d), value: Number(r.d.total || 0), status: soStatusOf(r), invStatus: r.d.invStatus || '', date: soDate(r), updated: r.d.lastUpdatedDate ?? null, stage: r.d.stage || '', labels: soTags.get(String(r.id))?.labels ?? [],
       // REPORT FIRST, CACHE SECOND. Both read the same field in Striven and
       // agree on every row, so this is about FRESHNESS and COVERAGE, not about
       // one being more correct: the report is fetched now but is scoped to
@@ -2388,7 +2478,7 @@ async function getSO() {
   for (const r of book) {
     const prog = soClass(r.d.type);
     if (prog === 'Other') continue;
-    const month = (r.dateCreated || '').slice(0, 7) || 'unknown';
+    const month = String(soDate(r) || '').slice(0, 7) || 'unknown';
     const rep = cleanRep(r.d.rep) || 'Unassigned';
     const key = `${month}|${prog}|${rep}`;
     commAgg[key] = commAgg[key] || { month, program: prog, rep, orders: 0, units: 0, value: 0 };
@@ -4771,6 +4861,42 @@ const commLastName = (name) => { let s = String(name || '').trim(); if (!s) retu
 // first name), matching the authorized last-name pattern used in order-tracking.
 const commLastDisp = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z\-']/g, '').trim(); };
 /**
+ * INITIAL + SURNAME, WHERE THE SALES ORDER NUMBER PROVES THE INITIAL.
+ *
+ * The labels report is the only Striven source that carries a patient's first
+ * name, and it does not reach the whole book — it is scoped to orders that have
+ * shipped or billed, and its rows are the only ones anywhere in this file that
+ * arrive already spelled "R. Robinson". Everything else has the SURNAME alone,
+ * from report_patient_items, which drops the first name at ingest.
+ *
+ * But Striven writes the order NUMBER as "RRobinson", "TJones2" — an initial,
+ * the surname, sometimes a sequence digit. So the initial is recoverable, and
+ * this recovers it ONLY WHERE IT CAN BE PROVED: the surname already on record
+ * must actually be the tail of the number. That test is the whole safety of the
+ * thing. The surname is authoritative and comes from the report either way; the
+ * leading letter is used only when the number demonstrably ends with that same
+ * surname, so a number that does not match yields the surname on its own rather
+ * than a guessed initial.
+ *
+ * NO FULL FIRST NAME IS EVER FORMED. The number holds one letter to begin with,
+ * and the report holds no first name at all — there is nothing here to leak.
+ *
+ * @param {string} orderNumber the sales order's `number` field
+ * @param {string} surname     already reduced by commLastDisp()
+ */
+const initialLastFromOrderNumber = (orderNumber, surname) => {
+  if (!surname) return '';
+  const stem = String(orderNumber ?? '').replace(/\d+$/, '');   // trailing sequence digits
+  const letters = (x) => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
+  const ns = letters(stem); const nl = letters(surname);
+  if (nl && ns.endsWith(nl) && ns.length > nl.length) {
+    const initial = stem.replace(/[^A-Za-z]/g, '').charAt(0);
+    if (initial) return `${initial.toUpperCase()}. ${surname}`;
+  }
+  return surname;
+};
+
+/**
  * Display name as FIRST INITIAL + FULL SURNAME — "J. Honeycutt".
  *
  * A surname alone stops being an identifier the moment two patients share one,
@@ -6077,6 +6203,42 @@ export async function getRepOverview(viewer = null) {
         revenue: isAdmin ? round2(set.reduce((s, o) => s + o.revenue, 0)) : null,
       };
     });
+    // ── EVERY ORDER LANDS IN EXACTLY ONE ROW ──────────────────────────────────
+    // VERTS is the four REAL programmes, and an order in none of them used to be
+    // listed nowhere while still counting in `orders` above. Maylon's card is
+    // what that looks like: 40 orders at the top, a By-vertical table adding to
+    // 37, and PI reading "100% of orders" because the share was taken against
+    // the table's own incomplete sum. The three missing were two "Other" orders
+    // worth $13,898 and one DEMO — real rows, silently absent.
+    //
+    // DEMO and Contract were dropped from VERTS deliberately, on the grounds
+    // that they were "a row of dashes and a zero". That holds only while they
+    // are EMPTY. The rule that survives both cases is this: a fixed row for each
+    // real programme, so a rep with no VA still shows VA as a dash — plus a row
+    // for anything else they actually have, and none for anything they do not.
+    // The table then sums to the rep's order count by construction.
+    {
+      const extra = new Map();
+      for (const o of orders) {
+        const v = String(o.vertical || 'Other');
+        if (VERTS.includes(v)) continue;
+        const e = extra.get(v) ?? { vertical: v, orders: 0, units: 0, revenue: 0 };
+        e.orders += 1;
+        e.units += o.units;
+        e.revenue += Number(o.revenue || 0);
+        extra.set(v, e);
+      }
+      for (const e of [...extra.values()].sort((a, b) => b.orders - a.orders || a.vertical.localeCompare(b.vertical))) {
+        byVertical.push({
+          vertical: e.vertical,
+          orders: e.orders,
+          // Same redaction as the four above — an extra row must not become a
+          // way to read a figure the fixed ones withhold.
+          units: lean ? null : e.units,
+          revenue: isAdmin ? round2(e.revenue) : null,
+        });
+      }
+    }
 
     return {
       rep,
@@ -6139,14 +6301,24 @@ export async function getRepOverview(viewer = null) {
             // never become a way to read a figure the aggregate withholds.
             revenue: isAdmin ? round2(e.revenue) : null,
             accounts: (isAdmin || supervised) && !lean ? e.accts.size : null,
-            // The SAME four verticals, in the same order, as byVertical above:
+            // The same four verticals, in the same order, as byVertical above —
             // the mix bar is drawn from this and would re-colour between periods
-            // if the list were built from whatever the month happened to hold.
-            byVertical: VERTS.map((v) => ({
-              vertical: v,
-              orders: e.verts.get(v)?.orders ?? 0,
-              units: lean ? null : (e.verts.get(v)?.units ?? 0),
-            })),
+            // if the list were built from whatever the month happened to hold —
+            // PLUS whatever else the month actually contains, for the reason
+            // given against the all-time copy: a month whose rows sum to less
+            // than its own order count is the same contradiction, one period at
+            // a time. `e.verts` has always carried these; they were dropped here.
+            byVertical: [
+              ...VERTS.map((v) => ({
+                vertical: v,
+                orders: e.verts.get(v)?.orders ?? 0,
+                units: lean ? null : (e.verts.get(v)?.units ?? 0),
+              })),
+              ...[...e.verts.entries()]
+                .filter(([v]) => !VERTS.includes(String(v)))
+                .sort((a, b) => b[1].orders - a[1].orders || String(a[0]).localeCompare(String(b[0])))
+                .map(([v, x]) => ({ vertical: String(v), orders: x.orders, units: lean ? null : x.units })),
+            ],
           }));
       })(),
       // THE PAY FIGURES, BY PAYOUT CYCLE — the same rows the Commission tab
@@ -6155,6 +6327,41 @@ export async function getRepOverview(viewer = null) {
       // aggregate `commission` / `payable` / `waiting` below do: a peer row
       // carries none of it, and a period selector must not be a way around that.
       commissionByCycle: own ? (cycleByRep.get(rep) ?? []) : null,
+      // ── THE LINES BEHIND THE UPCOMING PAYCHECK ────────────────────────────
+      // What the dashboard's paycheck tile opens onto: the signed-off, not-yet-
+      // paid lines that make up the figure, and — the point of it — WHERE EACH
+      // CAME FROM. A rep told they are owed $52,000 with no way to see what it
+      // is made of has to take the number on trust, and the number is assembled
+      // from two documents (the reconciliation sheet, and the commission
+      // workbooks for the cycles that sheet does not carry). `source` says
+      // which, per line, so the answer to "where is this from" is on the row
+      // rather than in someone's head.
+      //
+      // OWN ROWS ONLY, exactly like every money field around it. A peer row
+      // carries null — not an empty array, which would be a claim that a peer
+      // is owed nothing.
+      //
+      // UNPAID ONLY. Paid lines are history and would treble the payload for a
+      // panel about what is coming; the Commission tab is where a rep reads
+      // their whole book.
+      //
+      // ALREADY PHI-SAFE: `patient` was reduced to an initial and surname at the
+      // parse, in commissionBookRows() and the recon reader, so nothing is
+      // being newly exposed here.
+      payLines: own
+        ? (cm?.lines || []).filter((l) => l && l.state !== 'paid').map((l) => ({
+          ref: l.ref || '',
+          patient: l.patient || '',
+          item: l.item || '',
+          prog: l.prog || '',
+          month: l.month || null,
+          cycle: l.cycle || '',
+          comm: round2(Number(l.comm) || 0),
+          source: l.fromWorkbook ? 'workbook' : 'sheet',
+          unmatched: Boolean(l.unmatched),
+          bonus: Boolean(l.bonus),
+        }))
+        : null,
       // Admin only, for the same reason as byVertical above: own revenue is
       // still revenue. Commission below IS the rep's to see.
       revenue: isAdmin ? round2(orders.reduce((s, o) => s + o.revenue, 0)) : null,
@@ -6406,7 +6613,11 @@ export async function getRepOverview(viewer = null) {
     role: isAdmin ? 'admin' : 'rep',
     bookTotals,
     me: viewer?.repName ?? null,
-    verticals: VERTS,
+    // The four real programmes PLUS anything the book actually holds, so a
+    // consumer building columns from this cannot end up with a set narrower
+    // than the rows it has to place. Same rule as byVertical on each rep row.
+    verticals: [...VERTS, ...[...new Set(analytics.orders.map((o) => String(o.vertical || 'Other')))]
+      .filter((v) => !VERTS.includes(v)).sort()],
     // EVERY month the shown book touches, oldest first, so a period selector
     // offers exactly the periods that exist. Built from the rows rather than
     // from a date range: a month nobody booked in is not a period to rank, and

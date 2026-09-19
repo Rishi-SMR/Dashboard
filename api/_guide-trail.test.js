@@ -57,7 +57,10 @@ test('every GuideMark term is a real glossary headword', () => {
 });
 
 test("the PI book's four sections each name a real term", () => {
-  const ar = read('components/ReceivablesTab.tsx');
+  // The book moved to the AR Register (it describes the PI slice of the invoice
+  // book, and the register is where that slice is filtered to), so it is its own
+  // component now rather than a block inside ReceivablesTab.
+  const ar = read('components/PiBook.tsx');
   const used = [...ar.matchAll(/\bguide: '([^']+)'/g)].map((m) => m[1]);
   assert.equal(used.length, 4, 'expected one guide term per PI section');
   for (const t of used) assert.ok(TERMS.has(t), `PI section points at unknown term "${t}"`);
@@ -134,7 +137,7 @@ test('every anchor the glossary points at is declared by a screen', () => {
   // The PI book's four sections are opened by ReceivablesTab's own effect rather
   // than by a static attribute — it has to press the tab before the section
   // exists in the DOM at all — so they are declared by that regex instead.
-  const dynamic = /\/\^pi-\(\[1-4\]\)\$\//.test(read('components/ReceivablesTab.tsx'))
+  const dynamic = /\/\^pi-\(\[1-4\]\)\$\//.test(read('components/PiBook.tsx'))
     ? ['pi-1', 'pi-2', 'pi-3', 'pi-4'] : [];
   for (const a of dynamic) declared.add(a);
 
@@ -147,7 +150,7 @@ test('every anchor the glossary points at is declared by a screen', () => {
 });
 
 test('a PI-section anchor is what opens that section', () => {
-  const ar = read('components/ReceivablesTab.tsx');
+  const ar = read('components/PiBook.tsx');
   assert.match(ar, /currentAnchor\(\)/, 'the PI book must read the anchor to open the right sub-tab');
   assert.match(ar, /\^pi-\(\[1-4\]\)\$/, 'pi-1..pi-4 are the four section anchors');
   assert.match(ar, /data-guide-anchor="pi-book"/, 'the book itself must be scrollable-to once the tab is open');
@@ -234,4 +237,58 @@ test('the return chip stands down on the User Guide itself', () => {
   const src = read('guideTrail.tsx');
   const fn = src.slice(src.indexOf('export function GuideReturn'), src.indexOf('export function GuideLanding'));
   assert.match(fn, /view === 'guide'/, 'GuideReturn must not render on the guide view');
+});
+
+// ── COMING BACK MUST ALWAYS LAND ─────────────────────────────────────────────
+// The guide is filtered by a search box and a category, and both survive
+// leaving the tab. So "Back to User Guide" could return a reader to a page still
+// filtered by whatever they had typed — and if the entry they were sent back to
+// was not among the matches, its row did not exist and the scroll hit nothing.
+// The chip then did nothing at all, which is the one outcome a way-back control
+// must never have.
+//
+// Checked on the source, because the failure is a row that is absent rather
+// than a value that is wrong: there is no number to assert and no DOM here.
+test('returning to an entry clears the filters that could hide it', () => {
+  const src = read('components/UserGuideTab.tsx');
+  const land = src.slice(src.indexOf('const land = () => {'), src.indexOf('window.addEventListener(\'hashchange\', land)'));
+  assert.ok(land.length > 0, 'found the landing handler');
+  assert.match(land, /setQuery\(''\)/, 'the search box must be cleared before scrolling to the entry');
+  assert.match(land, /setCat\('All'\)/, 'the category filter must be cleared too');
+  // And the scroll must WAIT for the row the filters just revealed. rAF can run
+  // before React commits, which is the same bug wearing a different hat.
+  // A CALL, not the word: the handler's own comment explains why rAF is wrong,
+  // and matching bare text would fail on the explanation rather than the code.
+  assert.ok(!/requestAnimationFrame\s*\(/.test(land),
+    'the scroll must not be scheduled on rAF — it has to wait for the re-render');
+  assert.match(land, /setLanding\(/, 'the term is handed to an effect that waits for its row');
+
+  // CENTRED, both ways down the trail. A reader who was RETURNED to an entry
+  // did not choose it off a list, so the row has to be findable at a glance;
+  // pinned to the top edge it reads as the page having jumped. GuideLanding
+  // already centres for the outbound direction, and the two ends of one trail
+  // must not behave differently.
+  const src2 = read('components/UserGuideTab.tsx');
+  const effect = src2.slice(src2.indexOf('if (!landing) return;'));
+  assert.match(effect.slice(0, 1400), /scrollIntoView\(\{ block: 'center'/,
+    'the reverse link must land the entry in the centre of the page');
+  assert.match(read('guideTrail.tsx'), /scrollIntoView\(\{ block: 'center'/,
+    'and the outbound landing must still centre too');
+});
+
+// Both guide chips are fixed to the viewport, and the rail they used to sit on
+// top of is 220px wide — so they covered the Striven status line and the Sign
+// out button, the two controls at the bottom of the sidebar. A reader following
+// the guide lost the way out of the app to the thing telling them the way back
+// into it.
+test('the guide chips clear the sidebar rail', () => {
+  const css = readFileSync(new URL('../src/cashflow/cashflow.css', import.meta.url), 'utf8');
+  for (const cls of ['.guide-return', '.guide-land']) {
+    const at = css.indexOf(`${cls} {`);
+    const block = css.slice(at, css.indexOf('}', at) + 1);
+    assert.match(block, /left: calc\(220px \+ 18px\)/, `${cls} must sit past the 220px rail`);
+  }
+  // ...and drop the offset once the rail stops being a left column.
+  assert.match(css, /@media \(max-width: 900px\) \{ \.guide-return \{ left: 18px; \} \}/);
+  assert.match(css, /@media \(max-width: 900px\) \{ \.guide-land \{ left: 18px; \} \}/);
 });
