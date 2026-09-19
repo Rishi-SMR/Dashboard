@@ -2,7 +2,8 @@ import { useMemo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, ChartCard, AgingBar, MonthBars, DrillModal } from '../chartKit';
-import { fetchArRegister, type ArRegister, type ArRegisterInvoice } from '../strivenApi';
+import { fetchArRegister, fetchStrivenAR, type ArRegister, type ArRegisterInvoice, type ArResult } from '../strivenApi';
+import { PiBook } from './PiBook';
 import { ColumnFilter } from './ColumnFilter';
 import { downloadXlsx, printToPdf, stamped } from '../export';
 
@@ -482,6 +483,23 @@ export function ArSheetTab() {
       .then((r) => { setReg(r); if (r && r.ok === false) setLoadErr(r.note ?? 'AR register unavailable.'); })
       .catch((e) => setLoadErr(e instanceof Error ? e.message : 'Could not reach the AR register.'));
   }, []);
+
+  // ── THE PI BOOK'S OWN PAYLOAD ──────────────────────────────────────────────
+  // A SECOND ENDPOINT, and only for the PI panel. The register is built from
+  // /api/ar-register, which carries invoices; the four tranches of a lien case
+  // need /api/ar, which carries the split (an advance that has been COLLECTED
+  // leaves no balance, so the register cannot see section 1 at all).
+  //
+  // FETCHED ONCE, NOT PER PILL. Deliberately not gated on `vert === 'PI'`: a
+  // request fired by a filter click would make the panel appear a beat after
+  // the rows it belongs to, and clicking away and back would fire it again.
+  // One request on mount, and the panel is ready the moment PI is picked.
+  //
+  // A FAILURE IS SILENT HERE. The register is this page's job and must not go
+  // down with an endpoint only one of its six filters reads; the PI panel
+  // renders nothing and the invoice table is unaffected.
+  const [arPayload, setArPayload] = useState<ArResult | null>(null);
+  useEffect(() => { fetchStrivenAR().then(setArPayload).catch(() => setArPayload(null)); }, []);
 
   const INV: ArRegisterInvoice[] = useMemo(() => reg?.invoices ?? [], [reg]);
   const t = reg?.totals;
@@ -1875,6 +1893,27 @@ export function ArSheetTab() {
                   </button>
                 </div>
               </div>
+            )}
+
+            {/* ── THE PI BOOK, ABOVE THE INVOICE TABLE ──────────────────────
+                Only under the PI pill, because it only describes PI: a lien
+                case is billed in two tranches and is never simply open or paid,
+                which is the one thing the invoice table beneath cannot show.
+                Above rather than below, because it is the frame for the rows —
+                a reader who has just filtered to PI needs to know what the 15%
+                and the 85% are before reading a column of advances.
+                Renders nothing until /api/ar lands, and nothing at all if it
+                fails; the register does not depend on it.
+
+                WRAPPED IN g12-12 BECAUSE THIS IS A TWELVE-COLUMN GRID. A child
+                of .exec-grid12 with no span class gets ONE track — about 100px
+                — and the panel rendered as a column of single words down the
+                left edge. It had no span of its own because on the AR / AP page
+                it sat OUTSIDE the grid entirely; moving it inside one is what
+                made the class necessary. Full width, since it is a section in
+                its own right and not a card sharing a row. */}
+            {vert === 'PI' && arPayload && (
+              <div className="g12-12"><PiBook ar={arPayload} /></div>
             )}
 
             <div className="section chart-card g12-12" ref={printRef}>

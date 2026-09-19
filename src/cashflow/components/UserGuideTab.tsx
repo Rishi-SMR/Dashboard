@@ -257,7 +257,7 @@ const GLOSSARY: Entry[] = [
     basis: 'advance = order value × 0.15',
     note: 'The single most important rule in this portal. It is why a PI invoice total is far smaller than the order behind it, why AR Open is a fraction of the order book, and why a PI invoice at zero balance is not a settled case. Measured against the live book, 50 of 57 PI invoices sit at exactly 0.150 of their order.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Invoiced column) · PI orders yet to be invoiced', anchor: 'pi-1' },
+      { view: 'arsheet', tab: 'AR Register', section: 'PI Invoice Book · the book in four parts', anchor: 'pi-1' },
       { view: 'arsheet', tab: 'AR Register', section: 'INVOICED column · the advance-vs-billed check' },
     ],
   },
@@ -295,7 +295,7 @@ const GLOSSARY: Entry[] = [
     basis: 'orders with zero linked invoices, cancelled and DEMO excluded\nwould add to AR = case value × 0.15  (PI)',
     note: 'Flagged in red and deliberately kept OUT of every AR total - it is not a receivable until it is raised. On the current book this is larger than the entire open receivable, which is exactly why it is shown.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'PI orders yet to be invoiced (the red panel)', anchor: 'pi-3' },
+      { view: 'arsheet', tab: 'AR Register', section: 'PI Invoice Book · section 3, PI orders yet to be invoiced', anchor: 'pi-3' },
       { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices - red rows and the NOT INVOICED subtotal', anchor: 'open-invoices' },
     ],
   },
@@ -338,7 +338,7 @@ const GLOSSARY: Entry[] = [
     def: 'Personal Injury. The device is supplied against a lien on the patient’s legal claim, so the bill settles out of an eventual award rather than by an insurer on a cycle.',
     note: 'PI is the reason so much of this portal has a special case. Striven raises only the 15% advance as the invoice, so an invoice showing no balance means the ADVANCE is settled, not the case.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'AR Aging · Open Invoices · PI orders yet to be invoiced', anchor: 'pi-book' },
+      { view: 'arsheet', tab: 'AR Register', section: 'PI Invoice Book · the book in four parts', anchor: 'pi-book' },
       { view: 'arsheet', tab: 'AR Register', section: 'Invoice Book · AR Receivable' },
       { view: 'orders', tab: 'Orders', section: 'Order Value by Type · All Sales Orders' },
       { view: 'repspipeline', tab: 'PI & PIP', section: 'The PI stage board', differs: 'Here PI is a pipeline of stages, not a money basis.' },
@@ -750,22 +750,72 @@ export function UserGuideTab() {
    * a mount-only effect would never hear about it.
    */
   const [flash, setFlash] = useState<string | null>(null);
+  /** The term the hash asked for, held until the row it names actually exists. */
+  const [landing, setLanding] = useState<string | null>(null);
   useEffect(() => {
     const land = () => {
       const trail = splitHash(location.hash).trail;
       if (!trail) return;
       const hit = GLOSSARY.find((e) => termSlug(e.term) === trail);
       if (!hit) return;
+      // ── THE FILTERS COME OFF FIRST ────────────────────────────────────────
+      // This page is filtered by a SEARCH BOX and a CATEGORY, and both survive
+      // leaving the tab. So a reader who searched a keyword, followed a location
+      // link out to AR/AP, and then pressed "Back to User Guide" came back to a
+      // guide still filtered by whatever they had typed — and if the entry they
+      // were sent back to was not among the matches, the row did not exist to
+      // scroll to. The chip then did nothing at all, which is the one outcome a
+      // way-back control must never have.
+      //
+      // Clearing both GUARANTEES the row is rendered. It costs the reader their
+      // search, which is the right trade: they are being returned to a specific
+      // entry, that entry is opened and flashed, and an unfiltered glossary
+      // around it is the normal state of this page.
+      setQuery('');
+      setCat('All');
       setTermOpen(hit.term, true);
       setFlash(hit.term);
-      requestAnimationFrame(() => {
-        document.getElementById(termId(hit.term))?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      });
+      // NOT requestAnimationFrame. The three setState calls above have to render
+      // before the row exists in the DOM, and rAF can run before React commits —
+      // which is the same "scroll to an element that is not there yet" bug in a
+      // different disguise. Handing the term to an effect lets the scroll wait
+      // for the render that creates it.
+      setLanding(hit.term);
     };
     land();
     window.addEventListener('hashchange', land);
     return () => window.removeEventListener('hashchange', land);
   }, []);
+  // Scrolls once the row asked for is actually on the page. Retries briefly
+  // rather than assuming one frame is enough — the list re-renders as the
+  // filters clear — and gives up rather than hunting for a term that never
+  // arrives.
+  useEffect(() => {
+    if (!landing) return;
+    let done = false;
+    const deadline = Date.now() + 2000;
+    const tick = () => {
+      if (done) return;
+      const el = document.getElementById(termId(landing));
+      // ── CENTRED, NOT PINNED TO THE TOP ────────────────────────────────────
+      // The reader did not scroll here and did not choose this row off a list —
+      // they were RETURNED to it, so the first thing they need is to see which
+      // of forty rows the page means. `start` puts the entry hard against the
+      // top edge with the letter heading above it scrolled out of view and
+      // nothing but empty page below, which reads as "the page jumped" rather
+      // than "here it is". Centred, the entry has its neighbours around it and
+      // the flash lands on something the eye is already pointed at.
+      //
+      // The same rule, and the same reasoning, as GuideLanding in guideTrail.tsx
+      // uses for the outbound direction — so both ends of the trail behave the
+      // same way rather than one dropping the reader at the top and the other
+      // in the middle.
+      if (el) { done = true; el.scrollIntoView({ block: 'center', behavior: 'smooth' }); setLanding(null); return; }
+      if (Date.now() < deadline) setTimeout(tick, 60); else setLanding(null);
+    };
+    tick();
+    return () => { done = true; };
+  }, [landing]);
   useEffect(() => {
     if (!flash) return;
     const t = setTimeout(() => setFlash(null), 2000);

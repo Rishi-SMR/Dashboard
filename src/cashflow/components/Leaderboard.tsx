@@ -403,7 +403,14 @@ function OwnDrawer({ rep, viewAs, onClose }: { rep: RepRow; viewAs?: string | nu
   );
 }
 
-export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRow[]; months?: string[]; viewAs?: string | null; boardScoped?: boolean }) {
+export function Leaderboard({ reps, months, viewAs, boardScoped, onPeriod }: {
+  reps: RepRow[]; months?: string[]; viewAs?: string | null; boardScoped?: boolean;
+  /** Told the resolved period whenever it changes, so the dashboard's KPI tiles
+   *  can answer for the SAME month the board is showing. Reported rather than
+   *  controlled: the board still owns the choice and still defaults itself, so
+   *  nothing here depends on a parent knowing how `defaultMonth` works. */
+  onPeriod?: (period: string) => void;
+}) {
   const [open, setOpen] = useState<RepRow | null>(null);
   // Collapsed by default: the board is a ranking first, and a supervisor's
   // sub-rep detail is a second question they choose to ask.
@@ -439,6 +446,11 @@ export function Leaderboard({ reps, months, viewAs, boardScoped }: { reps: RepRo
   // must not strand the board on an empty period it cannot get out of.
   const period = chosen === ALL_TIME || available.includes(chosen) ? chosen : ALL_TIME;
   const scoped = period !== ALL_TIME;
+  // In an effect, not inline: telling the parent during render is a setState on
+  // another component mid-render, which React refuses. This also fires for the
+  // DEFAULT period, which matters — the tiles must agree with the board on the
+  // first paint, not only after the reader picks something.
+  useEffect(() => { onPeriod?.(period); }, [period, onPeriod]);
 
   // Producers only, ranked on the order count IN THE SELECTED PERIOD. Ties break
   // on name so the order cannot jitter between renders.

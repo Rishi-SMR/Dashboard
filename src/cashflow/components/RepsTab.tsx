@@ -143,6 +143,60 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   // the reps. `bookTotals` is still sent and still reconciles server-side.
   const kt = t;
 
+  // ── THE PERIOD THE REP'S BOARD IS ON ────────────────────────────────────────
+  // The leaderboard owns the selector and defaults itself to the current month;
+  // it reports the resolved value here so the Upcoming paycheck tile answers for
+  // the SAME month the board beneath it is ranking. Null until the board first
+  // reports, which is only the very first paint.
+  const [boardPeriod, setBoardPeriod] = useState<string | null>(null);
+  // The paycheck panel is its own dialog, not a KpiDrill metric: KpiDrill ranks
+  // every rep against one figure, and this answers "what is MY figure made of".
+  const [payOpen, setPayOpen] = useState(false);
+
+  // ── UPCOMING PAYCHECK ───────────────────────────────────────────────────────
+  // Signed off and owed, not yet paid — the figure the Commission tab calls
+  // "Payable / Due". The rep's own, never a peer's: `isSelf` marks the row the
+  // server sent unredacted for this caller, and a peer row carries
+  // `payable: null` by construction, so there is nothing here to leak.
+  //
+  // THE MONTH SELECTS THE PAYOUT RUN, NOT THE WORK. A run on the 15th settles
+  // the month BEFORE it — the 15 Sep run pays August — so with September on the
+  // board this tile shows August's payable and says when it lands.
+  //
+  // WHY NOT SEPTEMBER'S OWN PAYABLE: it is $0, and will be until the run exists.
+  // September's work sits in `waiting`, which is the engine's estimate and not
+  // an entitlement, so it must not be presented as a paycheck. A tile reading
+  // "Upcoming paycheck $0.00" to a rep owed $34,450 in a fortnight is the wrong
+  // answer to the question they opened the page with.
+  //
+  // Off `commissionByCycle` — the payout-cycle rollup the Commission tab pays
+  // from. NOT the order-date rollup: a line tying to no live sales order belongs
+  // to no order month, and cutting by that date drops it silently (it lost
+  // $28,526 of Jillian's July the last time something here did that).
+  const selfRow = reps.find((r) => r.isSelf) ?? null;
+  /** The month a run on the 15th of `m` settles: the one before it. */
+  const cyclePaidIn = (m: string) => {
+    const [y, mo] = m.split('-').map(Number);
+    const d = new Date(y, mo - 1, 1);
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const runDay = (m: string) => {
+    const [y, mo] = m.split('-').map(Number);
+    return new Date(y, mo - 1, 15).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+  const scoped = Boolean(boardPeriod && boardPeriod !== ALL_TIME);
+  const upcoming = (() => {
+    if (!selfRow || selfRow.payable == null) return null;          // manager, or withheld
+    if (!scoped) return selfRow.payable;                           // all time: everything still owed
+    const cyc = selfRow.commissionByCycle ?? null;
+    if (!cyc) return selfRow.payable;
+    return cyc.find((c) => c.month === cyclePaidIn(boardPeriod as string))?.payable ?? 0;
+  })();
+  const upcomingSub = scoped
+    ? `signed off · paid ~${runDay(boardPeriod as string)}`
+    : 'signed off, not yet paid · all cycles';
+
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
       <div className="page-head deck-head" style={{ marginBottom: 16 }}>
@@ -215,7 +269,8 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               designed against ~380px. A manager keeps OverviewPanel beside
               Units by device; they come here for the book, not for a rank. */}
           {view === 'overview' && !isManager && (
-            <Leaderboard reps={reps} months={data.months} viewAs={viewAs} boardScoped={data.boardScoped} />
+            <Leaderboard reps={reps} months={data.months} viewAs={viewAs} boardScoped={data.boardScoped}
+              onPeriod={setBoardPeriod} />
           )}
 
           {/* The house KPI card (KpiExec, shared from chartKit): the same
@@ -235,7 +290,11 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               things that are never drawn. A manager's five fit ONE line
               (kpi-strip-5 → a 10-column track, span 2); a rep's three ride the
               base span-4 rule, which is already one line. */}
-          <div className={`kpi-strip kpi-compact ${isManager ? 'kpi-strip-5' : ''}`}
+          {/* A rep now gets FOUR tiles — the Upcoming paycheck joined them — and
+              `kpi-strip-4` is the 4-per-row track that keeps them on one line.
+              Left at the span-4 default they would have wrapped 3 + 1, which
+              reads as a stray card rather than a row. */}
+          <div className={`kpi-strip kpi-compact ${isManager ? 'kpi-strip-5' : 'kpi-strip-4'}`}
             style={{ marginBottom: 12, marginTop: isManager ? 0 : 12 }}>
             {isManager && (
               <KpiExec label="Reps" value={t?.reps ?? 0} format={(x: number) => String(x)} hue={HUE.revenue}
@@ -255,6 +314,19 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                 third of the row empty. */}
             <KpiExec label={isManager ? 'Commission' : 'Your commission'} value={num(t?.commission)} format={money} hue={HUE.po}
               sub="units × device rate" chip={isManager ? 'SMR' : 'yours'} onClick={() => setDrill('commission')} />
+            {/* UPCOMING PAYCHECK — a rep's tile only.
+                It sits beside Commission deliberately: Commission is money that
+                has already gone out, this is money that has not. Those are the
+                two halves of the question a rep opens this page with, and with
+                only the first on screen a settled month read as $0 earned.
+                Green, matching Payable / Due everywhere else in the portal.
+                A manager keeps five tiles; the team's payable is on the
+                Commission tab, which is where they act on it. */}
+            {!isManager && upcoming != null && (
+              <KpiExec label="Upcoming paycheck" value={upcoming} format={money} hue={HUE.cash}
+                sub={upcomingSub} chip="yours"
+                onClick={() => setPayOpen(true)} />
+            )}
           </div>
 
           {/* WHICH WAY THEY ARE MOVING — directly under the tiles that say how
@@ -519,7 +591,136 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
       {drill && data && (
         <KpiDrill metric={drill} reps={reps} data={data} onClose={() => setDrill(null)} onPickRep={(r) => { setDrill(null); setSel(r); }} />
       )}
+      {payOpen && selfRow && upcoming != null && (
+        <PaycheckModal rep={selfRow} month={scoped ? boardPeriod : null} amount={upcoming}
+          onClose={() => setPayOpen(false)} />
+      )}
     </div>
+  );
+}
+
+/**
+ * WHAT THE UPCOMING PAYCHECK IS MADE OF, and where each dollar came from.
+ *
+ * The tile states a figure; this answers the two questions a rep has the moment
+ * they read it — what is in it, and who says so. Commission here is not computed
+ * by the portal: it is transcribed from documents the business maintains, and
+ * for the cycles the reconciliation sheet does not carry it is read straight
+ * from the commission workbook. A rep told they are owed $52,000 with no way to
+ * see the rows behind it has to take the number on trust.
+ *
+ * SOURCE IS PER LINE, not per panel, because one cycle can legitimately draw on
+ * both documents — the sheet wherever it speaks, the workbook for the rep x
+ * month cells it has no rows for. Saying "from the sheet" over a table half of
+ * which came from a workbook would be a tidier sentence and a false one.
+ *
+ * NO PATIENT NAMES. `patient` arrived as an initial and a surname, reduced at
+ * the parse in the reader, long before it reached any payload.
+ */
+function PaycheckModal({ rep, month, amount, onClose }: {
+  rep: RepRow; month: string | null; amount: number; onClose: () => void;
+}) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  // The cycle a run on the 15th settles: the month before the one on the board.
+  // Same rule as the tile — see the note where `upcoming` is computed.
+  const cycle = (() => {
+    if (!month) return null;
+    const [y, mo] = month.split('-').map(Number);
+    const d = new Date(y, mo - 1, 1);
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  const lines = (rep.payLines ?? []).filter((l) => (cycle ? l.month === cycle : true))
+    .slice().sort((a, b) => b.comm - a.comm);
+  const fromWorkbook = lines.filter((l) => l.source === 'workbook').length;
+  const fromSheet = lines.length - fromWorkbook;
+  const payDay = month
+    ? new Date(Number(month.split('-')[0]), Number(month.split('-')[1]) - 1, 15)
+      .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null;
+
+  return (
+    <Portal>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
+        <div onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Upcoming paycheck"
+          style={{ background: 'var(--panel)', borderRadius: 14, width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${C.positive}` }}>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>Upcoming paycheck</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.positive, marginTop: 4 }}>{pay(amount)}</div>
+              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>
+                {cycle
+                  ? <>{monthLabel(cycle)} commission{payDay ? <> · paid on or about <b>{payDay}</b></> : null}</>
+                  : <>Every cycle signed off and not yet paid.</>}
+              </div>
+            </div>
+            <button className="btn ghost" onClick={onClose} aria-label="Close" style={{ flex: 'none' }}>✕</button>
+          </div>
+
+          <div style={{ padding: '16px 18px' }}>
+            {/* WHERE IT COMES FROM — the band this panel exists for. */}
+            <div style={{ background: 'var(--panel-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '11px 13px', marginBottom: 14, fontSize: 12.5, color: C.sub, lineHeight: 1.6 }}>
+              <b style={{ color: C.ink }}>Where this figure comes from.</b>{' '}
+              {lines.length === 0
+                ? <>Nothing is outstanding for this cycle — it has been paid, or there was nothing in it.</>
+                : <>
+                  These <b>{lines.length}</b> line{lines.length === 1 ? '' : 's'} are read from the commission
+                  {fromWorkbook > 0 && fromSheet > 0
+                    ? <> documents: <b>{fromWorkbook}</b> from the workbook and <b>{fromSheet}</b> from the reconciliation sheet</>
+                    : fromWorkbook > 0
+                      ? <> <b>workbook</b> — the Google Sheet tab for this payout cycle</>
+                      : <> <b>reconciliation sheet</b></>}
+                  . The portal does not calculate this total: it transcribes the signed-off rows and adds them up, so what is
+                  here is what the sheet says, line for line.
+                </>}
+            </div>
+
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead><tr>
+                  <th>Patient</th><th>Device</th><th>Vertical</th><th>Order</th>
+                  <th>Source</th><th className="num">Commission</th>
+                </tr></thead>
+                <tbody>
+                  {lines.length === 0 && (
+                    <tr><td colSpan={6} style={{ color: C.muted }}>No outstanding lines for this cycle.</td></tr>
+                  )}
+                  {lines.map((l, i) => (
+                    <tr key={`${l.ref}-${i}`}>
+                      <td style={{ fontWeight: 600 }}>{l.bonus ? <i style={{ color: C.muted }}>bonus</i> : (l.patient || '-')}</td>
+                      <td>{l.item || '-'}</td>
+                      <td style={{ color: V_C[l.prog] || C.sub, fontWeight: 700 }}>{l.prog || '-'}</td>
+                      <td>{l.ref || <span title="Signed off, but ties to no live Striven order. Still paid." style={{ color: C.muted }}>-</span>}</td>
+                      <td style={{ fontSize: 11.5, fontWeight: 700, color: l.source === 'workbook' ? C.brand : C.sub }}>
+                        {l.source === 'workbook' ? 'workbook' : 'sheet'}
+                      </td>
+                      <td className="num" style={{ fontWeight: 700 }}>{pay(l.comm)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {lines.length > 0 && (
+                  <tfoot><tr className="total-row">
+                    <td colSpan={5}>Total</td>
+                    <td className="num" style={{ fontWeight: 800 }}>{pay(lines.reduce((s, l) => s + l.comm, 0))}</td>
+                  </tr></tfoot>
+                )}
+              </table>
+            </div>
+
+            <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10, lineHeight: 1.6 }}>
+              🔒 No patient names — an initial and a surname only.
+              {' '}A dash under Order means the row is signed off but ties to no live Striven sales order; it is still paid.
+            </div>
+          </div>
+        </div>
+      </div>
+    </Portal>
   );
 }
 
@@ -1409,11 +1610,21 @@ function MixBar({ parts, total, height = 9, scale = 1, radius = 999, dim = false
  * means this band never goes blank on someone.
  */
 function TeamShape({ reps }: { reps: RepRow[] }) {
-  const VERTS = ['PI', 'VA', 'DOL', 'TriCare'];
-  const byV = VERTS.map((vertical) => ({
-    vertical,
-    orders: reps.reduce((s, r) => s + (r.byVertical.find((v) => v.vertical === vertical)?.orders ?? 0), 0),
-  })).filter((v) => v.orders > 0);
+  // EVERY VERTICAL THE REPS ACTUALLY WORK, not a fixed four. This used to list
+  // PI/VA/DOL/TriCare only, so `total` — the figure the sentence below prints —
+  // silently omitted every order outside them: Maylon's two "Other" and one
+  // DEMO, and Cami's single "Other". The line then read "across the 503 orders"
+  // over a roster booking 507.
+  //
+  // Built from the rows rather than from a list, so a vertical that appears in
+  // Striven tomorrow is counted the day it appears instead of the day someone
+  // remembers to add it here.
+  const byV = [...reps
+    .flatMap((r) => r.byVertical)
+    .reduce((m, v) => m.set(v.vertical, (m.get(v.vertical) ?? 0) + (v.orders ?? 0)), new Map<string, number>())]
+    .map(([vertical, orders]) => ({ vertical, orders }))
+    .filter((v) => v.orders > 0)
+    .sort((a, b) => b.orders - a.orders || a.vertical.localeCompare(b.vertical));
   const total = byV.reduce((s, v) => s + v.orders, 0);
   if (!total) return null;
 
@@ -1430,7 +1641,7 @@ function TeamShape({ reps }: { reps: RepRow[] }) {
       <div className="section-head"><div>
         <h2 className="section-title">Leaders &amp; reconciliation</h2>
         <div className="section-sub">
-          Across the {total} orders booked to the four reps.
+          Across the {total} orders booked to the reps.
           {' '}Everything above covers the full order book, including orders booked to house and clinic accounts.
         </div>
       </div></div>
@@ -1476,7 +1687,14 @@ function Stat({ label, value, tint }: { label: string; value: string; tint?: str
 // One rep in full. Used inline for a rep's own view, and in a modal from the
 // team table.
 function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
-  const totalOrders = rep.byVertical.reduce((s, v) => s + v.orders, 0) || 1;
+  // THE REP'S OWN ORDER COUNT, not the table's sum. Those are now the same
+  // number — byVertical accounts for every order — but they were not, and the
+  // difference printed as "PI 100%" on a rep whose PI was 37 of 40. Taking the
+  // share against the figure shown at the top of the card means the percentages
+  // answer the question the reader is actually asking, and a future gap between
+  // the two shows up as a column that fails to reach 100% instead of a column
+  // that always reaches it.
+  const totalOrders = rep.orders || rep.byVertical.reduce((s, v) => s + v.orders, 0) || 1;
   // Revenue and Accounts are DROPPED, not shown empty. The server withholds
   // both from a rep, so these rendered as a "-" tile and a column of
   // CONFIDENTIAL chips — furniture announcing a figure the reader will never be

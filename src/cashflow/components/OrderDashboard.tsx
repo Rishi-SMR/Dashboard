@@ -24,6 +24,27 @@ import { SoLink } from './SoLink';
 // TriCare is legacy and kept for historical data.
 const VERTICALS = ['PI', 'VA', 'DOL', 'TriCare'] as const;
 
+/**
+ * THE VERTICALS ACTUALLY PRESENT, in a stable order.
+ *
+ * VERTICALS is the four real programmes and sets the sequence; anything else
+ * the book holds — DEMO, Other, Contract — follows, biggest first. Hard-coding
+ * the four meant every order outside them was dropped from the vertical table
+ * and unreachable from the filter pills, while still counting in the totals
+ * beside them: the pills added to less than "All together" and nothing said why.
+ *
+ * Derived from the rows, so a vertical Striven starts using tomorrow appears
+ * the day it appears rather than the day someone remembers to add it here.
+ */
+const vertsPresent = (rows: { vertical: string }[]): string[] => {
+  const n = new Map<string, number>();
+  for (const o of rows) n.set(o.vertical, (n.get(o.vertical) ?? 0) + 1);
+  const extra = [...n.keys()]
+    .filter((v) => !(VERTICALS as readonly string[]).includes(v))
+    .sort((a, b) => (n.get(b) ?? 0) - (n.get(a) ?? 0) || a.localeCompare(b));
+  return [...VERTICALS, ...extra];
+};
+
 // Segmented control: an inset track holds the options, and only the active one
 // gets a raised pill. Without the track the two filter groups read as one long
 // undifferentiated row.
@@ -298,7 +319,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
   // programmes they do not touch. The empty rows said nothing the totals did not
   // already say. `VERTICALS` still sets the ORDER, so the survivors keep their
   // familiar sequence rather than re-sorting by volume.
-  const byVertical = useMemo(() => VERTICALS.map((v) => {
+  const byVertical = useMemo(() => vertsPresent(rows).map((v) => {
     const set = rows.filter((o) => o.vertical === v);
     return { vertical: v, orders: set.length, units: set.reduce((s, o) => s + o.units, 0), revenue: set.reduce((s, o) => s + o.revenue, 0) };
   }).filter((v) => v.orders > 0), [rows]);
@@ -410,7 +431,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
             <span style={GROUP_LABEL}>Vertical</span>
             <div style={TRACK}>
               <button style={seg(vert === 'all')} aria-pressed={vert === 'all'} onClick={() => setVert('all')}>All together</button>
-              {VERTICALS.map((v) => {
+              {vertsPresent(all).map((v) => {
                 const n = all.filter((o) => o.vertical === v).length;
                 const on = vert === v;
                 return (
