@@ -798,6 +798,16 @@ export type RepRow = {
    *  $21,946, and stranded $28,526 of hers in no month at all. `null` on a peer
    *  row, exactly as the aggregates below are. */
   commissionByCycle?: { month: string; paid: number; payable: number; waiting: number; total: number }[] | null;
+  /** The signed-off, not-yet-paid lines behind the Upcoming paycheck tile, each
+   *  carrying the document it was read from. `null` on a peer row — a rep never
+   *  receives anyone else's pay, and null rather than [] because an empty array
+   *  would be a claim that the peer is owed nothing. */
+  payLines?: {
+    ref: string; patient: string; item: string; prog: string;
+    month: string | null; cycle: string; comm: number;
+    source: 'workbook' | 'sheet';
+    unmatched: boolean; bonus: boolean;
+  }[] | null;
   revenue: number | null; commission: number | null; payable: number | null; waiting: number | null;
   matchRate: number | null; verified: boolean;
 };

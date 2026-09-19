@@ -4744,7 +4744,16 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
    at the top of the document is one they would have to scroll to find. Left,
    because bottom-right is where this app's drill modals and toasts sit. */
 .guide-return {
-  position: fixed; left: 18px; bottom: 18px; z-index: 60;
+  /* ── CLEAR OF THE RAIL ────────────────────────────────────────────────────
+     `left: 18px` put both guide chips on top of the 220px sidebar, over the
+     Striven status line and the Sign out button — the two controls at the
+     bottom of the rail, which is exactly where these sit. A reader following
+     the guide lost the way out of the app to the thing telling them the way
+     back to the guide.
+     Past the rail on desktop; the 900px breakpoint collapses .shell to one
+     column and the rail stops being on the left at all, so the offset is
+     dropped with it (see the media queries below). */
+  position: fixed; left: calc(220px + 18px); bottom: 18px; z-index: 60;
   display: flex; align-items: stretch; gap: 0;
   background: var(--panel);
   border: 1px solid var(--border-strong);
@@ -4780,6 +4789,9 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 }
 .guide-return-x:hover { color: var(--text); background: var(--panel-2); }
 .guide-return-x:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The rail is a horizontal strip below 900px, not a left column, so the offset
+   would strand the chip in the middle of the page. */
+@media (max-width: 900px) { .guide-return { left: 18px; } }
 @media (max-width: 560px) { .guide-return { left: 10px; right: 10px; bottom: 10px; max-width: none; } }
 
 /* ── LANDING ON A TERM ─────────────────────────────────────────────────────
@@ -4828,7 +4840,9 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
    questions ("why am I here" and "how do I get back") and a reader who has just
    been teleported into a dense page needs the first one answered first. */
 .guide-land {
-  position: fixed; left: 18px; bottom: 76px; z-index: 61;
+  /* Same offset as .guide-return — they stack, so they must share a left edge
+     or the pair reads as two unrelated things. See the note there. */
+  position: fixed; left: calc(220px + 18px); bottom: 76px; z-index: 61;
   display: flex; align-items: center; gap: 9px;
   padding: 9px 13px 9px 11px;
   background: var(--accent); color: #fff;
@@ -4849,6 +4863,7 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
   font-size: 12.5px; font-weight: 700;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+@media (max-width: 900px) { .guide-land { left: 18px; } }
 @media (max-width: 560px) { .guide-land { left: 10px; right: 10px; bottom: 68px; max-width: none; } }
 
 /* ▸ ON A LOCATION LINK: this one lands on the section, not just the tab. Sized
