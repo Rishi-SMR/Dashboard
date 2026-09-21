@@ -17,18 +17,6 @@ const GROUP_OF = (status: string): SoGroup => {
   return 'active';
 };
 
-// Windowed page list: 1 2 3 … 21 (with the current page's neighbours kept visible).
-function pageList(cur: number, total: number): (number | '…')[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const keep = new Set([1, 2, 3, cur - 1, cur, cur + 1, total]);
-  const nums = [...keep].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
-  const out: (number | '…')[] = [];
-  for (let i = 0; i < nums.length; i++) {
-    if (i > 0 && nums[i] - nums[i - 1] > 1) out.push('…');
-    out.push(nums[i]);
-  }
-  return out;
-}
 
 export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = {}) {
   const [data, setData] = useState<OrdersResult | null>(null);
