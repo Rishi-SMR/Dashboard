@@ -18,7 +18,7 @@ import { isCancelledStatus } from './_commission-core.js';
 import {
   STANDINGS_EXCLUDE, REP_NAMES, REVIEW_LABELS, REP_SUB_REPS, blindspotsFor, supervisorOf,
   identitiesOf,
-  PI_LABEL_STAGE, PIP_LABEL_STAGE, VA_LABEL_STAGE,
+  PI_LABEL_STAGE, PIP_LABEL_STAGE, VA_LABEL_STAGE, COMMISSION_PAID_THROUGH,
 } from './_commission-config.js';
 
 const ADMIN = { email: 'admin@test', repName: null, role: 'admin' };
@@ -581,8 +581,22 @@ test('an order is listed at every stage its labels attest to', opts, async () =>
   }
   // The whole point: at least one order really is listed at two stages, and the
   // stage that used to be permanently empty now has orders in it.
+  //
+  // WHEN THIS FAILS, READ THE COVERAGE FIRST. A stage comes from an order's
+  // Striven labels, so a board whose labels report does not reach it has every
+  // order in stage 1 and no order at two — which fails here, several steps away
+  // from the cause. The saved report behind STRIVEN_LABELS_URL is scoped in
+  // Striven, outside this repository, and narrowing its list silently flattens
+  // whichever board it stops covering. The message says so rather than leaving
+  // the next reader to rediscover it.
+  const cov = p.labelCoverage?.PI;
+  const covNote = cov
+    ? ` — PI label coverage is ${cov.labelled}/${cov.orders}${cov.labelled === 0
+      ? ': the labels report does not reach the PI book at all, so every order has fallen back to stage 1. This is STRIVEN_LABELS_URL, not the code.'
+      : ''}`
+    : '';
   const multi = p.orders.filter((o) => o.stages.length > 1);
-  assert.ok(multi.length > 0, 'some order is listed at more than one stage');
+  assert.ok(multi.length > 0, `some order is listed at more than one stage${covNote}`);
 });
 
 // Striven's label vocabulary is edited by staff, so a new label can appear at
@@ -721,12 +735,51 @@ test('a payout cycle resolves to the month it pays for', () => {
   assert.equal(monthOfPayoutCycle('Payable 15 August 2026'), '2026-07');
   // The day number must never be mistaken for the year.
   assert.equal(monthOfPayoutCycle('15 Aug 26'), '2026-07');
+
+  // ── THE NUMERIC SPELLING, which is how the workbook names its tabs ────────
+  // "the data in the tab named 9/15/2026 is for August". This form resolved to
+  // NULL until it was taught here, and a monthless line can never be marked
+  // paid — isPaidLine requires a month — so a cycle labelled this way sat
+  // outside August and outside every cut-off, permanently.
+  assert.equal(monthOfPayoutCycle('9/15/2026'), '2026-08');
+  assert.equal(monthOfPayoutCycle('Paid ~9/15/2026'), '2026-08');
+  assert.equal(monthOfPayoutCycle('Payable 9/15/2026 (due)'), '2026-08');
+  assert.equal(monthOfPayoutCycle('09/15/2026'), '2026-08');
+  assert.equal(monthOfPayoutCycle('9-15-26'), '2026-08');
+  // January's run still rolls the year back, on this spelling too.
+  assert.equal(monthOfPayoutCycle('1/15/2027'), '2026-12');
+  // A MONTH NAME STILL WINS. "Apr/May" is two names and one run, and reading it
+  // as a numeric date would take the wrong one.
+  assert.equal(monthOfPayoutCycle('Paid ~Apr/May 26'), '2026-03');
+  // The format is M/D/Y and is not guessed at: a first field above 12 is not
+  // re-read as a day, because a wrong month moves real money into a real
+  // period and would do it silently.
+  assert.equal(monthOfPayoutCycle('15/9/2026'), null);
+  assert.equal(monthOfPayoutCycle('13/15/2026'), null);
   // Unparseable stays null: such a line keeps its money and its place in the
   // rep's total but belongs to no month. Guessing would move real money into a
   // period at random.
   assert.equal(monthOfPayoutCycle(''), null);
   assert.equal(monthOfPayoutCycle('Q3'), null);
   assert.equal(monthOfPayoutCycle(undefined), null);
+});
+
+// ── THE PAY DATE IS NOT THE MONTH ───────────────────────────────────────────
+// COMMISSION_PAID_THROUGH is advanced from instructions that name a PAY DATE —
+// a reconciliation cycle, or a workbook tab like "9/15/2026" — and it stores
+// the MONTH that date settles. The two are one apart, and confusing them marks
+// the in-flight month paid: when the 15 Sep 26 run went out, September had not
+// been run at all and was carrying $48,525 in Waiting.
+//
+// Tied to the parser rather than to a literal, so the cut-off and the rule that
+// dates every line stay one statement. Whoever next advances this only has to
+// keep the cycle string in step with the month.
+test('paid-through names the month its cycle pays for, not the month it pays in', () => {
+  const CURRENT_CYCLE = '15 Sep 26';
+  for (const [v, through] of Object.entries(COMMISSION_PAID_THROUGH)) {
+    assert.equal(through, monthOfPayoutCycle(CURRENT_CYCLE),
+      `${v}: paid-through must be the month the ${CURRENT_CYCLE} run settles`);
+  }
 });
 
 // The months a rep is shown must ADD UP to the figure they are paid, or the
@@ -899,6 +952,14 @@ test('orders are dated by orderDate, not by when they were keyed in', () => {
   // keeps falling back to dateCreated for ever, silently.
   assert.match(src, /!\('orderDate' in \(detail\[id\] \|\| \{\}\)\)/,
     'refreshDerived must treat a missing orderDate key as stale, or no old order is ever backfilled');
+
+  // EVERY month join follows the same rule, not just the order book's. Units by
+  // programme built its soId→month map off the list row's `dateCreated`, which
+  // is the one field this whole test exists to keep out of a month: a weekend's
+  // orders, keyed on the Monday, were counted a month late against a device mix
+  // the Orders board dated correctly.
+  assert.match(src, /\.map\(\(o\) => \[String\(o\.id\), String\(det\?\.\[String\(o\.id\)\]\?\.orderDate \?\? o\.dateCreated \?\? ''\)\.slice\(0, 7\)\]\)/,
+    "getDeviceMix's month join must prefer orderDate over dateCreated");
 });
 
 // ── EVERY ORDER IS ACCOUNTED FOR, EXACTLY ONCE ───────────────────────────────

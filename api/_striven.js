@@ -2986,7 +2986,7 @@ async function getReportPatientItems() {
  */
 export async function getDeviceMix(viewer = null) {
   if (viewer?.role !== 'admin') return { ok: true, devices: [], scoped: false };
-  const [rc, tags, soBlob] = await Promise.all([
+  const [rc, tags, soBlob, det] = await Promise.all([
     sbCacheRead('report_patient_items').catch(() => null),
     soLabelsBySoId().catch(() => new Map()),
     // WHEN each order was raised. The units source carries no date of its own —
@@ -2994,11 +2994,25 @@ export async function getDeviceMix(viewer = null) {
     // from the order book. Without it this endpoint can only ever answer for the
     // whole book, which is why Units by programme ignored the period filter.
     sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
+    // The order DATE lives on the detail cache, not on the list row: see the
+    // note on soDate. Read here so this join can follow the same rule as every
+    // other month in the app.
+    soDetailMap().catch(() => ({})),
   ]);
+  /**
+   * soId → the month it belongs to, BY ORDER DATE.
+   *
+   * `dateCreated` is when somebody keyed the order in, and the two are
+   * routinely days apart — a weekend's orders get entered on the Monday — so
+   * dating by it moved those units into the following month while every other
+   * board counted them in the month they were booked. Same rule as `soDate`,
+   * same fallback, so Units by programme cuts the book the way Orders does.
+   */
   const monthBySo = new Map(
     (Array.isArray(soBlob) ? soBlob : [])
-      .filter((o) => o?.id != null && o?.dateCreated)
-      .map((o) => [String(o.id), String(o.dateCreated).slice(0, 7)]),
+      .filter((o) => o?.id != null)
+      .map((o) => [String(o.id), String(det?.[String(o.id)]?.orderDate ?? o.dateCreated ?? '').slice(0, 7)])
+      .filter(([, m]) => m),
   );
   const orders = rc?.data?.orders ?? [];
   const held = new Set(['hold']);                 // the label, not a stage
@@ -3186,23 +3200,63 @@ export const reconRep = (raw) => {
 // all five live cycles resolve to the tab that contains exactly the same lines
 // and the same total, to the cent.
 //
+// TWO SPELLINGS, ONE RULE. The cycle is written either with a month NAME
+// ("Paid ~15 Jul 26") or as a NUMERIC pay date ("Paid ~9/15/2026"), which is
+// how the source workbook names its tabs and how the sheet labels a cycle
+// transcribed from one. Both are read here.
+//
+// THE NUMERIC FORM USED TO RESOLVE TO NOTHING, and that was not a cosmetic gap:
+// a line with no month is never marked paid (isPaidLine needs one), never
+// appears under a month filter, and sits outside every payout cycle for good.
+// The 9/15/2026 cycle survived only because its lines came through the WORKBOOK
+// reader, which takes the month off the tab's own digits; the same cycle
+// arriving on a reconciliation-sheet row was silently monthless — earned money
+// that could never be shown as paid for August, whatever the cut-off said.
+//
 // Unparseable → null. Such a line keeps its money and its place in the rep's
 // total; it simply belongs to no month and is reachable only under All months.
 // Guessing a month for it would move real money into a period at random.
 const CYCLE_MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** The month a run in `payYear`/`payIdx` (0-based) settles: the one before it.
+ *  Shared by both spellings so they cannot drift apart on the rule that
+ *  matters. */
+const cycleSettles = (payYear, payIdx) => {
+  const d = new Date(payYear, payIdx, 1);
+  d.setMonth(d.getMonth() - 1);                 // the cycle pays the month before
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+/**
+ * A numeric pay date: "9/15/2026", "9-15-26", "Paid ~09/15/2026".
+ *
+ * M/D/Y, the way this business writes dates and the way the workbook tabs are
+ * named (commissionBookRows reads "8152026" as 8/15/2026). A first field above
+ * 12 is NOT re-read as a day — that would be guessing at the format, and the
+ * whole point of returning null is that a wrong month moves real money into the
+ * wrong period.
+ */
+const numericCycleMonth = (s) => {
+  const m = /\b(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})\b/.exec(s);
+  if (!m) return null;
+  const mon = Number(m[1]);
+  if (!(mon >= 1 && mon <= 12)) return null;
+  const yr = Number(m[3]);
+  return cycleSettles(yr < 100 ? 2000 + yr : yr, mon - 1);
+};
+
 export function monthOfPayoutCycle(cycle) {
   const s = String(cycle ?? '');
   const m = new RegExp(`\\b(${CYCLE_MON.join('|')})[a-z]*`, 'i').exec(s);
-  if (!m) return null;
+  // A month NAME wins wherever there is one: "Paid ~Apr/May 26" must resolve by
+  // its first name, and reading its "Apr/May" as a numeric date would not.
+  if (!m) return numericCycleMonth(s);
   // The year token AFTER the month name, so the "15" in "15 Aug 26" cannot be
   // read as one. Two digits are 20xx: this sheet has no 19xx cycle.
   const y = /\b(\d{2}|\d{4})\b/.exec(s.slice(m.index + m[0].length));
   if (!y) return null;
   const year = Number(y[1]) < 100 ? 2000 + Number(y[1]) : Number(y[1]);
-  const payIdx = CYCLE_MON.indexOf(m[1].toLowerCase());
-  const d = new Date(year, payIdx, 1);
-  d.setMonth(d.getMonth() - 1);                 // the cycle pays the month before
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return cycleSettles(year, CYCLE_MON.indexOf(m[1].toLowerCase()));
 }
 
 /**
@@ -5963,6 +6017,10 @@ export async function saveDashboardView(user, view) {
       from: String(view?.filters?.from ?? ''),
       to: String(view?.filters?.to ?? ''),
       vert: String(view?.filters?.vert ?? 'all'),
+      // The month a 'pick' view is scoped to. The whitelist here is the reason
+      // it has to be named: a field this does not copy is dropped on save, and
+      // the view would come back naming a period it no longer carries.
+      month: String(view?.filters?.month ?? ''),
     },
     savedAt: new Date().toISOString(),
   };
@@ -6341,15 +6399,23 @@ export async function getRepOverview(viewer = null) {
       // carries null — not an empty array, which would be a claim that a peer
       // is owed nothing.
       //
-      // UNPAID ONLY. Paid lines are history and would treble the payload for a
-      // panel about what is coming; the Commission tab is where a rep reads
-      // their whole book.
+      // PAID LINES TRAVEL TOO, and the filter that dropped them is gone.
+      // It read `state !== 'paid'` on the reasoning that paid lines are history
+      // and the panel is about what is coming. That held only while something
+      // was always outstanding: the moment a cycle settles, every line in it
+      // becomes 'paid' and the panel behind a $52,000 figure listed nothing at
+      // all — the exact "take the number on trust" problem it was built to
+      // solve, arriving the day the money actually moved. `state` rides along
+      // so the panel can say which half a line is in.
+      //
+      // THE COST IS SMALL AND BOUNDED: these are one rep's OWN lines, 214 at
+      // the largest on the current book, and they are six short fields each.
       //
       // ALREADY PHI-SAFE: `patient` was reduced to an initial and surname at the
       // parse, in commissionBookRows() and the recon reader, so nothing is
       // being newly exposed here.
       payLines: own
-        ? (cm?.lines || []).filter((l) => l && l.state !== 'paid').map((l) => ({
+        ? (cm?.lines || []).filter(Boolean).map((l) => ({
           ref: l.ref || '',
           patient: l.patient || '',
           item: l.item || '',
@@ -6358,6 +6424,9 @@ export async function getRepOverview(viewer = null) {
           cycle: l.cycle || '',
           comm: round2(Number(l.comm) || 0),
           source: l.fromWorkbook ? 'workbook' : 'sheet',
+          // 'paid' or 'due', decided by isPaidLine() in getCommission — the one
+          // rule every commission figure in the app splits on.
+          state: l.state === 'paid' ? 'paid' : 'due',
           unmatched: Boolean(l.unmatched),
           bonus: Boolean(l.bonus),
         }))
@@ -6717,6 +6786,49 @@ async function fetchSavedReport(url) {
 }
 
 /** soId → the labels Striven has on that order. Empty when unconfigured. */
+/**
+ * ONE ROW OF A LABELS REPORT, READ WHATEVER ITS SHAPE.
+ *
+ * Saved reports are built in Striven by hand, so two of them describing the
+ * same thing do not agree on column names — and a report whose columns this
+ * code does not recognise contributes NOTHING while still fetching fine, which
+ * is the quietest way for a board to go blank.
+ *
+ * Two shapes are in use today:
+ *   SALES-ORDER LEVEL   Number · Labels · PatientName        (the VA report)
+ *   LINE-ITEM LEVEL     SalesOrderName · SalesOrderLabels    (the PI report)
+ * The second repeats its order's labels on every line of that order, so its
+ * rows MERGE rather than overwrite — see the union below.
+ *
+ * THE IDENTIFIER IS THE PART THAT MATTERS. A row with labels and no way to name
+ * its sales order cannot be used at all, however good the labels are.
+ */
+export const labelRowKey = (r) => String(
+  r?.Number ?? r?.SalesOrderNumber ?? r?.OrderNumber
+  ?? r?.SalesOrderName ?? r?.Name ?? '',
+).trim().toLowerCase();
+
+/**
+ * THE KEYS A ROW MIGHT BE JOINED BY, best first.
+ *
+ * Striven's sales-order NAME is the NUMBER with a description hung off it —
+ * "HAlhewamdeh-PI-PEMF/RL/KNEE" is order number "HAlhewamdeh". A report that
+ * carries Name instead of Number therefore still identifies its order, but only
+ * if the description is dropped first. Verified on the live PI report: the full
+ * string matches nothing, the prefix matches order 228.
+ *
+ * The WHOLE value is tried first, so a number that legitimately contains a dash
+ * is never truncated into somebody else's order.
+ */
+export const labelRowKeys = (r) => {
+  const full = labelRowKey(r);
+  if (!full) return [];
+  const prefix = full.split('-')[0].trim();
+  return prefix && prefix !== full ? [full, prefix] : [full];
+};
+export const labelRowLabels = (r) => String(r?.Labels ?? r?.SalesOrderLabels ?? '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
 async function soLabelsBySoId() {
   const urls = await LABELS_URLS();
   if (!urls.length) return new Map();
@@ -6727,20 +6839,38 @@ async function soLabelsBySoId() {
     ]);
     const rows = pages.flat();
     const so = Array.isArray(soBlob) ? soBlob : [];
-    const idByNumber = new Map(
-      so.filter((o) => o?.number != null).map((o) => [String(o.number).trim().toLowerCase(), String(o.id)]),
-    );
+    // BOTH IDENTIFYING COLUMNS ARE ACCEPTED, because the two reports name the
+    // order differently: `number` is the short key the VA report emits and
+    // `name` is the long one ("HAlhewamdeh-PI-PEMF/RL/KNEE") a line-item report
+    // carries. One lookup holding both means neither report needs a code change
+    // of its own.
+    const idByKey = new Map();
+    for (const o of so) {
+      for (const k of [o?.number, o?.name]) {
+        const key = String(k ?? '').trim().toLowerCase();
+        if (key && !idByKey.has(key)) idByKey.set(key, String(o.id));
+      }
+    }
     const out = new Map();
     for (const r of rows) {
-      const id = idByNumber.get(String(r?.Number ?? '').trim().toLowerCase());
+      let id = null;
+      for (const k of labelRowKeys(r)) { id = idByKey.get(k); if (id) break; }
       if (!id) continue;
-      const labels = String(r?.Labels ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+      const labels = labelRowLabels(r);
+      // MERGED, NOT REPLACED. A line-item report emits one row per line and
+      // repeats the order's labels on each, and several reports may cover the
+      // same order. Overwriting would leave whichever row happened to come last
+      // — and a blank Labels cell on one line would erase the order's stage.
+      const prev = out.get(id);
+      const merged = prev ? [...prev.labels] : [];
+      for (const l of labels) if (!merged.some((x) => x.toLowerCase() === l.toLowerCase())) merged.push(l);
       // The report carries the patient's FULL name. Only the first INITIAL and
       // the surname are kept, and only here — the full first name is discarded
       // at the boundary, so it is never stored, cached or serialized. This is
       // the one source that has a first name at all: report_patient_items drops
       // it at ingest, so every other patient field in the portal is surname-only.
-      out.set(id, { labels, patient: commInitialLastDisp(r?.PatientName) });
+      const patient = commInitialLastDisp(r?.PatientName) || prev?.patient || '';
+      out.set(id, { labels: merged, patient });
     }
     return out;
   }, 60_000);
@@ -7011,6 +7141,21 @@ export async function getPiStages(viewer = null) {
       const storeStage = canonicalStage(rec?.stage);
       const fromField = mine.includes(fieldStage) ? fieldStage : '';
       const fromStore = mine.includes(storeStage) ? storeStage : '';
+      // NO INFERENCE FROM INVOICING, and the attempt is worth recording.
+      //
+      // With the PI labels report scoped to VA, every PI order arrives untagged
+      // and lands in stage 1. A fallback was added that read invoicing, tracking
+      // and the Striven status and placed the order at the furthest stage that
+      // evidence reached. The business rejected it outright: THIS PIPELINE IS
+      // NOT THE INVOICING STATE. A partial invoice is the 15% advance being
+      // raised and says nothing about where the LOP, the dispense or the
+      // settlement stand, so a board built on it was confidently wrong in a way
+      // that was harder to spot than the empty one.
+      //
+      // A stage on this board comes from a LABEL, or from nothing. When the
+      // labels report does not reach a board, the board says so — see
+      // `labelCoverage` and the notice the UI draws from it — rather than
+      // filling itself in from whatever else happens to be on the order.
       const stage = fromLabels || fromField || fromStore || mine[0];
       const src = fromLabels ? 'labels' : fromField ? 'striven' : fromStore ? 'portal' : 'default';
       // WHERE THIS ORDER IS VISIBLE. `stage` is its current position — one
@@ -7148,10 +7293,41 @@ export async function getPiStages(viewer = null) {
         || b.count - a.count || a.label.localeCompare(b.label));
   })();
 
+  /**
+   * HOW MUCH OF EACH BOARD THE LABEL REPORT ACTUALLY REACHES.
+   *
+   * A stage is read from an order's Striven LABELS. An order carrying none
+   * falls back to stage 1 — the honest reading of "no label says otherwise" —
+   * and that is fine for one order. For a WHOLE BOARD it is a lie with a
+   * confident face: 128 PI orders all standing at "Order received", a 100% bar,
+   * and a caption promising the cards add up. Nothing on screen could say that
+   * the source behind them was missing.
+   *
+   * IT IS A CONFIGURATION FAILURE, NOT A CODE ONE, which is exactly why it has
+   * to be reported rather than handled: `STRIVEN_LABELS_URL` lists saved
+   * reports that are SCOPED IN STRIVEN, and no amount of code here can give an
+   * order a label its report omits (see the note on LABELS_URLS). The list has
+   * been narrowed before; when it happens again, the board it silently
+   * flattened should say so instead of drawing a pipeline nobody is in.
+   *
+   * The review queue does NOT cover this. It surfaces labels that map to no
+   * stage — an order with no labels at all never reaches it, which is why this
+   * failure stayed invisible.
+   */
+  const coverageOf = (rows) => {
+    const total = rows.length;
+    const labelled = rows.filter((o) => (o.labels || []).length > 0).length;
+    return { orders: total, labelled, missing: total - labelled };
+  };
+  const labelCoverage = { PI: coverageOf(orders), PIP: coverageOf(pipOrders), VA: coverageOf(vaOrders) };
+
   return {
     ok: true,
     scopedToRep: isAdmin ? null : (viewer?.repName ?? null),
     canEdit: isAdmin || Boolean(viewer?.repName),
+    // Per board: how many of its orders the labels report reaches. A board with
+    // orders and zero labelled is not a pipeline, it is a missing source.
+    labelCoverage,
     stageNames: PI_STAGES,
     stages,
     orders,

@@ -320,6 +320,29 @@ export const REVIEW_LABELS = [
   'attorney denied',
   'hold',
   'case dropped',
+  // ── ADDED FROM THE PI LABELS REPORT, by instruction ──────────────────────
+  // Four labels the PI report carries that place an order in no stage. They
+  // were left unmapped at first — an unmapped label reaches the review queue as
+  // 'unknown', which reads as a DEFECT ("nobody has mapped this yet") when in
+  // fact each is a real, recognised state. Listing them here makes them
+  // 'flagged': the same queue, next to PI and PIP, but reported as expected
+  // work to chase rather than as a gap in this file.
+  //
+  //   patient contacted  (32)  intake has happened and nothing has moved since
+  //   unobtainable lop   (14)  the LOP cannot be got — a stall, like attorney
+  //                            denied, rather than a step of the chase
+  //   needs aob           (7)  an assignment of benefits is outstanding
+  //   case settled        (1)  the case is closed out; it is not a position in
+  //                            a pipeline that ends at 'waiting for settlement'
+  //
+  // As with every entry here, these contribute NO stage. An order carrying one
+  // alongside a real stage label still sits where that label puts it — only an
+  // order whose labels are ALL exceptions rests at stage 1, and either way it
+  // is listed for review.
+  'patient contacted',
+  'unobtainable lop',
+  'needs aob',
+  'case settled',
 ];
 
 export const PIP_IDENTIFYING_LABELS = [
@@ -589,33 +612,42 @@ export const PI_LABEL_STAGE = {
 // without a redeploy. Left to rot it does not go wrong loudly — it simply keeps
 // reporting the newest paid month as still owed.
 export const COMMISSION_PAID_THROUGH = {
-  // ADVANCED TO JULY by instruction: the July cycle has gone out. It settles in
-  // the 15 Aug 26 run, which is now behind us, so every VA line whose payout
-  // cycle resolves to 2026-07 or earlier reads Paid rather than Payable / Due.
+  // ADVANCED TO AUGUST by instruction (2026-09-23): "the commission shown in
+  // the sheet source tab named 9/15/2026 has been paid — treat it as paid
+  // everywhere".
   //
-  // Previously '2026-06', with the note that July was still owed because the
-  // sheet called that cycle "Payable 15 Aug 26 (due)". The sheet may still say
-  // so until Crystal re-labels it; this key is the override that does not wait
-  // for that, which is exactly what it is for.
-  VA: '2026-07',
-  // TRICARE AND PI ARE NAMED TOO, by instruction ("mark paid for the commission
-  // of reps of July"), and what that does is worth stating because it is more
-  // than the words describe. Neither had a paid-through before, so neither had a
-  // single line marked paid. The comparison is `month <= through`, so setting
-  // them to July does not mark July alone — it marks the WHOLE of each book up
-  // to and including July as paid, earlier months included.
+  // 9/15/2026 IS AUGUST'S MONEY, and the translation is the whole reason this
+  // key is a MONTH while the sheet talks in PAY DATES. A run on the 15th
+  // settles the month before it, so the 15 Sep 26 tab holds August — the same
+  // rule monthOfPayoutCycle() applies to the reconciliation sheet's cycle
+  // strings and commissionBookRows() applies to a workbook tab name. Writing
+  // '2026-09' here would have marked September paid as well, and September has
+  // not been run: it is the in-flight month, and its $48,525 sits in Waiting.
   //
-  // That is the intended reading of "the amount that was payable for July is
-  // paid now": what stood in Payable / Due was the accumulated unpaid balance,
-  // not one month's slice, and settling it settles the lot. It was raised before
-  // it was applied, and confirmed.
+  // WHAT IT MOVED, measured against the live book before the change: $90,838.27
+  // across 148 lines and four reps — Alle Ann 52,000.00, Christy 34,450.00,
+  // Maylon 2,525.58, Jillian 1,862.69 — out of Payable / Due and into Paid.
+  // That was the ENTIRE outstanding balance; every earlier month was already
+  // settled, so nothing is left owed behind it.
+  //
+  // Previously '2026-07' for all three, when the 15 Aug 26 run had gone out.
+  VA: '2026-08',
+  // TRICARE AND PI MOVE WITH IT, as they did in July, and today that is a
+  // no-op: every one of those 148 August lines is VA — TriCare and PI carry no
+  // August money at all. They are advanced anyway so the three stay on one
+  // cut-off, which is what stops a line that arrives later — a sheet row added
+  // after the run, a workbook tab read for the first time — from reading as
+  // owed when it was in fact settled by the 15 Sep cycle with the rest.
+  //
+  // The comparison is `month <= through`, so this marks each book up to and
+  // including August, earlier months included.
   //
   // IF THAT IS EVER WRONG — a vertical genuinely behind on an earlier month —
   // this is the line to correct, and the correction is to move that vertical
   // BACK to its true last-paid month, not to remove it. An absent vertical means
   // "nothing paid", which would swing the error the other way.
-  TriCare: '2026-07',
-  PI: '2026-07',
+  TriCare: '2026-08',
+  PI: '2026-08',
   // No DOL key: verticalOfCommissionLine() folds a line to TriCare, VA or PI and
   // nothing else, so a DOL entry here could never match a line.
 };

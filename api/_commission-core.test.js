@@ -566,15 +566,15 @@ test('patient names match regardless of case and spacing', () => {
 });
 
 // ── PAID-THROUGH ────────────────────────────────────────────────────────────
-// The July run has gone out and COMMISSION_PAID_THROUGH was advanced to say so.
-// These pin the two things about that setting that are easy to get wrong, both
-// of which move real money on a rep's screen.
+// The 15 Sep 26 run has gone out and COMMISSION_PAID_THROUGH was advanced to
+// say so. These pin the three things about that setting that are easy to get
+// wrong, all of which move real money on a rep's screen.
 test('paid-through covers every vertical that can carry a commission line', () => {
   // verticalOfCommissionLine folds a line to exactly these three. A vertical
   // missing from the map has NOTHING marked paid — which is the safe default,
   // but here it would mean a book still showing a settled balance as owed.
   for (const v of ['VA', 'TriCare', 'PI']) {
-    assert.equal(COMMISSION_PAID_THROUGH[v], '2026-07', `${v} is paid through July`);
+    assert.equal(COMMISSION_PAID_THROUGH[v], '2026-08', `${v} is paid through August`);
   }
 });
 
