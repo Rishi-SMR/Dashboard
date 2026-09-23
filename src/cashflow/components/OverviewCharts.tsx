@@ -1545,9 +1545,14 @@ export function OverviewCharts() {
                 orders behind it. The tile above is gone — two copies of the
                 same number would only invite them to disagree. */}
             {commRows.length > 0 && (
-              <ChartCard className="g12-3" title="Commission Due"
-                sub={`Click a rep for their programme split and top orders${periodScoped ? ` · orders booked in ${periodLabel}` : ''}`}>
-                <CommissionBreakdown reps={commRows} onOpen={go('commission')} />
+              // The heading follows the state. With the book settled there is
+              // no rep row to click, and a sub inviting a click that does
+              // nothing is how a card that is working reads as one that is not.
+              <ChartCard className="g12-3" title={commRows.every((r) => r.payable <= 0) ? 'Commission' : 'Commission Due'}
+                sub={commRows.every((r) => r.payable <= 0)
+                  ? 'Nothing outstanding to any rep'
+                  : `Click a rep for their programme split and top orders${periodScoped ? ` · orders booked in ${periodLabel}` : ''}`}>
+                <CommissionBreakdown reps={commRows} onOpen={go('commission')} paidThrough={comm?.striven?.paidThrough} />
                 {/* The owed commission that belongs to NO month, named wherever
                     a period is on. Without it this tile's months sum to less
                     than its own all-time figure and nothing on screen says why —

@@ -193,9 +193,35 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
     if (!cyc) return selfRow.payable;
     return cyc.find((c) => c.month === cyclePaidIn(boardPeriod as string))?.payable ?? 0;
   })();
-  const upcomingSub = scoped
-    ? `signed off · paid ~${runDay(boardPeriod as string)}`
-    : 'signed off, not yet paid · all cycles';
+  /**
+   * HAS THIS RUN ALREADY GONE OUT?
+   *
+   * The tile below answers "what am I about to be paid", and the moment a
+   * cycle settles that question has a different answer — not a smaller one.
+   * Left alone it read "Upcoming paycheck $0.00 · paid ~Sep 15, 2026" to a rep
+   * whose $52,000 had just landed, which is the same failure as the $0 this
+   * tile was built to prevent, pointing the other way: a zero that means
+   * SETTLED rendered as a zero that means NOTHING COMING.
+   *
+   * Read off the cycle row, which carries paid and payable side by side, so
+   * "nothing owed because it is paid" and "nothing owed because there was
+   * nothing" can be told apart. On All time the same question is the row's own
+   * paid-vs-payable.
+   */
+  const runCycle = scoped
+    ? (selfRow?.commissionByCycle ?? []).find((c) => c.month === cyclePaidIn(boardPeriod as string)) ?? null
+    : null;
+  const settledRun = scoped
+    ? Boolean(runCycle && !runCycle.payable && (runCycle.paid ?? 0) > 0)
+    : Boolean(selfRow && selfRow.payable === 0 && (selfRow.commission ?? 0) > 0);
+  const payTileValue = settledRun && scoped ? (runCycle?.paid ?? 0)
+    : settledRun ? (selfRow?.commission ?? 0)
+      : upcoming;
+  const upcomingSub = settledRun
+    ? (scoped ? `already paid · run of ${runDay(boardPeriod as string)}` : 'every cycle settled · nothing outstanding')
+    : scoped
+      ? `signed off · paid ~${runDay(boardPeriod as string)}`
+      : 'signed off, not yet paid · all cycles';
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -323,7 +349,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                 A manager keeps five tiles; the team's payable is on the
                 Commission tab, which is where they act on it. */}
             {!isManager && upcoming != null && (
-              <KpiExec label="Upcoming paycheck" value={upcoming} format={money} hue={HUE.cash}
+              <KpiExec label={settledRun ? 'Paid this cycle' : 'Upcoming paycheck'} value={payTileValue ?? 0} format={money} hue={HUE.cash}
                 sub={upcomingSub} chip="yours"
                 onClick={() => setPayOpen(true)} />
             )}
@@ -592,7 +618,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
         <KpiDrill metric={drill} reps={reps} data={data} onClose={() => setDrill(null)} onPickRep={(r) => { setDrill(null); setSel(r); }} />
       )}
       {payOpen && selfRow && upcoming != null && (
-        <PaycheckModal rep={selfRow} month={scoped ? boardPeriod : null} amount={upcoming}
+        <PaycheckModal rep={selfRow} month={scoped ? boardPeriod : null} amount={payTileValue ?? 0} settled={settledRun}
           onClose={() => setPayOpen(false)} />
       )}
     </div>
@@ -617,8 +643,13 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
  * NO PATIENT NAMES. `patient` arrived as an initial and a surname, reduced at
  * the parse in the reader, long before it reached any payload.
  */
-function PaycheckModal({ rep, month, amount, onClose }: {
+function PaycheckModal({ rep, month, amount, onClose, settled = false }: {
   rep: RepRow; month: string | null; amount: number; onClose: () => void;
+  /** The run has already gone out, so the panel reports a payment rather than
+   *  forecasting one: its heading, its explanation and its empty state all
+   *  change. The lines themselves arrive either way — `payLines` carries paid
+   *  and outstanding alike. */
+  settled?: boolean;
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -635,10 +666,30 @@ function PaycheckModal({ rep, month, amount, onClose }: {
     d.setMonth(d.getMonth() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   })();
+  /**
+   * EVERY LINE IN THE CYCLE, paid or outstanding.
+   *
+   * It used to list the outstanding ones only, which was the same thing while
+   * a cycle was open and became NOTHING the moment it settled — a panel headed
+   * "$52,000.00" over an empty table. A rep reading a settled cycle wants the
+   * detail more than an open one, not less: this is the record of a payment
+   * they have actually received.
+   *
+   * On All time (`cycle === null`) it is the whole book, which is what the
+   * tile is showing there too.
+   */
   const lines = (rep.payLines ?? []).filter((l) => (cycle ? l.month === cycle : true))
     .slice().sort((a, b) => b.comm - a.comm);
   const fromWorkbook = lines.filter((l) => l.source === 'workbook').length;
   const fromSheet = lines.length - fromWorkbook;
+  // A cycle part-paid is possible in principle — the cut-off is per VERTICAL,
+  // so a rep with two programmes can be settled on one and owed on the other.
+  // The Status column appears only then, rather than printing "paid" 80 times
+  // down a table whose heading already says the cycle is paid.
+  const paidCount = lines.filter((l) => l.state === 'paid').length;
+  const mixed = paidCount > 0 && paidCount < lines.length;
+  const paidSum = lines.filter((l) => l.state === 'paid').reduce((t, l) => t + l.comm, 0);
+  const dueSum = lines.filter((l) => l.state !== 'paid').reduce((t, l) => t + l.comm, 0);
   const payDay = month
     ? new Date(Number(month.split('-')[0]), Number(month.split('-')[1]) - 1, 15)
       .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -647,12 +698,12 @@ function PaycheckModal({ rep, month, amount, onClose }: {
   return (
     <Portal>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,27,46,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'clamp(10px, 3vw, 20px)' }}>
-        <div onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Upcoming paycheck"
+        <div onClick={(e) => e.stopPropagation()} role="dialog" aria-label={settled ? 'Paid commission for this cycle' : 'Upcoming paycheck'}
           style={{ background: 'var(--panel)', borderRadius: 14, width: 'min(760px, 100%)', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.3)', borderTop: `4px solid ${C.positive}` }}>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>
             <div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>Upcoming paycheck</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>{settled ? 'Paid' : 'Upcoming paycheck'}</div>
               <div style={{ fontSize: 22, fontWeight: 800, color: C.positive, marginTop: 4 }}>{pay(amount)}</div>
               <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3 }}>
                 {cycle
@@ -668,8 +719,11 @@ function PaycheckModal({ rep, month, amount, onClose }: {
             <div style={{ background: 'var(--panel-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '11px 13px', marginBottom: 14, fontSize: 12.5, color: C.sub, lineHeight: 1.6 }}>
               <b style={{ color: C.ink }}>Where this figure comes from.</b>{' '}
               {lines.length === 0
-                ? <>Nothing is outstanding for this cycle — it has been paid, or there was nothing in it.</>
+                ? (settled
+                  ? <>This cycle has been <b>paid in full</b>. No lines came through for it, which means the figure was settled from a source this panel does not carry — the Commission board, under {cycle ? monthLabel(cycle) : 'the cycle'}, has the detail.</>
+                  : <>Nothing is outstanding for this cycle — it has been paid, or there was nothing in it.</>)
                 : <>
+                  {settled && <>This cycle has been <b>paid in full</b>, and every line of it is below.{' '}</>}
                   These <b>{lines.length}</b> line{lines.length === 1 ? '' : 's'} are read from the commission
                   {fromWorkbook > 0 && fromSheet > 0
                     ? <> documents: <b>{fromWorkbook}</b> from the workbook and <b>{fromSheet}</b> from the reconciliation sheet</>
@@ -685,11 +739,13 @@ function PaycheckModal({ rep, month, amount, onClose }: {
               <table className="data-table">
                 <thead><tr>
                   <th>Patient</th><th>Device</th><th>Vertical</th><th>Order</th>
-                  <th>Source</th><th className="num">Commission</th>
+                  <th>Source</th>{mixed && <th>Status</th>}<th className="num">Commission</th>
                 </tr></thead>
                 <tbody>
                   {lines.length === 0 && (
-                    <tr><td colSpan={6} style={{ color: C.muted }}>No outstanding lines for this cycle.</td></tr>
+                    <tr><td colSpan={mixed ? 7 : 6} style={{ color: C.muted }}>
+                      {settled ? 'This cycle is paid; its lines are on the Commission board.' : 'No outstanding lines for this cycle.'}
+                    </td></tr>
                   )}
                   {lines.map((l, i) => (
                     <tr key={`${l.ref}-${i}`}>
@@ -700,13 +756,21 @@ function PaycheckModal({ rep, month, amount, onClose }: {
                       <td style={{ fontSize: 11.5, fontWeight: 700, color: l.source === 'workbook' ? C.brand : C.sub }}>
                         {l.source === 'workbook' ? 'workbook' : 'sheet'}
                       </td>
+                      {mixed && (
+                        <td style={{ fontSize: 11.5, fontWeight: 700, color: l.state === 'paid' ? C.positive : C.warning }}>
+                          {l.state === 'paid' ? 'paid' : 'due'}
+                        </td>
+                      )}
                       <td className="num" style={{ fontWeight: 700 }}>{pay(l.comm)}</td>
                     </tr>
                   ))}
                 </tbody>
                 {lines.length > 0 && (
                   <tfoot><tr className="total-row">
-                    <td colSpan={5}>Total</td>
+                    {/* Names the two halves where they differ, so the footer
+                        cannot read as one figure while the heading names
+                        another. */}
+                    <td colSpan={mixed ? 6 : 5}>Total{mixed ? ` · ${pay(paidSum)} paid, ${pay(dueSum)} due` : ''}</td>
                     <td className="num" style={{ fontWeight: 800 }}>{pay(lines.reduce((s, l) => s + l.comm, 0))}</td>
                   </tr></tfoot>
                 )}

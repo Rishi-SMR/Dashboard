@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { downloadXlsx, printToPdf, stamped, type Sheet } from '../export';
-import { fetchOrderAnalytics, fetchViews, saveView, deleteView, type AnalyticsOrder, type OrderAnalytics, type SavedView } from '../strivenApi';
+import { fetchOrderAnalytics, fetchViews, saveView, deleteView, type AnalyticsOrder, type DashFilters, type OrderAnalytics, type SavedView } from '../strivenApi';
 
 // Is the signed-in caller a rep? Sourced from the SERVER's `scopedToRep`, which
 // is non-null only when the API narrowed the payload to one person, so it cannot
@@ -19,6 +19,7 @@ import { ColumnFilter, SortHead } from './ColumnFilter';
 import { Portal } from './Portal';
 import { StatStrip } from './StatStrip';
 import { SoLink } from './SoLink';
+import { monthLabel, thisMonthKey, defaultMonth } from './MonthSelect';
 
 // The order the client asked for: PI and VA are active, DOL is live-but-empty,
 // TriCare is legacy and kept for historical data.
@@ -89,17 +90,81 @@ const GROUP_LABEL: React.CSSProperties = {
   display: 'block', fontSize: 10, fontWeight: 800, letterSpacing: '0.11em',
   textTransform: 'uppercase', color: C.muted, marginBottom: 6,
 };
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+/** `YYYY-MM-DD` for a Date, in LOCAL time. `toISOString()` is UTC and prints
+ *  the PREVIOUS day for anyone west of it, which is how a period boundary ends
+ *  up a day out. */
+const iso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-/** Inclusive date window for the chosen preset. `null` means no bound. */
-function windowFor(preset: string, from: string, to: string): { start: number | null; end: number | null } {
+/**
+ * An order's day as `YYYY-MM-DD`.
+ *
+ * TAKEN OFF THE STRING, NOT OFF A PARSED DATE, and that is the whole point.
+ * Striven stamps orders as ISO text, and `new Date('2026-09-01')` is UTC
+ * midnight — 8pm on 31 August in New York. Comparing that against a window
+ * built from local midnights moved every order dated the 1st into the previous
+ * month, and every order dated the last of a month out of it. The rest of the
+ * app already keys months by `date.slice(0, 7)`; this is the same rule, one
+ * digit longer, so this board and the rep boards cut the book identically.
+ *
+ * Anything that is not ISO-shaped falls back to a parse, read back in LOCAL
+ * time, so an unexpected format is still placed on the right day.
+ */
+const dayOf = (raw: string | null | undefined): string => {
+  const s = String(raw ?? '');
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const t = s ? new Date(s).getTime() : NaN;
+  return Number.isFinite(t) ? iso(new Date(t)) : '';
+};
+
+/** First and last day of the calendar month `ym` ('2026-08'). Day 0 of the NEXT
+ *  month is the last of this one, so February and leap years need no table. */
+const monthBounds = (ym: string): { start: string; end: string } | null => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym ?? ''));
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]);
+  if (mo < 1 || mo > 12) return null;
+  return { start: `${ym}-01`, end: `${ym}-${String(new Date(y, mo, 0).getDate()).padStart(2, '0')}` };
+};
+
+/** What each period covers, on the button — the label alone is what let "This
+ *  month" be read as a calendar month while it was a trailing thirty days. */
+const PERIOD_HINT: Record<string, string> = {
+  all: 'Every order in the book',
+  week: 'Sunday to Saturday of the current week',
+  month: 'The 1st to the last of the current calendar month, and nothing either side of it',
+  pick: 'One calendar month, on its own',
+  custom: 'A from → to range you choose',
+};
+
+/**
+ * Inclusive date window for the chosen preset, as `YYYY-MM-DD` day strings.
+ * `null` means no bound.
+ *
+ * EVERY PERIOD IS A CLOSED CALENDAR WINDOW, bounded at BOTH ends. "This month"
+ * was a trailing 30 days, which is what put August orders on the board under
+ * September — on the 23rd it reached back to 25 August. A period names a
+ * calendar month now and holds that month only: no spill from the month before
+ * it, and none from the month after either, which an open end let in.
+ *
+ * Day strings rather than timestamps, so the comparison is the plain text one
+ * the server's own month buckets use. See `dayOf`.
+ */
+function windowFor(preset: string, from: string, to: string, month: string): { start: string | null; end: string | null } {
   const now = new Date();
-  if (preset === 'week') { const s = new Date(now); s.setDate(s.getDate() - 6); s.setHours(0, 0, 0, 0); return { start: s.getTime(), end: null }; }
-  if (preset === 'month') { const s = new Date(now); s.setDate(s.getDate() - 29); s.setHours(0, 0, 0, 0); return { start: s.getTime(), end: null }; }
+  if (preset === 'week') {
+    const s = new Date(now); s.setDate(s.getDate() - s.getDay());   // Sunday
+    const e = new Date(s); e.setDate(e.getDate() + 6);              // Saturday
+    return { start: iso(s), end: iso(e) };
+  }
+  // The month someone picked, and the one we are in, are the same question
+  // asked twice: resolve both through the same bounds so they cannot drift.
+  if (preset === 'month' || preset === 'pick') {
+    const b = monthBounds(preset === 'month' ? thisMonthKey() : month);
+    return b ? { start: b.start, end: b.end } : { start: null, end: null };
+  }
   if (preset === 'custom') {
-    const s = from ? new Date(`${from}T00:00:00`).getTime() : null;
-    const e = to ? new Date(`${to}T23:59:59.999`).getTime() : null;
-    return { start: Number.isFinite(s as number) ? s : null, end: Number.isFinite(e as number) ? e : null };
+    return { start: from || null, end: to || null };
   }
   return { start: null, end: null };   // all time
 }
@@ -115,7 +180,10 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
-  const [preset, setPreset] = useState<'all' | 'week' | 'month' | 'custom'>('all');
+  const [preset, setPreset] = useState<'all' | 'week' | 'month' | 'pick' | 'custom'>('all');
+  // WHICH MONTH "Month" MEANS: a 'YYYY-MM' key, the same vocabulary the rep
+  // boards and the pipeline use, so August here is the August they show.
+  const [month, setMonth] = useState<string>(thisMonthKey());
   const [from, setFrom] = useState(iso(new Date(Date.now() - 30 * 86_400_000)));
   const [to, setTo] = useState(iso(new Date()));
   const [vert, setVert] = useState<string>('all');
@@ -134,17 +202,27 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
 
   const all = data?.orders ?? [];
   const rows = useMemo(() => {
-    const { start, end } = windowFor(preset, from, to);
+    const { start, end } = windowFor(preset, from, to, month);
     return all.filter((o) => {
       if (vert !== 'all' && o.vertical !== vert) return false;
       if (start == null && end == null) return true;
-      const t = o.date ? new Date(o.date).getTime() : NaN;
-      if (!Number.isFinite(t)) return false;
-      if (start != null && t < start) return false;
-      if (end != null && t > end) return false;
+      // Both bounds are INCLUSIVE and both are plain `YYYY-MM-DD`, so the
+      // comparison is lexicographic — no timezone anywhere in it. An undated
+      // order belongs to no period, exactly as it belongs to no month in the
+      // rep boards' `byMonth`.
+      const d = dayOf(o.date);
+      if (!d) return false;
+      if (start != null && d < start) return false;
+      if (end != null && d > end) return false;
       return true;
     });
-  }, [all, preset, from, to, vert]);
+  }, [all, preset, from, to, month, vert]);
+
+  /** Every month the loaded book has an order in, oldest first — what the
+   *  Month picker offers, so it can never name an empty period. */
+  const monthsInData = useMemo(() => [...new Set(
+    all.map((o) => dayOf(o.date).slice(0, 7)).filter(Boolean),
+  )].sort(), [all]);
 
   // ── the six headline totals ──
   // Server-scoped role signal: non-null only when the API narrowed this payload
@@ -169,12 +247,33 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
     return { orders: rows.length, devices, accounts: accounts.size, revenue, pending, delivered };
   }, [rows]);
 
+  /**
+   * THE WINDOW, IN WORDS — and the board says it out loud.
+   *
+   * A period control that only ever showed a LABEL is what let "This month"
+   * mean a trailing thirty days for as long as it did: nothing on screen named
+   * the dates being applied, so the figures had no way to look wrong. This is
+   * the one sentence, and both the caption under the filters and the exported
+   * workbook are labelled from it.
+   */
+  const periodText = useMemo(() => {
+    if (preset === 'all') return 'all time';
+    if (preset === 'month') return monthLabel(thisMonthKey());
+    if (preset === 'pick') return monthLabel(month);
+    const { start, end } = windowFor(preset, from, to, month);
+    const d = (s: string | null) => (s
+      ? new Date(`${s}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      : null);
+    const a = d(start), b = d(end);
+    return a && b ? `${a} – ${b}` : a ? `from ${a}` : b ? `up to ${b}` : 'all time';
+  }, [preset, from, to, month]);
+
   // Region the PDF captures: the filter bar and page shell are stripped by the
   // print stylesheet so the output is the view, not the app.
   const printRef = useRef<HTMLDivElement>(null);
 
   // Which saved view is on screen, with the filters it stood for.
-  const [view, setView] = useState<{ name: string; filters: { preset: string; from: string; to: string; vert: string } } | null>(null);
+  const [view, setView] = useState<{ name: string; filters: DashFilters } | null>(null);
 
   // Editing any filter by hand detaches the view, so an export is never
   // labelled with a saved view whose filters it no longer matches. Compared
@@ -184,9 +283,10 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
     if (!view) return;
     const f = view.filters;
     const same = f.preset === preset && (f.vert || 'all') === vert
-      && (f.from || '') === (from || '') && (f.to || '') === (to || '');
+      && (f.from || '') === (from || '') && (f.to || '') === (to || '')
+      && (f.month || '') === (month || '');
     if (!same) setView(null);
-  }, [preset, from, to, vert]);
+  }, [preset, from, to, month, vert]);
   const appliedView = view?.name ?? null;
 
   /**
@@ -199,7 +299,10 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
    * this needs to sum the column, and "$1,415,592" is text to Excel.
    */
   function exportExcel() {
-    const period = preset === 'custom' ? `${from || 'earliest'} to ${to || 'latest'}` : preset;
+    // NAMES THE WINDOW, not the button: "month" told a reader nothing about
+    // which month a forwarded workbook had been cut to. Same sentence the
+    // caption shows, so the file and the screen cannot disagree.
+    const period = periodText;
     const summary: Sheet = {
       name: 'Summary',
       rows: [
@@ -407,10 +510,35 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
             <span style={GROUP_LABEL}>Period</span>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
               <div style={TRACK}>
-                {([['all', 'All time'], ['week', 'This week'], ['month', 'This month'], ['custom', 'Custom']] as const).map(([k, label]) => (
-                  <button key={k} style={seg(preset === k)} aria-pressed={preset === k} onClick={() => setPreset(k)}>{label}</button>
+                {([['all', 'All time'], ['week', 'This week'], ['month', 'This month'], ['pick', 'Month'], ['custom', 'Custom']] as const).map(([k, label]) => (
+                  <button key={k} style={seg(preset === k)} aria-pressed={preset === k}
+                    title={PERIOD_HINT[k]}
+                    onClick={() => {
+                      setPreset(k);
+                      // Landing on "Month" with an empty month reads as a failed
+                      // load, so it opens on the current month where that has
+                      // orders and on the newest month that does otherwise —
+                      // the same rule the rep boards use (see defaultMonth).
+                      if (k === 'pick' && !monthsInData.includes(month)) setMonth(defaultMonth(monthsInData, month));
+                    }}>{label}</button>
                 ))}
               </div>
+              {preset === 'pick' && (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted }}>
+                  {/* Newest first: the month being asked about is nearly always
+                      the last one, and it should not sink down a list that
+                      grows by a row a month. */}
+                  <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month"
+                    title="Show one calendar month, on its own"
+                    style={{ padding: '5px 8px', borderRadius: 7, border: `1px solid ${C.muted}44`, background: 'var(--panel-2)', color: C.ink, fontSize: 12.5, fontWeight: 600 }}>
+                    {/* The held month is always offered, even with nothing in
+                        it, or a select with no matching option would silently
+                        re-point at whatever sits first in the list. */}
+                    {[...new Set([month, ...monthsInData])].sort().reverse()
+                      .map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+                  </select>
+                </div>
+              )}
               {preset === 'custom' && (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.muted }}>
                   <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} aria-label="From date"
@@ -450,13 +578,16 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
           <div role="group" aria-label="Saved views" style={{ paddingRight: 22 }}>
             <span style={GROUP_LABEL}>Saved view</span>
             <SavedViews
-              current={{ preset, from, to, vert }}
+              current={{ preset, from, to, vert, month }}
               onApply={(f, name) => {
                 // Resolve the effective filters ONCE and use the same object for
                 // both the controls and the view snapshot: reading `preset` et al.
                 // back here would see the previous render's values.
-                const eff = { preset: f.preset, from: f.from || from, to: f.to || to, vert: f.vert || 'all' };
-                setPreset(eff.preset as typeof preset); setFrom(eff.from); setTo(eff.to); setVert(eff.vert);
+                // `month` is READ THROUGH THE SAME FALLBACK as from/to, so a
+                // view saved before the Month period existed applies cleanly
+                // and keeps its name instead of detaching on an empty month.
+                const eff = { preset: f.preset, from: f.from || from, to: f.to || to, vert: f.vert || 'all', month: f.month || month };
+                setPreset(eff.preset as typeof preset); setFrom(eff.from); setTo(eff.to); setVert(eff.vert); setMonth(eff.month);
                 setView(name ? { name, filters: eff } : null);
               }}
             />
@@ -482,6 +613,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
 
         <div style={{ borderTop: `1px solid ${C.muted}22`, marginTop: 12, paddingTop: 8, fontSize: 12, color: C.muted, fontVariantNumeric: 'tabular-nums' }}>
           <b style={{ color: C.sub, fontWeight: 700 }}>{rows.length}</b> of {all.length} orders in scope
+          {` · ${periodText}`}
           {agoText ? ` · updated ${agoText}` : ''}
           {data?.scopedToRep ? ` · scoped to ${data.scopedToRep}` : ''}
           {data?.excludedCancelled ? ` · ${data.excludedCancelled} cancelled excluded` : ''}
@@ -765,9 +897,9 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
  * today's data rather than a frozen snapshot.
  */
 function SavedViews({ current, onApply }: {
-  current: { preset: string; from: string; to: string; vert: string };
+  current: DashFilters;
   /** `name` is the saved view being applied, so exports can be labelled with it. */
-  onApply: (f: { preset: string; from: string; to: string; vert: string }, name?: string) => void;
+  onApply: (f: DashFilters, name?: string) => void;
 }) {
   const [views, setViews] = useState<SavedView[]>([]);
   const [naming, setNaming] = useState(false);
@@ -795,7 +927,9 @@ function SavedViews({ current, onApply }: {
   }
 
   const label = (v: SavedView) => {
-    const p = v.filters.preset === 'custom' ? `${v.filters.from} → ${v.filters.to}` : v.filters.preset;
+    const p = v.filters.preset === 'custom' ? `${v.filters.from} → ${v.filters.to}`
+      : v.filters.preset === 'pick' ? monthLabel(String(v.filters.month ?? ''))
+        : v.filters.preset;
     return `${p} · ${v.filters.vert === 'all' ? 'all verticals' : v.filters.vert}`;
   };
 

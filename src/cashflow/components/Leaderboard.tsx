@@ -547,17 +547,55 @@ export function Leaderboard({ reps, months, viewAs, boardScoped, onPeriod }: {
   // 1st, which reads as broken and says out loud that a row is missing.
   // `boardRank` is contiguous over the rows this viewer received, so the board
   // numbers what is on it.
-  const rankOf = (r: RepRow, i: number) => (typeof r.boardRank === 'number' ? r.boardRank
-    : typeof r.rank === 'number' ? r.rank : i + 1);
+  /**
+   * THE POSITIONS THE BOARD DRAWS — numbered over the rows ON IT, in its own
+   * order, which is orders descending.
+   *
+   * `boardRank` alone could not do this, and the September board showed why in
+   * two ways at once:
+   *
+   *  · A HOLE AT 3. `boardRank` is contiguous over the rows the SERVER sent,
+   *    but the client removes one more — a sub-rep is rolled up into the
+   *    supervisor's card (`rollsUp`) after the numbering is stamped. Jillian
+   *    held 3, her row left the board, and Maylon kept 4 under a 2 with
+   *    nothing between them.
+   *  · TWO REPS AT 4. A rep who has never booked has no month row, so no rank
+   *    at all, and the old fallback handed them `i + 1` — an ARRAY index
+   *    masquerading as a position. CVT Medical, on zero orders ever, was drawn
+   *    as 4th beside Maylon's real 4th, and David/Dino as 5th.
+   *
+   * A REP WITH NO ORDERS IN THE PERIOD HOLDS NO POSITION. They are listed only
+   * so a roster edit is visibly live (see the note on the filter above), which
+   * is a different statement from finishing behind someone — so they are drawn
+   * without a number rather than with a borrowed one.
+   *
+   * This does NOT reopen the gap `boardRank` was added to close: a row withheld
+   * from this viewer never reaches `board`, so the numbering simply does not
+   * count it, exactly as before. What changed is that the client's own removals
+   * are now counted the same way as the server's.
+   */
+  const placed = (r: RankedRep) => r.orders > 0;
+  const displayRank = useMemo(() => {
+    const m = new Map<string, number>();
+    let n = 0;
+    for (const r of board) if (placed(r)) m.set(r.rep, ++n);
+    return m;
+  }, [board]);
+  /** The drawn position, or `null` for a rep who holds none. */
+  const rankOf = (r: RepRow): number | null => displayRank.get(r.rep) ?? null;
   // THE TRUE POSITION, for anything that makes a CLAIM rather than draws a list.
   // With Alle withheld, Jillian's boardRank is 1 on 102 orders while Alle sits
   // above her on 185 — drawing that is fine, congratulating her on it is the
   // portal telling her she has overtaken someone she has not.
-  const trueRankOf = (r: RepRow, i: number) => (typeof r.rank === 'number' ? r.rank : rankOf(r, i));
+  const trueRankOf = (r: RepRow, i: number) => (typeof r.rank === 'number' ? r.rank
+    : rankOf(r) ?? i + 1);
   const selfArrIdx = board.findIndex((r) => r.isSelf);
   // 0-based, so every comparison below (`=== 0` for the leader, `> 0` for a
   // chaser) keeps reading the way it did.
-  const selfIdx = self ? rankOf(self, selfArrIdx) - 1 : -1;
+  // 0-based. An unplaced self (no orders in the period) has no position to
+  // read, so the array index stands in — it drives only the scroll-into-view
+  // guard and the chase line, neither of which is a claim about rank.
+  const selfIdx = self ? ((rankOf(self) ?? selfArrIdx + 1) - 1) : -1;
   const leader = board[0]?.orders ?? 0;
   const canOpen = (r: RepRow) => Boolean(r.own);
 
@@ -629,12 +667,14 @@ export function Leaderboard({ reps, months, viewAs, boardScoped, onPeriod }: {
   // leaves its medal unclaimed, which is the honest way to render a gap.
   // `board` and `mySubReps` are resolved further up, beside `self` — the chase
   // line and the scroll-into-view need them too.
-  const withRank = board.map((r, i) => ({ r, rank: rankOf(r, i) }));
-  const podium = withRank.filter((x) => x.rank <= 3);
-  const rest = withRank.filter((x) => x.rank > 3);
+  const withRank = board.map((r) => ({ r, rank: rankOf(r) }));
+  // An unplaced rep is never on the podium — it is the top three of the board,
+  // and holding no position is not holding one of them.
+  const podium = withRank.filter((x) => x.rank != null && x.rank <= 3);
+  const rest = withRank.filter((x) => x.rank == null || x.rank > 3);
   const inFilter = (r: RepRow) => vertFilter === 'all' || r.byVertical.some((v) => v.vertical === vertFilter && v.orders > 0);
 
-  const row = ({ r, rank }: { r: RankedRep; rank: number }) => {
+  const row = ({ r, rank }: { r: RankedRep; rank: number | null }) => {
     // LIFETIME, like the confetti above. A milestone badge says "this rep has
     // booked 150 orders", which stays true whichever month is on screen.
     const badge = badgeFor(r.lifetimeOrders);
@@ -650,7 +690,12 @@ export function Leaderboard({ reps, months, viewAs, boardScoped, onPeriod }: {
         onClick={canOpen(r) ? () => setOpen(r) : undefined}
         title={canOpen(r) ? 'Open your breakdown' : `${r.rep}'s breakdown is theirs to open`}
         style={{ opacity: inFilter(r) ? 1 : 0.35 }}>
-        <span className="lbx-rank">{rank}</span>
+        {/* No number where there is no position: an em dash, and the title
+            says why rather than leaving a blank cell to be read as a fault. */}
+        <span className="lbx-rank" style={rank == null ? { opacity: 0.45 } : undefined}
+          title={rank == null ? `${r.rep} has no orders in this period, so holds no position on it` : undefined}>
+          {rank ?? '—'}
+        </span>
         <span className="lbx-name">
           <span className="lbx-name-t">{r.rep}</span>
           {badge && <span className="lbx-badge" title={`${badge}+ orders`}>{badge}</span>}

@@ -240,7 +240,26 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
   const total = boardOrders.length;
   // Orders listed at more than one stage — what makes the card counts overlap.
   const multi = boardOrders.filter((o) => (o.stages?.length ?? 1) > 1).length;
+  /**
+   * THE BOARD HAS ORDERS BUT NO STAGE DATA AT ALL.
+   *
+   * A stage is read from an order's Striven labels; an order with none falls
+   * back to stage 1. Across a whole board that produces a pipeline that looks
+   * complete and is entirely false — 128 PI orders standing at "Order
+   * received", a 100% bar, and a caption promising the cards add up.
+   *
+   * The cause is always the same and is NOT in this repository: the saved
+   * report behind `STRIVEN_LABELS_URL` is scoped in Striven, and when its list
+   * is narrowed the boards it stops covering flatten without a word. Saying so
+   * is the only correct thing this component can do — it cannot invent a stage
+   * for an order whose labels it was never sent.
+   *
+   * Counted off the ORDERS ON SCREEN rather than the payload's own tally, so a
+   * month filtered down to unlabelled orders reports honestly too.
+   */
+  const noLabels = total > 0 && boardOrders.every((o) => (o.labels?.length ?? 0) === 0);
   const byLabel = boardOrders.filter((o) => o.source === 'labels').length;
+
   // THE TWO COHORTS OF THE OPEN STAGE, so the drawer can show either and always
   // say which. `nowInStage` is the orders standing here — the card's headline —
   // and `everInStage` is membership: an order tagged "Shipped, Waiting for
@@ -428,6 +447,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
             ) : (
               <>
                 {total} PI order{total === 1 ? '' : 's'}{month === ALL_TIME ? '' : ` in ${monthLabel(month)}`}. Click a stage to see its orders. Each card leads with the orders <b>standing at that stage now</b>, so the cards add up to {total}.
+                {noLabels && <> <b>Not right now:</b> see the notice above — every one of them has fallen back to the first stage.</>}
                 {multi > 0 && <> A Striven label can also list an order at a stage it has already passed; those are counted under <i>passed through</i> on the card rather than in its figure.</>}
                 {/* WHOLE-BOOK FIGURE, so it is only quoted on the whole book.
                     `trackedCount` counts every order ever moved across the
@@ -444,6 +464,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
         {/* THE PERIOD, and the same control the rep boards use — same chip, same
             wording, same "All time" sentinel. One vocabulary for periods across
             the app, so a month picked here means what it means there. */}
+        {/* placed after the head so it reads before the cards it is about */}
         <MonthSelect months={monthsAvailable} month={month} onMonth={setMonth}
           title="Show one month of this pipeline, or the whole book. Same months as My Orders." />
         {/* Board switch. PIP shows its count even at zero, so the tab reads as
@@ -488,6 +509,26 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
 
       {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
       {loading && !data && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
+
+      {/* NO STAGE DATA — said before the cards, because it is about all of them.
+          Deliberately loud: the cards below are not a pipeline, they are every
+          order sitting in the fallback, and they look exactly like a real
+          pipeline with a slow month. See `noLabels`. */}
+      {noLabels && !loading && (
+        <div style={{
+          marginBottom: 12, padding: '11px 13px', borderRadius: 10, fontSize: 12.5, lineHeight: 1.6,
+          background: 'var(--panel-2)', border: `1px solid ${C.negative}55`, borderLeft: `4px solid ${C.negative}`, color: C.sub,
+        }}>
+          <b style={{ color: C.ink }}>This board has no labels to read, so it cannot say where the work is.</b>{' '}
+          None of these <b>{total}</b> order{total === 1 ? '' : 's'} carries a Striven label, so every one rests at the first
+          stage. A stage on this board comes from a label and from nothing else — the invoicing state is a different
+          question and is deliberately not used to guess one.
+          {' '}Labels reach the portal through a saved Striven report listed in <code>STRIVEN_LABELS_URL</code>. The one
+          configured today returns <code>Type = "VA Order"</code> on all 400 of its rows, so no PI order is in it. Adding a
+          saved report that covers PI orders — the list takes several, comma-separated — fills every card here from the real
+          tags, with no code change.
+        </div>
+      )}
 
       {/* A PERIOD WITH NOTHING IN IT. Empty stage cards look identical to a board
           that failed to load, and the reader's next move — pick another month —
@@ -930,7 +971,8 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
         <div className="qb-flash warn" style={{ marginTop: 14 }}>
           ⚠️ Stages are read from each order's <b>Striven labels</b>, so they cannot be moved here - change the label in Striven and it
           follows on the next refresh. An order is listed at <b>every stage its labels attest to</b>; the furthest of them is where it counts as sitting now.
-          {byLabel > 0 && <> {byLabel} of {boardOrders.length} order{boardOrders.length === 1 ? '' : 's'} on this board {byLabel === 1 ? 'is' : 'are'} set this way; the rest carry no label yet and sit in stage 1 until one is added in Striven.</>}
+          {byLabel > 0 && <> {byLabel} of {boardOrders.length} order{boardOrders.length === 1 ? '' : 's'} on this board {byLabel === 1 ? 'is' : 'are'} set this way.</>}
+
           {canReview && reviewOrders.length > 0 && (
             <> {reviewOrders.length} order{reviewOrders.length === 1 ? '' : 's'} carry a label that holds no
             stage{unknownCount > 0 ? `, including ${unknownCount} unrecognised label${unknownCount === 1 ? '' : 's'}` : ''} - see{' '}

@@ -327,7 +327,14 @@ function BarList({ title, sub, slices, total, fmt = (n: number) => String(n), em
  *  stage — shown as a footnote, never counted in `value`. */
 type StageCell = Slice & { passed?: number };
 
-function StageStrip({ slices, unfiltered }: { slices: StageCell[]; unfiltered?: boolean }) {
+function StageStrip({ slices, unfiltered, noLabels, boardTotal }: {
+  slices: StageCell[]; unfiltered?: boolean;
+  /** No order on this board carries a Striven label, so every one has fallen
+   *  back to stage 1 and the funnel below describes nothing. Same condition the
+   *  PI Pipeline board reports — said here too, because this strip is the same
+   *  picture on a page most people open first. */
+  noLabels?: boolean; boardTotal?: number;
+}) {
   const total = slices.reduce((s, x) => s + x.value, 0);
   // Whether the passed-through footnote appears anywhere, so the caption only
   // explains a thing the reader can actually see on this board.
@@ -337,6 +344,18 @@ function StageStrip({ slices, unfiltered }: { slices: StageCell[]; unfiltered?: 
     <div className="section chart-card" style={{ marginTop: 0, marginBottom: 14 }}>
       <div className="section-head"><div>
         <h2 className="section-title">PI pipeline</h2>
+        {/* Before the strip, because it is about every cell in it. */}
+        {noLabels && (
+          <div style={{
+            margin: '6px 0 8px', padding: '9px 11px', borderRadius: 9, fontSize: 12.5, lineHeight: 1.55,
+            background: 'var(--panel-2)', border: `1px solid ${C.negative}55`, borderLeft: `4px solid ${C.negative}`, color: C.sub,
+          }}>
+            <b style={{ color: C.ink }}>Stage data is missing.</b>{' '}
+            None of these {boardTotal ?? 0} orders carries a Striven label, so all of them rest at the first stage and this
+            strip cannot say where the work is. The saved report behind <code>STRIVEN_LABELS_URL</code> covers VA orders only;
+            adding one that covers PI fills this in.
+          </div>
+        )}
         <div className="section-sub">
           {total} Personal Injury order{total === 1 ? '' : 's'} by stage: a subset of the PI orders above. Left to right is the order of work.
           {' '}Each cell counts the orders <b>standing at that stage now</b>, so they add up to {total}.
@@ -475,30 +494,52 @@ export function DashboardOverview({ reps, viewAs, aside }: {
   // controls are set to.
   const pinnedDevices = useMemo(() => pinColors(tally(deviceRows, (d) => d.item, (d) => d.qty)), [a]);
 
-  // A window rather than a single cutoff, so a custom range can close at both
-  // ends. `null` means no date filtering at all.
+  /**
+   * A window rather than a single cutoff, so a custom range can close at both
+   * ends. `null` means no date filtering at all.
+   *
+   * BOTH ENDS ARE `YYYY-MM-DD` DAY STRINGS, and both are inclusive. Two things
+   * follow from that, and both were wrong before:
+   *
+   *  · THE COMPARISON CARRIES NO TIMEZONE. Order dates arrive as ISO text and
+   *    `new Date('2026-09-01')` is UTC midnight — the evening of 31 August in
+   *    New York — so an order dated the 1st fell on the wrong side of a window
+   *    built from local midnights, and landed in the previous month.
+   *  · A NAMED PERIOD CLOSES. "This month" and "This year" ran to Infinity,
+   *    which let a forward-dated order sit inside a month it is not in. The
+   *    rolling "Last N days" windows still end today, which is what they mean.
+   */
   const win = useMemo(() => {
     const now = new Date();
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     if (period === 'all') return null;
     if (period === 'custom') {
-      const f = from ? new Date(`${from}T00:00:00`).getTime() : -Infinity;
-      // The end date is INCLUSIVE: an order stamped 14:32 on the closing day
-      // belongs in the range, so the window runs to the end of that day.
-      const t = to ? new Date(`${to}T23:59:59.999`).getTime() : Infinity;
+      const f = from || '0000-01-01';
+      const t = to || '9999-12-31';
       // Tolerate a reversed range instead of silently returning nothing.
       return f <= t ? { from: f, to: t } : { from: t, to: f };
     }
-    if (period === 'mtd') return { from: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), to: Infinity };
-    if (period === 'ytd') return { from: new Date(now.getFullYear(), 0, 1).getTime(), to: Infinity };
+    if (period === 'mtd') return { from: isoDay(new Date(now.getFullYear(), now.getMonth(), 1)), to: isoDay(endOfMonth) };
+    if (period === 'ytd') return { from: `${now.getFullYear()}-01-01`, to: `${now.getFullYear()}-12-31` };
+    // `days - 1`, so "Last 7 days" is seven calendar days ENDING TODAY rather
+    // than eight touched by a 7×24h reach back from the current clock time.
     const days = Number(period);
-    return Number.isFinite(days) ? { from: now.getTime() - days * 864e5, to: Infinity } : null;
+    if (!Number.isFinite(days)) return null;
+    const start = new Date(now); start.setDate(start.getDate() - (days - 1));
+    return { from: isoDay(start), to: isoDay(now) };
   }, [period, from, to]);
 
   const orders = useMemo(() => allOrders.filter((o) => {
     if (win) {
       if (!o.date) return false;               // undated can't be in a window
-      const t = new Date(o.date).getTime();
-      if (!Number.isFinite(t) || t < win.from || t > win.to) return false;
+      // Off the STRING: see the note on `win`. Anything not ISO-shaped is read
+      // back through a local-time parse rather than dropped.
+      const raw = String(o.date);
+      const d = /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : (() => {
+        const t = new Date(raw).getTime();
+        return Number.isFinite(t) ? isoDay(new Date(t)) : '';
+      })();
+      if (!d || d < win.from || d > win.to) return false;
     }
     if (vert !== 'all' && o.vertical !== vert) return false;
     // Device lives on the order's line items, so this asks "did this order
@@ -569,6 +610,10 @@ export function DashboardOverview({ reps, viewAs, aside }: {
   // Rather than show it silently unfiltered, it says so: and hides entirely
   // when the vertical filter has excluded PI.
   const showStages = (vert === 'all' || vert === 'PI') && byStage.length > 0;
+  // Straight off the payload: how much of the PI board the labels report
+  // reaches. `labelled: 0` against real orders means there is no stage data at
+  // all — see the note on StageStrip.
+  const piCoverage = pi?.labelCoverage?.PI ?? null;
 
   return (
     <>
@@ -650,7 +695,11 @@ export function DashboardOverview({ reps, viewAs, aside }: {
       {/* The pipeline is a SEQUENCE, not a composition: a donut implied its
           stages were parts of a whole and left an orphaned fifth card. A full
           width funnel reads left to right, the way the work actually flows. */}
-      {showStages && <StageStrip slices={byStage} unfiltered={filtered} />}
+      {showStages && (
+        <StageStrip slices={byStage} unfiltered={filtered}
+          noLabels={Boolean(piCoverage && piCoverage.orders > 0 && piCoverage.labelled === 0)}
+          boardTotal={piCoverage?.orders} />
+      )}
     </>
   );
 }

@@ -31,9 +31,23 @@ export type CommRep = {
 
 const PROGS = ['PI', 'VA', 'TriCare'] as const;
 
-export function CommissionBreakdown({ reps, onOpen }: {
+/** '2026-08' → 'August 2026'. Built from the parts, never parsed: a
+ *  `new Date('2026-08')` is UTC midnight and renders as the PREVIOUS month for
+ *  anyone behind UTC, which would misname the very cut-off this states. */
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+const monthName = (m: string) => {
+  const [y, mo] = String(m ?? '').split('-');
+  const i = Number(mo) - 1;
+  return MONTHS[i] ? `${MONTHS[i]} ${y}` : String(m ?? '');
+};
+
+export function CommissionBreakdown({ reps, onOpen, paidThrough }: {
   reps: CommRep[];
   onOpen?: () => void;
+  /** Vertical → last month paid, straight off the payload. Used only by the
+   *  settled state below, so the card can name WHEN rather than assert it. */
+  paidThrough?: Record<string, string>;
 }) {
   const [mode, setMode] = useState<'rep' | 'prog'>('rep');
   const [pick, setPick] = useState<string | null>(null);
@@ -59,6 +73,22 @@ export function CommissionBreakdown({ reps, onOpen }: {
     : progTotals.map((p) => ({ key: p.name, label: p.name, value: p.value, color: p.color }));
   const max = Math.max(1, ...rows.map((r) => r.value));
 
+  /**
+   * NOTHING OWED IS A RESULT, NOT AN EMPTY CARD.
+   *
+   * Every bar here is a rep with money outstanding, so the day a payout run
+   * clears the book this rendered as "$0.00 · payable to 0 producing reps"
+   * over an empty chart — which reads as a card that failed to load, exactly
+   * when it is reporting the best news it can. It says so instead, and names
+   * the cut-off it is saying it about.
+   *
+   * Keyed off the ROWS, not off the total: a book owing nothing has no bars to
+   * draw whichever view is selected.
+   */
+  const settled = onRoster.length === 0 && offRoster.length === 0;
+  const through = Object.entries(paidThrough ?? {})
+    .map(([v, m]) => `${v} through ${monthName(m)}`).join(' · ');
+
   const sel = pick ? reps.find((r) => r.rep === pick) ?? null : null;
   // Top earning lines for the selected rep. Commission per line, never the
   // order's value — this card is about what is owed, not what was sold.
@@ -66,6 +96,28 @@ export function CommissionBreakdown({ reps, onOpen }: {
     .filter((l) => l.comm > 0)
     .sort((a, b) => b.comm - a.comm)
     .slice(0, 5), [sel]);
+
+  if (settled) {
+    return (
+      <div className="cmb">
+        <div className="cmb-head">
+          <div>
+            <div className="cmb-total" style={{ color: C.positive }}>All settled</div>
+            <div className="cmb-sub">
+              Every signed-off commission has been paid{through ? ` — ${through}` : ''}.
+              {' '}Nothing is outstanding to any rep.
+            </div>
+          </div>
+        </div>
+        {onOpen && (
+          <button className="cmb-open" onClick={onOpen}
+            style={{ alignSelf: 'flex-start', border: 'none', background: 'transparent', color: C.brand, fontWeight: 700, fontSize: 12.5, cursor: 'pointer', padding: '2px 0' }}>
+            See the Commission board →
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="cmb">
