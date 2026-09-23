@@ -6812,7 +6812,7 @@ export const labelRowKey = (r) => String(
  * THE KEYS A ROW MIGHT BE JOINED BY, best first.
  *
  * Striven's sales-order NAME is the NUMBER with a description hung off it —
- * "HAlhewamdeh-PI-PEMF/RL/KNEE" is order number "HAlhewamdeh". A report that
+ * "JSample-PI-PEMF/RL/KNEE" is order number "JSample". A report that
  * carries Name instead of Number therefore still identifies its order, but only
  * if the description is dropped first. Verified on the live PI report: the full
  * string matches nothing, the prefix matches order 228.
@@ -6841,7 +6841,7 @@ async function soLabelsBySoId() {
     const so = Array.isArray(soBlob) ? soBlob : [];
     // BOTH IDENTIFYING COLUMNS ARE ACCEPTED, because the two reports name the
     // order differently: `number` is the short key the VA report emits and
-    // `name` is the long one ("HAlhewamdeh-PI-PEMF/RL/KNEE") a line-item report
+    // `name` is the long one ("JSample-PI-PEMF/RL/KNEE") a line-item report
     // carries. One lookup holding both means neither report needs a code change
     // of its own.
     const idByKey = new Map();

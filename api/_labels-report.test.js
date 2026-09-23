@@ -24,8 +24,8 @@ test('the sales-order-level shape is read (the VA report)', () => {
 });
 
 test('the line-item shape is read (the PI report)', () => {
-  const row = { SalesOrderName: 'HAlhewamdeh-PI-PEMF/RL/KNEE', SalesOrderLabels: 'Shipped, Waiting for first payment' };
-  assert.equal(labelRowKey(row), 'halhewamdeh-pi-pemf/rl/knee');
+  const row = { SalesOrderName: 'JSample-PI-PEMF/RL/KNEE', SalesOrderLabels: 'Shipped, Waiting for first payment' };
+  assert.equal(labelRowKey(row), 'jsample-pi-pemf/rl/knee');
   assert.deepEqual(labelRowLabels(row), ['Shipped', 'Waiting for first payment']);
 });
 
@@ -51,9 +51,13 @@ test('a sales-order NAME still identifies its order', () => {
   // Striven's Name is the NUMBER with a description hung off it. A report
   // carrying Name instead of Number is still joinable, but only once the
   // description is dropped — verified against the live PI report, whose one
-  // named row is order number "HAlhewamdeh".
-  assert.deepEqual(labelRowKeys({ SalesOrderName: 'HAlhewamdeh-PI-PEMF/RL/KNEE' }),
-    ['halhewamdeh-pi-pemf/rl/knee', 'halhewamdeh']);
+  // named row resolved to a real order this way.
+  //
+  // THE EXAMPLE IS FICTIONAL ON PURPOSE. A Striven sales-order name embeds the
+  // PATIENT (initial + surname), so pasting a real one into a test would put
+  // PHI in the repository for good. This exercises the identical rule.
+  assert.deepEqual(labelRowKeys({ SalesOrderName: 'JSample-PI-PEMF/RL/KNEE' }),
+    ['jsample-pi-pemf/rl/knee', 'jsample']);
   // The WHOLE value is tried first, so a number that legitimately contains a
   // dash is never truncated into somebody else's order.
   assert.deepEqual(labelRowKeys({ Number: 'SO-480' }), ['so-480', 'so']);
