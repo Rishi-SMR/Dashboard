@@ -723,8 +723,13 @@ export const fetchOrderAnalytics = (as?: string | null) =>
   get<OrderAnalytics>(`/api/order-analytics${as ? `?as=${encodeURIComponent(as)}` : ''}`);
 
 // ── Saved dashboard views ────────────────────────────────────────────────────
-/** A named filter set, stored per signed-in user. */
-export type DashFilters = { preset: string; from: string; to: string; vert: string };
+/** A named filter set, stored per signed-in user.
+ *
+ *  `month` is a 'YYYY-MM' key and only means anything when `preset` is 'pick'.
+ *  OPTIONAL because views saved before the Month period existed have no such
+ *  field, and those must keep applying rather than resolving to an empty
+ *  month — see the apply handler in OrderDashboard. */
+export type DashFilters = { preset: string; from: string; to: string; vert: string; month?: string };
 export type SavedView = { id: string; name: string; filters: DashFilters; savedAt: string };
 export const fetchViews = () => get<{ ok: boolean; views: SavedView[] }>('/api/views');
 export const saveView = (name: string, filters: DashFilters) =>
@@ -798,14 +803,17 @@ export type RepRow = {
    *  $21,946, and stranded $28,526 of hers in no month at all. `null` on a peer
    *  row, exactly as the aggregates below are. */
   commissionByCycle?: { month: string; paid: number; payable: number; waiting: number; total: number }[] | null;
-  /** The signed-off, not-yet-paid lines behind the Upcoming paycheck tile, each
-   *  carrying the document it was read from. `null` on a peer row — a rep never
-   *  receives anyone else's pay, and null rather than [] because an empty array
-   *  would be a claim that the peer is owed nothing. */
+  /** The signed-off lines behind the paycheck tile — PAID AND OUTSTANDING
+   *  alike, each carrying the document it was read from and which half it is
+   *  in. Paid ones are here because a settled cycle is still a cycle a rep
+   *  needs to see the detail of. `null` on a peer row — a rep never receives
+   *  anyone else's pay, and null rather than [] because an empty array would be
+   *  a claim that the peer is owed nothing. */
   payLines?: {
     ref: string; patient: string; item: string; prog: string;
     month: string | null; cycle: string; comm: number;
     source: 'workbook' | 'sheet';
+    state: 'paid' | 'due';
     unmatched: boolean; bonus: boolean;
   }[] | null;
   revenue: number | null; commission: number | null; payable: number | null; waiting: number | null;
@@ -880,8 +888,13 @@ export type PiStageOrder = AnalyticsOrder & {
    *              any move, so the UI offers no dropdown for these.
    *  'striven' — the mirrored Stage custom field
    *  'portal'  — moved by hand here
+   *  'status'  — INFERRED from the order's own invoicing, tracking and Striven
+   *              status, because no label reached it (piStageFromStatus). PI
+   *              only, and never where a label, the custom field or a portal
+   *              move said anything. It is evidence, not a tag somebody wrote,
+   *              and the boards say so.
    *  'default' — nothing known; it sits in stage 1 */
-  source?: 'labels' | 'striven' | 'portal' | 'default';
+  source?: 'labels' | 'striven' | 'portal' | 'status' | 'default';
   stageSince: string | null;
   daysInStage: number | null;
   /** true when ageing falls back to the order date because the order has never
@@ -913,6 +926,11 @@ export type PiStages = {
    *  Striven, which is Crystal's call, so this is always empty for a rep. */
   reviewOrders?: PiStageOrder[];
   reviewLabels?: { label: string; reason: 'flagged' | 'unknown'; count: number; boards: PiBoard[] }[];
+  /** Per board, how many of its orders the Striven labels report actually
+   *  reaches. A board with orders and `labelled: 0` has no stage data at all:
+   *  every order falls back to stage 1, which draws as a full, confident and
+   *  entirely false pipeline. The boards read this to say so instead. */
+  labelCoverage?: Record<PiBoard, { orders: number; labelled: number; missing: number }>;
   trackedCount: number; autoFromTracking: boolean;
 };
 export const fetchPiStages = (as?: string | null) =>
