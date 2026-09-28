@@ -7356,6 +7356,173 @@ export async function getPiStages(viewer = null) {
   };
 }
 
+// ── MASTER DATA · INVENTORY ITEMS ────────────────────────────────────────────
+// The "Inventory Items" tab of the Master Data sheet, for Vendors & Items →
+// Items & Catalog. Read by TAB NAME (gviz), so a reordered or re-created tab
+// keeps working; MASTER_DATA_INVENTORY_GID pins it to a gid instead.
+//
+// THE COLUMNS ARE THE SHEET'S. Nothing here names a column: the first row with
+// two or more filled cells is the header and every column under it is passed
+// through, so a column added in the sheet shows up without a code change.
+// Like every other sheet feed, the file must be shared "anyone with the link".
+const MASTER_DATA_ID = () => cfgValue('MASTER_DATA_SHEET_ID', '12-2BpCUY9QevlMmVRr5UbdYD2-8n8hoHkKZ4L22W-oQ');
+const MASTER_DATA_INVENTORY_TAB = () => cfgValue('MASTER_DATA_INVENTORY_TAB', 'Inventory Items');
+// Pinned by gid: the tab is really named "Inventory Items " (trailing space),
+// and gviz answers a name it cannot match with the FIRST tab, not an error.
+const MASTER_DATA_INVENTORY_GID = () => cfgValue('MASTER_DATA_INVENTORY_GID', '0');
+
+export async function getInventoryItems() {
+  const id = await MASTER_DATA_ID();
+  const tab = await MASTER_DATA_INVENTORY_TAB();
+  const gid = await MASTER_DATA_INVENTORY_GID();
+  return cached('derived:inventory-items', async () => {
+    const url = gid
+      ? `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
+      : `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(tab)}`;
+    const res = await fetch(url).catch(() => null);
+    const csv = res?.ok ? await res.text() : '';
+    // A private sheet answers 401, or 200 with Google's sign-in page.
+    if (!csv || /^\s*<(!doctype|html)/i.test(csv)) {
+      return { ok: false, configured: true, tab, columns: [], moneyCols: [], rows: [],
+        note: `Master Data "${tab}" tab is unreachable. Share the sheet as "Anyone with the link can view".` };
+    }
+    const all = parseCsvRows(csv).map((r) => r.map((c) => String(c ?? '').trim()));
+    const hIdx = all.findIndex((r) => r.filter(Boolean).length >= 2);
+    if (hIdx < 0) return { ok: false, configured: true, tab, columns: [], moneyCols: [], rows: [], note: `"${tab}" tab has no header row.` };
+    // Trailing unnamed columns are the sheet's empty grid, not data.
+    const header = all[hIdx];
+    let width = header.length;
+    while (width > 0 && !header[width - 1]) width -= 1;
+    const columns = header.slice(0, width).map((h, i) => h || `Column ${i + 1}`);
+    const rows = all.slice(hIdx + 1)
+      .map((r) => columns.map((_, i) => r[i] ?? ''))
+      .filter((r) => r.some(Boolean));
+    // A column is money when its header says so, or when most filled cells
+    // carry a "$". The client formats and sorts those numerically.
+    const moneyCols = columns.map((h, i) => {
+      if (/price|cost|msrp|amount|rate|value|fee|charge|reimb|shipping|handling/i.test(h)) return i;
+      const vals = rows.map((r) => r[i]).filter(Boolean);
+      return vals.length && vals.filter((v) => /^-?\$/.test(v)).length / vals.length > 0.6 ? i : -1;
+    }).filter((i) => i >= 0);
+    return { ok: true, configured: true, tab, columns, moneyCols, rows, count: rows.length };
+  });
+}
+
+// ── MASTER DATA · REPS WITH ITS CLINICS & LAW FIRMS ──────────────────────────
+// Each rep's territory: the clinics they cover and the law firms under each.
+// Admin → every rep. Rep → ONLY the blocks that are theirs, cut here on the
+// server, so another rep's territory never reaches their browser.
+//
+// THE SHEET NAMES A REP ONCE PER BLOCK. "Rep Name" is filled on a block's first
+// row and blank below it, so it is carried down until the next filled cell.
+//
+// WHICH BLOCKS ARE A VIEWER'S. The sheet's labels are not the roster's names:
+// "Maverick Medical- Jillian Colin", "Christy Tan- CVT Medical". A label is
+// split on "-" and "/" and any piece equal to one of the viewer's identities
+// (identitiesOf) claims the block; so does the viewer's login email appearing
+// in the block's email cell. Labels that match neither way are mapped in
+// REP_TERRITORY_ALIASES (app_config JSON, {"<roster name>": ["<sheet label>"]}),
+// on top of the defaults below.
+//
+// A LEAD SEES THEIR SUB-REPS' BLOCKS. "Maylon Sanders- Denise Zavala" splits to
+// "Maylon Sanders", so Maylon sees it. The viewer's own name is never split, so
+// "Maylon Sanders- David/Dino" does not inherit all of Maylon's territory.
+const MASTER_DATA_REPS_GID = () => cfgValue('MASTER_DATA_REPS_GID', '572253785');
+const REP_TERRITORY_ALIASES_DEFAULT = {
+  'Alle Ann Dubberley': ['Alle Anne Dubberly- Maverick Medical'],
+  'Maylon Sanders- David/Dino': ['David Berlanga/Dino Maldonado- Maylon Sanders'],
+};
+const nameKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+async function repTerritoryAliases() {
+  const out = new Map();
+  const add = (obj) => { for (const [k, v] of Object.entries(obj || {})) out.set(nameKey(k), [...(out.get(nameKey(k)) ?? []), ...[].concat(v)]); };
+  add(REP_TERRITORY_ALIASES_DEFAULT);
+  try { add(JSON.parse(String(await cfgValue('REP_TERRITORY_ALIASES', '')) || '{}')); } catch { /* malformed JSON: defaults only */ }
+  return out;
+}
+
+async function readRepTerritories() {
+  const id = await MASTER_DATA_ID();
+  const gid = await MASTER_DATA_REPS_GID();
+  return cached('derived:rep-territories', async () => {
+    const res = await fetch(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`).catch(() => null);
+    const csv = res?.ok ? await res.text() : '';
+    if (!csv || /^\s*<(!doctype|html)/i.test(csv)) {
+      return { ok: false, reps: [], note: 'Master Data "Reps With Its Clinics & Law Firms" tab is unreachable. Share the sheet as "Anyone with the link can view".' };
+    }
+    const all = parseCsvRows(csv).map((r) => r.map((c) => String(c ?? '').trim()));
+    const hIdx = all.findIndex((r) => r.some((c) => /clinic/i.test(c)) && r.some((c) => /rep/i.test(c)));
+    if (hIdx < 0) return { ok: false, reps: [], note: 'Reps tab has no Clinic / Rep Name header.' };
+    const hdr = all[hIdx];
+    const col = (re) => hdr.findIndex((h) => re.test(h));
+    const cClinic = col(/clinic/i), cFirm = col(/law\s*firm/i), cRep = col(/rep\s*name/i), cEmail = col(/e-?mail/i);
+    const byLabel = new Map();
+    let cur = null;
+    for (const r of all.slice(hIdx + 1)) {
+      const label = cRep >= 0 ? r[cRep] : '';
+      if (label) {
+        cur = byLabel.get(label) ?? { rep: label, emails: new Set(), clinics: new Map() };
+        byLabel.set(label, cur);
+      }
+      if (!cur) continue;
+      for (const e of String(cEmail >= 0 ? r[cEmail] : '').split(/[;,\s]+/)) if (e.includes('@')) cur.emails.add(e.toLowerCase());
+      const clinic = cClinic >= 0 ? r[cClinic] : '';
+      const firm = cFirm >= 0 ? r[cFirm] : '';
+      if (!clinic && !firm) continue;
+      const key = clinic || '(clinic not listed)';
+      if (!cur.clinics.has(key)) cur.clinics.set(key, new Set());
+      if (firm) cur.clinics.get(key).add(firm);
+    }
+    // Sets → arrays. The sheet repeats a firm under a clinic freely; one entry each.
+    const reps = [...byLabel.values()].map((b) => {
+      const clinics = [...b.clinics.entries()].map(([name, firms]) => ({
+        name,
+        lawFirms: [...firms].sort((a, z) => a.localeCompare(z)).map((f) => ({ name: f, doNotAccept: /do not accept/i.test(f) })),
+      }));
+      return {
+        rep: b.rep,
+        emails: [...b.emails],
+        clinics,
+        clinicCount: clinics.filter((c) => c.name !== '(clinic not listed)').length,
+        lawFirmCount: new Set(clinics.flatMap((c) => c.lawFirms.map((f) => f.name.toLowerCase()))).size,
+      };
+    });
+    return { ok: true, reps };
+  });
+}
+
+/**
+ * @param {{email?:string, repName?:string|null, role?:string}|null} viewer
+ * @param {{fresh?:boolean}} opts `fresh` RE-READS THE SHEET instead of serving
+ *   the cached copy (up to CACHE_TTL old), so the page's Refresh shows an edit
+ *   made in the sheet a moment ago.
+ */
+export async function getRepTerritories(viewer = null, { fresh = false } = {}) {
+  if (fresh) _cache.delete('derived:rep-territories');
+  const base = await readRepTerritories();
+  const isAdmin = viewer?.role === 'admin';
+  const totals = (reps) => ({
+    reps: reps.length,
+    clinics: new Set(reps.flatMap((r) => r.clinics.map((c) => c.name)).filter((n) => n !== '(clinic not listed)')).size,
+    lawFirms: new Set(reps.flatMap((r) => r.clinics.flatMap((c) => c.lawFirms.map((f) => f.name.toLowerCase())))).size,
+  });
+  if (!base.ok) return { ok: false, scope: isAdmin ? 'all' : 'own', reps: [], totals: totals([]), note: base.note };
+  if (isAdmin) return { ok: true, scope: 'all', reps: base.reps, totals: totals(base.reps) };
+
+  const email = String(viewer?.email ?? '').toLowerCase();
+  const own = new Set([...identitiesOf(viewer?.repName)].map(nameKey));
+  const aliases = await repTerritoryAliases();
+  for (const n of [...own]) for (const a of aliases.get(n) ?? []) own.add(nameKey(a));
+  const isMine = (r) => (email && r.emails.includes(email))
+    || [r.rep, ...r.rep.split(/\s*[-/]\s*/)].map(nameKey).some((k) => k && own.has(k));
+  const reps = own.size || email ? base.reps.filter(isMine) : [];
+  return {
+    ok: true, scope: 'own', repName: viewer?.repName ?? null, reps, totals: totals(reps),
+    note: reps.length ? undefined : 'No territory is assigned to you in the Master Data sheet yet.',
+  };
+}
+
 export const ROUTES = {
   '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
   '/api/reports/vendor-items': getReportVendorItems,
@@ -7376,6 +7543,7 @@ export const ROUTES = {
   '/api/customers': getCustomers,
   '/api/vendors': getVendors,
   '/api/items': getItems,
+  '/api/inventory-items': getInventoryItems,
   '/api/trends': getTrends,
   '/api/payments': getPayments,
   '/api/billpayments': getBillPayments,

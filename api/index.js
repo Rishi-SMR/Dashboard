@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
 import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
@@ -153,6 +153,13 @@ export default async function handler(req, res) {
       const me = await getMe({ user: currentUser });
       if (me?.role !== 'admin') return res.status(403).json({ error: 'admin only' });
       return res.status(200).json(await getCacheHealth());
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  // ---- rep territories (Master Data) — all reps for an admin, own for a rep ----
+  if (pathname === '/api/rep-territories') {
+    try {
+      return res.status(200).json(await getRepTerritories(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as')), { fresh: url.searchParams.get('fresh') === '1' }));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
