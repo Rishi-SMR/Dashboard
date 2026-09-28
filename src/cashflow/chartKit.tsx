@@ -202,6 +202,27 @@ export function useSyncAgo(lastSync: number | null): string {
 }
 const trunc = (v: string, n = 18) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 
+/** A category tick that wraps onto at most two lines within `width` px, for
+ *  RankBar's labelWidth mode. ~6.4px per character at 11.5px. */
+function WrapTick({ x, y, payload, width }: { x: number; y: number; payload: { value: string }; width: number }) {
+  const max = Math.max(8, Math.floor((width - 10) / 6.4));
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of String(payload.value ?? '').split(/\s+/)) {
+    if (!cur) cur = w;
+    else if ((cur + ' ' + w).length <= max) cur += ' ' + w;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  const shown = lines.length > 2 ? [lines[0], trunc(lines.slice(1).join(' '), max)] : lines;
+  return (
+    <text x={x} y={y} textAnchor="end" fill={C.sub} fontSize={11.5}>
+      <title>{payload.value}</title>
+      {shown.map((l, i) => <tspan key={i} x={x - 4} dy={i === 0 ? (shown.length > 1 ? -3 : 4) : 13}>{l}</tspan>)}
+    </text>
+  );
+}
+
 // Compact status/category cards: a small, scannable alternative to a bar chart
 // for a handful of categories (e.g. patients/vendors by status). Colour-coded by
 // status tone; pass onSelect to make each card a clickable drill.
@@ -467,7 +488,14 @@ export function BarList({ data, money = true, showPct = true, onSelect }: {
 // Grouped vertical bars per month: e.g. revenue vs expenses side-by-side.
 // Horizontal ranked bar: the ONLY chart for category/status/ranking data (no pies).
 // Pass onSelect to make bars clickable (drill).
-export function RankBar({ data, money = false, colorAt, onSelect }: { data: { name: string; value: number }[]; money?: boolean; colorAt?: (i: number) => string; onSelect?: (name: string) => void }) {
+/**
+ * `labelWidth` opts into LABEL EVERY BAR: recharts otherwise drops alternate
+ * category ticks once they would overlap, which on a dozen long names (Items by
+ * Therapy) leaves half the bars unnamed. With it set, no tick is skipped and a
+ * long name wraps onto two lines inside that width instead of being cut to 18
+ * characters. Unset, the chart behaves exactly as before.
+ */
+export function RankBar({ data, money = false, colorAt, onSelect, labelWidth }: { data: { name: string; value: number }[]; money?: boolean; colorAt?: (i: number) => string; onSelect?: (name: string) => void; labelWidth?: number }) {
   const max = Math.max(1, ...data.map((d) => d.value));
   const domainMax = money ? max * 1.15 : Math.max(1, Math.ceil(max * 1.12));
   const color = colorAt ?? ((i: number) => SERIES[i % SERIES.length]);
@@ -477,7 +505,10 @@ export function RankBar({ data, money = false, colorAt, onSelect }: { data: { na
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 60, left: 4, bottom: 4 }}>
           <CartesianGrid {...gridProps} horizontal={false} vertical />
           <XAxis type="number" domain={[0, domainMax]} {...axisProps} tickFormatter={money ? compactMoney : undefined} allowDecimals={false} />
-          <YAxis type="category" dataKey="name" width={132} tickLine={false} axisLine={false} tick={{ fill: C.sub, fontSize: 11.5 }} tickFormatter={(v: string) => trunc(v)} />
+          {labelWidth
+            ? <YAxis type="category" dataKey="name" width={labelWidth} interval={0} tickLine={false} axisLine={false}
+                tick={(p: { x: number; y: number; payload: { value: string } }) => <WrapTick {...p} width={labelWidth} />} />
+            : <YAxis type="category" dataKey="name" width={132} tickLine={false} axisLine={false} tick={{ fill: C.sub, fontSize: 11.5 }} tickFormatter={(v: string) => trunc(v)} />}
           <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.10)' }} formatter={(v: number | string) => (money ? formatCurrency(Number(v)) : String(v))} />
           <Bar {...NOANIM} dataKey="value" radius={[0, 6, 6, 0]} barSize={18} cursor={onSelect ? 'pointer' : undefined} onClick={onSelect ? (p: any) => onSelect(p?.name) : undefined}>
             {data.map((_, i) => <Cell key={i} fill={color(i)} />)}
@@ -531,7 +562,8 @@ export function DrillModal({ title, sub, summary, columns, rows, total, onClose 
    * cashflow.css gives them a house style to build in.
    */
   summary?: ReactNode;
-  columns: { key: string; label: string; num?: boolean }[];
+  /** `left` opts one column out of the dialog's centring (e.g. a name list). */
+  columns: { key: string; label: string; num?: boolean; left?: boolean }[];
   rows: Record<string, ReactNode>[];
   /**
    * COLUMN TOTALS, PINNED TO THE FOOT OF THE DIALOG. Keyed by column; only the
@@ -564,7 +596,7 @@ export function DrillModal({ title, sub, summary, columns, rows, total, onClose 
           <div className="section" style={{ margin: 0 }}>
             <div className="table-wrap">
               <table className="data-table">
-                <thead><tr>{columns.map((c) => <th key={c.key} className={c.num ? 'num' : undefined}>{c.label}</th>)}</tr></thead>
+                <thead><tr>{columns.map((c) => <th key={c.key} className={c.left ? 'left' : c.num ? 'num' : undefined}>{c.label}</th>)}</tr></thead>
                 <tbody>
                   {rows.length === 0 && <tr><td colSpan={columns.length} style={{ color: C.muted }}>No rows.</td></tr>}
                   {/* `rowClass` is a RESERVED KEY, not a column: a row can ask to be
@@ -574,7 +606,7 @@ export function DrillModal({ title, sub, summary, columns, rows, total, onClose 
                       rowClass. */}
                   {rows.map((r, i) => (
                     <tr key={i} className={typeof r.rowClass === 'string' ? r.rowClass : undefined}>
-                      {columns.map((c) => <td key={c.key} className={c.num ? 'num' : undefined}>{r[c.key]}</td>)}
+                      {columns.map((c) => <td key={c.key} className={c.left ? 'left' : c.num ? 'num' : undefined}>{r[c.key]}</td>)}
                     </tr>
                   ))}
                 </tbody>

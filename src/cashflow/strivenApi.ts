@@ -397,6 +397,10 @@ export const fetchStrivenPO = () => get<PoResult>('/api/po');
 export const fetchStrivenCustomers = () => get<CustomersResult>('/api/customers');
 export const fetchStrivenVendors = () => get<VendorsResult>('/api/vendors');
 export const fetchStrivenItems = () => get<ItemsResult>('/api/items');
+/** Master Data sheet → "Inventory Items" tab. Columns are the sheet's own
+ *  header row; `moneyCols` indexes the ones to format and sort as dollars. */
+export type InventoryItemsResult = { ok: boolean; configured: boolean; tab: string; columns: string[]; moneyCols: number[]; rows: string[][]; count?: number; note?: string };
+export const fetchInventoryItems = () => get<InventoryItemsResult>('/api/inventory-items');
 export const fetchStrivenTrends = () => get<TrendsResult>('/api/trends');
 export const fetchStrivenPODetail = (id: number) => get<PoDetail>(`/api/po/${id}`);
 export const fetchStrivenSODetail = (id: number) => get<SoDetail>(`/api/so/${id}`);
@@ -942,6 +946,18 @@ export const setPiStage = (soId: string, stage: PiStageName) =>
  *: never from a cookie the browser could set. */
 export type Me = { email: string | null; repName: string | null; role: 'rep' | 'admin' };
 export const fetchMe = () => get<Me>('/api/me');
+/** Master Data → "Reps With Its Clinics & Law Firms". An admin gets every rep
+ *  (`scope: 'all'`); a rep gets only their own blocks, cut on the server. */
+export type TerritoryLawFirm = { name: string; doNotAccept: boolean };
+export type TerritoryRep = { rep: string; emails: string[]; clinics: { name: string; lawFirms: TerritoryLawFirm[] }[]; clinicCount: number; lawFirmCount: number };
+export type RepTerritories = { ok: boolean; scope: 'all' | 'own'; repName?: string | null; reps: TerritoryRep[]; totals: { reps: number; clinics: number; lawFirms: number }; note?: string };
+/** `fresh` re-reads the sheet on the server instead of its cached copy. */
+export const fetchRepTerritories = (as?: string | null, fresh = false) => {
+  const qs = new URLSearchParams();
+  if (as) qs.set('as', as);
+  if (fresh) qs.set('fresh', '1');
+  return get<RepTerritories>(`/api/rep-territories${qs.size ? `?${qs}` : ''}`);
+};
 /** Add a tracking row. Last name goes in the POST body (never the URL). */
 export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);
 export const trackingRemove = (id: string) => get<{ ok: boolean }>(`/api/tracking?action=remove&id=${encodeURIComponent(id)}`);

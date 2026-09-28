@@ -1616,6 +1616,9 @@ code {
    alone would break the day either block moves. */
 .drill .data-table .num,
 .drill .data-table th.num { text-align: center; width: auto; }
+/* Opt-out for a name column that reads better as a ragged-right list. */
+.drill .data-table th.left,
+.drill .data-table td.left { text-align: left; }
 
 /* ---- Uniform chart grid + summary stat tiles (Overview & tabs) ---- */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
@@ -1630,6 +1633,8 @@ code {
 .main > .chart-card { margin-bottom: 14px !important; }
 .chart-card { padding: var(--sp-6); }
 .chart-card .chart-box { width: 100%; height: 260px; }
+/* Ranked bars with a dozen categories (Items by Therapy) need the room. */
+.chart-card.rank-tall .chart-box { height: 380px; }
 
 /* ── ONE PERIOD, DRAWN AS A PROPORTION ──────────────────────────────────────
    The single-month form of BarsLine. It takes the chart box's own height so the
