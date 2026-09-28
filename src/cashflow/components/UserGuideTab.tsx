@@ -78,7 +78,7 @@ type Entry = {
   locs: Loc[];
 };
 
-const CATS = ['Programmes', 'Receivables', 'Payables', 'Orders', 'Commission', 'Accounting', 'Data & status'] as const;
+const CATS = ['Programmes', 'Receivables', 'Payables', 'Orders', 'Commission', 'Territory', 'Catalog', 'Accounting', 'Data & status'] as const;
 
 const GLOSSARY: Entry[] = [
   {
@@ -267,7 +267,8 @@ const GLOSSARY: Entry[] = [
     note: 'Not the same as Striven’s status, which only ever says In Progress or Completed. An order with no label cannot be placed past stage one and is listed for review instead of being guessed at.',
     locs: [
       { view: 'orders', tab: 'Orders', section: 'All Sales Orders (label column)' },
-      { view: 'repspipeline', tab: 'PI & PIP', section: 'Orders needing review' },
+      { view: 'repspipeline', tab: 'PI Pipeline · PI & PIP', section: 'Stage drawer (Striven labels column) · Review board for admins' },
+      { view: 'vapipeline', tab: 'VA Pipeline', section: 'Stage drawer (Striven labels column)' },
       { view: 'overview', tab: 'Overview', section: 'Order status by Striven label' },
     ],
   },
@@ -286,7 +287,6 @@ const GLOSSARY: Entry[] = [
     locs: [
       { view: 'pl', tab: 'P&L', section: 'Income Statement' },
       { view: 'overview', tab: 'Overview', section: 'Cash Flow Overview (Profit · Margin)' },
-      { view: 'reps', tab: 'Dashboard', section: 'Business Growth' },
     ],
   },
   {
@@ -394,10 +394,11 @@ const GLOSSARY: Entry[] = [
   {
     term: 'Stage', cat: 'Orders',
     def: 'Where an order sits on its programme’s journey - Order received, LOP requested, Waiting for settlement, and so on.',
-    note: 'Seeded from the order’s Striven LABEL and then overridable by hand. A manual move is stored in this portal and does NOT write back to Striven. PI, PIP and VA each have their own stage list.',
+    basis: 'PI   Order received → LOP requested → Dispense/Shipped → Delivered → Waiting for first payment → Waiting for settlement\nPIP  Order received → Waiting on PIP Payment → Bill settled\nVA   Order received → Dispense/Shipped → Delivered → Waiting on VA payment → Paid',
+    note: 'Set from the order’s Striven LABELS first, then Striven’s Stage field, then a stage saved in this portal; with none of those it sits at stage one (“Stage set by” shows which). A manual move is stored in this portal and does NOT write back to Striven. Labels such as hold, attorney denied or case dropped carry no stage and go to the admin review list.',
     locs: [
-      { view: 'repspipeline', tab: 'PI & PIP', section: 'The stage columns' },
-      { view: 'vapipeline', tab: 'VA Pipeline', section: 'The stage columns' },
+      { view: 'repspipeline', tab: 'PI Pipeline · PI & PIP', section: 'The stage cards · stage drawer (Stage set by)' },
+      { view: 'vapipeline', tab: 'VA Pipeline', section: 'The stage cards · stage drawer (Stage set by)' },
     ],
   },
   {
@@ -459,6 +460,191 @@ const GLOSSARY: Entry[] = [
       { view: 'orders', tab: 'Orders', section: 'Order Value by Type' },
       { view: 'arsheet', tab: 'AR Register', section: 'Invoice Book' },
     ],
+  },
+  {
+    term: 'Account', aka: ['Total accounts', 'accounts'], cat: 'Orders',
+    def: 'On the rep boards, the payer an order is billed to - a law firm on PI, the VA, TriCare - counted once however many orders it has.',
+    basis: 'Total accounts = distinct accounts on the orders in scope\n“Unassigned” and test payers excluded',
+    note: 'The same thing the finance side calls the PAYER. The By account table ranks them by orders; Min orders and the search box narrow it.',
+    locs: [
+      { view: 'repsorders', tab: 'My Orders · Orders & Revenue', section: 'Total accounts tile · By account table' },
+    ],
+  },
+  {
+    term: 'Commission state', aka: ['Paid', 'Payable / Due', 'Waiting', 'Paid + Due', 'owed'], cat: 'Commission',
+    def: 'Where a rep’s commission stands: already paid out, signed off and due in a coming run, or still waiting on a cycle that has not closed.',
+    basis: 'Paid        signed-off line, month on or before the paid-through month\nPayable/Due  signed-off line not yet paid\nWaiting     a month with no payout run yet (still being booked)\nPaid + Due  paid + payable',
+    note: 'The money comes from the signed-off reconciliation sheet, not from the order-by-order calculation. Months are PAYOUT CYCLES, not order dates, and the run on the 15th pays the month before. The “Commission” column and the “Your commission” tile are the PAID figure.',
+    locs: [
+      { view: 'commission', tab: 'My Commission · Commission', section: 'Commission state card · the table · your own row’s pop-up' },
+      { view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Your commission tile', differs: 'Paid to date only - what is due next is on the Upcoming paycheck tile.' },
+    ],
+  },
+  {
+    term: 'Delivered / Pending orders', aka: ['Delivered orders', 'Pending orders', 'completed'], cat: 'Orders',
+    def: 'Delivered = the order is marked Completed in Striven. Pending = everything else still live.',
+    basis: 'Delivered = status is Completed\nPending = not completed and not cancelled',
+    note: 'Delivered means COMPLETED IN STRIVEN, not carrier-confirmed delivery - for the carrier’s own status see the tracking number.',
+    locs: [{ view: 'repsorders', tab: 'My Orders · Orders & Revenue', section: 'Delivered orders · Pending orders tiles' }],
+  },
+  {
+    term: 'Devices', aka: ['units', 'Your devices', 'Total devices'], cat: 'Orders',
+    def: 'How many device units went out on the orders counted - one order can carry several.',
+    basis: 'Σ units on those orders\n(quantity from the patient-items report)',
+    locs: [
+      { view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Your devices tile · Your growth' },
+      { view: 'repsorders', tab: 'My Orders · Orders & Revenue', section: 'Total devices tile · By device type' },
+    ],
+  },
+  {
+    term: 'In stage', aka: ['days in stage', 'avg / oldest', 'est.'], cat: 'Orders',
+    def: 'How long an order has been at its current pipeline stage.',
+    basis: 'measured from the order date\n(from the day it was moved, where the portal moved it - marked “est.” otherwise)\ncard shows the average and the oldest of the orders standing there',
+    note: 'An order more than 14 days at a stage is shown in red.',
+    locs: [
+      { view: 'repspipeline', tab: 'PI Pipeline · PI & PIP', section: 'Stage cards · stage drawer (In stage column)' },
+      { view: 'vapipeline', tab: 'VA Pipeline', section: 'Stage cards · stage drawer (In stage column)' },
+    ],
+  },
+  {
+    term: 'Leaderboard', aka: ['rank', 'milestone', 'podium'], cat: 'Orders',
+    def: 'The reps ranked by orders booked, for a chosen month or all time.',
+    basis: 'rank = orders booked in the period, cancelled excluded\nreps with no orders in the period are left off\nmilestone badges at 25 · 50 · 100 · 150 orders, always all-time',
+    note: 'Order COUNTS only - no rep sees another rep’s revenue or pay. Tap your own row for your breakdown by vertical and by device.',
+    locs: [{ view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Leaderboard', differs: 'Shown to reps; an admin’s dashboard has the team overview instead.' }],
+  },
+  {
+    term: 'On hold', aka: ['HOLD', 'hold'], cat: 'Commission',
+    def: 'An order carrying a HOLD label in Striven. It earns nothing while it holds.',
+    basis: 'label or status contains “hold” / “on hold”',
+    note: 'Held orders are left out of what is payable and counted in the “orders on hold are not payable” line under the commission card. Remove the label in Striven and the order becomes payable in the normal way. On the pipelines a HOLD order has no stage and goes to the admin review list.',
+    locs: [{ view: 'commission', tab: 'My Commission · Commission', section: 'Commission state card (All months)' }],
+  },
+  {
+    term: 'Order count', aka: ['Your orders', 'Total orders', 'orders'], cat: 'Orders',
+    def: 'How many sales orders are credited to the rep.',
+    basis: 'count of the rep’s orders · cancelled excluded\n(cancelled = status cancel / void / lost / denied / rejected)\nDEMO and $0 orders are still counted',
+    note: 'All-time on My Dashboard; the chosen period on My Orders. The Commission page counts differently - it leaves out DEMO and $0 orders because they earn nothing - so its order count can be lower.',
+    locs: [
+      { view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Your orders tile · Leaderboard' },
+      { view: 'repsorders', tab: 'My Orders · Orders & Revenue', section: 'Total orders tile · Figures by vertical' },
+      { view: 'commission', tab: 'My Commission · Commission', section: 'Orders column', differs: 'Only orders that can earn commission: DEMO and $0-value orders excluded.' },
+    ],
+  },
+  {
+    term: 'Per-device rate', aka: ['commission rate', 'device rate', 'units × rate'], cat: 'Commission',
+    def: 'What a rep earns for each unit of a device, set per device and programme.',
+    basis: 'order commission = units × per-device rate\n(a few reps are on their own schedule, e.g. a share of PI billed)',
+    note: 'Only TriCare, VA, PI and DOL orders earn; DEMO never does. A device with no confirmed rate uses a fallback and is counted as a rate gap.',
+    locs: [{ view: 'commission', tab: 'My Commission · Commission', section: 'Vertical tiles · your own row’s order-by-order list' }],
+  },
+  {
+    term: 'Standing vs passed through', aka: ['standing here', 'passed through'], cat: 'Orders',
+    def: 'Standing = orders whose furthest stage is this one right now. Passed through = orders that have reached this stage and moved on.',
+    basis: 'stage = the furthest stage the order’s Striven labels attest to\nthe standing counts across the cards add up to the board total',
+    locs: [
+      { view: 'repspipeline', tab: 'PI Pipeline · PI & PIP', section: 'Stage cards (“+ N passed through”) · drawer toggle' },
+      { view: 'vapipeline', tab: 'VA Pipeline', section: 'Stage cards · drawer toggle' },
+    ],
+  },
+  {
+    term: 'Sub-rep', aka: ['supervisor', 'team lead'], cat: 'Orders',
+    def: 'A rep who sells under another rep. The lead sees their sub-reps’ volume.',
+    note: 'VOLUME ONLY - orders, devices, accounts and months. A lead never sees a sub-rep’s pay.',
+    locs: [{ view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Leaderboard · “N sub-reps · view”' }],
+  },
+  {
+    term: 'Upcoming paycheck', aka: ['Paid this cycle', 'paycheck'], cat: 'Commission',
+    def: 'Commission that is signed off and will be paid in the next payout run.',
+    basis: 'all time: signed-off commission not yet paid\nmonth picked: that month’s payout run, which pays the month BEFORE',
+    note: 'The run is on the 15th of the following month. Once a cycle is settled the tile turns into “Paid this cycle”. Tap it for the line-by-line list behind the figure.',
+    locs: [{ view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Upcoming paycheck tile · its pop-up' }],
+  },
+  {
+    term: 'Vertical', aka: ['programme', 'program'], cat: 'Programmes',
+    def: 'The programme an order or item belongs to: PI, VA, TriCare, DOL or DEMO (the catalog also has Inventory and Replacement).',
+    note: 'Decides who pays and how - see PI, VA and TriCare - and whether an order earns commission: only TriCare, VA, PI and DOL do.',
+    locs: [
+      { view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Leaderboard vertical legend · your breakdown' },
+      { view: 'repsorders', tab: 'My Orders · Orders & Revenue', section: 'Vertical filter · Figures by vertical' },
+      { view: 'commission', tab: 'My Commission · Commission', section: 'Vertical tiles' },
+      { view: 'catalog', tab: 'Vendors & Items › Items & Catalog', section: 'Vertical chips · Verticals tile' },
+    ],
+  },
+  {
+    term: 'Your growth', aka: ['growth', 'month over month', 'Reps growth'], cat: 'Orders',
+    def: 'How a rep’s book has moved over the last twelve months.',
+    basis: 'orders and devices by ORDER month\ncommission by PAYOUT cycle (matching the Commission page)',
+    locs: [{ view: 'reps', tab: 'My Dashboard · Dashboard', section: 'Your growth', differs: 'An admin sees “Reps growth”, with by-rep and by-vertical splits.' }],
+  },
+  {
+    term: 'Clinic', aka: ['practice', 'facility', 'VA medical center'], cat: 'Territory',
+    def: 'A practice or VA facility a rep covers, as listed in the Clinic column of the Master Data sheet’s Reps tab.',
+    basis: 'Clinics tile = distinct clinic names across the reps shown',
+    note: 'VA facilities carry no law firms - VA is billed to the VA, not settled through a claim - so a VA rep’s clinics show “no law firms”, which is correct rather than missing. One clinic can sit under more than one rep.',
+    locs: [
+      { view: 'repsterritory', tab: 'My Territory · Reps & Territories', section: 'Clinics tile · the Clinic column of each rep’s list' },
+    ],
+  },
+  {
+    term: 'Cost per device', aka: ['device cost', 'shipping & handling', 'S&H'], cat: 'Catalog',
+    def: 'What one unit of an item costs the business, as entered in the Master Data sheet, with shipping & handling in its own column.',
+    note: 'Read from the sheet, not from Striven’s item price. A blank cell shows as “–”, never as $0 - an unpriced item and a free one are different things.',
+    locs: [{ view: 'catalog', tab: 'Vendors & Items › Items & Catalog', section: 'Inventory Items table · Cost Per Device and Shipping & Handling columns' }],
+  },
+  {
+    term: 'Inventory item', aka: ['item', 'device', 'SKU', 'catalog item'], cat: 'Catalog',
+    def: 'One device or supply the business sells, from the Inventory Items tab of the Master Data sheet: its name, vertical, product line, therapy, body part, notes and cost.',
+    basis: 'Items tile = rows in the tab · every column the sheet has is shown',
+    note: 'The catalog is read from the sheet, not Striven, and the table takes its columns from the sheet’s header row - a column added there appears here without a code change. The same device is usually listed once per vertical (a PI, a VA and a DEMO version).',
+    locs: [{ view: 'catalog', tab: 'Vendors & Items › Items & Catalog', section: 'Items tile · Inventory Items · Master Data' }],
+  },
+  {
+    term: 'Law firm', aka: ['attorney', 'referring firm'], cat: 'Territory',
+    def: 'The personal-injury law firm handling a patient’s claim, listed under the clinic it refers through.',
+    basis: 'Law Firms tile = distinct firm names, case-insensitive\n(a firm repeated in the sheet, or under two clinics, counts once)',
+    note: 'On PI this is also the PAYER - the bill settles out of the claim the firm is running. A firm the sheet marks “DO NOT ACCEPT ORDERS” is shown in red wherever it appears.',
+    locs: [
+      { view: 'repsterritory', tab: 'My Territory · Reps & Territories', section: 'Law Firms tile · the Law Firm column of each rep’s list' },
+      { view: 'receivables', tab: 'AR / AP', section: 'Top Customers by Balance', differs: 'Here the firm appears as the payer on PI invoices, not as a territory contact.' },
+    ],
+  },
+  {
+    term: 'Master Data sheet', aka: ['master data', 'Google Sheet'], cat: 'Data & status',
+    def: 'The company’s own Google Sheet of reference lists, read directly by the portal: the Inventory Items tab (the catalog) and the Reps With Its Clinics & Law Firms tab (territories).',
+    note: 'The portal reads it, never writes to it - fix a value in the sheet, not here. The server keeps a copy for up to five minutes; the Refresh button on My Territory re-reads the sheet on the spot. The sheet must stay shared as “Anyone with the link can view”, or both screens show an unreachable notice.',
+    locs: [
+      { view: 'catalog', tab: 'Vendors & Items › Items & Catalog', section: 'Page header · every tile and table' },
+      { view: 'repsterritory', tab: 'My Territory · Reps & Territories', section: 'Page header · Refresh' },
+    ],
+  },
+  {
+    term: 'Needs review', cat: 'Catalog',
+    def: 'An inventory item someone has left a note on in the Master Data sheet - a spelling to fix, a therapy to confirm, a duplicate to check.',
+    basis: 'count of items whose Notes cell is filled in',
+    note: 'The flag is the sheet’s own Notes column; clearing the note there clears the flag here.',
+    locs: [{ view: 'catalog', tab: 'Vendors & Items › Items & Catalog', section: 'Needs Review tile · its pop-up' }],
+  },
+  {
+    term: 'Product line', aka: ['device family', 'brand'], cat: 'Catalog',
+    def: 'The device family an item belongs to - Genesys, SofPulse, ManaRay, 4 Stim and so on - regardless of which vertical it is sold under.',
+    basis: 'distinct values of the Product Line column',
+    locs: [{ view: 'catalog', tab: 'Vendors & Items › Items & Catalog', section: 'Items tile (“product lines”) · Product Line column' }],
+  },
+  {
+    term: 'Territory', aka: ['my territory', 'rep territory', 'reps & territories'], cat: 'Territory',
+    def: 'The clinics a rep covers and the law firms under each, from the Reps tab of the Master Data sheet.',
+    note: 'A rep sees ONLY their own territory; everyone else’s is removed on the server, not hidden on screen. The sheet names a rep once per block, so each block runs until the next name. A lead also sees blocks that carry their name (e.g. “David Berlanga/Dino Maldonado- Maylon Sanders” is Maylon’s too). If a rep’s page is empty, their login is not matched to a block in the sheet - fix the name in the sheet or ask an admin to map it.',
+    locs: [
+      { view: 'repsterritory', tab: 'My Territory · Reps & Territories', section: 'The whole page', differs: 'An admin sees every rep, with a search; a rep sees their own blocks only.' },
+    ],
+  },
+  {
+    term: 'Therapy / Treatment', aka: ['therapy', 'treatment', 'modality'], cat: 'Catalog',
+    def: 'The clinical category an item serves - PEMF Therapy, Electrical Stimulation, Red Light / Near-Infrared, Orthotic Bracing and so on.',
+    basis: 'Items by Therapy / Treatment chart = item count per therapy\nfollows the Vertical filter chips',
+    note: 'The chart’s bars are clickable and filter the list. The Therapies pop-up always counts across the whole sheet, even when a vertical is picked.',
+    locs: [{ view: 'catalog', tab: 'Vendors & Items › Items & Catalog', section: 'Therapies tile · Items by Therapy / Treatment chart' }],
   },
 ];
 

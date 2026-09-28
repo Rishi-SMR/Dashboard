@@ -39,6 +39,8 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   // pair; the shield is what says which programme — a service badge, not a
   // second unrelated icon.
   vapipeline: svg(<><rect x="2.5" y="7" width="4.5" height="12" rx="1.3" /><rect x="8.5" y="7" width="4.5" height="8" rx="1.3" /><path d="M18 2.7l4 1.5v3.6c0 2.6-1.6 4.7-4 5.5-2.4-.8-4-2.9-4-5.5V4.2z" /></>),
+  // Territory: a map pin.
+  repsterritory: svg(<><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z" /><circle cx="12" cy="10" r="2.4" /></>),
   repsroster: svg(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
   // Standings: a podium.
   standings: svg(<><rect x="9" y="4" width="6" height="16" /><rect x="3" y="10" width="6" height="10" /><rect x="15" y="13" width="6" height="7" /></>),
@@ -88,6 +90,8 @@ export const REPS_NAV: Array<{ key: ViewKey; label: string }> = [
   // programmes, and VA is a pipeline in its own right rather than a third tab
   // inside a page named for the other two.
   { key: 'vapipeline', label: 'VA Pipeline' },
+  // Every rep with the clinics and law firms they cover (Master Data sheet).
+  { key: 'repsterritory', label: 'Reps & Territories' },
   // 'repsroster' ("Reps") is gone: it opened the Roster sub-view, which is now
   // a section of the Dashboard above. Two nav entries onto one page is exactly
   // the duplication the sub-tab strip already had.
@@ -113,6 +117,8 @@ export const REP_NAV: Array<{ key: ViewKey; label: string }> = [
   // board to the rep's own orders, so a rep sees their VA book and no one
   // else's — the same redaction the PI board already relies on.
   { key: 'vapipeline', label: 'VA Pipeline' },
+  // Their own clinics and law firms only — the server drops every other rep's.
+  { key: 'repsterritory', label: 'My Territory' },
   // A rep gets it too: the glossary is what a new rep needs most, and it only
   // ever links to views their own allow-list already contains.
   { key: 'guide', label: 'User Guide' },
