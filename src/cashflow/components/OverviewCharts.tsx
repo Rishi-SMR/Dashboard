@@ -15,6 +15,7 @@ import { UnitsByDevice } from './UnitsByDevice';
 import { CommissionBreakdown } from './CommissionBreakdown';
 import { MetricDetail } from './MetricDetail';
 import { SoLink } from './SoLink';
+import { YetToInvoice } from './YetToInvoice';
 
 /**
  * Chip colour for a Striven label, by what the label MEANS — stopped, money in,
@@ -1324,6 +1325,10 @@ export function OverviewCharts() {
   const excGroups = exc ? [...exc.groups].sort((a, b) => b.count - a.count).slice(0, 6) : [];
 
   const ready = ar && ap && pl && payments && so && po && trends;
+  // Kevin's board shows Units by device beside Financial Insights rather than
+  // at the foot of the page. One flag, so the two placements cannot both render.
+  const kevinUnits = kevinLook && !hide('overview.devices') && devMixRows.length > 0;
+
   return (
     // `ov-board` scopes the Company board's own typography. `exec-deck` is
     // shared by a dozen tabs, so styling through it would restyle the whole
@@ -1859,10 +1864,18 @@ export function OverviewCharts() {
 
               Hideable like every other panel here, so a profile can drop it
               without touching this file. */}
-          {!hide('overview.growth') && <BusinessGrowth />}
+          {kevinLook ? (
+            // Kevin's board: Yet to be Invoiced beside Business growth, on request.
+            <div className="exec-grid12">
+              {!hide('overview.growth') && <div className="g12-8 g12-fill"><BusinessGrowth /></div>}
+              <YetToInvoice pending={ar?.pending} className={hide('overview.growth') ? 'g12-12' : 'g12-4'} fill={!hide('overview.growth')} />
+            </div>
+          ) : (!hide('overview.growth') && <BusinessGrowth />)}
 
           <div className="exec-grid12">
-            <ChartCard className="g12-5" title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>
+            {/* Kevin's board: Cash Flow, Revenue vs Expense and Sales Orders by
+                Program sit three across (a third each), on request. */}
+            <ChartCard className={kevinLook ? "g12-4" : "g12-5"} title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>
               {cashData.length > 1 && <LegendDots items={[{ name: 'Cash In', color: C.positive }, { name: 'Cash Out', color: C.negative }, { name: 'Net Cash', color: C.brand }]} />}
               <BarsLine data={cashData}
                 bars={[{ key: 'cashIn', name: 'Cash In', color: C.positive }, { key: 'cashOut', name: 'Cash Out', color: C.negative }]}
@@ -1874,7 +1887,7 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <ChartCard className={hide('overview.collectionRate') ? "g12-7" : "g12-4"} title="Revenue vs Expense" sub={`Invoiced revenue vs billed expenses · ${periodLabel}`}>
+            <ChartCard className={kevinLook || !hide('overview.collectionRate') ? "g12-4" : "g12-7"} title="Revenue vs Expense" sub={`Invoiced revenue vs billed expenses · ${periodLabel}`}>
               {finData.length > 1 && <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />}
               <BarsLine data={finData}
                 bars={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expense', color: C.negative }]}
@@ -1916,7 +1929,7 @@ export function OverviewCharts() {
             {/* The sub names the demo split rather than leaving a muted bar to
                 explain itself — it is the one row on this card that is in the
                 total but not in the business. */}
-            <ChartCard className="g12-6" title="Sales Orders by Program"
+            <ChartCard className={kevinLook ? "g12-4" : "g12-6"} title="Sales Orders by Program"
               sub={`${so.count} orders · click a program to filter${(so.piva.DEMO?.count ?? 0) > 0 ? ` · includes ${so.piva.DEMO.count} DEMO / test` : ''}`}>
               <div className="card-body">
                 <BarList data={programBars} money={false}
@@ -1943,7 +1956,9 @@ export function OverviewCharts() {
             </ChartCard>
             )}
 
-            <div className={`section chart-card ${hide('overview.exceptions') ? 'g12-6' : 'g12-8'}`}>
+            <div className={`section chart-card ${kevinLook
+              ? (hide('overview.exceptions') ? (kevinUnits ? 'g12-6' : 'g12-12') : 'g12-8')
+              : (hide('overview.exceptions') ? 'g12-6' : 'g12-4')}`}>
               <div className="section-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                 <div>
                   <h2 className="section-title">Financial Insights</h2>
@@ -1980,6 +1995,22 @@ export function OverviewCharts() {
                 </div>
               </div>
             </div>
+
+            {/* Kevin's board: Units by device beside Financial Insights, on
+                request, instead of at the foot of the board. */}
+            {kevinUnits && (
+            <ChartCard className="g12-6" title="Units by device">
+              <UnitsByDevice
+                rows={devMixRows}
+                subtitle={`${devMixTotal.toLocaleString()} units across ${devMixRealRows} device${devMixRealRows === 1 ? '' : 's'} · ${PROG_LABEL[prog]}${devMixDemoUnits > 0 ? ` · plus ${devMixDemoUnits} demo unit${devMixDemoUnits === 1 ? '' : 's'} across ${demoOrders} DEMO order${demoOrders === 1 ? '' : 's'}, listed separately` : ''}`}
+                onOpen={go('orders')}
+              />
+            </ChartCard>
+            )}
+
+            {/* Between the two: every live sales order nobody has invoiced.
+                On Kevin's board it sits beside Business growth instead (below). */}
+            {!kevinLook && <YetToInvoice pending={ar?.pending} className={hide('overview.exceptions') ? 'g12-6' : 'g12-4'} />}
 
             {!hide('overview.exceptions') && (
             <ChartCard className="g12-4" title="Exceptions" sub={`${exc?.totalOpen ?? 0} data-quality items`}
@@ -2077,7 +2108,7 @@ export function OverviewCharts() {
               reference list rather than a headline: you come to it once you
               have a question about the mix, not on the way in. The cards above
               answer "how are we doing"; this answers "made of what". */}
-          {!hide('overview.devices') && devMixRows.length > 0 && (
+          {!kevinUnits && !hide('overview.devices') && devMixRows.length > 0 && (
             <ChartCard title="Units by device">
               <UnitsByDevice
                 rows={devMixRows}
