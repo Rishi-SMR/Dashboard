@@ -2095,6 +2095,10 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
 .ov-board .exec-grid12 > .g12-6 { flex-grow: 6; flex-basis: clamp(380px, 46%, 720px); }
 .ov-board .exec-grid12 > .g12-7 { flex-grow: 7; flex-basis: clamp(420px, 54%, 820px); }
 .ov-board .exec-grid12 > .g12-8 { flex-grow: 8; flex-basis: clamp(460px, 62%, 920px); }
+/* A plain wrapper around a card (Business growth on Kevin's board) — the card
+   inside fills the wrapper, so it ends level with the card beside it. */
+.ov-board .exec-grid12 > .g12-fill { display: flex; flex-direction: column; }
+.ov-board .exec-grid12 > .g12-fill > .section { flex: 1 1 auto; margin: 0; }
 /* Anything asking for the full twelve takes its own line, as it always did. */
 .ov-board .exec-grid12 > .g12-9,
 .ov-board .exec-grid12 > .g12-10,
@@ -2424,6 +2428,9 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
   transition:background .15s ease, color .15s ease; }
 .ov-tab:hover { background:var(--panel-2); color:var(--text); }
 .ov-tab.active { background:var(--accent); color:#fff; box-shadow:0 4px 12px -4px rgba(10,54,159,.45); }
+/* Yet to be Invoiced: every vertical on ONE line, even in a third-width card. */
+.yti-tabs { flex-wrap:nowrap; }
+.yti-tabs .ov-tab { flex:1 1 auto; min-width:0; padding:6px 6px; font-size:12px; }
 @media (max-width:640px){ .ov-tab { padding:10px 8px; font-size:12.5px; } }
 
 /* Table controls (search + bucket filter) + sortable headers + pagination. */
