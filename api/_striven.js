@@ -1484,6 +1484,13 @@ async function getArPending(billedSoIds = new Set()) {
   ]);
   const numberBySo = new Map((Array.isArray(soBlobP) ? soBlobP : [])
     .map((o) => [String(o?.id), String(o?.number ?? '')]));
+  // THE ORDER'S STATUS AS OF THE LAST 6-HOUR REFRESH. The chain's own status is
+  // as stale as its invoice links (it is read once, at first fetch): on
+  // 29 Sep 2026 sixteen orders the chain still called "In Progress" were
+  // Canceled in Striven and were being listed here as waiting to be invoiced.
+  // Like billedSoIds below, this can only ever REMOVE an order.
+  const freshStatusBySo = new Map((Array.isArray(soBlobP) ? soBlobP : [])
+    .map((o) => [String(o?.id), String((typeof o?.status === 'object' ? o?.status?.name : o?.status) ?? '')]));
   const surnameBySo = new Map((Array.isArray(rpiBlobP) ? rpiBlobP : [])
     .filter((o) => o?.soId != null).map((o) => [String(o.soId), commLastDisp(o.lastName)]));
   const patientFor = (soId) => {
@@ -1529,12 +1536,16 @@ async function getArPending(billedSoIds = new Set()) {
      */
     if (billedSoIds.has(String(soId))) continue;
     if (isVoidStatus(c.status) || isDemoType(c.type)) continue;  // finished, or not real
+    // Cancelled or LOST, by the fresher status or the chain's own. "Lost" is
+    // not in isVoidStatus (which also judges invoices), so it is tested here.
+    const fresh = freshStatusBySo.get(String(soId)) || '';
+    if (isVoidStatus(fresh) || /\blost\b/i.test(fresh) || /\blost\b/i.test(c.status || '')) continue;
     const vertical = soClass(c.type);
     const value = round2(Number(c.value || 0));
     if (!(value > 0)) continue;
     orders.push({
       soId, ref: c.ref || `SO-${soId}`, vertical, type: c.type || '',
-      rep: cleanRep(c.rep), payer: payerOf(c), status: c.status || '',
+      rep: cleanRep(c.rep), payer: payerOf(c), status: fresh || c.status || '',
       patient: patientFor(soId),
       /** The order the advance would be struck against. */
       caseValue: value,
