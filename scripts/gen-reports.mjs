@@ -39,7 +39,7 @@ const lastNameOnly = (name) => {
 // small sequence number, but for many orders staff typed initials+surname
 // (e.g. "AAvila") instead — show whatever it holds; it is the key staff use.
 const refOf = (d) => String(d?.orderNumber ?? d?.number ?? d?.referenceNumber ?? '').trim();
-const progOf = (t) => { const s = String(t?.name ?? t ?? '').toLowerCase(); if (/tri.?care/.test(s)) return 'TriCare'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/\bpi\b|personal injury/.test(s)) return 'PI'; return 'Other'; };
+const progOf = (t) => { const s = String(t?.name ?? t ?? '').toLowerCase(); if (/tri.?care/.test(s)) return 'TriCare'; if (/\bva\b|veteran/.test(s)) return 'VA'; if (/\bdol\b|department of labor|\bowcp\b/.test(s)) return 'DOL'; if (/\bpi\b|personal injury/.test(s)) return 'PI'; return 'Other'; };
 // Retry the detail fetch once — a single transient failure used to silently drop
 // the SO (continue), which hid orders from the sequence (e.g. a missing 316).
 const soFetch = async (id) => {

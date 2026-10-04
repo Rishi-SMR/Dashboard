@@ -27,6 +27,7 @@ const payerOf = (d) => {
   if (explicit) return explicit;
   if (/tri.?care/i.test(type)) return 'TriCare';
   if (/\bva\b|veteran/i.test(type)) return 'Veterans Affairs';
+  if (/\bdol\b|department of labor|\bowcp\b/i.test(type)) return 'Department of Labor';
   if (/\bpi\b|personal injury/i.test(type)) return String(cf(d, 'Law Firm') || '').trim();
   return '';
 };

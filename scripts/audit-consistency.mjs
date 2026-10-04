@@ -94,8 +94,8 @@ check('COMMISSION — grand total', {
   'striven.grandTotal': sv.grandTotal,
   'sum byRep.total': byRep.reduce((s, r) => s + (r.total || 0), 0),
   'sum months.total': (sv.months || []).reduce((s, m) => s + (m.total || 0), 0),
-  'byProgram TriCare+VA+PI': sv.byProgram
-    ? round2((sv.byProgram.TriCare || 0) + (sv.byProgram.VA || 0) + (sv.byProgram.PI || 0)) : null,
+  'byProgram TriCare+VA+PI+DOL': sv.byProgram
+    ? round2((sv.byProgram.TriCare || 0) + (sv.byProgram.VA || 0) + (sv.byProgram.PI || 0) + (sv.byProgram.DOL || 0)) : null,
   // The headline is PAID + PAYABLE, not payable + waiting. Waiting is the
   // in-flight cycle: an estimate off the engine for a month with no payout run
   // yet, deliberately OUTSIDE the signed-off total. Asserting the old sum meant
@@ -145,7 +145,7 @@ check('REPS on the roster', {
 // ── Verticals: analytics vs commission volume columns ────────────────────────
 const vertA = {};
 for (const o of orders) vertA[o.vertical] = (vertA[o.vertical] || 0) + 1;
-for (const [v, key] of [['TriCare', 'nTricare'], ['VA', 'nVa'], ['PI', 'nPi']]) {
+for (const [v, key] of [['TriCare', 'nTricare'], ['VA', 'nVa'], ['PI', 'nPi'], ['DOL', 'nDol']]) {
   check(`VERTICAL ${v} — order count`, {
     'analytics by vertical': vertA[v] || 0,
     'commission table (reps + off roster)': byRep.length
