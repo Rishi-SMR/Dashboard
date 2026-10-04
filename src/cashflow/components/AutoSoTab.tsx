@@ -218,4 +218,4 @@ function CreateResult({ result, onClose }: { result: AutoSoRunResult; onClose: (
   );
 }
 
-const PROG_C: Record<string, string> = { PI: '#0A369F', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };
+const PROG_C: Record<string, string> = { PI: '#0A369F', VA: '#16A34A', TriCare: '#0D9488', DOL: '#7C3AED', Other: '#94A3B8' };

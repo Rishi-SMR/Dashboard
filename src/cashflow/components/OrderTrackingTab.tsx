@@ -36,7 +36,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [statusF, setStatusF] = useState<'All' | SoGroup>('All');
-  const [progF, setProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'Other'>('All');
+  const [progF, setProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'DOL' | 'Other'>('All');
   const [openRef, setOpenRef] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'value', dir: -1 });
   const [page, setPage] = useState(1);
@@ -165,6 +165,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
                   <option value="PI">PI</option>
                   <option value="VA">VA</option>
                   <option value="TriCare">Tri-Care</option>
+                  <option value="DOL">DOL</option>
                   <option value="Other">Other</option>
                 </select>
                 <button className="btn ghost" style={{ padding: '7px 11px' }} title="Download CSV of the filtered orders" onClick={exportCsv}>⤓ CSV</button>

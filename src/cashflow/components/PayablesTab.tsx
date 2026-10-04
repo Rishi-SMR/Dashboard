@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  fetchStrivenAP, fetchStrivenVendors, fetchStrivenPO, fetchStrivenBillPayments, fetchApLedger,
-  type ApResult, type VendorsResult, type PoResult, type BillPaymentsResult, type ApLedger,
+  fetchStrivenVendors, fetchStrivenPO, fetchApLedger, fetchMasterFileAp, type MasterFileAp,
+  type VendorsResult, type PoResult, type ApLedger,
 } from '../strivenApi';
 import { formatCurrency, formatPhone, pageList } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING_LABELS } from '../chartTheme';
-import { ChartCard, RankBar, AgingBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
+import { ChartCard, RankBar, AgingBar, DrillModal, KpiR, useSyncAgo, dueLabel } from '../chartKit';
 
 const VENDOR_CAP = 50;
 const PAGE_SIZE = 8;
@@ -39,13 +39,13 @@ function DuePill({ dueDate, refMs }: { dueDate: string | null; refMs?: number })
 type SortKey = 'due' | 'total' | 'open' | 'days';
 
 export function PayablesTab() {
-  const [ap, setAp] = useState<ApResult | null>(null);
   const [vendors, setVendors] = useState<VendorsResult | null>(null);
   const [po, setPo] = useState<PoResult | null>(null);
-  const [bp, setBp] = useState<BillPaymentsResult | null>(null);
   // The AP ledger sheet, for BILLS PAID. Striven records one bill payment; the
   // sheet's Debit column records fifty. See the card below.
   const [apl, setApl] = useState<ApLedger | null>(null);
+  // AP Open's source: the Master File For SMR "AP" tab, by vendor.
+  const [mfAp, setMfAp] = useState<MasterFileAp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<null | { title: string; sub: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] }>(null);
@@ -58,6 +58,8 @@ export function PayablesTab() {
   const [page, setPage] = useState(1);
   const [query, setQuery] = useState('');
   const [dueF, setDueF] = useState<'All' | 'overdue' | 'today' | 'upcoming'>('All');
+  // The Open Bills table, so the "# Open Bills" tile can jump to it.
+  const billsRef = useRef<HTMLDivElement>(null);
   const [asOfPick, setAsOfPick] = useState<string | null>(null); // YYYY-MM-DD
   const todayStr = new Date().toISOString().slice(0, 10);
   const asOfStr = asOfPick && asOfPick <= todayStr ? asOfPick : todayStr;
@@ -66,13 +68,14 @@ export function PayablesTab() {
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
     try {
-      const [a, v, o, p, l] = await Promise.all([
-        fetchStrivenAP(), fetchStrivenVendors(), fetchStrivenPO(), fetchStrivenBillPayments(),
+      const [v, o, l, mf] = await Promise.all([
+        fetchStrivenVendors(), fetchStrivenPO(),
         // Never lets the page fail: the ledger is one sheet away and the rest of
         // Payables does not depend on it.
         fetchApLedger().catch(() => null),
+        fetchMasterFileAp().catch(() => null),
       ]);
-      setAp(a); setVendors(v); setPo(o); setBp(p); setApl(l);
+      setVendors(v); setPo(o); setApl(l); setMfAp(mf);
       setLastSync(Date.now());
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : 'Failed to load Payables data.');
@@ -103,42 +106,45 @@ export function PayablesTab() {
   // is the same reason Bills Paid already moved — Striven had one payment of
   // $840 against a six-figure book.
   //
-  // STRIVEN IS NOT DISCARDED. Its figure is carried as `strivenOpen` and shown
-  // on the card and in the drill, exactly as the commission page keeps
-  // `strivenPayable` beside the sheet's number: a reader who remembers $11,422
-  // must be able to find it and see why it differs.
-  //
-  // Falls back to Striven whole if the sheet is unreachable — one book at a
-  // time either way, never a blend of the two.
+  // STRIVEN IS NO LONGER READ FOR AP (1 Oct 2026, on request). It used to be
+  // shown beside the sheet's figure and used whole as a fallback; both are
+  // gone. The sheet is the only AP source, and an unreachable sheet is said so.
   // OPEN BILLS ONLY — a credit note is not a bill anybody works off a worklist,
   // so it does not belong in a list called "Open Bills". It IS money off the
   // payable, though, so it stays in the AP Open headline, in the drill's
   // arithmetic and in the note under the table. The same split the AP Register
   // makes: counted out of the list, netted into the total.
-  const ledgerOpenBills = useMemo(() => (apl?.bills ?? [])
-    .filter((b) => b.open > 0.005)
+  // THE MASTER FILE'S BILLS (1 Oct 2026) - the same book as the AP Register
+  // and the Overview - with the AP Ledgers sheet only as a fallback.
+  const mfReady = Boolean(mfAp?.ok && mfAp.bills);
+  const ledgerOpenBills = useMemo(() => ((mfReady ? mfAp!.bills : apl?.bills) ?? [])
+    .filter((b) => b.kind === 'bill' && b.open > 0.005)
     .map((b) => ({
       id: b.no, number: b.no, vendor: b.subLedger,
       dueDate: b.due || null, total: b.faceValue, open: b.open,
       currency: 'USD',
-    })), [apl]);
-  const useLedger = Boolean(apl?.ok && (apl.bills?.length ?? 0) > 0);
-  const bills = useLedger ? ledgerOpenBills : (ap?.bills ?? []);
-  const apOpen = useLedger ? (apl!.totals?.open ?? 0) : (ap?.totalOpen ?? 0);
-  const apOpenBills = useLedger ? (apl!.totals?.openBills ?? 0) : (ap?.count ?? 0);
-  const strivenOpen = ap?.totalOpen ?? 0;
-  const strivenBills = ap?.count ?? 0;
+    })), [apl, mfAp, mfReady]);
+  const useLedger = mfReady || Boolean(apl?.ok && (apl.bills?.length ?? 0) > 0);
+  const mfCredits = mfReady ? mfAp!.bills!.filter((b) => b.kind === 'credit-note') : [];
+  // AP IS THE SHEET'S, AND ONLY THE SHEET'S (1 Oct 2026). There is no Striven
+  // fallback any more: if the sheet cannot be read the page says so, rather
+  // than quietly showing Striven's four bills as if they were the payable.
+  const bills = useLedger ? ledgerOpenBills : [];
+  const apOpenBills = mfReady ? ledgerOpenBills.length : useLedger ? (apl!.totals?.openBills ?? 0) : 0;
   // The credit notes the list above deliberately excludes. `apOpen` is net of
   // them, the bill rows are not, and the gap is exactly this — so every place
   // the two figures appear together says so rather than leaving $51.20
   // unaccounted for.
-  const creditNoteCount = useLedger ? (apl!.totals?.creditNotes ?? 0) : 0;
-  const creditNoteAmount = useLedger ? (apl!.totals?.creditNoteAmount ?? 0) : 0;
+  const creditNoteCount = mfReady ? mfCredits.length : useLedger ? (apl!.totals?.creditNotes ?? 0) : 0;
+  const creditNoteAmount = mfReady ? -mfCredits.reduce((s, b) => s + b.open, 0) : useLedger ? (apl!.totals?.creditNoteAmount ?? 0) : 0;
   // What the bill rows themselves add up to, before the credit notes come off.
   // Rounded inline rather than through `r2`, which is declared further down and
   // would be in its temporal dead zone when this memo runs during render.
   const billsOnlyOpen = useMemo(
     () => Math.round(bills.reduce((s, b) => s + b.open, 0) * 100) / 100, [bills]);
+  // Open bills net of credit notes - the bill-level total (the AP Open CARD is
+  // the vendor-level figure, which also counts unapplied lump payments).
+  const apOpen = mfReady ? Math.round((billsOnlyOpen - creditNoteAmount) * 100) / 100 : useLedger ? (apl!.totals?.open ?? 0) : 0;
 
   // ── BILLS PAID COMES FROM THE AP LEDGER SHEET ───────────────────────────────
   //
@@ -151,24 +157,29 @@ export function PayablesTab() {
   // not dropped. It is not wrong — it is one payment somebody entered there —
   // and a page that silently swapped its source would leave whoever remembers
   // the $840 unable to find it.
+  // BILLS PAID = the Master File's Amount Paid (1 Oct 2026), the same paid-to-
+  // date figure as the AP Register. AP Ledgers' Debit column only as fallback.
   const paidRows = useMemo(() => {
-    const rows = apl?.payments ?? [];
+    const rows = (mfReady ? mfAp!.payments : apl?.payments) ?? [];
     return rows.map((p, i) => ({ key: `${p.subLedger}-${p.date}-${i}`, vendor: p.subLedger, date: p.date, amount: p.amount }));
-  }, [apl]);
-  const paidTotal = apl?.totals?.paidRecorded ?? 0;
+  }, [apl, mfAp, mfReady]);
+  const paidTotal = mfReady ? (mfAp!.paid ?? 0) : (apl?.totals?.paidRecorded ?? 0);
   // `paidImplied` is billed − outstanding: what the BILLS say was settled, as
   // against what the debit rows record. Equal today across every vendor, and
   // worth stating rather than assuming — the two are independent columns.
-  const paidTies = apl?.totals != null
-    && Math.abs((apl.totals.paidRecorded ?? 0) - (apl.totals.paidImplied ?? 0)) < 0.005;
+  const paidTies = mfReady || (apl?.totals != null
+    && Math.abs((apl.totals.paidRecorded ?? 0) - (apl.totals.paidImplied ?? 0)) < 0.005);
   // WHAT THE CARD SHOWS, as against what the drill shows. Six vendors read at a
   // glance; fifty payments do not — and the card is a third of a row tall, so
   // the choice is which of the two it can actually answer. It takes "who was
   // paid, how much", and the payment-by-payment list moves behind the click.
-  const paidVendors = useMemo(() => (apl?.subLedgers ?? [])
-    .filter((g) => g.paymentRows > 0)
-    .map((g) => ({ vendor: g.subLedger, rows: g.paymentRows, amount: g.paidRecorded }))
-    .sort((a, b) => b.amount - a.amount), [apl]);
+  const paidVendors = useMemo(() => (mfReady
+    ? (mfAp!.vendors ?? []).filter((v) => v.paid !== 0).map((v) => ({
+      vendor: v.vendor, rows: (mfAp!.payments ?? []).filter((p) => p.subLedger === v.vendor).length, amount: v.paid,
+    }))
+    : (apl?.subLedgers ?? []).filter((g) => g.paymentRows > 0)
+      .map((g) => ({ vendor: g.subLedger, rows: g.paymentRows, amount: g.paidRecorded })))
+    .sort((a, b) => b.amount - a.amount), [apl, mfAp, mfReady]);
 
   // Aging by bill count for the toggle.
   const bucketK = (d: number) => (d <= 0 ? 'current' : d <= 30 ? 'd1_30' : d <= 60 ? 'd31_60' : d <= 90 ? 'd61_90' : 'd90plus');
@@ -247,7 +258,7 @@ export function PayablesTab() {
       return bl === label;
     };
     setDrill({
-      title: `AP Aging · ${label}`, sub: label === 'Current' ? 'Bills not yet due' : `Bills ${label} days past due`,
+      title: `AP Aging · ${dueLabel(label)}`, sub: label === 'Current' ? 'Due - bills still within their due date' : `Overdue - bills ${label} days past their due date`,
       columns: [{ key: 'n', label: 'Bill #' }, { key: 'v', label: 'Vendor' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
       rows: bills.filter((b) => b.open > 0 && inBucket(b)).sort((a, b) => b.open - a.open)
         .map((b) => ({ n: `#${b.number}`, v: b.vendor || '-', d: fmtDate(b.dueDate), o: formatCurrency(b.open) })),
@@ -269,11 +280,32 @@ export function PayablesTab() {
   // and the table use, so the drill cannot disagree with either. It used to read
   // `ap.aging` — Striven's own buckets — which is a different book AND ignores
   // the "As of" date the rest of the page respects.
+  // AP OPEN = THE MASTER FILE'S VENDOR BALANCES (1 Oct 2026, on request).
+  // Each vendor's actual balance, billed − paid; NO OFFSETTING - a vendor paid
+  // more than billed does not reduce what the others are owed. Overpaid vendors
+  // are listed as "bills required" instead. Aging and the bill list below still
+  // come from the Master File's bills too (see `ledgerOpenBills`).
+  const mfOk = Boolean(mfAp?.ok);
+  const mfOwed = (mfAp?.vendors ?? []).filter((v) => v.owed > 0);
+  const mfReq = (mfAp?.vendors ?? []).filter((v) => v.billsRequired > 0);
+  const explainMfAp = () => setDrill({
+    title: 'AP Open · by vendor',
+    sub: 'Master File For SMR · AP tab · billed (Invoice Amount) − paid to date (Amount Paid) · cancelled bills excluded · no offsetting between vendors',
+    ...kv([
+      ...mfOwed.map((v) => ({ k: `${v.vendor} · billed ${formatCurrency(v.billed, true)} − paid ${formatCurrency(v.paid, true)}`, v: formatCurrency(v.owed, true) })),
+      { k: `AP Open · ${mfOwed.length} vendor${mfOwed.length === 1 ? '' : 's'} owed`, v: formatCurrency(mfAp?.apOpen ?? 0, true) },
+      ...(mfReq.length ? [
+        { k: 'Bills required - paid more than billed (not netted against AP Open)', v: '' },
+        ...mfReq.map((v) => ({ k: `  ${v.vendor} · paid ${formatCurrency(v.paid, true)} vs billed ${formatCurrency(v.billed, true)} · bills of this amount are required`, v: formatCurrency(v.billsRequired, true) })),
+        { k: 'Bills required · total', v: formatCurrency(mfAp?.billsRequired ?? 0, true) },
+      ] : []),
+    ]),
+  });
   const explainAp = () => setDrill({
     title: 'AP Open',
-    sub: `Unpaid balance across every open vendor bill, split by days past due · ${useLedger ? 'AP ledger sheet' : 'Striven'} · as of ${asOfStr}`,
+    sub: `Unpaid balance across every open vendor bill, split by days past due · ${mfReady ? 'Master File AP tab' : useLedger ? 'AP ledger sheet' : 'AP sheet unavailable'} · as of ${asOfStr}`,
     ...kv([
-      ...AGING_LABELS.map((b) => ({ k: b.label, v: formatCurrency(agingEff[b.key] || 0, true) })),
+      ...AGING_LABELS.map((b) => ({ k: dueLabel(b.label), v: formatCurrency(agingEff[b.key] || 0, true) })),
       // The buckets add to the BILLS, and AP Open is net of credit notes — so
       // the subtotal and the deduction are both shown. Printing the aged bands
       // straight above a headline $51.20 below their sum is the kind of gap a
@@ -283,12 +315,6 @@ export function PayablesTab() {
         ? [{ k: `Less ${creditNoteCount} credit note${creditNoteCount === 1 ? '' : 's'}`, v: formatCurrency(-creditNoteAmount, true) }]
         : []),
       { k: 'AP Open', v: formatCurrency(apOpen, true) },
-      // The other book, named as such and BELOW the total so it cannot read as
-      // part of it. Whoever remembers $11,422 finds it here with the reason.
-      ...(useLedger ? [
-        { k: `- Striven records ${strivenBills} open bill${strivenBills === 1 ? '' : 's'}`, v: formatCurrency(strivenOpen, true) },
-        { k: '- difference: bills tracked only in the sheet', v: formatCurrency(r2(apOpen - strivenOpen), true) },
-      ] : []),
     ]),
   });
   const explainPo = () => {
@@ -344,11 +370,11 @@ export function PayablesTab() {
   // question the vendor summary on the card already answers better.
   const explainPaid = () => setDrill({
     title: 'Bill Payment Details',
-    sub: `Every payment in the AP ledger's Debit column · ${paidRows.length} payment${paidRows.length === 1 ? '' : 's'} across ${paidVendors.length} vendor${paidVendors.length === 1 ? '' : 's'} · ${formatCurrency(paidTotal)}${
+    sub: `Every payment ${mfReady ? 'in the Master File AP tab (Amount Paid)' : "in the AP ledger's Debit column"} · ${paidRows.length} payment${paidRows.length === 1 ? '' : 's'} across ${paidVendors.length} vendor${paidVendors.length === 1 ? '' : 's'} · ${formatCurrency(paidTotal)}${
       paidTies
         ? ' · ledger ties: the debits match what the bills imply was settled'
         : ` · ledger differs: ${formatCurrency(apl?.totals?.paidImplied ?? 0)} implied by the bills`
-    }${(bp?.count ?? 0) > 0 ? ` · Striven separately records ${bp?.count} bill payment${(bp?.count ?? 0) === 1 ? '' : 's'} totalling ${formatCurrency(bp?.total ?? 0)}, included above rather than additional to it` : ''}`,
+    }`,
     columns: [{ key: 'v', label: 'Vendor' }, { key: 'd', label: 'Paid on' }, { key: 'a', label: 'Amount', num: true }],
     rows: [...paidRows]
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
@@ -357,7 +383,7 @@ export function PayablesTab() {
 
   const vendorRows = (vendors?.vendors ?? []).slice(0, VENDOR_CAP);
   const moreVendors = Math.max(0, (vendors?.vendors.length ?? 0) - vendorRows.length);
-  const ready = !!ap;
+  const ready = lastSync !== null;
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -365,7 +391,7 @@ export function PayablesTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Payables</h1>
           <div className="page-sub">
-            <span className="live-dot" /> {useLedger ? 'AP ledger' : 'Striven'} · {ready ? `${apOpenBills} open bills` : 'loading…'}{agoText ? ` · updated ${agoText}` : ''}
+            <span className="live-dot" /> {mfReady ? 'Master File' : useLedger ? 'AP ledger' : 'AP sheet unavailable'} · {ready ? `${apOpenBills} open bills` : 'loading…'}{agoText ? ` · updated ${agoText}` : ''}
           </div>
         </div>
         <div className="ov-headright">
@@ -378,7 +404,8 @@ export function PayablesTab() {
       </div>
 
       {error && <div className="error">{error}</div>}
-      {loading && !ap && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
+      {loading && !ready && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
+      {ready && !useLedger && <div className="error">The AP ledger sheet could not be read{apl?.note ? ` - ${apl.note}` : ''}. AP is taken from that sheet only, so open bills and aging are not shown until it is reachable.</div>}
 
       {ready && (
         <>
@@ -387,13 +414,17 @@ export function PayablesTab() {
                 so billed − paid = open holds across the strip. The foot names
                 the source rather than leaving two books to be told apart by
                 whoever notices the arithmetic does not work. */}
-            <KpiR ico="doc" tint="#0A369F" label="AP Open" value={apOpen} format={formatCurrency}
-              deltaText={`${apOpenBills} open bills`}
-              foot={useLedger ? 'AP ledger · net of credit notes' : 'Striven · ledger unavailable'}
-              onClick={explainAp} />
+            <KpiR ico="doc" tint="#0A369F" label="AP Open" value={mfOk ? (mfAp!.apOpen ?? 0) : 0} format={formatCurrency}
+              deltaText={mfOk ? `${mfOwed.length} vendors owed${mfReq.length ? ` · ${formatCurrency(mfAp!.billsRequired ?? 0)} bills required` : ''}` : 'Master File unavailable'}
+              foot={mfOk ? 'Master File · by vendor, no offsetting' : (mfAp?.note ?? 'Master File AP tab unavailable')}
+              onClick={mfOk ? explainMfAp : explainAp} />
+            {/* Clickable: jumps to the Open Bills table below with every filter
+                cleared, so all of them are listed — the same behaviour as the
+                Open Invoices tile on Receivables. */}
             <KpiR ico="clip" tint="#16A34A" label="# Open Bills" value={apOpenBills}
               deltaText="awaiting payment"
-              foot={useLedger ? `Striven records ${strivenBills}` : 'Striven AP aging'} />
+              foot={mfReady ? 'Master File · Unpaid bills' : useLedger ? 'AP ledger sheet' : 'AP sheet unavailable'}
+              onClick={() => { setQuery(''); setDueF('All'); setPage(1); billsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
             <KpiR ico="box" tint="#7C3AED" label="PO Total" value={po?.totalValue ?? 0} format={formatCurrency}
               deltaText={`${po?.count ?? 0} active POs`} foot={po?.cancelledCount ? `${po.cancelledCount} cancelled excluded` : 'active only'} onClick={explainPo} />
             {/* Same source as the card below. Leaving this on Striven's $840
@@ -401,7 +432,7 @@ export function PayablesTab() {
                 a tile and a card apart. */}
             <KpiR ico="wallet" tint="#D97706" label="Bills Paid" value={paidTotal} format={formatCurrency}
               deltaText={`${paidRows.length} payment${paidRows.length === 1 ? '' : 's'}`}
-              foot="AP ledger · Debit column" onClick={explainPaid} />
+              foot={mfReady ? 'Master File · Amount Paid' : 'AP ledger · Debit column'} onClick={explainPaid} />
           </div>
 
           <div className="exec-grid12">
@@ -409,7 +440,8 @@ export function PayablesTab() {
               <RankBar data={vendorData} money colorAt={() => C.brand} onSelect={openVendorDrill} />
             </ChartCard>
 
-            <ChartCard className="g12-4" title="AP Aging" sub="Open payables by days past due"
+            <ChartCard className="g12-4" title="AP Aging"
+              sub={`Due ${formatCurrency(agingEff.current || 0)} · Overdue ${formatCurrency((agingEff.d1_30 || 0) + (agingEff.d31_60 || 0) + (agingEff.d61_90 || 0) + (agingEff.d90plus || 0))} · open bills by due date`}
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={agingMode === 'amount' ? 'active' : ''} onClick={() => setAgingMode('amount')}>By Amount</button>
@@ -486,7 +518,7 @@ export function PayablesTab() {
                     </li>
                   ))}
                   {paidVendors.length === 0 && (
-                    <li className="pv-empty">{apl ? 'No payments recorded in the ledger.' : 'AP ledger unavailable.'}</li>
+                    <li className="pv-empty">{mfReady || apl ? 'No payments recorded.' : 'AP sheet unavailable.'}</li>
                   )}
                 </ul>
                 <div className="cfoot">
@@ -501,7 +533,7 @@ export function PayablesTab() {
                 across three lines ("Jul / 2, / 2026") and every long vendor across
                 four, so a row stood four lines tall and the card ran to twice the
                 height of Vendors beside it. See the rule in cashflow.css. */}
-            <div className="section chart-card g12-6 tbl-single">
+            <div className="section chart-card g12-6 tbl-single" ref={billsRef}>
               <div className="section-head">
                 <div><h2 className="section-title">Open Bills</h2><div className="section-sub">Unpaid vendor bills with a remaining balance</div></div>
                 <div className="tbl-controls">

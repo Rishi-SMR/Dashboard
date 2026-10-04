@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { C } from '../chartTheme';
+import { C, isDol } from '../chartTheme';
 import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
 import { ChartCard, RankBar, ShareRankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 import {
@@ -191,7 +191,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
   // table drive it. It has no dropdown any more — the tiles are its control —
   // so the table header names it whenever it is on, with a way to clear it.
   const [soStatusF, setSoStatusF] = useState<'All' | SoGroup>('All');
-  const [soProgF, setSoProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'Other'>('All');
+  const [soProgF, setSoProgF] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'DOL' | 'Other'>('All');
   const [soQuery, setSoQuery] = useState('');
   const [soPage, setSoPage] = useState(1);
   const [poQuery, setPoQuery] = useState('');
@@ -481,7 +481,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                 money={typeMode === 'value'}
                 colorAt={(i) => TYPE_COLOR([...so.byType].sort((a, b) => (typeMode === 'value' ? b.value - a.value : b.count - a.count))[i]?.type ?? '')}
                 onSelect={(name) => {
-                  const k = /tri.?care/i.test(name) ? 'TriCare' : /\bva\b|veteran/i.test(name) ? 'VA' : /pi/i.test(name) ? 'PI' : 'Other';
+                  const k = /tri.?care/i.test(name) ? 'TriCare' : /\bva\b|veteran/i.test(name) ? 'VA' : isDol(name) ? 'DOL' : /pi/i.test(name) ? 'PI' : 'Other';
                   setSoProgF(k); setSoPage(1);
                   soTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 }} />
@@ -564,6 +564,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                   <option value="PI">PI</option>
                   <option value="VA">VA</option>
                   <option value="TriCare">Tri-Care</option>
+                  <option value="DOL">DOL</option>
                   <option value="Other">Other</option>
                 </select>
               </div>

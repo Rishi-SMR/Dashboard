@@ -3,6 +3,7 @@ import {
   fetchStrivenAR, fetchStrivenPayments, fetchStrivenCustomers,
   type ArResult, type ArInvoice, type ArPendingOrder, type Payment, type PaymentsResult, type CustomersResult,
 } from '../strivenApi';
+import { fetchArCei, type ArCei } from '../strivenApi';
 import { formatCurrency, pageList, clickableProps } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTheme';
@@ -117,6 +118,9 @@ const valueOf = (i: ArInvoice) =>
 
 export function ReceivablesTab() {
   const [ar, setAr] = useState<ArResult | null>(null);
+  // Monthly Collection Effectiveness Index - the AR health measure per month.
+  const [cei, setCei] = useState<ArCei | null>(null);
+  useEffect(() => { fetchArCei().then(setCei).catch(() => setCei(null)); }, []);
   const [payments, setPayments] = useState<PaymentsResult | null>(null);
   const [customers, setCustomers] = useState<CustomersResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -167,14 +171,29 @@ export function ReceivablesTab() {
   // meaningless there. Aging method: amount-weighted average age of open PI
   // receivables (revenue isn't program-split, so a sales-based PI DSO can't be
   // scoped honestly).
-  const piOpenInv = invoices.filter((i) => (i.open || 0) > 0 && programOfPayer(i.payer || i.customer) === 'PI');
-  const piOpenSum = piOpenInv.reduce((s, i) => s + (i.open || 0), 0);
-  const dso = piOpenSum > 0
-    ? Math.round(piOpenInv.reduce((s, i) => {
-        const age = i.dueDate ? Math.max(0, Math.floor((refMs - new Date(i.dueDate).getTime()) / 86_400_000)) : 0;
-        return s + (i.open || 0) * age;
-      }, 0) / piOpenSum)
-    : null;
+  // ── DSO, TWO WAYS (2 Oct 2026, on request) ─────────────────────────────────
+  // DSO = Σ(receivable × days past due) ÷ Σ(receivable), over open invoices.
+  // THE RECEIVABLE: on PI it is 15% of the case value - the advance - and never
+  // more than is unpaid on the invoice; every other vertical counts its open
+  // balance in full. (`open` from the server already follows this rule; it is
+  // stated again here so the DSO cannot drift from it.)
+  const isPiInv = (i: typeof invoices[number]) => programOfPayer(i.payer || i.customer) === 'PI';
+  const receivableOf = (i: typeof invoices[number]) => (isPiInv(i) && (i.caseValue ?? 0) > 0
+    ? Math.min(i.open || 0, Math.round((i.caseValue ?? 0) * 0.15 * 100) / 100)
+    : (i.open || 0));
+  const daysPastDue = (i: typeof invoices[number]) => (i.dueDate ? Math.max(0, Math.floor((refMs - new Date(i.dueDate).getTime()) / 86_400_000)) : 0);
+  const dsoOf = (list: typeof invoices) => {
+    const sum = list.reduce((s, i) => s + receivableOf(i), 0);
+    return sum > 0 ? Math.round(list.reduce((s, i) => s + receivableOf(i) * daysPastDue(i), 0) / sum) : null;
+  };
+  const allOpenInv = invoices.filter((i) => (i.open || 0) > 0);
+  const piOpenInv = allOpenInv.filter(isPiInv);
+  const piOpenSum = piOpenInv.reduce((s, i) => s + receivableOf(i), 0);
+  /** PI only, the 15% advance as the receivable. */
+  const dso = dsoOf(piOpenInv);
+  /** Every vertical: PI at its 15% advance, VA / TriCare / others in full. */
+  const dsoAll = dsoOf(allOpenInv);
+  const allOpenSum = allOpenInv.reduce((s, i) => s + receivableOf(i), 0);
 
   // Collection effectiveness = collected ÷ (collected + still open). Real, explainable.
   const collected = payments?.total ?? 0;
@@ -216,7 +235,7 @@ export function ReceivablesTab() {
   const insights: { tone: keyof typeof INS_TONES; ico: string; text: ReactNode }[] = [];
   if (cashD) insights.push({ tone: cashD.up ? 'pos' : 'neg', ico: cashD.up ? '▲' : '▼', text: <>Collections {cashD.up ? 'increased' : 'dropped'} <b>{pctText(cashD.pct)}</b> vs last month</> });
   if (biggestBucket && biggestBucket.value > 0) insights.push({ tone: 'warn', ico: '!', text: <><b>{biggestBucket.label}</b> overdue is the largest bucket ({formatCurrency(biggestBucket.value)})</> });
-  if (dso != null) insights.push({ tone: 'brand', ico: '◷', text: <>PI DSO is <b>{dso} days</b> (avg age of open PI receivables)</> });
+  if (dsoAll != null) insights.push({ tone: 'brand', ico: '◷', text: <>DSO is <b>{dsoAll} days</b> across all verticals (PI at its 15% advance)</> });
   if ((ar?.unappliedCredits ?? 0) > 0.005) insights.push({ tone: 'warn', ico: '$', text: <><b>{formatCurrency(ar!.unappliedCredits!)}</b> paid but unapplied: netted out of AR</> });
   if (topPayers[0]) insights.push({ tone: 'pos', ico: '◆', text: <>Top balance: <b>{trunc(topPayers[0].name, 20)}</b> ({formatCurrency(topPayers[0].open)})</> });
 
@@ -347,10 +366,24 @@ export function ReceivablesTab() {
    * and not in the table that opened it, and the money column is named by the
    * section exactly as it is on screen.
    */
-  const explainDso = () => setDrill({
-    title: 'PI Days Sales Outstanding', sub: 'PI only (client rule) · avg age of open PI receivables, amount-weighted',
-    ...kv([{ k: 'Open PI AR', v: formatCurrency(piOpenSum) }, { k: 'PI invoices open', v: String(piOpenInv.length) }, { k: 'PI DSO', v: dso != null ? `${dso} days` : '-' }]),
-  });
+  // All verticals, with each vertical's own share so the blend can be read.
+  const explainDsoAll = () => {
+    const groups = new Map<string, typeof invoices>();
+    for (const i of allOpenInv) {
+      const g = isPiInv(i) ? 'PI (15% of case value)' : (programOfPayer(i.payer || i.customer) || 'Other');
+      groups.set(g, [...(groups.get(g) ?? []), i]);
+    }
+    setDrill({
+      title: 'DSO · All Verticals', sub: 'Every open invoice · PI at 15% of case value, VA / TriCare / others at their full open balance · Σ(receivable × days past due) ÷ Σ(receivable)',
+      ...kv([
+        ...[...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([g, list]) => ({
+          k: `${g} · ${list.length} invoice${list.length === 1 ? '' : 's'} · ${formatCurrency(list.reduce((s, i) => s + receivableOf(i), 0))}`,
+          v: dsoOf(list) != null ? `${dsoOf(list)} days` : '-',
+        })),
+        { k: `All verticals · ${allOpenInv.length} invoices · ${formatCurrency(allOpenSum)}`, v: dsoAll != null ? `${dsoAll} days` : '-' },
+      ]),
+    });
+  };
   const drillBucket = (label: string) => setDrill({
     title: `Open Invoices · ${label}`, sub: `${invoices.filter((i) => bucketOf(i.dueDate, refMs) === label).length} invoices in this bucket`,
     columns: [{ key: 'n', label: 'Invoice #' }, { key: 'p', label: 'Payer' }, { key: 'd', label: 'Due' }, { key: 'o', label: 'Open', num: true }],
@@ -366,7 +399,7 @@ export function ReceivablesTab() {
     return <span className="cell-neg">{formatCurrency(p.outstanding)}</span>;
   };
   const viewAllPayments = () => setDrill({
-    title: 'Recent Payments', sub: `${payRows.length} latest customer payments · patient and what they still owe`,
+    title: 'Recent Customer Payments Received', sub: `${payRows.length} latest customer payments · patient and what they still owe`,
     columns: [
       { key: 'r', label: 'Payment Ref' },
       { key: 'p', label: 'Patient' },
@@ -415,8 +448,11 @@ export function ReceivablesTab() {
           <div className="kpi-r-strip" data-guide-anchor="ar-kpis">
             <KpiR ico="doc" tint="#0A369F" label="AR Open" value={ar.totalOpen} format={formatCurrency}
               deltaText={`${ar.count} open invoices`} foot="excludes voided invoices" onClick={explainAr} />
+            {/* Clickable: jumps to the Open Invoices table below with every
+                filter cleared, so all of them are listed. */}
             <KpiR ico="clip" tint="#16A34A" label="Open Invoices" value={ar.count}
-              deltaText="awaiting payment" foot="matches Striven A/R aging" />
+              deltaText="awaiting payment" foot="click to see the invoices"
+              onClick={() => { setQuery(''); setBucketFilter('All'); setProgFilter('All'); setPage(1); tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
             {/* ── "AR COLLECTED TILL DATE", renamed from "Cash Received" ───────
                 The figure is CUMULATIVE and always was: `payments.total` is the
                 sum of every month the book holds — verified against byMonth,
@@ -436,13 +472,17 @@ export function ReceivablesTab() {
               delta={cashD} foot={`${payments.count} payments`} onClick={explainCash} />
             <KpiR ico="users" tint="#7C3AED" label="Accounts" value={customers.count}
               deltaText={`${customers.customers.filter((c) => /active/i.test(c.status)).length} active`} foot="on record" />
-            <KpiR ico="clock" tint="#D97706" label="PI Days Sales Outstanding" value={dso ?? 0}
-              format={(n) => `${Math.round(n)} days`} deltaText="PI only · fixed-cycle payers excluded" foot="avg age of open PI receivables" onClick={explainDso} />
+            {/* The separate PI-only DSO card was removed on request (2 Oct 2026);
+                this one covers every vertical, PI counted at its 15% advance.
+                Its breakdown still shows PI's own figure. */}
+            {/* All verticals: PI at its 15% advance, the rest in full. */}
+            <KpiR ico="clock" tint="#0E7490" label="DSO · All Verticals" value={dsoAll ?? 0}
+              format={(n) => `${Math.round(n)} days`} deltaText="PI at 15% · VA & TriCare in full" foot="avg age of all open receivables" onClick={explainDsoAll} />
           </div>
 
 
           <div className="exec-grid12">
-            <ChartCard className="g12-5" title="AR Aging" guide="Aging bucket" anchor="ar-aging" sub="Open receivables by days past due · click a bar"
+            <ChartCard className="g12-4" title="AR Aging" guide="Aging bucket" anchor="ar-aging" sub="Open receivables by days past due · click a bar"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={agingMode === 'amount' ? 'active' : ''} onClick={() => setAgingMode('amount')}>By Amount</button>
@@ -461,6 +501,61 @@ export function ReceivablesTab() {
               }>
               <TrendArea data={payData} idPrefix="rc-pay" series={[{ key: 'amount', name: 'Received', color: C.brand }]} />
             </ChartCard>
+
+            {/* INSIGHTS beside Cash Received by Month (2 Oct 2026, on request):
+                AR Aging · Cash Received · Insights, a third each. */}
+            <div className="section chart-card g12-4" data-guide-anchor="ar-insights">
+              <div className="section-head"><div><h2 className="section-title">Insights<GuideMark term="Unapplied credit" /></h2><div className="section-sub">Computed from live data</div></div></div>
+              <div className="card-body" style={{ justifyContent: 'flex-start' }}>
+                <div className="ins-list">
+                  {insights.map((ins, i) => (
+                    <div key={i} className="ins-item">
+                      <span className="ins-dot" style={{ background: INS_TONES[ins.tone].bg, color: INS_TONES[ins.tone].fg }}>{ins.ico}</span>
+                      <span>{ins.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* COLLECTION EFFECTIVENESS (CEI), one tile per month (2 Oct 2026).
+                (Opening AR + Invoiced − Closing AR) ÷ (Opening AR + Invoiced −
+                Closing Current AR). Bills not yet due at month end do not count
+                against the month. The running month is shown, never scored. */}
+            {cei?.ok && cei.months.length > 0 && (
+              <div className="section chart-card g12-12" data-guide-anchor="ar-cei">
+                <div className="section-head"><div>
+                  <h2 className="section-title">Collection Effectiveness (CEI) · by month<GuideMark term="Collection Effectiveness Index" /></h2>
+                  <div className="section-sub">(Opening AR + Invoiced − Closing AR) ÷ (Opening AR + Invoiced − Closing current AR) · target 90+ · ≥90 Excellent · ≥75 Good · ≥60 Fair · below Low</div>
+                </div></div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+                  {cei.months.slice(-6).map((mo) => {
+                    const tone = mo.band === 'Excellent' ? C.positive : mo.band === 'Good' ? C.brand : mo.band === 'Fair' ? C.warning : mo.band === 'Low' ? C.negative : C.muted;
+                    const label = new Date(`${mo.month}-01T00:00:00`).toLocaleString('en-US', { month: 'short', year: 'numeric' });
+                    return (
+                      // Addressable per month, so the Overview's CEI card can land
+                      // on the tile for the month it is quoting.
+                      <div key={mo.month} data-guide-anchor={`ar-cei-${mo.month}`} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', opacity: mo.inProgress ? 0.6 : 1 }}
+                        title={`Opening AR ${formatCurrency(mo.opening)} + invoiced ${formatCurrency(mo.invoiced)} − closing AR ${formatCurrency(mo.closing)} = collected ${formatCurrency(mo.collected)}
+Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)} = collectible ${formatCurrency(mo.collectible)}`}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.muted }}>{label}</div>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: tone, fontVariantNumeric: 'tabular-nums' }}>{mo.cei == null ? '–' : `${mo.cei.toFixed(1)}%`}</div>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, color: tone }}>{mo.inProgress ? 'In progress · not scored' : mo.band ?? 'Nothing to collect'}</div>
+                        <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                          collected {formatCurrency(mo.collected)} of {formatCurrency(mo.collectible)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {cei.fifoCheck && (
+                  <div className="muted-note">
+                    Past month-end balances are rebuilt from Striven's invoices and payments, each customer's payments applied to their oldest invoices first;
+                    this reproduces today's open balance on {cei.fifoCheck.matched} of {cei.fifoCheck.checked} invoices. Hover a month for its figures.
+                  </div>
+                )}
+              </div>
+            )}
 
             <ChartCard className="g12-3" title="A/R Health Score" guide="A/R Health Score" anchor="ar-health" sub="Collected ÷ (collected + open AR)">
               <div className="card-body">
@@ -491,7 +586,7 @@ export function ReceivablesTab() {
               </div>
             </div>
 
-            <div className="section chart-card g12-4" data-guide-anchor="top-customers">
+            <div className="section chart-card g12-5" data-guide-anchor="top-customers">
               <div className="section-head"><div><h2 className="section-title">Top Customers (by Balance)<GuideMark term="Payer" /></h2><div className="section-sub">Payer · largest open balances</div></div></div>
               <div className="rank-list">
                 {topPayers.map((c) => (
@@ -506,20 +601,6 @@ export function ReceivablesTab() {
               </div>
               <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }}
                 onClick={() => tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>View all customers →</button>
-            </div>
-
-            <div className="section chart-card g12-4 g12-w" data-guide-anchor="ar-insights">
-              <div className="section-head"><div><h2 className="section-title">Insights<GuideMark term="Unapplied credit" /></h2><div className="section-sub">Computed from live data</div></div></div>
-              <div className="card-body" style={{ justifyContent: 'flex-start' }}>
-                <div className="ins-list">
-                  {insights.map((ins, i) => (
-                    <div key={i} className="ins-item">
-                      <span className="ins-dot" style={{ background: INS_TONES[ins.tone].bg, color: INS_TONES[ins.tone].fg }}>{ins.ico}</span>
-                      <span>{ins.text}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
 
             {/* FULL WIDTH, and `tbl-single` with it. At 7-of-12 the nine
@@ -547,6 +628,7 @@ export function ReceivablesTab() {
                     <option value="PI">PI</option>
                     <option value="VA">VA</option>
                     <option value="TriCare">Tri-Care</option>
+                    <option value="DOL">DOL</option>
                     <option value="Unassigned">Unassigned</option>
                   </select>
                 </div>
@@ -749,7 +831,7 @@ export function ReceivablesTab() {
 
             <div className="section chart-card g12-12" data-guide-anchor="recent-payments">
               <div className="section-head">
-                <div><h2 className="section-title">Recent Payments<GuideMark term="PHI masking" /></h2><div className="section-sub">Latest customer payments received</div></div>
+                <div><h2 className="section-title">Recent Customer Payments Received<GuideMark term="PHI masking" /></h2><div className="section-sub">Latest customer payments received</div></div>
                 <button className="card-link" style={{ marginTop: 0 }} onClick={viewAllPayments}>View All →</button>
               </div>
               <div className="table-wrap">
@@ -825,5 +907,6 @@ const PROG_NOTE: Record<string, string> = {
   PI: 'PI invoices stay open until settlement. The 15% advance is applied and the remainder stays open: often for a long time. An outstanding PI balance is normal here, not a collection problem.',
   VA: 'VA pays on fixed cycles (Integrated on the 5th & 15th, HIDAL by the 5th) and settles one-for-one, so VA invoices close cleanly. An open VA balance usually just means the cycle hasn’t run yet.',
   TriCare: 'Tri-Care is paid by the TriCare program on a fixed cycle. Open balances clear when that cycle runs.',
+  DOL: 'DOL is paid by the Department of Labor. Like VA and Tri-Care it is a single payer and the invoice is the receivable in full.',
   Unassigned: 'Invoices whose payer isn’t classified to a program yet. Set the payer on the order in Striven to route them.',
 };

@@ -47,7 +47,9 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
 };
 
 // Views that live inside another tab: highlight the parent nav item.
-const VIEW_ALIAS: Partial<Record<ViewKey, ViewKey>> = { payables: 'receivables', tracking: 'orders', catalog: 'vendors', autopo: 'automation', autoso: 'automation' };
+// The registers live inside their side's page (2 Oct 2026): #arsheet opens
+// Receivables on its AR Register tab, #apsheet opens Payables on AP Register.
+const VIEW_ALIAS: Partial<Record<ViewKey, ViewKey>> = { arsheet: 'receivables', apsheet: 'payables', tracking: 'orders', catalog: 'vendors', autopo: 'automation', autoso: 'automation' };
 
 // ── Role-driven navigation ───────────────────────────────────────────────────
 // One app, two sides. An admin runs the business AND oversees the reps, so they
@@ -62,12 +64,12 @@ export type Mode = 'company' | 'reps';
 /** Company side: the finance/ops dashboard, exactly as it always was. */
 export const COMPANY_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
-  { key: 'receivables', label: 'AR / AP' },
-  // The two registers sit together, AR before AP: both are invoice books read
-  // one counterparty at a time, and both source their detail from a sheet the
-  // accountant keeps. The AR / AP tab above answers "what is the balance now".
-  { key: 'arsheet', label: 'AR Register' },
-  { key: 'apsheet', label: 'AP Register' },
+  // ONE ENTRY PER SIDE (2 Oct 2026, on request): Receivables holds the AR
+  // overview and the AR Register as two tabs; Payables holds the AP overview
+  // and the AP Register. They used to be "AR / AP" plus two register entries,
+  // which split each side's figures across two places.
+  { key: 'receivables', label: 'Receivables' },
+  { key: 'payables', label: 'Payables' },
   { key: 'pl', label: 'P&L' },
   { key: 'orders', label: 'Orders' },
   { key: 'automation', label: 'Automation' },

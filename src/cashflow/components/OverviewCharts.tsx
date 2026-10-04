@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  fetchStrivenAR, fetchStrivenAP, fetchStrivenPL, fetchStrivenSO, fetchStrivenPO,
+  fetchStrivenAR, fetchStrivenPL, fetchStrivenSO, fetchStrivenPO,
   fetchStrivenTrends, fetchStrivenPayments, fetchStrivenBillPayments,
   fetchStrivenOrders, fetchStrivenExceptions, fetchCommission, fetchApLedger,
-  type ArResult, type ApResult, type PlResult, type SoResult, type PoResult,
+  type ArResult, type PlResult, type SoResult, type PoResult,
   type TrendsResult, type PaymentsResult, type BillPaymentsResult,
   type OrdersResult, type ExceptionsResult, type CommissionResult, type ApLedger,
 } from '../strivenApi';
 import { formatCurrency, clickableProps, isCancelledStatus, isCompletedStatus } from '../format';
 import { C, SERIES, CAT6, VERTICAL_COLORS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
+import { sectionHref } from '../guideTrail';
+import { PiLienstarCard } from './PiLienstarCard';
+import { VaRemittanceCard } from './VaRemittanceCard';
 import { ChartCard, BarsLine, LegendDots, BarList, DonutList, GaugeRing, DrillModal, useSyncAgo, pctText, HUE, AnimatedNumber } from '../chartKit';
 import { shortDeviceName } from './DeviceChips';
 import { UnitsByDevice } from './UnitsByDevice';
@@ -43,7 +46,7 @@ const shade = (base: string, i: number, n: number): string => {
   const mix = c.map((v) => Math.round(v + (255 - v) * t));
   return `#${mix.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 };
-import { fetchDeviceMix, fetchMe, type DeviceMixRow } from '../strivenApi';
+import { fetchDeviceMix, fetchMe, fetchMasterFileAp, fetchArCei, fetchPiLienstar, fetchVaRemittances, type DeviceMixRow, type MasterFileAp, type ArCei, type PiLienstar, type VaRemittances } from '../strivenApi';
 import { useHidden, useViewProfile, setViewProfile, isKevinLogin, PROFILE_LABEL, type ViewProfile } from '../viewProfile';
 import { BusinessGrowth } from './BusinessGrowth';
 
@@ -51,7 +54,7 @@ const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '�
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '-');
 const initials = (name: string) =>
   name.split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '•';
-const PROG_LABEL: Record<string, string> = { All: 'All programs', PI: 'PI', VA: 'VA', TriCare: 'Tri-Care' };
+const PROG_LABEL: Record<string, string> = { All: 'All programs', PI: 'PI', VA: 'VA', TriCare: 'Tri-Care', DOL: 'DOL' };
 
 // `bucketKeyOf` lived here to bucket invoices for the two aging donuts. Both
 // are now AR Due / AP Due, which report days past due per party instead, so
@@ -82,15 +85,28 @@ const INS_TONES: Record<string, { bg: string; fg: string }> = {
 
 export function OverviewCharts() {
   const [ar, setAr] = useState<ArResult | null>(null);
-  const [ap, setAp] = useState<ApResult | null>(null);
   // The AP ledger sheet — the real payables book. See `apOpenF` below.
   const [apLedger, setApLedger] = useState<ApLedger | null>(null);
+  // AP TOTAL'S SOURCE (1 Oct 2026): Master File For SMR "AP" tab, by vendor,
+  // no offsetting - the same figure as the Payables tab's AP Open card.
+  const [mfAp, setMfAp] = useState<MasterFileAp | null>(null);
+  // Monthly Collection Effectiveness Index, for the CEI tile beside Collection Rate.
+  const [cei, setCei] = useState<ArCei | null>(null);
+  useEffect(() => { fetchArCei().then(setCei).catch(() => setCei(null)); }, []);
+  // PI / VA RECEIVABLE PER THE MASTER FILE, for the AR Due card: invoiced in
+  // Striven but not yet funded by Lienstar / remitted by the distributors.
+  const [piLien, setPiLien] = useState<PiLienstar | null>(null);
+  const [vaRemit, setVaRemit] = useState<VaRemittances | null>(null);
+  useEffect(() => {
+    fetchPiLienstar().then(setPiLien).catch(() => setPiLien(null));
+    fetchVaRemittances().then(setVaRemit).catch(() => setVaRemit(null));
+  }, []);
+  const [arView, setArView] = useState<'all' | 'ledger' | 'pi' | 'va'>('all');
   const [pl, setPl] = useState<PlResult | null>(null);
   const [so, setSo] = useState<SoResult | null>(null);
   const [po, setPo] = useState<PoResult | null>(null);
   const [trends, setTrends] = useState<TrendsResult | null>(null);
   const [payments, setPayments] = useState<PaymentsResult | null>(null);
-  const [billpay, setBillpay] = useState<BillPaymentsResult | null>(null);
   const [orders, setOrders] = useState<OrdersResult | null>(null);
   const [exc, setExc] = useState<ExceptionsResult | null>(null);
   const [comm, setComm] = useState<CommissionResult | null>(null);
@@ -117,19 +133,20 @@ export function OverviewCharts() {
       // tile whenever it lands. Not awaited, so a slow or failed commission
       // derivation can never hold up the rest of the board.
       fetchCommission().then(setComm).catch(() => setComm(null));
-      const [a, b, p, s, o, t, pay, bp, ord, ex, apl] = await Promise.all([
-        fetchStrivenAR(), fetchStrivenAP(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
-        fetchStrivenTrends(), fetchStrivenPayments(), fetchStrivenBillPayments().catch(() => null),
+      const [a, p, s, o, t, pay, ord, ex, apl, mf] = await Promise.all([
+        fetchStrivenAR(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
+        fetchStrivenTrends(), fetchStrivenPayments(),
         fetchStrivenOrders().catch(() => null), fetchStrivenExceptions().catch(() => null),
         // THE AP BOOK, for the same reason the Payables tab reads it: vendor
         // bills are tracked by hand in this sheet and only a handful ever reach
-        // Striven, so Striven's four open bills are not the payable. Never
-        // fails the board — the AP figure falls back to Striven if it is
-        // unreachable, which is a smaller number but not a broken page.
+        // Striven, so Striven's four open bills are not the payable. AP is
+        // read from this sheet ONLY (1 Oct 2026): unreachable means no AP
+        // figure, never Striven's. Still never fails the rest of the board.
         fetchApLedger().catch(() => null),
+        fetchMasterFileAp().catch(() => null),
       ]);
-      setAr(a); setAp(b); setPl(p); setSo(s); setPo(o); setTrends(t); setPayments(pay);
-      setBillpay(bp); setOrders(ord); setExc(ex); setApLedger(apl);
+      setAr(a); setPl(p); setSo(s); setPo(o); setTrends(t); setPayments(pay);
+      setOrders(ord); setExc(ex); setApLedger(apl); setMfAp(mf);
       setLastSync(Date.now());
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : 'Failed to load Striven data.');
@@ -423,10 +440,13 @@ export function OverviewCharts() {
   //
   // Falls back to Striven's list if the sheet is unreachable: a small cash-out
   // line is wrong, but an empty chart is worse and hides that anything is off.
+  // NOW THE MASTER FILE'S PAYMENTS (1 Oct 2026): the same rows that make Paid
+  // to Date everywhere else, dated by their Payment Date. The AP ledger only if
+  // the Master File cannot be read; Striven's bill payments are not used.
   const vendorCashOut: { date: string | null; amount: number }[] =
-    apLedger?.ok && (apLedger.payments?.length ?? 0) > 0
-      ? apLedger.payments!.map((p) => ({ date: p.date, amount: p.amount }))
-      : (billpay?.recent ?? []).map((r) => ({ date: r.date, amount: r.amount }));
+    mfAp?.ok && (mfAp.payments?.length ?? 0) > 0
+      ? mfAp.payments!.map((p) => ({ date: p.date || null, amount: p.amount }))
+      : (apLedger?.payments ?? []).map((p) => ({ date: p.date, amount: p.amount }));
   const cashOutBy: Record<string, number> = {};
   for (const r of vendorCashOut) {
     const m = String(r.date ?? '').slice(0, 7);
@@ -492,20 +512,31 @@ export function OverviewCharts() {
   // Action Center's "due soon", and the card's own bill count — and patching
   // them one at a time is how a card ends up printing "$30,455.00 across 4
   // unpaid bills". Whichever book is in play, they now read the same array.
-  const apLedgerBills = (apLedger?.ok ? apLedger.bills : null) ?? null;
+  // THE BILL BOOK IS THE MASTER FILE'S (1 Oct 2026): the same bills the AP
+  // Register lists, so every bill-level figure on this board - Oldest bill,
+  // due soon, the dues card - agrees with it. The AP Ledgers sheet only when
+  // the Master File cannot be read; never Striven.
+  const mfBills = (mfAp?.ok ? mfAp.bills : null) ?? null;
+  const apLedgerBills = mfBills ?? ((apLedger?.ok ? apLedger.bills : null) ?? null);
   const apBook = apLedgerBills
     ? apLedgerBills
-      .filter((b) => Math.abs(b.open) > 0.005)
+      .filter((b) => b.kind !== 'cancelled' && Math.abs(b.open) > 0.005)
       .map((b) => ({ number: String(b.no), vendor: b.subLedger || '-', dueDate: b.due || null, open: b.open }))
-    : (ap?.bills ?? [])
-      .filter((b) => b.open > 0)
-      .map((b) => ({ number: String(b.number), vendor: b.vendor || '-', dueDate: b.dueDate, open: b.open }));
+    : [];   // no Striven fallback - AP is the sheet's only
   const apBookScoped = apBook.filter((b) => !BALANCES_FOLLOW_PERIOD || inPeriodDate(b.dueDate));
   const apOpenF = apBookScoped.reduce((s, b) => s + b.open, 0);
   // A credit note is money off the payable but nobody works it off a worklist,
   // so it counts toward the TOTAL and not toward the COUNT — the same split the
   // AP Register makes, which is why the two agree.
   const apBillCount = apBookScoped.filter((b) => b.open > 0).length;
+  // THE AP TOTAL every card on this board shows: the Master File's vendor
+  // balances (billed − paid, no offsetting), the same figure as Payables'
+  // AP Open. Falls back to the ledger's bill total only if that tab cannot be
+  // read, so the board is never blank. Bill-level views read `apBook` above,
+  // which is the Master File's bills too.
+  const mfOk = Boolean(mfAp?.ok);
+  const mfOwed = (mfAp?.vendors ?? []).filter((v) => v.owed > 0);
+  const apTotal = mfOk ? (mfAp!.apOpen ?? 0) : apOpenF;
   // Aging always client-bucketed so Program + As-of both apply.
   // The aging buckets are gone from this board: both summaries are now AR Due /
   // AP Due, which list the parties rather than the age bands. `emptyAging`,
@@ -529,6 +560,45 @@ export function OverviewCharts() {
       m.set(p, e);
     }
     return [...m.values()].sort((a, b) => b.open - a.open);
+  })();
+
+  // ── THE COMPLETE RECEIVABLE (3 Oct 2026, on request) ───────────────────────
+  // Three books, each used ONLY for the programme it is the authority on, so
+  // nothing is counted twice:
+  //   PI     invoiced in Striven − funded by Lienstar (Master File, Approved)
+  //   VA     invoiced in Striven − remitted by the distributors (Master File)
+  //   others the Striven ledger's open balance (TriCare, DOL, unassigned, …)
+  // The ledger's own PI and VA balances are deliberately NOT added: those same
+  // invoices are already inside the first two lines, judged against the money
+  // that actually arrived rather than against Striven's payment records.
+  const recvPi = piLien?.ok ? piLien.receivable ?? null : null;
+  const recvVa = vaRemit?.ok ? vaRemit.receivable ?? null : null;
+  const progOfInv = (i: { vertical?: string; payer?: string | null }) => i.vertical || programOfPayer(i.payer);
+  const ledgerOther = arInv.filter((i) => i.open > 0 && !['PI', 'VA'].includes(progOfInv(i)));
+  const ledgerOtherSum = ledgerOther.reduce((s, i) => s + i.open, 0);
+  const recvTotal = (recvPi?.outstanding ?? 0) + (recvVa?.outstanding ?? 0) + ledgerOtherSum;
+
+  // ── AR EXPECTED, OFF THE MASTER FILE ONLY (3 Oct 2026, on request) ─────────
+  // What is invoiced and not yet received, per AR Due's PI and VA lines, with
+  // NO Striven ledger balance in it at all — not even for the programmes the
+  // Master File does not cover. Those are stated on the card as left out.
+  // Follows the Program filter: PI or VA alone shows that programme's line.
+  const expPi = prog === 'All' || prog === 'PI' ? recvPi : null;
+  const expVa = prog === 'All' || prog === 'VA' ? recvVa : null;
+  const arExp = (expPi?.outstanding ?? 0) + (expVa?.outstanding ?? 0);
+  const arExpDetail = (() => {
+    const part = (rows: { received: number; outstanding: number }[] | undefined, partial: boolean) =>
+      (rows ?? []).filter((r) => (r.received > 0.005) === partial).reduce((s, r) => s + r.outstanding, 0);
+    const segs = [
+      { name: 'PI · not funded', value: part(expPi?.rows, false), color: VERTICAL_COLORS.PI },
+      { name: 'PI · part funded', value: part(expPi?.rows, true), color: '#6B8BD6' },
+      { name: 'VA · nothing remitted', value: part(expVa?.rows, false), color: VERTICAL_COLORS.VA },
+      { name: 'VA · part remitted', value: part(expVa?.rows, true), color: '#7CC79A' },
+    ].filter((x) => x.value > 0.005);
+    const invoiced = (expPi?.invoiced ?? 0) + (expVa?.invoiced ?? 0);
+    const received = (expPi?.received ?? 0) + (expVa?.received ?? 0);
+    const all = [...(expPi?.rows ?? []), ...(expVa?.rows ?? [])].sort((a, b) => b.outstanding - a.outstanding);
+    return { segs, invoiced, received, top: all[0] ?? null, cases: all.length };
   })();
 
   // AP DUE, by payee. Bills are grouped per vendor because a payment run is
@@ -622,8 +692,9 @@ export function OverviewCharts() {
   // dropped rather than drawn — a 0% slice is a legend entry pretending to be
   // data, and it makes the ring look broken.
   const donutSlices = [
-    { name: 'AR Expected', value: arOpenF, color: HUE.ar.to },
-    { name: 'AP Due', value: apOpenF, color: HUE.ap.to },
+    // Same figure as the AR Expected card — the Master File receivable.
+    { name: 'AR Expected', value: arExp, color: HUE.ar.to },
+    { name: 'AP Due', value: apTotal, color: HUE.ap.to },
     { name: 'Commission Due', value: commDue.payable, color: HUE.po.to },
   ].filter((s) => s.value > 0);
 
@@ -652,10 +723,10 @@ export function OverviewCharts() {
     const top = [...byPayer.entries()].sort((a, b2) => b2[1] - a[1])[0] ?? null;
     return {
       buckets: [
-        { name: 'Not yet due', value: b.current, color: C.positive },
-        { name: '1–30d', value: b.d30, color: C.warning },
-        { name: '31–60d', value: b.d60, color: '#EA580C' },
-        { name: '60d+', value: b.d90, color: C.negative },
+        { name: 'Due', value: b.current, color: C.positive },
+        { name: 'Overdue 1–30d', value: b.d30, color: C.warning },
+        { name: 'Overdue 31–60d', value: b.d60, color: '#EA580C' },
+        { name: 'Overdue 60d+', value: b.d90, color: C.negative },
       ].filter((x) => x.value > 0),
       overdue: b.d30 + b.d60 + b.d90,
       oldest,
@@ -685,10 +756,10 @@ export function OverviewCharts() {
     const top = [...byVendor.entries()].sort((a, b2) => b2[1] - a[1])[0] ?? null;
     return {
       rail: [
-        { name: 'Not yet due', value: k.current, color: C.positive },
-        { name: '1–30d', value: k.d30, color: C.warning },
-        { name: '31–60d', value: k.d60, color: '#EA580C' },
-        { name: '60d+', value: k.d90, color: C.negative },
+        { name: 'Due', value: k.current, color: C.positive },
+        { name: 'Overdue 1–30d', value: k.d30, color: C.warning },
+        { name: 'Overdue 31–60d', value: k.d60, color: '#EA580C' },
+        { name: 'Overdue 60d+', value: k.d90, color: C.negative },
       ],
       overdue: k.d30 + k.d60 + k.d90,
       oldest: bills.reduce((mx, b) => Math.max(mx, age(b)), 0),
@@ -717,17 +788,21 @@ export function OverviewCharts() {
   // four; the rest are carried so their money is reported rather than dropped.
   // THE ROWS UNDER THE HEADLINE, on the same basis as the headline.
   //
-  // `payable` and `lines` are both cut to the period here. They have to move
-  // together with commDue.payable above, or the tile shows a total the list
-  // beneath it does not add up to — and the list is what someone checks the
-  // total against. Same rule throughout: owed only, and an undated line belongs
-  // to no month.
+  // `payable` and `lines` are the same owed lines, so the tile's total is what
+  // the list beneath it adds up to — and the list is what someone checks the
+  // total against. This matches commDue.payable above, which is also unscoped
+  // (balances do not follow the period: BALANCES_FOLLOW_PERIOD).
+  //
+  // NOT CUT TO THE PERIOD ANY MORE (3 Oct 2026, on request). The card answers
+  // "what is due to be paid", and the sheet answers that by PAYOUT CYCLE, not by
+  // when an order was booked. Cutting by order date showed October's $3,250 —
+  // five lines, four of them 30 Sep orders keyed in on 1 Oct — while the sheet
+  // had $79,212.69 owed in the 15 Oct run. Every owed line counts, whatever the
+  // Period filter says; the sub names the payout run instead.
   const commRows = (() => {
     const roster = new Set(comm?.roster ?? []);
-    const inScope = (l: { date?: string | null }) =>
-      !periodScoped || (Boolean(l.date) && inFy(String(l.date).slice(0, 7)));
     return (comm?.striven?.byRep ?? []).map((r) => {
-      const owed = (r.lines ?? []).filter((l) => l.state !== 'paid' && inScope(l));
+      const owed = (r.lines ?? []).filter((l) => l.state !== 'paid');
       return {
         rep: r.rep,
         payable: (r.lines ?? []).length
@@ -735,7 +810,7 @@ export function OverviewCharts() {
           : (r.payableTotal ?? 0),
         orders: r.orders ?? 0,
         units: r.units ?? 0,
-        pi: r.pi ?? 0, va: r.va ?? 0, tricare: r.tricare ?? 0,
+        pi: r.pi ?? 0, va: r.va ?? 0, tricare: r.tricare ?? 0, dol: r.dol ?? 0,
         onRoster: roster.size ? roster.has(r.rep) : true,
         // The drill lists the SAME lines the figure was built from, so opening a
         // rep can never show orders from outside the period on screen.
@@ -744,6 +819,17 @@ export function OverviewCharts() {
         })),
       };
     }).filter((r) => r.payable > 0);
+  })();
+  // The payout run(s) the owed lines belong to, off the sheet's own cycle text
+  // ("Paid ~10/15/2026" → "15 Oct 2026"), so the card says WHEN it is due.
+  const commPayRuns = (() => {
+    const runs = new Set<string>();
+    for (const r of comm?.striven?.byRep ?? []) for (const l of r.lines ?? []) {
+      if (l.state === 'paid') continue;
+      const m = /(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(l.cycle ?? ''));
+      if (m) runs.add(new Date(+m[3], +m[1] - 1, +m[2]).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }));
+    }
+    return [...runs];
   })();
 
   // ── THE OTHER TWO RINGS ────────────────────────────────────────────────────
@@ -773,9 +859,9 @@ export function OverviewCharts() {
   // SEGMENTED BY VERTICAL. The board's Program filter is the outer one, so when
   // it is set this control has nothing left to choose and defers to it rather
   // than offering a second answer to the same question.
-  const [labelVert, setLabelVert] = useState<'All' | 'PI' | 'VA' | 'TriCare'>('All');
+  const [labelVert, setLabelVert] = useState<'All' | 'PI' | 'VA' | 'TriCare' | 'DOL'>('All');
   const vertPick: string = prog !== 'All' ? prog : labelVert;
-  const LABEL_VERTS = ['All', 'PI', 'VA', 'TriCare'] as const;
+  const LABEL_VERTS = ['All', 'PI', 'VA', 'TriCare', 'DOL'] as const;
   /** Sentinel for "Striven has tagged this order with nothing". The parentheses
    *  keep it from colliding with a real label, which never has them — the same
    *  sentinel the pipeline's label filter uses, for the same reason. */
@@ -913,7 +999,7 @@ export function OverviewCharts() {
   })();
 
   // Program-scoped sales orders.
-  const soCount = so ? (prog === 'All' ? so.count : so.piva[prog === 'Unassigned' ? 'Other' : prog].count) : 0;
+  const soCount = so ? (prog === 'All' ? so.count : (so.piva[prog === 'Unassigned' ? 'Other' : prog]?.count ?? 0)) : 0;
 
   // Cap at 100 so the printed label can't exceed the gauge arc (which clamps).
   const collectionPct = fRev > 0 ? Math.min(100, Math.round((cashFY / fRev) * 100)) : 0;
@@ -937,229 +1023,6 @@ export function OverviewCharts() {
   const overdueSum = overdue.reduce((s, i) => s + i.open, 0);
   const billsDue = apBook.filter((b) => b.open > 0 && b.dueDate && new Date(b.dueDate).getTime() <= soon);
   const billsDueSum = billsDue.reduce((s, b) => s + b.open, 0);
-  /**
-   * DUE DATES, IN TWO DIRECTIONS.
-   *
-   * The board reports what is owed; this reports WHEN, which is the part that
-   * makes it actionable. Three states against the As-of date, in both
-   * directions — money owed to us, and money we owe out — because a week where
-   * $40k lands and $4k leaves is a different week from the reverse, and a single
-   * netted figure hides which one you are in.
-   *
-   * DAY PRECISION, on the date STRING. Comparing YYYY-MM-DD lexically avoids the
-   * timezone drift that `new Date(d) < Date.now()` introduces — an invoice due
-   * today read as overdue for anyone west of UTC.
-   *
-   * A ROW WITH NO DUE DATE IS IN NONE OF THEM. It cannot be scheduled, so it
-   * cannot be chased on a date; it stays in the balance cards, which is where an
-   * undated liability belongs.
-   */
-  /**
-   * A LOCAL DATE, FORMATTED LOCALLY — and `toISOString()` cannot be used here.
-   *
-   * `new Date('2026-09-07T00:00:00')` is LOCAL midnight; `toISOString()` prints
-   * it in UTC. East of Greenwich those are different days: at UTC+5:30, local
-   * midnight on the 14th is 18:30 on the 13th in UTC, so the 7-day horizon came
-   * back as 2026-09-13 and every invoice due on the 14th fell out of "Due within
-   * 7 days" into the later bucket. Reading the parts back off the local date is
-   * the fix, and it is why the month end below is built the same way.
-   */
-  const ymd = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const dayPlus = (iso: string, n: number) => {
-    const d = new Date(`${iso}T00:00:00`);
-    d.setDate(d.getDate() + n);
-    return ymd(d);
-  };
-  const horizonStr = dayPlus(asOfStr, 7);
-  /** The last day of the as-of month. Day 0 of the NEXT month IS the last day of
-   *  this one, which handles February and leap years without a table. */
-  const monthEndStr = (() => {
-    const d = new Date(`${asOfStr}T00:00:00`);
-    return ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0));
-  })();
-  /** Month-only, deliberately NOT the `monthName()` helper above — that one
-    *  prints "September 2026", which is more than a compact row label can carry
-    *  when the year is already stated in the card's own subtitle. */
-  const asOfMonth = new Date(`${asOfStr}T00:00:00`).toLocaleString(undefined, { month: 'long' });
-  const dueState = (d?: string | null) => {
-    const s = String(d ?? '').slice(0, 10);
-    if (!s) return 'none';
-    if (s < asOfStr) return 'past';
-    if (s === asOfStr) return 'today';
-    if (s <= horizonStr) return 'soon';
-    // THE REST OF THE CALENDAR MONTH, and it is a bucket of its own rather than
-    // a total spanning the three above. Every row on this card names one state,
-    // so the four add up and a reader can sum the column; a cumulative "due this
-    // month" row would double-count everything already sitting in Overdue and
-    // Due today, on a card whose whole job is to be added up.
-    //
-    // EMPTY BY CONSTRUCTION LATE IN THE MONTH. From the 24th onward the 7-day
-    // horizon reaches past month end, so nothing can land here — the row draws
-    // at zero, which is the truth, not a gap.
-    return s <= monthEndStr ? 'month' : 'later';
-  };
-  /**
-   * WHO THE ROW IS ABOUT, in the two ways that matter on a receivable.
-   *
-   * `who` is the PAYER — the law firm, the VA, TriCare — which is who gets
-   * chased. `patient` is the case the invoice belongs to, as FIRST INITIAL +
-   * SURNAME, which is how anyone here actually recognises it: an overdue list
-   * reading PT-36 / PT-231 / PT-385 cannot be worked without a second lookup
-   * per line. The server resolves it from the same joins the AR register uses,
-   * so an invoice cannot be "D. Butler" on one screen and "PT-385" here.
-   *
-   * PHI: first-initial-plus-surname is the portal's patient rendering
-   * throughout (pipeline, commission drill, AR sheet); no new kind of data
-   * reaches the browser. `customer` — the de-identified PT-<id> — is the
-   * fallback, so a row with no resolved name still names something.
-   */
-  type DueRow = { number: string; who: string; patient: string; vertical: string; dueDate: string | null; open: number };
-  const arDueRows: DueRow[] = arInv.map((i) => ({
-    number: String(i.number),
-    who: i.payer || '-',
-    patient: i.patient || i.customer || '-',
-    // The SERVER'S vertical first: it comes off the sales order behind the
-    // invoice, where the programme actually lives. programOfPayer() is the
-    // same last-resort read of the payer string the server itself falls back
-    // to, and it only ever answers when there IS a payer.
-    vertical: i.vertical || (i.payer ? programOfPayer(i.payer) : '') || '-',
-    dueDate: i.dueDate, open: i.open,
-  }));
-  const apDueRows: DueRow[] = apBook.map((b) => ({
-    number: String(b.number), who: b.vendor || '-', patient: '-', vertical: '-', dueDate: b.dueDate, open: b.open,
-  }));
-  const DUE_STATES = [
-    { key: 'past', label: 'Overdue', tone: C.negative, note: 'past its due date' },
-    { key: 'today', label: 'Due today', tone: C.warning, note: `due ${asOfStr}` },
-    { key: 'soon', label: 'Due within 7 days', tone: C.info, note: `due by ${horizonStr}` },
-    // Brand blue continues the urgency ramp — red, amber, cyan, blue — rather
-    // than introducing a hue that reads as a different KIND of thing.
-    { key: 'month', label: `Later in ${asOfMonth}`, tone: C.brand, note: `due ${dayPlus(horizonStr, 1)} – ${monthEndStr}` },
-  ] as const;
-  const bucketOfRows = (rows: DueRow[], key: string) => rows.filter((r) => dueState(r.dueDate) === key);
-  const sumRows = (rows: DueRow[]) => rows.reduce((s2, r) => s2 + r.open, 0);
-  /** Every bucket that actually has something in it, both directions. */
-  const dueBuckets = DUE_STATES.flatMap((st) => ([
-    { ...st, dir: 'in' as const, rows: bucketOfRows(arDueRows, st.key) },
-    { ...st, dir: 'out' as const, rows: bucketOfRows(apDueRows, st.key) },
-  ])).filter((b) => b.rows.length > 0);
-  const dueTotal = (dir: 'in' | 'out', key: string) =>
-    sumRows(bucketOfRows(dir === 'in' ? arDueRows : apDueRows, key));
-  const dueCount = (dir: 'in' | 'out', key: string) =>
-    bucketOfRows(dir === 'in' ? arDueRows : apDueRows, key).length;
-  const openDueDrill = (dir: 'in' | 'out', st: typeof DUE_STATES[number]) => {
-    const rows = bucketOfRows(dir === 'in' ? arDueRows : apDueRows, st.key)
-      .sort((a, b) => b.open - a.open);
-    if (!rows.length) return;
-    const sum = sumRows(rows);
-    /**
-     * HOW OLD, AND HOW CONCENTRATED — the two things 84 rows of dates and
-     * amounts will not tell you by being read in order.
-     *
-     * `ageOf` is days past the as-of date, so it is only meaningful on the
-     * OVERDUE bucket; the forward-looking buckets get days UNTIL instead, which
-     * is the same subtraction the other way round and is why the label flips
-     * rather than the arithmetic.
-     */
-    const ageOf = (r: DueRow) => {
-      const s = String(r.dueDate ?? '').slice(0, 10);
-      if (!s) return 0;
-      return Math.round((new Date(`${asOfStr}T00:00:00`).getTime() - new Date(`${s}T00:00:00`).getTime()) / 86_400_000);
-    };
-    const ages = rows.map(ageOf);
-    const oldest = ages.length ? Math.max(...ages) : 0;
-    const soonest = ages.length ? Math.min(...ages) : 0;
-    const biggest = rows[0];                       // already sorted by amount, descending
-    /** The programme split, which only a receivable has — a vendor bill belongs
-     *  to no programme, so the band is simply absent on the AP side rather than
-     *  drawn as one grey bar that says nothing. */
-    const byVert = (() => {
-      if (dir !== 'in') return [];
-      const m = new Map<string, number>();
-      // A DASH IS A CELL, NOT A LABEL. `-` is the right rendering in a table
-      // cell, where the column header already says what is missing; in a legend
-      // it is a segment named nothing. The unresolved programme gets a word
-      // here — $1,804 of the overdue book has one.
-      for (const r of rows) {
-        const k = r.vertical === '-' ? 'Unassigned' : r.vertical;
-        m.set(k, (m.get(k) ?? 0) + r.open);
-      }
-      return [...m.entries()]
-        .map(([name, value]) => ({ name, value, color: VERTICAL_COLORS[name] ?? C.muted }))
-        .filter((x) => x.value > 0)
-        .sort((a, b) => b.value - a.value);
-    })();
-    const pctOf = (v: number) => (sum > 0 ? Math.round((v / sum) * 100) : 0);
-
-    setDrill({
-      title: `${st.label} · ${dir === 'in' ? 'owed to us' : 'we owe out'}`,
-      sub: `${rows.length} ${dir === 'in' ? 'invoice' : 'bill'}${rows.length === 1 ? '' : 's'} · ${formatCurrency(sum)} · ${st.note}`,
-      /* THE SUMMARY, ABOVE THE ROWS. A dialog that opens on 84 lines has to say
-         what they amount to before it says what they are, or the reader is
-         doing the totalling the card behind it already did. */
-      summary: (
-        <div className="drill-sum">
-          <div className="drill-sum-stats">
-            <span><i>{dir === 'in' ? 'Invoices' : 'Bills'}</i><b>{rows.length}</b></span>
-            <span><i>Total</i><b style={{ color: dir === 'in' ? C.positive : C.negative }}>{formatCurrency(sum)}</b></span>
-            <span><i>Largest</i><b>{formatCurrency(biggest.open)}</b><em>#{biggest.number}</em></span>
-            {st.key === 'past'
-              ? <span><i>Oldest</i><b>{oldest}d</b><em>past due</em></span>
-              : <span><i>Furthest out</i><b>{Math.abs(soonest)}d</b><em>away</em></span>}
-          </div>
-          {byVert.length > 0 && (
-            <>
-              <div className="drill-sum-bar">
-                {byVert.map((v) => (
-                  <span key={v.name} title={`${v.name}: ${formatCurrency(v.value)}`}
-                    style={{ width: `${pctOf(v.value)}%`, background: v.color }} />
-                ))}
-              </div>
-              <div className="drill-sum-key">
-                {byVert.map((v) => (
-                  <span key={v.name}>
-                    <i style={{ background: v.color }} />{v.name}
-                    <b>{formatCurrency(v.value)}</b>
-                    <em>{pctOf(v.value)}%</em>
-                  </span>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      ),
-      columns: [
-        { key: 'no', label: dir === 'in' ? 'INVOICE' : 'BILL' },
-        // The patient and the programme belong to a receivable only: a vendor
-        // bill has neither, and empty columns would just be noise on it.
-        ...(dir === 'in' ? [
-          { key: 'patient', label: 'PATIENT' },
-          { key: 'vert', label: 'VERTICAL' },
-        ] : []),
-        { key: 'who', label: dir === 'in' ? 'PAYER' : 'VENDOR' },
-        { key: 'due', label: 'DUE' },
-        { key: 'amt', label: 'AMOUNT', num: true },
-      ],
-      rows: rows.map((r) => ({
-        no: <strong>#{r.number}</strong>,
-        patient: <span style={{ fontWeight: 700 }}>{r.patient}</span>,
-        vert: r.vertical === '-' ? <span style={{ color: C.muted }}>-</span> : (
-          <span style={{ whiteSpace: 'nowrap', fontWeight: 700, color: VERTICAL_COLORS[r.vertical] ?? C.sub }}>
-            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 3, marginRight: 6, background: VERTICAL_COLORS[r.vertical] ?? C.muted }} />
-            {r.vertical}
-          </span>
-        ),
-        who: r.who,
-        // The feed carries a full timestamp on this field; a due DATE is what
-        // the column means, so the time half is dropped rather than printed as
-        // "T00:00:00" beside every date.
-        due: r.dueDate ? String(r.dueDate).slice(0, 10) : '-',
-        amt: <span style={{ color: dir === 'in' ? C.positive : C.negative, fontWeight: 700 }}>{formatCurrency(r.open)}</span>,
-      })),
-    });
-  };
-
   const waitingPo = (orders?.orders ?? []).filter((o) =>
     (prog === 'All' || o.pi === prog) && o.pos.length === 0 && !/cancel|void|complete|closed/i.test(o.status));
   type AcItem = { n: string; l1: string; l2: string; view: string; ico: ReactNode };
@@ -1183,12 +1046,14 @@ export function OverviewCharts() {
   // DEMO is drawn MUTED and is not clickable. It is a real Striven order type
   // and belongs in the count, but it is not a programme anyone sells into, and
   // colouring it like one would put test orders on the same footing as VA. The
-  // click handler below already ignores anything that is not PI / VA / TriCare,
-  // so the bar is inert by construction rather than by a second rule.
+  // click handler below already ignores anything that is not PI / VA / TriCare
+  // / DOL, so the bar is inert by construction rather than by a second rule.
   const programBars = so ? ([
     { key: 'PI', name: 'PI', ...so.piva.PI, color: SERIES[0] },
     { key: 'VA', name: 'VA', ...so.piva.VA, color: SERIES[1] },
     { key: 'TriCare', name: 'Tri-Care', ...so.piva.TriCare, color: SERIES[2] },
+    // Absent from a payload cached before DOL existed, hence the guard.
+    ...((so.piva.DOL?.count ?? 0) > 0 ? [{ key: 'DOL', name: 'DOL', ...so.piva.DOL, color: VERTICAL_COLORS.DOL }] : []),
     ...(so.piva.Contract?.count > 0 ? [{ key: 'Contract', name: 'Contract', ...so.piva.Contract, color: SERIES[3] }] : []),
     ...(so.piva.Other.count > 0 ? [{ key: 'Other', name: 'Other', ...so.piva.Other, color: SERIES[4] }] : []),
     ...(so.piva.DEMO?.count > 0 ? [{ key: 'DEMO', name: 'DEMO / test', ...so.piva.DEMO, color: C.muted }] : []),
@@ -1324,9 +1189,13 @@ export function OverviewCharts() {
 
   const excGroups = exc ? [...exc.groups].sort((a, b) => b.count - a.count).slice(0, 6) : [];
 
-  const ready = ar && ap && pl && payments && so && po && trends;
+  const ready = ar && pl && payments && so && po && trends;
   // Kevin's board shows Units by device beside Financial Insights rather than
   // at the foot of the page. One flag, so the two placements cannot both render.
+  // Last two COMPLETED months of CEI (the running month is never scored).
+  const ceiDone = (cei?.months ?? []).filter((mo) => !mo.inProgress && mo.cei != null);
+  const ceiLast = ceiDone[ceiDone.length - 1] ?? null;
+  const ceiPrev = ceiDone[ceiDone.length - 2] ?? null;
   const kevinUnits = kevinLook && !hide('overview.devices') && devMixRows.length > 0;
 
   return (
@@ -1427,6 +1296,7 @@ export function OverviewCharts() {
             <option value="PI">PI</option>
             <option value="VA">VA</option>
             <option value="TriCare">Tri-Care</option>
+            <option value="DOL">DOL</option>
           </select>
         </label>
         <label className="ov-filter"><span className="fl">As of</span>
@@ -1460,89 +1330,29 @@ export function OverviewCharts() {
               units — a picture with no meaning. Revenue and Cash Received are
               period FLOWS, not balances, and both read $0 this month, so they
               would contribute invisible slices. Counts keep their tiles. */}
-          {/* ── WHAT IS DUE, AND WHEN ─────────────────────────────────────
-              First on the board and only when there IS something, so it reads as
-              a prompt rather than as furniture. The rest of the page answers
-              "how much"; this answers "by when", split by direction because
-              money arriving and money leaving are not one number.
-              Silent when nothing is due — a permanently present reminder is one
-              nobody reads. */}
-          {dueBuckets.length > 0 && (
+          {/* RECEIVABLES AND DUES THIS MONTH WAS HERE, and is gone on request
+              (3 Oct 2026): the Overdue / Due today / Due within 7 days / Later
+              this month split of receivables and vendor bills. The same balances
+              are still on the AR Due and AP Due cards and on Receivables and
+              Payables. */}
+
+          {/* BUSINESS GROWTH (2 Oct 2026, on
+              request). The company's own trajectory, month by month, added
+              to this board on request (it already sits on the team dashboard).
+              It reads the P&L for BOTH revenue and net profit, so its margin is
+              the statement's own; the Revenue vs Expense card below is the
+              STRIVEN book over the selected period, which is a different set of
+              documents. Two cards, two books, each saying which it is.
+
+              Hideable like every other panel here, so a profile can drop it
+              without touching this file. */}
+          {kevinLook ? (
+            // Kevin's board: Yet to be Invoiced beside Business growth, on request.
             <div className="exec-grid12">
-              {/* TITLED FOR ITS TWO HALVES. "Due dates" named the axis the card
-                  buckets on; this names what is actually in it — receivables on
-                  the left, what we owe on the right.
-                  THE SUBTITLE CARRIES THE SCOPE, and has to: the title says
-                  "this month", but the Overdue bucket reaches back as far as
-                  anything is still unpaid (today that is a May invoice), so the
-                  card is NOT confined to the month its name mentions. Stating
-                  the as-of date and the month end is what keeps the name from
-                  overselling the contents. */}
-              <ChartCard className="g12-12" title="Receivables and Dues this month"
-                sub={`Against ${asOfStr} · buckets run through ${monthEndStr}, and Overdue reaches back to whatever is still unpaid · click any figure for the list`}>
-                <div className="due-panel">
-                  {(['in', 'out'] as const).map((dir) => (
-                    <div className="due-col" key={dir}>
-                      <div className="due-head">
-                        {dir === 'in' ? 'Owed to us' : 'We owe out'}
-                        <i>{dir === 'in' ? 'receivables' : 'vendor bills'}</i>
-                      </div>
-                      {DUE_STATES.map((st) => {
-                        const n = dueCount(dir, st.key);
-                        // ── DUE TODAY GETS A PULSE ────────────────────────
-                        // Only this row, and only when something is actually in
-                        // it. Today is the one bucket with a deadline that
-                        // expires while you are looking at the screen — Overdue
-                        // has already passed and can wait for a chase list, and
-                        // anything Due within 7 days will still be there
-                        // tomorrow. Pulsing more than one row would make the
-                        // whole card move and single out nothing.
-                        //
-                        // A zero row must never pulse: an animation that fires
-                        // when there is no action to take is the fastest way to
-                        // teach someone to ignore it.
-                        const urgent = st.key === 'today' && n > 0;
-                        return (
-                          <button type="button" key={st.key}
-                            className={`due-row${n === 0 ? ' is-empty' : ''}${urgent ? ' is-urgent' : ''}`}
-                            disabled={n === 0}
-                            title={n === 0 ? `Nothing ${st.label.toLowerCase()}` : `${n} · ${st.note}`}
-                            onClick={() => openDueDrill(dir, st)}>
-                            <span className="dot" style={{ background: n === 0 ? 'var(--border)' : st.tone }} />
-                            <span className="l">
-                              {st.label}
-                              {/* The word, not only the motion. Colour and
-                                  movement are both unavailable to somebody —
-                                  colour-blind, reduced-motion, or reading a
-                                  screenshot — so the state is spelled out. */}
-                              {urgent && (
-                                <span className="due-badge">
-                                  {dir === 'in' ? 'collect today' : 'pay today'}
-                                </span>
-                              )}
-                            </span>
-                            <span className="n">{n}</span>
-                            <span className="v" style={{ color: n === 0 ? 'var(--muted)' : st.tone }}>
-                              {formatCurrency(dueTotal(dir, st.key))}
-                            </span>
-                            {/* Announced once when it appears, and politely —
-                                this must not interrupt whatever the reader is
-                                doing elsewhere on the page. */}
-                            {urgent && (
-                              <span className="sr-only" role="status">
-                                {n} {dir === 'in' ? 'receivable' : 'vendor bill'}{n === 1 ? '' : 's'} due today,
-                                {' '}{formatCurrency(dueTotal(dir, st.key))}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
-              </ChartCard>
+              {!hide('overview.growth') && <div className="g12-8 g12-fill"><BusinessGrowth /></div>}
+              <YetToInvoice pending={ar?.pending} className={hide('overview.growth') ? 'g12-12' : 'g12-4'} fill={!hide('overview.growth')} />
             </div>
-          )}
+          ) : (!hide('overview.growth') && <BusinessGrowth />)}
 
           <div className="exec-grid12">
             {/* COMMISSION, INTERACTIVE. Replaces the flat tile: same headline,
@@ -1556,7 +1366,7 @@ export function OverviewCharts() {
               <ChartCard className="g12-3" title={commRows.every((r) => r.payable <= 0) ? 'Commission' : 'Commission Due'}
                 sub={commRows.every((r) => r.payable <= 0)
                   ? 'Nothing outstanding to any rep'
-                  : `Click a rep for their programme split and top orders${periodScoped ? ` · orders booked in ${periodLabel}` : ''}`}>
+                  : `Owed per the commission sheet${commPayRuns.length ? ` · due in the ${commPayRuns.join(' / ')} payout` : ''} · click a rep for their split and orders`}>
                 <CommissionBreakdown reps={commRows} onOpen={go('commission')} paidThrough={comm?.striven?.paidThrough} />
                 {/* The owed commission that belongs to NO month, named wherever
                     a period is on. Without it this tile's months sum to less
@@ -1571,66 +1381,259 @@ export function OverviewCharts() {
                 )}
               </ChartCard>
             )}
-            {/* THE PERIOD IS IN THE TITLE, not only in the sub-line. A card
+            {/* AR DUE + AP DUE moved up here, into the slots Open balances and
+                Position summary held (2 Oct 2026, on request); those two moved
+                down to where these were. */}
+            {/* AR DUE — the receivables themselves: "who owes us what" is the
+                collection call, and days past due rides on each row.
+                Takes SIX columns now that the AP Due list beside it is gone —
+                its per-vendor detail was already carried by the AP Due card
+                above (ageing, oldest bill, vendor concentration), so the list
+                was a second answer to a question already answered. Payables
+                keeps the full per-bill view, one click away. */}
+            <div className="section chart-card g12-4">
+              <div className="section-head"><div>
+                <h2 className="section-title">AR Due</h2>
+                <div className="section-sub">
+                  {arView === 'all' ? 'Complete receivable · PI per Lienstar · VA per remittances · others per Striven'
+                    : arView === 'pi' ? 'PI invoiced in Striven, not yet funded by Lienstar (Approved = funded)'
+                      : arView === 'va' ? 'VA invoiced in Striven, not yet remitted (Master File)'
+                        : `Striven open invoices · ${PROG_LABEL[prog]} · ${balanceScopeLabel}`}
+                </div>
+              </div></div>
+              {/* FOUR VIEWS OF ONE QUESTION — what is owed to us. "All" is the
+                  complete receivable; the other three are its parts' detail. */}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
+                {([['all', 'All'], ['ledger', 'Striven ledger'], ['pi', 'PI · Lienstar'], ['va', 'VA · Remit']] as const).map(([k, label]) => (
+                  <button key={k} type="button" className={`ins-qtab${arView === k ? ' on' : ''}`} onClick={() => setArView(k)}>{label}</button>
+                ))}
+              </div>
+              {arView === 'all' && (
+                <div className="rank-list is-scroll">
+                  {[
+                    { k: 'pi' as const, ico: 'PI', name: 'PI · not funded by Lienstar', sub: recvPi ? `${recvPi.count} case${recvPi.count === 1 ? '' : 's'} · ${formatCurrency(recvPi.invoiced)} invoiced` : 'Master File unavailable', v: recvPi?.outstanding ?? 0, tint: VERTICAL_COLORS.PI },
+                    { k: 'va' as const, ico: 'VA', name: 'VA · not remitted', sub: recvVa ? `${recvVa.count} patient${recvVa.count === 1 ? '' : 's'} · ${formatCurrency(recvVa.invoiced)} invoiced` : 'Master File unavailable', v: recvVa?.outstanding ?? 0, tint: VERTICAL_COLORS.VA },
+                    { k: 'ledger' as const, ico: 'ST', name: 'Other programmes · Striven', sub: `${ledgerOther.length} open invoice${ledgerOther.length === 1 ? '' : 's'} · TriCare, DOL, unassigned`, v: ledgerOtherSum, tint: C.muted },
+                  ].map((r) => (
+                    <div key={r.k} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => setArView(r.k))}>
+                      <span className="rk-ico" style={{ background: `${r.tint}1A`, color: r.tint }}>{r.ico}</span>
+                      <span className="rk-name" title={r.name}>
+                        {r.name}
+                        <span style={{ display: 'block', fontSize: 10.5, color: C.muted, fontWeight: 600 }}>{r.sub}</span>
+                      </span>
+                      <span className="rk-val">{formatCurrency(r.v)}</span>
+                    </div>
+                  ))}
+                  <div className="muted-note" style={{ marginTop: 6 }}>
+                    Striven's own PI and VA open balances are not added — those invoices are already counted above, against the money that actually arrived.
+                    {(recvPi?.overFunded ?? 0) + (recvVa?.overRemitted ?? 0) > 0 && <> Received above invoiced (not netted): {formatCurrency((recvPi?.overFunded ?? 0) + (recvVa?.overRemitted ?? 0))}.</>}
+                  </div>
+                </div>
+              )}
+              {(arView === 'pi' || arView === 'va') && (
+                <div className="rank-list is-scroll">
+                  {(arView === 'pi' ? recvPi?.rows ?? [] : recvVa?.rows ?? []).map((r, i) => (
+                    <div key={`${r.patient}-${i}`} className="rk-row"
+                      title={`${r.patient} · invoiced ${formatCurrency(r.invoiced)} · received ${formatCurrency(r.received)}`}>
+                      <span className="rk-ico" style={{ background: 'rgba(13,148,136,0.10)', color: '#0D9488' }}>{initials(r.patient || '-')}</span>
+                      <span className="rk-name">
+                        {trunc(r.patient || '-', 20)}
+                        <span style={{ display: 'block', fontSize: 10.5, color: r.received > 0 ? C.warning : C.negative, fontWeight: 600 }}>
+                          {r.reason}{r.received > 0 ? ` · ${formatCurrency(r.received)} in` : ''}
+                        </span>
+                      </span>
+                      <span className="rk-val">{formatCurrency(r.outstanding)}</span>
+                    </div>
+                  ))}
+                  {(arView === 'pi' ? !recvPi : !recvVa) && <div className="muted-note">Master File comparison unavailable.</div>}
+                  {(arView === 'pi' ? recvPi?.rows.length === 0 : recvVa?.rows.length === 0) && <div className="muted-note">Nothing outstanding.</div>}
+                </div>
+              )}
+              {/* `is-scroll`: this list is not sliced, so it caps its own height
+                  and scrolls rather than stretching the cards beside it. */}
+              {arView === 'ledger' && (
+              <div className="rank-list is-scroll">
+                {arDue.map((r) => (
+                  <div key={r.id} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillArPayer(r.payer))}>
+                    <span className="rk-ico" style={{ background: 'rgba(13,148,136,0.10)', color: '#0D9488' }}>{initials(r.payer || '-')}</span>
+                    <span className="rk-name" title={`${r.payer} · ${r.n} invoice${r.n === 1 ? '' : 's'}`}>
+                      {trunc(r.payer || '-', 20)}
+                      <span style={{ display: 'block', fontSize: 10.5, color: r.days > 0 ? C.negative : C.muted, fontWeight: 600 }}>
+                        {r.days > 0 ? `${r.days}d past due` : r.dueDate ? `due ${shortDate(r.dueDate)}` : 'no due date'}
+                        {r.n > 1 ? ` · ${r.n} invoices` : ''}
+                      </span>
+                    </span>
+                    <span className="rk-val">{formatCurrency(r.open)}</span>
+                  </div>
+                ))}
+                {arDue.length === 0 && <div className="muted-note">No open receivables.</div>}
+              </div>
+              )}
+              <div className="cfoot" style={{ marginTop: 'auto' }}>
+                {arView === 'all' ? (<>
+                  <div className="cf-i"><div className="l">Complete receivable</div><div className="v">{formatCurrency(recvTotal)}</div></div>
+                </>) : arView === 'ledger' ? (<>
+                  <div className="cf-i"><div className="l">Total due</div><div className="v">{formatCurrency(arOpenF)}</div></div>
+                  <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Invoices</div><div className="v accent">{arInv.length}</div></div>
+                </>) : (<>
+                  <div className="cf-i"><div className="l">{arView === 'pi' ? 'Not funded' : 'Not remitted'}</div><div className="v">{formatCurrency((arView === 'pi' ? recvPi?.outstanding : recvVa?.outstanding) ?? 0)}</div></div>
+                  <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">{arView === 'pi' ? 'Cases' : 'Patients'}</div><div className="v accent">{(arView === 'pi' ? recvPi?.count : recvVa?.count) ?? 0}</div></div>
+                </>)}
+              </div>
+              <button className="card-link" onClick={go('receivables')}>Open receivables →</button>
+            </div>
+
+            {/* AP DUE — same bands as AR, so "what we are owed" and "what we
+                owe" can be read against each other rather than in isolation. */}
+            {(mfOk ? mfOwed.length > 0 : apBillCount > 0) && (
+              <ChartCard className="g12-4" title="AP Due"
+                sub={mfOk ? 'Owed by vendor · Master File · no offsetting' : `Open bills · ${balanceScopeLabel}${apLedgerBills ? ' · AP ledger' : ''}`}>
+                {/* apBillCount, not ap.count: the value is the ledger's, and
+                    pairing it with Striven's four made this card contradict
+                    itself inside a single sentence. */}
+                {mfOk ? (
+                <MetricDetail
+                  value={apTotal} format={formatCurrency}
+                  sub={<>owed to {mfOwed.length} vendor{mfOwed.length === 1 ? '' : 's'}
+                    {/* Due vs Overdue, by each open bill's due date. */}
+                    {' · '}bills <b style={{ color: C.info }}>{formatCurrency(apDetail.rail[0].value)}</b> due,
+                    {' '}<b style={{ color: C.negative }}>{formatCurrency(apDetail.overdue)}</b> overdue
+                    {(mfAp!.billsRequired ?? 0) > 0 && <> · <b style={{ color: C.warning }}>{formatCurrency(mfAp!.billsRequired ?? 0)}</b> bills required (paid more than billed, not netted)</>}</>}
+                  rail={mfOwed.map((v, i) => ({ name: v.vendor, value: v.owed, color: [HUE.ap.to, C.warning, '#EA580C', C.negative, C.info, C.brand][i % 6] }))}
+                  facts={[
+                    ...(mfOwed[0] ? [{
+                      label: 'Top vendor',
+                      value: `${Math.round((mfOwed[0].owed / Math.max(1, apTotal)) * 100)}%`,
+                      note: trunc(mfOwed[0].vendor, 18), title: mfOwed[0].vendor,
+                      warn: (mfOwed[0].owed / Math.max(1, apTotal)) > 0.5,
+                    }] : []),
+                    { label: 'Vendors', value: String(mfOwed.length), note: 'owed now' },
+                    { label: 'Bills req.', value: formatCurrency(mfAp!.billsRequired ?? 0), note: 'overpaid vendors', warn: (mfAp!.billsRequired ?? 0) > 0 },
+                  ]}
+                />
+                ) : (
+                <MetricDetail
+                  value={apOpenF} format={formatCurrency}
+                  sub={<>across {apBillCount} unpaid bill{apBillCount === 1 ? '' : 's'}
+                    {apDetail.overdue > 0 && <> · <b style={{ color: C.warning }}>{formatCurrency(apDetail.overdue)}</b> already overdue</>}</>}
+                  rail={apDetail.rail}
+                  facts={[
+                    { label: 'Oldest', value: apDetail.oldest > 0 ? `${apDetail.oldest}d` : '-', note: 'past due', warn: apDetail.oldest > 30 },
+                    ...(apDetail.top ? [{
+                      label: 'Top vendor',
+                      value: `${Math.round((apDetail.top.value / Math.max(1, apOpenF)) * 100)}%`,
+                      note: trunc(apDetail.top.name, 18), title: apDetail.top.name,
+                      warn: (apDetail.top.value / Math.max(1, apOpenF)) > 0.5,
+                    }] : []),
+                    { label: 'Vendors', value: String(apDetail.vendors), note: 'owed now' },
+                  ]}
+                />
+                )}
+              </ChartCard>
+            )}
+
+            {/* PI · STRIVEN VS LIENSTAR (3 Oct 2026, on request): Striven's PI
+                order value and invoicing against the Master File's PI Lienstar
+                Funding tab, with the difference and the cases behind it. Full
+                width, so it takes a row of its own under AR Due / AP Due. */}
+            {!hide('overview.piLienstar') && <PiLienstarCard className="g12-12" />}
+            {/* VA · STRIVEN VS REMITTANCES (3 Oct 2026, on request): the VA twin
+                — Striven's VA invoicing against what the distributors remitted,
+                per the Master File's VA Remmittances tab. */}
+            {!hide('overview.vaRemittances') && <VaRemittanceCard className="g12-12" />}
+
+            {/* OPEN BALANCES sits where Units by programme was (2 Oct 2026, on
+                request); Units by programme moved down beside Position summary.
+                THE PERIOD IS IN THE TITLE, not only in the sub-line. A card
                 headed "Open balances" under a header showing FY2026 reads as the
                 whole year; it is September's, and the sub-line saying so was
                 being missed. See periodLabel. */}
             {donutSlices.length > 0 && (
               <ChartCard className="g12-3" title={`Open balances${balScoped ? ` · ${periodLabel}` : ''}`}
-                sub={`${formatCurrency(arOpenF)} owed to us · ${formatCurrency(apOpenF + commDue.payable)} owed out`}>
+                sub={`${formatCurrency(arOpenF)} owed to us · ${formatCurrency(apTotal + commDue.payable)} owed out`}>
                 <DonutList data={donutSlices} totalLabel="Total outstanding"
                   onSelect={(n) => { location.hash = n === 'AR Expected' ? 'receivables' : n === 'AP Due' ? 'payables' : 'commission'; }} />
               </ChartCard>
             )}
-            {/* POSITION SUMMARY — the same three balances, summarised rather
-                than split. The ring can only show composition, so its "total
-                outstanding" adds money coming IN to money going OUT: a real
-                sum of two opposite things. This says which way each runs and
-                what is left, which is the question the ring raises. */}
-            {donutSlices.length > 0 && (
-              <ChartCard className="g12-3" title={`Position summary${balScoped ? ` · ${periodLabel}` : ''}`} sub={`Open balances, netted · ${balanceScopeLabel}`}>
-                <div className="pos">
-                  <div className="pos-cap">Net position</div>
-                  <div className={`pos-net ${arOpenF - (apOpenF + commDue.payable) < 0 ? 'neg' : 'pos'}`}>
-                    <AnimatedNumber value={arOpenF - (apOpenF + commDue.payable)} format={formatCurrency} duration={700} />
-                  </div>
-                  <div className="pos-sub">
-                    {arOpenF >= apOpenF + commDue.payable
-                      ? 'More is owed to us than we owe out.'
-                      : `We owe ${((apOpenF + commDue.payable) / Math.max(1, arOpenF)).toFixed(1)}× what we are owed.`}
-                  </div>
-
-                  {/* Both bars share ONE scale — the larger side is full width —
-                      so the two lengths are directly comparable. Scaling each to
-                      its own width would make them look equal. */}
-                  <div className="pos-side">
-                    <div className="pos-lab"><span className="t">Owed to us</span><span className="v">{formatCurrency(arOpenF)}</span></div>
-                    <div className="pos-track">
-                      <span className="seg" style={{ width: `${(arOpenF / Math.max(arOpenF, apOpenF + commDue.payable, 1)) * 100}%`, background: C.positive }} />
-                    </div>
-                    <div className="pos-key"><span className="k"><span className="d" style={{ background: C.positive }} />AR from {arInv.length} unpaid invoice{arInv.length === 1 ? '' : 's'}</span></div>
+            {/* AR EXPECTED, IN DETAIL. The tile said "$35,076 · 11 unpaid",
+                which is a number without a risk attached. This adds the three
+                things that change what you do about it: how overdue it is, how
+                much rides on one payer, and what is sitting in unapplied
+                credits. */}
+            {/* AR EXPECTED IS THE MASTER FILE'S RECEIVABLE NOW (3 Oct 2026, on
+                request): PI invoiced and not funded by Lienstar, plus VA
+                invoiced and not remitted — AR Due's PI and VA lines. The Striven
+                ledger balance (and its ageing, payers and unapplied credits,
+                which were all ledger facts) is no longer in this card. */}
+            {(recvPi || recvVa) && (
+              <ChartCard className="g12-4" title="AR Expected"
+                sub={`Invoiced, not yet received · PI per Lienstar · VA per remittances · ${PROG_LABEL[prog]}`}>
+                <div className="ard">
+                  <div className="ard-top"><AnimatedNumber value={arExp} format={formatCurrency} duration={700} /></div>
+                  <div className="ard-sub">
+                    {expPi && <>{expPi.count} PI case{expPi.count === 1 ? '' : 's'} <b>{formatCurrency(expPi.outstanding)}</b></>}
+                    {expPi && expVa && ' · '}
+                    {expVa && <>{expVa.count} VA patient{expVa.count === 1 ? '' : 's'} <b>{formatCurrency(expVa.outstanding)}</b></>}
+                    {!expPi && !expVa && <>The Master File covers PI and VA only; nothing to show for {PROG_LABEL[prog]}.</>}
                   </div>
 
-                  <div className="pos-side">
-                    <div className="pos-lab"><span className="t">We owe out</span><span className="v">{formatCurrency(apOpenF + commDue.payable)}</span></div>
-                    <div className="pos-track">
-                      <span className="seg" style={{ width: `${(commDue.payable / Math.max(arOpenF, apOpenF + commDue.payable, 1)) * 100}%`, background: HUE.po.to }} />
-                      <span className="seg" style={{ width: `${(apOpenF / Math.max(arOpenF, apOpenF + commDue.payable, 1)) * 100}%`, background: HUE.ap.to, animationDelay: '.08s' }} />
+                  {/* What it is made of: per programme, nothing received yet vs
+                      partly received — the two call for different follow-up. */}
+                  {arExpDetail.segs.length > 0 && (
+                    <>
+                      <div className="ard-rail">
+                        {arExpDetail.segs.map((x, i) => (
+                          <span key={x.name} className="seg" title={`${x.name}: ${formatCurrency(x.value)}`}
+                            style={{ width: `${(x.value / Math.max(1, arExp)) * 100}%`, background: x.color, animationDelay: `${i * 0.07}s` }} />
+                        ))}
+                      </div>
+                      <div className="ard-key">
+                        {arExpDetail.segs.map((x) => (
+                          <span key={x.name} className="k">
+                            <span className="d" style={{ background: x.color }} />{x.name} <b>{formatCurrency(x.value)}</b>
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  <div className="ard-facts">
+                    <div className="ard-f">
+                      <div className="l">Invoiced</div>
+                      <div className="v">{formatCurrency(arExpDetail.invoiced)}</div>
+                      <div className="n">on these cases</div>
                     </div>
-                    <div className="pos-key">
-                      <span className="k"><span className="d" style={{ background: HUE.po.to }} />Commission <b>{formatCurrency(commDue.payable)}</b></span>
-                      <span className="k"><span className="d" style={{ background: HUE.ap.to }} />Bills <b>{formatCurrency(apOpenF)}</b></span>
+                    <div className="ard-f">
+                      <div className="l">Received</div>
+                      <div className="v">{arExpDetail.invoiced > 0 ? `${Math.round((arExpDetail.received / arExpDetail.invoiced) * 100)}%` : '-'}</div>
+                      <div className="n">{formatCurrency(arExpDetail.received)} in so far</div>
                     </div>
+                    {arExpDetail.top && (
+                      <div className="ard-f" title={arExpDetail.top.patient}>
+                        <div className="l">Largest</div>
+                        <div className={`v${(arExpDetail.top.outstanding / Math.max(1, arExp)) > 0.3 ? ' warn' : ''}`}>
+                          {Math.round((arExpDetail.top.outstanding / Math.max(1, arExp)) * 100)}%
+                        </div>
+                        <div className="n">{trunc(arExpDetail.top.patient, 18)}</div>
+                      </div>
+                    )}
+                    {expVa && vaRemit?.remit?.lastPaid && (
+                      <div className="ard-f">
+                        <div className="l">Last remittance</div>
+                        <div className="v">{shortDate(vaRemit.remit.lastPaid)}</div>
+                        <div className="n">latest on the VA tab</div>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="pos-note">
-                    Balances, not cash: commission falls due as orders settle, and AR arrives on its own schedule
-                    {piDso != null ? ` - PI is collecting in about ${piDso} days` : ''}.
+                  <div className="ard-note">
+                    No Striven ledger balance is included.
+                    {prog === 'All' && ledgerOtherSum > 0 && <> {formatCurrency(ledgerOtherSum)} open on the ledger for programmes the Master File does not cover (TriCare, DOL, unassigned) is left out.</>}
+                    {' '}Click AR Due → PI · Lienstar or VA · Remit for the cases.
                   </div>
                 </div>
               </ChartCard>
             )}
-
             {/* DEMO IS STILL NOT IN THIS RING, deliberately. The ring is a
                 share-of-programme chart, and demo is not a programme anyone
                 sells into — a fourth slice would put test orders in the same
@@ -1649,143 +1652,10 @@ export function OverviewCharts() {
                 )}
               </ChartCard>
             )}
-            {/* AR EXPECTED, IN DETAIL. The tile said "$35,076 · 11 unpaid",
-                which is a number without a risk attached. This adds the three
-                things that change what you do about it: how overdue it is, how
-                much rides on one payer, and what is sitting in unapplied
-                credits. */}
-            {arInv.length > 0 && (
-              <ChartCard className="g12-4" title="AR Expected"
-                sub={`Open receivables · ${PROG_LABEL[prog]} · ${balanceScopeLabel}`}>
-                <div className="ard">
-                  <div className="ard-top"><AnimatedNumber value={arOpenF} format={formatCurrency} duration={700} /></div>
-                  <div className="ard-sub">
-                    across {arInv.length} unpaid invoice{arInv.length === 1 ? '' : 's'}
-                    {arDetail.overdue > 0 && <> · <b style={{ color: C.warning }}>{formatCurrency(arDetail.overdue)}</b> already overdue</>}
-                  </div>
-
-                  {/* Urgency rail: one bar, segments in due-date order, so the
-                      weight of the overdue end reads without a legend. */}
-                  {arDetail.buckets.length > 0 && (
-                    <>
-                      <div className="ard-rail">
-                        {arDetail.buckets.map((x, i) => (
-                          <span key={x.name} className="seg" title={`${x.name}: ${formatCurrency(x.value)}`}
-                            style={{ width: `${(x.value / Math.max(1, arOpenF)) * 100}%`, background: x.color, animationDelay: `${i * 0.07}s` }} />
-                        ))}
-                      </div>
-                      <div className="ard-key">
-                        {arDetail.buckets.map((x) => (
-                          <span key={x.name} className="k">
-                            <span className="d" style={{ background: x.color }} />{x.name} <b>{formatCurrency(x.value)}</b>
-                          </span>
-                        ))}
-                      </div>
-                    </>
-                  )}
-
-                  <div className="ard-facts">
-                    <div className="ard-f">
-                      <div className="l">Oldest</div>
-                      <div className={`v${arDetail.oldest > 30 ? ' warn' : ''}`}>{arDetail.oldest > 0 ? `${arDetail.oldest}d` : '-'}</div>
-                      <div className="n">past due</div>
-                    </div>
-                    <div className="ard-f">
-                      <div className="l">PI DSO</div>
-                      <div className="v">{piDso != null ? `${piDso}d` : '-'}</div>
-                      <div className="n">to collect</div>
-                    </div>
-                    {arDetail.top && (
-                      <div className="ard-f" title={arDetail.top.name}>
-                        <div className="l">Top payer</div>
-                        <div className={`v${(arDetail.top.value / Math.max(1, arOpenF)) > 0.3 ? ' warn' : ''}`}>
-                          {Math.round((arDetail.top.value / Math.max(1, arOpenF)) * 100)}%
-                        </div>
-                        <div className="n">{trunc(arDetail.top.name, 18)}</div>
-                      </div>
-                    )}
-                    <div className="ard-f">
-                      <div className="l">Payers</div>
-                      <div className="v">{arDetail.payers}</div>
-                      <div className="n">owing now</div>
-                    </div>
-                  </div>
-
-                  {/* Unapplied credits are money already received that no invoice
-                      has been matched to — it reduces what is really collectable
-                      and is invisible in the AR total. */}
-                  {prog === 'All' && (ar?.unappliedCredits ?? 0) > 0 && (
-                    <div className="ard-note">
-                      <b style={{ color: C.warning }}>{formatCurrency(ar.unappliedCredits)}</b> sits in unapplied credits -
-                      payments received but not matched to an invoice, so the true collectable balance is lower than the figure above.
-                    </div>
-                  )}
-                </div>
-              </ChartCard>
-            )}
-            {/* AR DUE — the receivables themselves: "who owes us what" is the
-                collection call, and days past due rides on each row.
-                Takes SIX columns now that the AP Due list beside it is gone —
-                its per-vendor detail was already carried by the AP Due card
-                above (ageing, oldest bill, vendor concentration), so the list
-                was a second answer to a question already answered. Payables
-                keeps the full per-bill view, one click away. */}
-            <div className="section chart-card g12-4">
-              <div className="section-head"><div>
-                <h2 className="section-title">AR Due</h2>
-                <div className="section-sub">Open receivables · {PROG_LABEL[prog]} · {balanceScopeLabel}</div>
-              </div></div>
-              {/* `is-scroll`: this list is not sliced, so it caps its own height
-                  and scrolls rather than stretching the cards beside it. */}
-              <div className="rank-list is-scroll">
-                {arDue.map((r) => (
-                  <div key={r.id} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillArPayer(r.payer))}>
-                    <span className="rk-ico" style={{ background: 'rgba(13,148,136,0.10)', color: '#0D9488' }}>{initials(r.payer || '-')}</span>
-                    <span className="rk-name" title={`${r.payer} · ${r.n} invoice${r.n === 1 ? '' : 's'}`}>
-                      {trunc(r.payer || '-', 20)}
-                      <span style={{ display: 'block', fontSize: 10.5, color: r.days > 0 ? C.negative : C.muted, fontWeight: 600 }}>
-                        {r.days > 0 ? `${r.days}d past due` : r.dueDate ? `due ${shortDate(r.dueDate)}` : 'no due date'}
-                        {r.n > 1 ? ` · ${r.n} invoices` : ''}
-                      </span>
-                    </span>
-                    <span className="rk-val">{formatCurrency(r.open)}</span>
-                  </div>
-                ))}
-                {arDue.length === 0 && <div className="muted-note">No open receivables.</div>}
-              </div>
-              <div className="cfoot" style={{ marginTop: 'auto' }}>
-                <div className="cf-i"><div className="l">Total due</div><div className="v">{formatCurrency(arOpenF)}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Invoices</div><div className="v accent">{arInv.length}</div></div>
-              </div>
-              <button className="card-link" onClick={go('receivables')}>Open receivables →</button>
-            </div>
-
-            {/* AP DUE — same bands as AR, so "what we are owed" and "what we
-                owe" can be read against each other rather than in isolation. */}
-            {apBillCount > 0 && (
-              <ChartCard className="g12-4" title="AP Due"
-                sub={`Open bills · ${balanceScopeLabel}${apLedgerBills ? ' · AP ledger' : ''}`}>
-                {/* apBillCount, not ap.count: the value is the ledger's, and
-                    pairing it with Striven's four made this card contradict
-                    itself inside a single sentence. */}
-                <MetricDetail
-                  value={apOpenF} format={formatCurrency}
-                  sub={<>across {apBillCount} unpaid bill{apBillCount === 1 ? '' : 's'}
-                    {apDetail.overdue > 0 && <> · <b style={{ color: C.warning }}>{formatCurrency(apDetail.overdue)}</b> already overdue</>}</>}
-                  rail={apDetail.rail}
-                  facts={[
-                    { label: 'Oldest', value: apDetail.oldest > 0 ? `${apDetail.oldest}d` : '-', note: 'past due', warn: apDetail.oldest > 30 },
-                    ...(apDetail.top ? [{
-                      label: 'Top vendor',
-                      value: `${Math.round((apDetail.top.value / Math.max(1, apOpenF)) * 100)}%`,
-                      note: trunc(apDetail.top.name, 18), title: apDetail.top.name,
-                      warn: (apDetail.top.value / Math.max(1, apOpenF)) > 0.5,
-                    }] : []),
-                    { label: 'Vendors', value: String(apDetail.vendors), note: 'owed now' },
-                  ]}
-                />
-              </ChartCard>
-            )}
+            {/* POSITION SUMMARY WAS HERE, and is gone on request (3 Oct 2026):
+                the net of what is owed to us against commission + bills owed
+                out. Its parts are still on AR Expected, AP Due and Commission
+                Due. */}
 
             {/* ORDER BOOK BY STATE — replaces the funnel. See the note on
                 orderStates: the stages could not legitimately nest, and the old
@@ -1855,27 +1725,10 @@ export function OverviewCharts() {
 
           </div>
 
-          {/* BUSINESS GROWTH — the company's own trajectory, month by month, added
-              to this board on request (it already sits on the team dashboard).
-              It reads the P&L for BOTH revenue and net profit, so its margin is
-              the statement's own; the Revenue vs Expense card below is the
-              STRIVEN book over the selected period, which is a different set of
-              documents. Two cards, two books, each saying which it is.
-
-              Hideable like every other panel here, so a profile can drop it
-              without touching this file. */}
-          {kevinLook ? (
-            // Kevin's board: Yet to be Invoiced beside Business growth, on request.
-            <div className="exec-grid12">
-              {!hide('overview.growth') && <div className="g12-8 g12-fill"><BusinessGrowth /></div>}
-              <YetToInvoice pending={ar?.pending} className={hide('overview.growth') ? 'g12-12' : 'g12-4'} fill={!hide('overview.growth')} />
-            </div>
-          ) : (!hide('overview.growth') && <BusinessGrowth />)}
-
           <div className="exec-grid12">
             {/* Kevin's board: Cash Flow, Revenue vs Expense and Sales Orders by
-                Program sit three across (a third each), on request. */}
-            <ChartCard className={kevinLook ? "g12-4" : "g12-5"} title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>
+                Program sit across one row with the CEI tile (a quarter each), on request. */}
+            <ChartCard className={kevinLook ? "g12-3" : "g12-5"} title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>
               {cashData.length > 1 && <LegendDots items={[{ name: 'Cash In', color: C.positive }, { name: 'Cash Out', color: C.negative }, { name: 'Net Cash', color: C.brand }]} />}
               <BarsLine data={cashData}
                 bars={[{ key: 'cashIn', name: 'Cash In', color: C.positive }, { key: 'cashOut', name: 'Cash Out', color: C.negative }]}
@@ -1887,7 +1740,7 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <ChartCard className={kevinLook || !hide('overview.collectionRate') ? "g12-4" : "g12-7"} title="Revenue vs Expense" sub={`Invoiced revenue vs billed expenses · ${periodLabel}`}>
+            <ChartCard className={kevinLook ? "g12-3" : !hide('overview.collectionRate') ? "g12-4" : "g12-7"} title="Revenue vs Expense" sub={`Invoiced revenue vs billed expenses · ${periodLabel}`}>
               {finData.length > 1 && <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />}
               <BarsLine data={finData}
                 bars={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expense', color: C.negative }]}
@@ -1916,6 +1769,39 @@ export function OverviewCharts() {
             </ChartCard>
             )}
 
+            {/* CEI · SALES ORDERS BY PROGRAM · PO SPEND, one row of three on
+                Crystal's board (2 Oct 2026, on request). This zero-height
+                full-width spacer forces the line break before CEI, so Cash Flow,
+                Revenue vs Expense and Collection Rate keep the row above. Kevin's
+                board keeps its own four-across row and does not get the break. */}
+            {!kevinLook && <div className="g12-12" aria-hidden style={{ height: 0, margin: 0, padding: 0, border: 0 }} />}
+            {/* CEI - the last COMPLETED month's Collection Effectiveness Index,
+                beside Collection Rate (2 Oct 2026, on request). Collection Rate
+                is this period's cash ÷ invoicing and runs past 100% early in a
+                month; CEI only counts what was collectible. Full history is on
+                Receivables › AR Overview. */}
+            {!hide('overview.cei') && ceiLast && (
+            <ChartCard className={kevinLook ? "g12-3" : "g12-4"} title="Collection Effectiveness" guide="Collection Effectiveness Index"
+              sub={`CEI · ${new Date(`${ceiLast.month}-01T00:00:00`).toLocaleString('en-US', { month: 'long', year: 'numeric' })} · last full month`}
+              right={<button className="card-link" style={{ marginTop: 0 }} onClick={() => { location.hash = sectionHref('receivables', `ar-cei-${ceiLast.month}`); }}>By month →</button>}>
+              <div className="card-body">
+                <GaugeRing value={Math.min(100, Math.max(0, ceiLast.cei ?? 0))} centerValue={`${(ceiLast.cei ?? 0).toFixed(1)}%`} centerLabel={ceiLast.band ?? ''}
+                  color={ceiLast.band === 'Excellent' ? C.positive : ceiLast.band === 'Good' ? C.brand : ceiLast.band === 'Fair' ? C.warning : C.negative} height={150} />
+              </div>
+              <div className="cfoot">
+                <div className="cf-i"><div className="l">Collected</div><div className="v pos">{formatCurrency(ceiLast.collected)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Collectible</div><div className="v">{formatCurrency(ceiLast.collectible)}</div></div>
+              </div>
+              <div className="cfoot" style={{ marginTop: 0 }}>
+                <div className="cf-i"><div className="l">vs prior month</div>
+                  <div className={`v ${ceiPrev?.cei != null ? ((ceiLast.cei ?? 0) >= ceiPrev.cei ? 'pos' : 'neg') : ''}`}>
+                    {ceiPrev?.cei != null ? `${(ceiLast.cei ?? 0) >= ceiPrev.cei ? '▲' : '▼'} ${Math.abs((ceiLast.cei ?? 0) - ceiPrev.cei).toFixed(1)} pts` : '-'}
+                  </div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Target</div><div className="v">90+</div></div>
+              </div>
+            </ChartCard>
+            )}
+
             {/* TOP VENDORS (BY SPEND) WAS HERE, and is gone on request. It
                 ranked the five largest vendors by committed PO spend and linked
                 out to the Vendors tab.
@@ -1929,13 +1815,13 @@ export function OverviewCharts() {
             {/* The sub names the demo split rather than leaving a muted bar to
                 explain itself — it is the one row on this card that is in the
                 total but not in the business. */}
-            <ChartCard className={kevinLook ? "g12-4" : "g12-6"} title="Sales Orders by Program"
+            <ChartCard className={kevinLook ? "g12-3" : "g12-4"} title="Sales Orders by Program"
               sub={`${so.count} orders · click a program to filter${(so.piva.DEMO?.count ?? 0) > 0 ? ` · includes ${so.piva.DEMO.count} DEMO / test` : ''}`}>
               <div className="card-body">
                 <BarList data={programBars} money={false}
                   onSelect={(name) => setProg((p) => {
                     const key = name === 'Tri-Care' ? 'TriCare' : name;
-                    return p === key ? 'All' : (key === 'PI' || key === 'VA' || key === 'TriCare' ? key : p);
+                    return p === key ? 'All' : (key === 'PI' || key === 'VA' || key === 'TriCare' || key === 'DOL' ? key : p);
                   })} />
               </div>
               <div className="cfoot">
@@ -1944,6 +1830,9 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
+            {/* The Exceptions preview card was removed from this board on request
+                (2 Oct 2026). The Exceptions page itself is unchanged and still in
+                the sidebar. */}
             {!hide('overview.poSpendTop5') && (
             <ChartCard className="g12-4" title="PO Spend by Vendor (Top 5)" sub="Committed spend · active POs only">
               <div className="card-body">
@@ -1958,7 +1847,7 @@ export function OverviewCharts() {
 
             <div className={`section chart-card ${kevinLook
               ? (hide('overview.exceptions') ? (kevinUnits ? 'g12-6' : 'g12-12') : 'g12-8')
-              : (hide('overview.exceptions') ? 'g12-6' : 'g12-4')}`}>
+              : 'g12-6'}`}>
               <div className="section-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                 <div>
                   <h2 className="section-title">Financial Insights</h2>
@@ -2010,24 +1899,8 @@ export function OverviewCharts() {
 
             {/* Between the two: every live sales order nobody has invoiced.
                 On Kevin's board it sits beside Business growth instead (below). */}
-            {!kevinLook && <YetToInvoice pending={ar?.pending} className={hide('overview.exceptions') ? 'g12-6' : 'g12-4'} />}
+            {!kevinLook && <YetToInvoice pending={ar?.pending} className="g12-6" />}
 
-            {!hide('overview.exceptions') && (
-            <ChartCard className="g12-4" title="Exceptions" sub={`${exc?.totalOpen ?? 0} data-quality items`}
-              right={<button className="card-link" style={{ marginTop: 0 }} onClick={go('exceptions')}>View all →</button>}>
-              {excGroups.length ? (
-                <div className="exc-list">
-                  {excGroups.map((g) => (
-                    <div key={g.key} className="exc-row" style={{ cursor: 'pointer' }} {...clickableProps(go('exceptions'))}>
-                      <span className={`exc-badge ${g.severity}`}>{g.count}</span>
-                      <span className="exc-title" title={g.title}>{g.title}</span>
-                      <span className="exc-val">{g.value ? formatCurrency(g.value) : ''}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : <div className="qb-placeholder"><span className="qb-icon">✓</span>No open exceptions</div>}
-            </ChartCard>
-            )}
           </div>
 
           {/* ORDER STATUS BY STRIVEN LABEL — Company board only. Striven's exact

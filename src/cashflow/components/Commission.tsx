@@ -85,7 +85,7 @@ export function CommissionTab() {
   // is NOT the same as choosing All — see the derivation below.
   const [monthPick, setMonthPick] = useState<string | null>(null);
   const [repSel, setRepSel] = useState<StrivenCommRep | null>(null);
-  const [drill, setDrill] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI'>(null);
+  const [drill, setDrill] = useState<null | 'total' | 'TriCare' | 'VA' | 'PI' | 'DOL'>(null);
   const [peer, setPeer] = useState<StrivenCommRep | null>(null);
   const [viewAs, setViewAs] = useState<string | null>(null);   // admin preview only
   const agoText = useSyncAgo(lastSync);
@@ -175,9 +175,9 @@ export function CommissionTab() {
   // the Total reading 376 orders / 517 units above four rows summing to
   // 374 / 516 — a total with no rows behind it. Starts from zero now.
   const vt = reps.reduce((a, r) => ({
-    TriCare: a.TriCare + num(r.nTricare), VA: a.VA + num(r.nVa), PI: a.PI + num(r.nPi),
+    TriCare: a.TriCare + num(r.nTricare), VA: a.VA + num(r.nVa), PI: a.PI + num(r.nPi), DOL: a.DOL + num(r.nDol),
     orders: a.orders + num(r.orders), units: a.units + num(r.units),
-  }), { TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0 });
+  }), { TriCare: 0, VA: 0, PI: 0, DOL: 0, orders: 0, units: 0 });
   // The SERVER aggregates describe the whole book. Whenever this page shows
   // less than that — a month, or a trimmed roster — they stop describing what is
   // on screen, so nothing reads them. Re-summing the rendered rows is the rule
@@ -204,6 +204,7 @@ export function CommissionTab() {
     TriCare: m0(sumOf((r) => r.tricare)),
     VA: m0(sumOf((r) => r.va)),
     PI: m0(sumOf((r) => r.pi)),
+    DOL: m0(sumOf((r) => r.dol)),
   };
   const total = m0(sumOf((r) => r.total));
   const payableSum = m0(sumOf((r) => r.payableTotal));
@@ -316,6 +317,7 @@ export function CommissionTab() {
               { key: 'TriCare' as const, ico: 'shield' as const, tint: PROG_C.TriCare, label: 'TriCare', value: bp.TriCare, orders: vt.TriCare, note: 'legacy vertical' },
               { key: 'VA' as const, ico: 'clip' as const, tint: PROG_C.VA, label: 'VA', value: bp.VA, orders: vt.VA, note: 'units × device rate' },
               { key: 'PI' as const, ico: 'trend' as const, tint: PROG_C.PI, label: 'Personal Injury', value: bp.PI, orders: vt.PI, note: 'units × device rate' },
+              { key: 'DOL' as const, ico: 'shield' as const, tint: PROG_C.DOL, label: 'DOL', value: bp.DOL, orders: vt.DOL, note: 'units × device rate' },
             ].filter((p) => p.orders > 0);
             return (
               // SHAPE FOLLOWS THE COUNT. This strip sits in half a row beside a
@@ -364,8 +366,8 @@ export function CommissionTab() {
             accent={drill === 'total' ? C.brand : PROG_C[drill]}
             rows={reps.map((r) => ({
               name: r.rep,
-              value: drill === 'total' ? r.total : drill === 'TriCare' ? r.tricare : drill === 'VA' ? r.va : r.pi,
-              orders: drill === 'total' ? num(r.orders) : drill === 'TriCare' ? num(r.nTricare) : drill === 'VA' ? num(r.nVa) : num(r.nPi),
+              value: drill === 'total' ? r.total : drill === 'TriCare' ? r.tricare : drill === 'VA' ? r.va : drill === 'DOL' ? (r.dol ?? null) : r.pi,
+              orders: drill === 'total' ? num(r.orders) : drill === 'TriCare' ? num(r.nTricare) : drill === 'VA' ? num(r.nVa) : drill === 'DOL' ? num(r.nDol) : num(r.nPi),
             }))}
             onClose={() => setDrill(null)}
           />}
@@ -411,6 +413,7 @@ export function CommissionTab() {
                   <th className="num" title="Orders booked in TriCare">TriCare ord.</th>
                   <th className="num" title="Orders booked in VA">VA ord.</th>
                   <th className="num" title="Orders booked in PI">PI ord.</th>
+                  <th className="num" title="Orders booked in DOL">DOL ord.</th>
                   <th className="num">Orders</th><th className="num">Units</th>
                   {/* PAID, and it had to be added the moment July was marked
                       settled. Without it the columns read "$0 payable · $0
@@ -435,7 +438,7 @@ export function CommissionTab() {
                       the row order and took a fifth of the width to do it. */}
                 </tr></thead>
                 <tbody>
-                  {reps.length === 0 && <tr><td colSpan={10} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+                  {reps.length === 0 && <tr><td colSpan={11} style={{ color: C.muted }}>No orders in this period.</td></tr>}
                   {reps.map((r, i) => {
                     const mine = myRep === r.rep;
                     const open = isAdmin || mine;
@@ -467,7 +470,7 @@ export function CommissionTab() {
                             </span>
                           )}
                         </td>
-                        <OrderCountCells t={num(r.nTricare)} v={num(r.nVa)} p={num(r.nPi)} />
+                        <OrderCountCells t={num(r.nTricare)} v={num(r.nVa)} p={num(r.nPi)} d={num(r.nDol)} />
                         <td className="num">{num(r.orders)}</td>
                         <td className="num">{num(r.units)}</td>
                         <td className="num" style={{ color: r.payableTotal == null ? C.muted : C.positive, fontWeight: 700 }}>{money(r.payableTotal)}</td>
@@ -492,7 +495,7 @@ export function CommissionTab() {
                 {reps.length > 0 && (
                   <tfoot><tr className="total-row">
                     <td /><td>Total</td>
-                    <td className="num">{vt.TriCare}</td><td className="num">{vt.VA}</td><td className="num">{vt.PI}</td>
+                    <td className="num">{vt.TriCare}</td><td className="num">{vt.VA}</td><td className="num">{vt.PI}</td><td className="num">{vt.DOL}</td>
                     <td className="num">{vt.orders}</td><td className="num">{vt.units}</td>
                     {/* Same population as the Commission cell beside it. */}
                     {/* The two cells that showed the bug: under "Jul 2026" they
@@ -584,14 +587,15 @@ function AccessNote({ who }: { who: string }) {
 // peer row opens this instead of the pay detail, so the boundary is explicit
 // rather than a dead click.
 function PeerModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }) {
-  const t = num(rep.nTricare), v = num(rep.nVa), p = num(rep.nPi);
-  const tot = t + v + p;
+  const t = num(rep.nTricare), v = num(rep.nVa), p = num(rep.nPi), d = num(rep.nDol);
+  const tot = t + v + p + d;
   const rows: [string, number, number, string][] = [
     ['TriCare', t, num(rep.uTricare), PROG_C.TriCare],
     ['VA', v, num(rep.uVa), PROG_C.VA],
     ['Personal Injury', p, num(rep.uPi), PROG_C.PI],
+    ['DOL', d, num(rep.uDol), PROG_C.DOL],
   ];
-  // 560, not the 760 default. Three rows — TriCare, VA, PI — across five
+  // 560, not the 760 default. Four rows — TriCare, VA, PI, DOL — across five
   // columns; the extra 200px went to the Vertical column and pushed the figures
   // away from the names they belong to.
   return (
@@ -648,11 +652,11 @@ const pct = (n: number | null | undefined, total: number | null | undefined) =>
 
 // Order counts are non-financial and survive redaction, so every rep can see how
 // much volume every other rep booked in each vertical: just not their pay.
-function OrderCountCells({ t, v, p }: { t: number; v: number; p: number }) {
+function OrderCountCells({ t, v, p, d }: { t: number; v: number; p: number; d: number }) {
   const cell = (n: number, key: string) => (
     <td key={key} className="num" style={{ color: n ? C.ink : C.muted, fontWeight: n ? 700 : 400 }}>{n || '-'}</td>
   );
-  return <>{cell(t, 't')}{cell(v, 'v')}{cell(p, 'p')}</>;
+  return <>{cell(t, 't')}{cell(v, 'v')}{cell(p, 'p')}{cell(d, 'd')}</>;
 }
 
 // Paid / Payable-Due / Waiting.
@@ -788,6 +792,7 @@ function RepModal({ rep, onClose }: { rep: StrivenCommRep; onClose: () => void }
     ['TriCare', rep.tricare, num(rep.nTricare), PROG_C.TriCare],
     ['VA', rep.va, num(rep.nVa), PROG_C.VA],
     ['Personal Injury', rep.pi, num(rep.nPi), PROG_C.PI],
+    ['DOL', rep.dol ?? null, num(rep.nDol), PROG_C.DOL],
   ];
   // Prints ONLY what this modal already holds. `rep` is the payload the server
   // sent, and peers' lines and money are stripped there before serialization,

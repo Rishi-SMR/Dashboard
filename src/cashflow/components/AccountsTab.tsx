@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  fetchStrivenAccounts, fetchStrivenPayments, fetchStrivenBillPayments, fetchApLedger,
-  type AccountsResult, type GlAccount, type PaymentsResult, type BillPaymentsResult,
-  type ApLedger,
+  fetchStrivenAccounts, fetchStrivenPayments, fetchMasterFileAp,
+  type AccountsResult, type GlAccount, type PaymentsResult, type MasterFileAp,
 } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
@@ -26,9 +25,10 @@ type Drill = { title: string; sub?: string; columns: { key: string; label: strin
 export function AccountsTab() {
   const [accts, setAccts] = useState<AccountsResult | null>(null);
   const [pay, setPay] = useState<PaymentsResult | null>(null);
-  const [bp, setBp] = useState<BillPaymentsResult | null>(null);
-  // The AP ledger sheet — where the vendor payments actually live. See `paid`.
-  const [apl, setApl] = useState<ApLedger | null>(null);
+  // BILLS PAID's source (1 Oct 2026): the Master File For SMR "AP" tab's
+  // Amount Paid - the same paid-to-date figure as Payables and the AP Register.
+  // Striven's bill-payment records are no longer read for AP.
+  const [mf, setMf] = useState<MasterFileAp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<Drill | null>(null);
@@ -38,11 +38,11 @@ export function AccountsTab() {
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
     try {
-      const [a, p, b, l] = await Promise.all([
-        fetchStrivenAccounts(), fetchStrivenPayments(), fetchStrivenBillPayments(),
-        fetchApLedger().catch(() => null),
+      const [a, p, m] = await Promise.all([
+        fetchStrivenAccounts(), fetchStrivenPayments(),
+        fetchMasterFileAp().catch(() => null),
       ]);
-      setAccts(a); setPay(p); setBp(b); setApl(l);
+      setAccts(a); setPay(p); setMf(m);
       setLastSync(Date.now());
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : 'Failed to load accounts.');
@@ -69,34 +69,18 @@ export function AccountsTab() {
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [accounts]);
 
-  // ── BILLS PAID COMES FROM THE AP LEDGER, like every other screen ───────────
-  //
-  // This card read Striven's bill-payment records: ONE payment, $840 to HiDow.
-  // The Payables tab had already moved to the AP ledger's Debit column — 51
-  // payments, $76,026.06 — so the site carried two tiles with the same label
-  // and a $75,186.06 gap between them, on different tabs where nobody would see
-  // them together and notice.
-  //
-  // Striven's own record is NOT dropped. It keeps its table below, retitled as
-  // what it is, so whoever remembers the $840 can still find it.
-  const useLedgerPaid = Boolean(apl?.ok && (apl.totals?.paymentRows ?? 0) > 0);
-  const paidTotal = useLedgerPaid ? (apl!.totals!.paidRecorded ?? 0) : (bp?.total ?? 0);
-  const paidRowCount = useLedgerPaid ? (apl!.totals!.paymentRows ?? 0) : (bp?.count ?? 0);
-
-  // Bill payments grouped by vendor → amount paid (ranked money bar).
-  const bpByVendor = useMemo(() => {
-    if (useLedgerPaid) {
-      return (apl?.subLedgers ?? [])
-        .filter((g) => g.paymentRows > 0)
-        .map((g) => ({ name: g.subLedger || '-', value: g.paidRecorded }))
-        .sort((a, b) => b.value - a.value);
-    }
-    const m = new Map<string, number>();
-    for (const r of bp?.recent ?? []) m.set(r.vendor || '-', (m.get(r.vendor || '-') ?? 0) + r.amount);
-    return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [bp, apl, useLedgerPaid]);
-
-  const paidCount = useMemo(() => (bp?.recent ?? []).filter((r) => isPaid(r.status)).length, [bp]);
+  // ── BILLS PAID = THE MASTER FILE'S AMOUNT PAID ─────────────────────────────
+  // One figure for "paid to date" across the portal: Payables, the AP Register
+  // and this card all read the Master File AP tab. Every row with an Amount
+  // Paid is a payment - a bill's own, or a lump payment row.
+  const mfOk = Boolean(mf?.ok);
+  const mfPayments = mf?.payments ?? [];
+  const paidTotal = mfOk ? (mf!.paid ?? 0) : 0;
+  const paidRowCount = mfPayments.length;
+  const bpByVendor = useMemo(() => (mf?.vendors ?? [])
+    .filter((v) => v.paid !== 0)
+    .map((v) => ({ name: v.vendor || '-', value: v.paid }))
+    .sort((x, y) => y.value - x.value), [mf]);
 
   // Chart of accounts sorted by type → number → name.
   const sortedAccounts = useMemo(
@@ -127,18 +111,17 @@ export function AccountsTab() {
   }
 
   function openBpDrill(vendor: string) {
-    const list = (bp?.recent ?? []).filter((r) => (r.vendor || '-') === vendor);
+    const list = mfPayments.filter((r) => (r.subLedger || '-') === vendor);
     const sum = list.reduce((t, r) => t + r.amount, 0);
     setDrill({
       title: `Bill Payments: ${vendor}`,
-      sub: `${list.length} paid · ${formatCurrency(sum)}`,
+      sub: `${list.length} payment${list.length === 1 ? '' : 's'} · ${formatCurrency(sum)} · Master File AP tab`,
       columns: [
-        { key: 'ref', label: 'Reference' }, { key: 'account', label: 'Paid from' },
-        { key: 'date', label: 'Paid on' }, { key: 'amount', label: 'Amount', num: true }, { key: 'status', label: 'Status' },
+        { key: 'invoice', label: 'Invoice' }, { key: 'date', label: 'Paid on' }, { key: 'amount', label: 'Amount', num: true },
       ],
       rows: list.map((r) => ({
-        ref: <strong>{r.ref}</strong>, account: r.account || '-', date: fmtDate(r.date),
-        amount: formatCurrency(r.amount), status: <PaidBadge status={r.status} />,
+        invoice: r.invoice ? <strong>{r.invoice}</strong> : <span className="muted-note" style={{ margin: 0 }}>lump payment</span>,
+        date: r.date ? fmtDate(r.date) : '-', amount: formatCurrency(r.amount),
       })),
     });
   }
@@ -148,7 +131,7 @@ export function AccountsTab() {
     columns: [{ key: 'k', label: 'Item' }, { key: 'v', label: 'Value', num: true }],
     rows: rows.map((r) => ({ k: r.k, v: r.v })),
   });
-  const ready = accts && pay && bp;
+  const ready = accts && pay;
   const asOf = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
@@ -192,16 +175,13 @@ export function AccountsTab() {
                 must not be able to differ. */}
             <KpiR ico="wallet" tint="#D97706" label="Bills Paid" value={paidTotal} format={formatCurrency}
               deltaText={`${paidRowCount} payment${paidRowCount === 1 ? '' : 's'}`}
-              foot={useLedgerPaid ? 'AP ledger · Debit column' : 'Striven · ledger unavailable'}
+              foot={mfOk ? 'Master File · Amount Paid' : 'Master File AP tab unavailable'}
               onClick={() => setDrill({
                 title: 'Bills Paid',
-                sub: `Vendor bill payments by vendor · ${useLedgerPaid ? 'AP ledger sheet' : 'Striven records'}`,
+                sub: 'Vendor bill payments by vendor · Master File AP tab · paid to date',
                 ...kv([
                   ...bpByVendor.map((v) => ({ k: v.name, v: formatCurrency(v.value, true) })),
                   { k: 'Total paid', v: formatCurrency(paidTotal, true) },
-                  ...(useLedgerPaid && (bp?.count ?? 0) > 0
-                    ? [{ k: `- Striven separately records ${bp!.count} payment${bp!.count === 1 ? '' : 's'} (included above)`, v: formatCurrency(bp!.total, true) }]
-                    : []),
                 ]),
               })} />
             <KpiR ico="users" tint="#7C3AED" label="Active Accounts" value={activeCount}
@@ -221,46 +201,25 @@ export function AccountsTab() {
           {/* ── Bill payments: PAID ────────────────────────────────── */}
           <ChartCard
             title="Bill Payments: Paid"
-            sub={`${formatCurrency(paidTotal)} settled across ${paidRowCount} payment${paidRowCount === 1 ? '' : 's'}${useLedgerPaid ? ' · AP ledger · Debit column' : ''}`}
+            sub={`${formatCurrency(paidTotal)} paid to date across ${paidRowCount} payment${paidRowCount === 1 ? '' : 's'} · Master File AP tab`}
           >
-            <div className="paid-banner">
-              <span className="paid-banner-check">✓</span>
-              <span><strong>All caught up.</strong> Every recorded bill payment has been settled with the vendor: {formatCurrency(paidTotal)} paid.</span>
-            </div>
             {bpByVendor.length > 0 && <RankBar data={bpByVendor} money colorAt={() => C.positive} onSelect={openBpDrill} />}
-            {/* STRIVEN'S OWN RECORDS, and only those. The figures above come
-                from the AP ledger, which carries a vendor, a date and an amount
-                and no reference, bank account or status — so this table cannot
-                be rebuilt from it, and is kept as the narrower thing it is
-                rather than deleted. The payments here are INCLUDED in the total
-                above, not additional to it. */}
-            {(bp?.count ?? 0) > 0 && (
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 14, marginBottom: -4 }}>
-                Striven&rsquo;s own bill-payment records - {bp!.count} of the {paidRowCount} above, {formatCurrency(bp!.total)}.
-                The rest are recorded only in the AP ledger sheet, which carries no reference or bank account.
-              </div>
-            )}
-            <div className="table-wrap" style={{ marginTop: 14 }}>
-              <table className="data-table">
+            <div className="table-wrap scroll-y" style={{ marginTop: 14 }}>
+              <table className="data-table compact">
                 <thead>
-                  <tr>
-                    <th>Reference</th><th>Vendor</th><th>Paid from</th><th>Paid on</th>
-                    <th className="num">Amount</th><th>Status</th>
-                  </tr>
+                  <tr><th>Vendor</th><th>Invoice</th><th>Paid on</th><th className="num">Amount</th></tr>
                 </thead>
                 <tbody>
-                  {bp.recent.map((r) => (
-                    <tr key={r.id}>
-                      <td><strong>{r.ref}</strong></td>
-                      <td>{r.vendor || '-'}</td>
-                      <td>{r.account || '-'}</td>
-                      <td>{fmtDate(r.date)}</td>
+                  {[...mfPayments].sort((x, y) => (y.date || '').localeCompare(x.date || '')).map((r, i) => (
+                    <tr key={`${r.subLedger}-${r.date}-${i}`}>
+                      <td>{r.subLedger || '-'}</td>
+                      <td>{r.invoice ? <strong>{r.invoice}</strong> : <span className="muted-note" style={{ margin: 0 }}>lump payment</span>}</td>
+                      <td>{r.date ? fmtDate(r.date) : '-'}</td>
                       <td className="num">{formatCurrency(r.amount)}</td>
-                      <td><PaidBadge status={r.status} /></td>
                     </tr>
                   ))}
-                  {bp.recent.length === 0 && (
-                    <tr><td colSpan={6} className="muted-note">No bill payments on record.</td></tr>
+                  {mfPayments.length === 0 && (
+                    <tr><td colSpan={4} className="muted-note">{mfOk ? 'No bill payments recorded.' : 'Master File AP tab unavailable.'}</td></tr>
                   )}
                 </tbody>
               </table>
@@ -271,7 +230,7 @@ export function AccountsTab() {
           {/* `pay.recent` is the server's 30-row slice, not all `pay.count` — so
               the sub names both figures. "Latest of 198" read as though the
               table held 198 rows and scrolling would reach them. */}
-          <ChartCard title="Recent Payments Received" sub={`Latest ${pay.recent.length} of ${pay.count.toLocaleString()} customer payments · patient names masked`}>
+          <ChartCard title="Recent Customer Payments Received" sub={`Latest ${pay.recent.length} of ${pay.count.toLocaleString()} customer payments · patient names masked`}>
             {/* Capped and scrolled: the register is as tall as the card lets it
                 be, and the column titles stay put while it moves. */}
             <div className="table-wrap scroll-y">

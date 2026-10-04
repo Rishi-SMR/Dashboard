@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { KpiR, ChartCard, RankBar, AgingBar, DrillModal, StatCards } from '../chartKit';
-import { fetchApLedger, type ApLedger } from '../strivenApi';
+import { fetchApLedger, fetchMasterFileAp, type ApLedger, type MasterFileAp } from '../strivenApi';
 import { ColumnFilter } from './ColumnFilter';
 import { downloadXlsx, printToPdf, stamped } from '../export';
 import { Portal } from './Portal';
@@ -56,6 +56,8 @@ const fmtDate = (s: string) => {
 // Sheet aging label → shared AgingBar bucket key.
 const AGING_KEY: Record<string, string> = {
   '0-30 Days': 'd1_30', '31-60 Days': 'd31_60', '61-90 Days': 'd61_90', '91-120 Days': 'd90plus',
+  // Was missing, so a 120+ day bill aged as Current.
+  '120+Days': 'd90plus', '120+ Days': 'd90plus',
 };
 
 // Status → pill tone class used across the dashboard.
@@ -72,6 +74,22 @@ function statusTag(status: string, kind: Bill['kind'] = 'bill'): ReactNode {
   if (status === 'Partially Paid') return <span className="pill-tag tag-warn">Partial</span>;
   if (s.includes('cancel')) return <span className="pill-tag tag-muted">Cancelled</span>;
   return <span className="pill-tag tag-danger">Unpaid</span>;
+}
+
+/**
+ * DUE OR OVERDUE (2 Oct 2026, on request). A bill still owing something is
+ * DUE while today is on or before its due date, and OVERDUE once it is past.
+ * Settled bills, credit notes and cancellations carry neither.
+ */
+function dueOf(b: { open: number; kind: Bill['kind']; due: string }): 'Due' | 'Overdue' | null {
+  if (b.kind !== 'bill' || !(b.open > 0.005) || !b.due) return null;
+  const t = new Date(new Date().toDateString()).getTime();
+  return new Date(`${b.due.slice(0, 10)}T00:00:00`).getTime() < t ? 'Overdue' : 'Due';
+}
+function dueTag(b: { open: number; kind: Bill['kind']; due: string }): ReactNode {
+  const d = dueOf(b);
+  if (!d) return null;
+  return <span className={`pill-tag ${d === 'Overdue' ? 'tag-danger' : 'tag-info'}`} style={{ marginLeft: 6 }}>{d}</span>;
 }
 
 /**
@@ -150,7 +168,7 @@ function BillCard({ bill, onClose }: { bill: Bill; onClose: () => void }) {
               <BillKV label="Days past due">
                 {late == null ? <span style={{ color: C.muted }}>settled</span>
                   : late > 0 ? <span style={{ color: C.negative }}>{late} days</span>
-                    : <span style={{ color: C.positive }}>not yet due</span>}
+                    : <span style={{ color: C.positive }}>Due · within its due date</span>}
               </BillKV>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
@@ -516,7 +534,7 @@ function BillTable({ title, sub, bills, isUnpaid, creditOffset = 0, creditCount 
                 <td className={b.open > 0 ? 'num cell-neg' : 'num'}>
                   {b.open > 0 ? formatCurrency(b.open, true) : <span style={{ color: C.muted }}>-</span>}
                 </td>
-                <td>{statusTag(b.status, b.kind)}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>{statusTag(b.status, b.kind)}{dueTag(b)}</td>
               </tr>
             ))}
             {sorted.length === 0 && <tr><td colSpan={8} style={{ color: C.muted }}>No bills match.</td></tr>}
@@ -586,20 +604,33 @@ export function ApSheetTab() {
   // Sub-Ledger column holds and what every table and chart here already reads.
   const [ledger, setLedger] = useState<ApLedger | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  // THE REGISTER'S FIGURES (1 Oct 2026): Master File For SMR "AP" tab, by
+  // vendor - billed (Invoice Amount) − paid to date (Amount Paid), cancelled
+  // excluded, NO offsetting. The same source as Payables' AP Open and the
+  // Overview's AP Due. The bill-level views (aging, status, the two bill
+  // registers) still read the AP Ledgers sheet, which carries due dates per bill.
+  const [mf, setMf] = useState<MasterFileAp | null>(null);
+  useEffect(() => { fetchMasterFileAp().then(setMf).catch(() => setMf(null)); }, []);
+  const mfOk = Boolean(mf?.ok);
+  const mfVendors = mf?.vendors ?? [];
+  const mfOwed = mfVendors.filter((v) => v.owed > 0);
+  const mfReq = mfVendors.filter((v) => v.billsRequired > 0);
   useEffect(() => {
     fetchApLedger()
       .then((d) => { setLedger(d); if (d && d.ok === false) setLoadErr(d.note ?? 'AP Ledgers sheet unavailable.'); })
       .catch((e) => setLoadErr(e instanceof Error ? e.message : 'Could not reach the AP Ledgers sheet.'));
   }, []);
+  // Bills from the Master File AP tab when it is readable (1 Oct 2026), the
+  // AP Ledgers sheet otherwise - one book at a time, never a blend.
   const BILLS: Bill[] = useMemo(
-    () => (ledger?.bills ?? []).map((b) => ({
+    () => ((mfOk ? mf!.bills : null) ?? ledger?.bills ?? []).map((b) => ({
       no: b.no, vendor: b.subLedger, date: b.date, due: b.due,
       total: b.total, faceValue: b.faceValue ?? b.total, kind: b.kind ?? 'bill',
       status: b.status, aging: b.aging, open: b.open,
       terms: b.terms ?? '', dueDays: b.dueDays ?? 0,
       termsDays: b.termsDays ?? null, termsSource: b.termsSource ?? 'none',
     })),
-    [ledger],
+    [ledger, mf, mfOk],
   );
 
   // ── THE TWO REGISTERS ──────────────────────────────────────────────────────
@@ -713,14 +744,26 @@ export function ApSheetTab() {
 
   // Spend by vendor (all bills) and outstanding watchlist (open only).
   const spend = useMemo(() => {
+    if (mfOk) return mfVendors.map((v) => ({ name: v.vendor, value: v.billed })).sort((a, b) => b.value - a.value);
     const m = new Map<string, number>();
     for (const b of BILLS) m.set(b.vendor, (m.get(b.vendor) || 0) + b.total);
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [BILLS]);
+  }, [BILLS, mfOk, mfVendors]);
   const watch = useMemo(() => {
+    if (mfOk) return mfOwed.map((v) => ({ name: v.vendor, value: v.owed }));
     const m = new Map<string, number>();
     for (const b of BILLS) if (b.open > 0) m.set(b.vendor, (m.get(b.vendor) || 0) + b.open);
     return [...m.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [BILLS, mfOk, mfOwed]);
+
+  // DUE vs OVERDUE totals for the open bills - see dueOf().
+  const dueSplit = useMemo(() => {
+    const r = { due: 0, dueN: 0, overdue: 0, overdueN: 0 };
+    for (const b of BILLS) {
+      const d = dueOf(b);
+      if (d === 'Due') { r.due += b.open; r.dueN += 1; } else if (d === 'Overdue') { r.overdue += b.open; r.overdueN += 1; }
+    }
+    return r;
   }, [BILLS]);
 
   // Aging of open balances, mapped onto the shared 5-bucket ramp.
@@ -785,7 +828,7 @@ export function ApSheetTab() {
         t: b.kind === 'cancelled'
           ? <s style={{ color: C.muted }}>{formatCurrency(b.faceValue, true)}</s>
           : formatCurrency(b.total, true),
-        s: statusTag(b.status, b.kind),
+        s: <>{statusTag(b.status, b.kind)}{dueTag(b)}</>,
       })),
   });
   const explainOutstanding = () => setDrill({
@@ -871,6 +914,26 @@ export function ApSheetTab() {
     rows: spend.map((s) => ({ v: s.name, t: formatCurrency(s.value, true) })),
   });
 
+  const explainMf = () => setDrill({
+    title: 'AP by vendor',
+    sub: 'Master File For SMR · AP tab · billed (Invoice Amount) − paid to date (Amount Paid) · cancelled excluded · no offsetting between vendors',
+    columns: [
+      { key: 'vendor', label: 'Vendor' }, { key: 'billed', label: 'Billed', num: true },
+      { key: 'paid', label: 'Paid to date', num: true }, { key: 'owed', label: 'Outstanding', num: true },
+      { key: 'req', label: 'Bills required', num: true },
+    ],
+    rows: [
+      ...mfVendors.map((v) => ({
+        vendor: <strong>{v.vendor}</strong>, billed: formatCurrency(v.billed, true), paid: formatCurrency(v.paid, true),
+        owed: v.owed > 0 ? formatCurrency(v.owed, true) : '-', req: v.billsRequired > 0 ? formatCurrency(v.billsRequired, true) : '-',
+      })),
+      {
+        vendor: <strong>TOTAL</strong>, billed: <strong>{formatCurrency(mf?.billed ?? 0, true)}</strong>, paid: <strong>{formatCurrency(mf?.paid ?? 0, true)}</strong>,
+        owed: <strong>{formatCurrency(mf?.apOpen ?? 0, true)}</strong>, req: <strong>{formatCurrency(mf?.billsRequired ?? 0, true)}</strong>,
+      },
+    ],
+  });
+
   return (
     // `ap-register` scopes this tab's own typography. `exec-deck` is shared by a
     // dozen tabs, so styling through it would restyle the whole portal.
@@ -879,7 +942,7 @@ export function ApSheetTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>AP Register</h1>
           <div className="page-sub">
-            Live from the <b>AP Ledgers</b> sheet · {BILLS.length} bills across {ledger?.subLedgers?.length ?? 0} sub-ledgers · no patient data
+            {mfOk ? <>Live from the <b>Master File For SMR</b> · AP tab</> : <>Live from the <b>AP Ledgers</b> sheet (Master File unavailable)</>} · {BILLS.length} bills across {ledger?.subLedgers?.length ?? 0} sub-ledgers · no patient data
             {ledger?.fetchedAt && <> · read {new Date(ledger.fetchedAt).toLocaleTimeString()}</>}
           </div>
         </div>
@@ -890,6 +953,21 @@ export function ApSheetTab() {
       {loadErr && <div className="error" style={{ marginBottom: 12 }}>{loadErr}</div>}
       {!ledger && !loadErr && <div className="page-sub" style={{ padding: 16 }}>Reading the AP Ledgers sheet…</div>}
 
+      {mfOk ? (
+      <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+        <KpiR ico="doc" tint="#0A369F" label="Total AP Billed" value={mf!.billed ?? 0} format={formatCurrency}
+          deltaText={`${mfVendors.length} vendors`} foot="Master File · Invoice Amount, cancelled excluded"
+          onClick={explainMf} />
+        <KpiR ico="wallet" tint="#16A34A" label="Paid to Date" value={mf!.paid ?? 0} format={formatCurrency}
+          deltaText="Amount Paid column" foot="Master File · paid till date" onClick={explainMf} />
+        <KpiR ico="cash" tint="#DC2626" label="Outstanding" value={mf!.apOpen ?? 0} format={formatCurrency}
+          deltaText={`${mfOwed.length} vendors owed`} foot="by vendor · no offsetting" onClick={explainMf} />
+        <KpiR ico="clip" tint="#D97706" label="Bills Required" value={mf!.billsRequired ?? 0} format={formatCurrency}
+          deltaText={`${mfReq.length} vendor${mfReq.length === 1 ? '' : 's'} paid more than billed`} foot="bills to obtain · not netted" onClick={explainMf} />
+        <KpiR ico="pie" tint="#7C3AED" label="Payment Rate" value={(mf!.billed ?? 0) > 0 ? ((mf!.paid ?? 0) / (mf!.billed ?? 1)) * 100 : 0} format={(n) => `${n.toFixed(1)}%`}
+          deltaText="paid ÷ billed" foot="Master File" />
+      </div>
+      ) : (
       <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
         {/* NET of credit notes and cancellations — said on the tile, because a
             total that is quietly smaller than the sheet's own invoice column
@@ -918,13 +996,15 @@ export function ApSheetTab() {
         <KpiR ico="pie" tint="#7C3AED" label="Payment Rate" value={agg.rate} format={(n) => `${n.toFixed(1)}%`}
           deltaText="paid ÷ (paid + open)" foot="of registered $" />
       </div>
+      )}
 
       <div className="exec-grid12">
         <ChartCard className="g12-7" title="Spend by Vendor" sub="Total billed per vendor · click a bar to drill">
           <RankBar data={spend} money colorAt={() => C.brand} onSelect={vendorDrill} />
         </ChartCard>
 
-        <ChartCard className="g12-5" title="AP Aging" sub="Open balance by days past due"
+        <ChartCard className="g12-5" title="AP Aging"
+          sub={`Due ${formatCurrency(dueSplit.due)} (${dueSplit.dueN}) · Overdue ${formatCurrency(dueSplit.overdue)} (${dueSplit.overdueN}) · open bills by due date`}
           right={
             <div className="smr-seg" style={{ margin: 0 }}>
               <button className={agingMode === 'amount' ? 'active' : ''} onClick={() => setAgingMode('amount')}>By Amount</button>
@@ -958,6 +1038,57 @@ export function ApSheetTab() {
             Payments are per-VENDOR in this sheet, not per-bill, so they cannot
             be shown as a column inside the bill tables below — this is their
             place. */}
+        {mfOk ? (
+        <div className="section chart-card g12-12">
+          <div className="section-head">
+            <div>
+              <h2 className="section-title">SUB-LEDGER SUMMARY</h2>
+              <div className="section-sub">
+                What each supplier was billed, what has been paid to them, and what is left · Master File For SMR · AP tab · no offsetting
+              </div>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>SUB-LEDGER</th>
+                  <th className="num">BILLED</th>
+                  <th className="num">PAID TO DATE</th>
+                  <th className="num">OUTSTANDING</th>
+                  <th className="num" title="Paid more than billed: bills of this amount are required to account for it. Not netted against what other vendors are owed.">BILLS REQUIRED</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mfVendors.map((v) => (
+                  <tr key={v.vendor}>
+                    <td><strong>{v.vendor}</strong></td>
+                    <td className="num">{formatCurrency(v.billed, true)}</td>
+                    <td className="num cell-pos">{formatCurrency(v.paid, true)}</td>
+                    <td className={v.owed > 0 ? 'num cell-neg' : 'num'}>{v.owed > 0 ? formatCurrency(v.owed, true) : '-'}</td>
+                    <td className="num" style={v.billsRequired > 0 ? { color: C.warning, fontWeight: 700 } : undefined}>
+                      {v.billsRequired > 0 ? formatCurrency(v.billsRequired, true) : '-'}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="total-row">
+                  <td>TOTAL</td>
+                  <td className="num">{formatCurrency(mf!.billed ?? 0, true)}</td>
+                  <td className="num">{formatCurrency(mf!.paid ?? 0, true)}</td>
+                  <td className="num">{formatCurrency(mf!.apOpen ?? 0, true)}</td>
+                  <td className="num" style={(mf!.billsRequired ?? 0) > 0 ? { color: C.warning, fontWeight: 800 } : undefined}>
+                    {(mf!.billsRequired ?? 0) > 0 ? formatCurrency(mf!.billsRequired ?? 0, true) : '-'}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="muted-note">
+            Outstanding is each vendor's billed − paid, only where that is owed; a vendor paid more than billed shows under
+            Bills required instead and is not netted against the others.{(mf!.cancelledExcluded ?? 0) > 0 ? ` ${mf!.cancelledExcluded} cancelled bill${mf!.cancelledExcluded === 1 ? '' : 's'} excluded.` : ''}
+          </div>
+        </div>
+        ) : (
         <div className="section chart-card g12-12">
           <div className="section-head">
             <div>
@@ -1071,6 +1202,7 @@ export function ApSheetTab() {
             );
           })()}
         </div>
+        )}
 
         {/* ONE REGISTER. It was two cards - "Unpaid Bills" then "Paid Bills" -
             which split every supplier's history in half: answering "what has
@@ -1079,13 +1211,17 @@ export function ApSheetTab() {
             filter. The segment inside keeps both worklists one click away. */}
         <BillTable
           title="Bill Register"
-          sub={adjustments.note
-            ? `Every bill, paid and unpaid · includes ${adjustments.note}, excluded from the total`
-            : 'Every bill, paid and unpaid'}
+          sub={mfOk
+            // Said on the table, because the two totals on this page differ and
+            // the reader should not have to work out why.
+            ? `Every bill, paid and unpaid · Master File AP tab · unpaid bills total ${formatCurrency(mf!.billsOpen ?? 0, true)} by the sheet's own statuses; Outstanding above is ${formatCurrency(mf!.apOpen ?? 0, true)} because lump payments (rows with no invoice number) are counted by vendor but not applied to any bill`
+            : adjustments.note
+              ? `Every bill, paid and unpaid · includes ${adjustments.note}, excluded from the total`
+              : 'Every bill, paid and unpaid'}
           bills={BILLS}
           isUnpaid={isUnpaid}
-          creditOffset={ledger?.totals?.creditNoteAmount ?? 0}
-          creditCount={ledger?.totals?.creditNotes ?? 0}
+          creditOffset={mfOk ? -BILLS.filter((b) => b.kind === 'credit-note').reduce((s2, b) => s2 + b.open, 0) : (ledger?.totals?.creditNoteAmount ?? 0)}
+          creditCount={mfOk ? BILLS.filter((b) => b.kind === 'credit-note').length : (ledger?.totals?.creditNotes ?? 0)}
         />
       </div>
 

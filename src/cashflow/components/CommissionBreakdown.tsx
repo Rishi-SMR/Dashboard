@@ -24,12 +24,15 @@ export type CommRep = {
   payable: number;
   orders: number;
   units: number;
-  pi: number; va: number; tricare: number;
+  pi: number; va: number; tricare: number; dol: number;
   onRoster: boolean;
   lines: { ref: string; patient: string; item: string; prog: string; comm: number }[];
 };
 
-const PROGS = ['PI', 'VA', 'TriCare'] as const;
+const PROGS = ['PI', 'VA', 'TriCare', 'DOL'] as const;
+/** One rep's money in one programme. */
+const progValue = (r: CommRep, p: typeof PROGS[number]) =>
+  (p === 'PI' ? r.pi : p === 'VA' ? r.va : p === 'DOL' ? r.dol : r.tricare);
 
 /** '2026-08' → 'August 2026'. Built from the parts, never parsed: a
  *  `new Date('2026-08')` is UTC midnight and renders as the PREVIOUS month for
@@ -64,7 +67,7 @@ export function CommissionBreakdown({ reps, onOpen, paidThrough }: {
   // headline rather than to a different population.
   const progTotals = PROGS.map((p) => ({
     name: p,
-    value: onRoster.reduce((s, r) => s + (p === 'PI' ? r.pi : p === 'VA' ? r.va : r.tricare), 0),
+    value: onRoster.reduce((s, r) => s + progValue(r, p), 0),
     color: VERTICAL_COLORS[p] ?? C.muted,
   })).filter((p) => p.value > 0);
 
@@ -169,7 +172,7 @@ export function CommissionBreakdown({ reps, onOpen, paidThrough }: {
               a single programme reads as one solid bar at a glance. */}
           <div className="cmb-split">
             {PROGS.map((p) => {
-              const v = p === 'PI' ? sel.pi : p === 'VA' ? sel.va : sel.tricare;
+              const v = progValue(sel, p);
               if (v <= 0) return null;
               return (
                 <span key={p} className="seg" title={`${p}: ${formatCurrency(v)}`}

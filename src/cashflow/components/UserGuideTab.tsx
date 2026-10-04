@@ -92,13 +92,13 @@ const GLOSSARY: Entry[] = [
   },
   {
     term: 'Aging bucket', aka: ['Current', '1–30', '31–60', '61–90', '90+'], cat: 'Receivables',
-    def: 'How overdue a balance is, measured in days past its due date.',
-    basis: 'days past due = today − due date\nCurrent ≤ 0 · 1–30 · 31–60 · 61–90 · 90+',
+    def: 'Whether a balance is Due or Overdue. Within its due date (today or later) it is DUE; once the due date has passed it is OVERDUE, banded by how many days.',
+    basis: 'days past due = today − due date\nDue ≤ 0 (on or before the due date) · Overdue 1–30 · 31–60 · 61–90 · 90+',
     note: 'An order with no invoice has no due date and therefore no bucket - which is why the red not-invoiced rows disappear when an ageing filter is applied, rather than being filed under an age they do not have.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'AR Aging', anchor: 'ar-aging' },
-      { view: 'payables', tab: 'AR / AP › Payables', section: 'AP Aging' },
-      { view: 'apsheet', tab: 'AP Register', section: 'AP Aging' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'AR Aging', anchor: 'ar-aging' },
+      { view: 'payables', tab: 'Payables › AP Overview', section: 'AP Aging' },
+      { view: 'apsheet', tab: 'Payables › AP Register', section: 'AP Aging' },
       { view: 'overview', tab: 'Overview', section: 'AR Due · AP Due' },
     ],
   },
@@ -108,8 +108,8 @@ const GLOSSARY: Entry[] = [
     basis: 'billed − paid − credit notes, from the AP ledger sheet',
     note: 'The AP LEDGER SHEET is the real book here, not Striven: the sheet carries 133 bills where Striven carries four. Striven’s figure is kept beside it rather than discarded.',
     locs: [
-      { view: 'payables', tab: 'AR / AP › Payables', section: 'AP Open · Open Bills' },
-      { view: 'apsheet', tab: 'AP Register', section: 'Bill Register · Outstanding by Vendor' },
+      { view: 'payables', tab: 'Payables › AP Overview', section: 'AP Open · Open Bills' },
+      { view: 'apsheet', tab: 'Payables › AP Register', section: 'Bill Register · Outstanding by Vendor' },
       { view: 'overview', tab: 'Overview', section: 'AP Due' },
     ],
   },
@@ -117,7 +117,7 @@ const GLOSSARY: Entry[] = [
     term: 'AP Register', aka: ['AP ledger'], cat: 'Accounting',
     def: 'The vendor bill ledger, kept by hand in a Google Sheet and read directly from it.',
     note: 'Not Striven, and the more complete of the two books on the payables side.',
-    locs: [{ view: 'apsheet', tab: 'AP Register', section: 'Bill Register · SUB-LEDGER SUMMARY' }],
+    locs: [{ view: 'apsheet', tab: 'Payables › AP Register', section: 'Bill Register · SUB-LEDGER SUMMARY' }],
   },
   {
     term: 'AR Open', aka: ['receivable', 'outstanding', 'open balance'], cat: 'Receivables',
@@ -125,23 +125,23 @@ const GLOSSARY: Entry[] = [
     basis: 'PI      min(unpaid on invoice, 15% × order value)\nothers  unpaid on invoice, net of unapplied credit\ntotal   Σ over non-void invoices with a balance',
     note: 'On PI the 85% lien remainder is NOT counted. It settles out of an award on nobody’s timetable, so it is exposure rather than money that can be chased.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'AR Open tile · Open Invoices · AR Aging', anchor: 'ar-kpis' },
-      { view: 'overview', tab: 'Overview', section: 'AR Due · Receivables and Dues this month' },
-      { view: 'arsheet', tab: 'AR Register', section: 'AR Receivable', differs: 'Reads the accountant’s Google Sheet, not Striven - the two books will not tie exactly.' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'AR Open tile · Open Invoices · AR Aging', anchor: 'ar-kpis' },
+      { view: 'overview', tab: 'Overview', section: 'AR Due' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'AR Receivable', differs: 'Reads the accountant’s Google Sheet, not Striven - the two books will not tie exactly.' },
     ],
   },
   {
     term: 'AR Register', cat: 'Accounting',
     def: 'The accountant’s own invoice workbook, read directly from their Google Sheet.',
     note: 'Not Striven. It will not reconcile exactly with the AR / AP tab, because they are two different books - which is what the “in Striven but not in the sheet” section exists to show.',
-    locs: [{ view: 'arsheet', tab: 'AR Register', section: 'Invoice Book · in Striven but not in the sheet' }],
+    locs: [{ view: 'arsheet', tab: 'Receivables › AR Register', section: 'Invoice Book · in Striven but not in the sheet' }],
   },
   {
     term: 'A/R Health Score', cat: 'Receivables',
     def: 'How much of everything billed has actually turned into cash.',
     basis: 'cash received ÷ (cash received + AR open)\n≥90% Excellent · ≥75% Good · ≥60% Fair · else Low',
     note: 'NOT the same calculation as Collection Rate, despite both sounding like collection performance. This one divides by cash plus what is still owed; Collection Rate divides by revenue billed in the period. Compare the two bases before quoting either.',
-    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'A/R Health Score', anchor: 'ar-health' }],
+    locs: [{ view: 'receivables', tab: 'Receivables › AR Overview', section: 'A/R Health Score', anchor: 'ar-health' }],
   },
   {
     term: 'Auto-PO', cat: 'Data & status',
@@ -161,7 +161,7 @@ const GLOSSARY: Entry[] = [
     basis: 'Σ of the AP ledger sheet’s Debit column\n(Striven’s own figure = Σ credit-card charges only)',
     note: 'Striven’s record is CARD CHARGES ONLY - a bill paid by cheque or ACH never appears in it. That is why the totals come from the ledger sheet, which records all of them.',
     locs: [
-      { view: 'payables', tab: 'AR / AP › Payables', section: 'Bills Paid' },
+      { view: 'payables', tab: 'Payables › AP Overview', section: 'Bills Paid' },
       { view: 'accounts', tab: 'Accounts', section: 'Bill Payments: Paid', differs: 'Same figure, reached from the accounting side.' },
     ],
   },
@@ -171,8 +171,8 @@ const GLOSSARY: Entry[] = [
     basis: 'read from the sales order · never derived from the invoice\nlien exposure = case value − invoiced',
     note: 'Shown for context and never added into a receivable total. Real money, but not money you can invoice for today.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Total Amount column)', anchor: 'open-invoices' },
-      { view: 'arsheet', tab: 'AR Register', section: 'TOTAL column' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Open Invoices (Total Amount column)', anchor: 'open-invoices' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'TOTAL column' },
     ],
   },
   {
@@ -181,8 +181,8 @@ const GLOSSARY: Entry[] = [
     basis: 'Σ payment amount, gross\nvoided / cancelled / denied payments excluded\nincludes credits not yet applied to an invoice',
     note: 'Read the period carefully: the AR tile is ALL-TIME while the arrow beneath it compares the last two complete months, and the P&L tile is year-to-date because the payments endpoint takes no period.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Cash Received tile · Cash Received by Month', anchor: 'cash-received', differs: 'The tile is all-time; the chart beside it is monthly.' },
-      { view: 'accounts', tab: 'Accounts', section: 'Payments Received by Month · Recent Payments Received' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Cash Received tile · Cash Received by Month', anchor: 'cash-received', differs: 'The tile is all-time; the chart beside it is monthly.' },
+      { view: 'accounts', tab: 'Accounts', section: 'Payments Received by Month · Recent Customer Payments Received' },
       { view: 'pl', tab: 'P&L', section: 'Cash Received tile', differs: 'Year to date, not all-time.' },
       { view: 'overview', tab: 'Overview', section: 'Cash Received · Collection Rate' },
     ],
@@ -192,6 +192,15 @@ const GLOSSARY: Entry[] = [
     def: 'Every general-ledger account, by type.',
     note: 'No running balances, and that is correct rather than missing: Striven’s API does not expose them - they exist only inside Striven’s own Report Builder - so no balance is invented here.',
     locs: [{ view: 'accounts', tab: 'Accounts', section: 'Chart of Accounts · Accounts by Type' }],
+  },
+  {
+    term: 'Collection Effectiveness Index', aka: ['CEI', 'monthly AR health', 'collection effectiveness'], cat: 'Receivables',
+    def: 'How much of what could be collected in a month actually was. The monthly measure of AR health.',
+    basis: 'CEI = (Opening AR + Invoiced − Closing AR) ÷ (Opening AR + Invoiced − Closing current AR) × 100\n≥90% Excellent · ≥75% Good · ≥60% Fair · else Low · target 90+',
+    note: 'Bills not yet due at month end are not counted against the month, and an old balance cannot drag every later month down - the two flaws of the A/R Health Score. Past month-end balances are rebuilt from Striven invoices and payments, applying each customer’s payments to their oldest invoices first (it reproduces today’s balances on 444 of 445 invoices). The running month is shown but never scored. On PI the invoice is the 15% advance, so case value never enters it.',
+    locs: [
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Collection Effectiveness (CEI) · by month', anchor: 'ar-cei' },
+    ],
   },
   {
     term: 'Collection Rate', cat: 'Receivables',
@@ -228,10 +237,10 @@ const GLOSSARY: Entry[] = [
   },
   {
     term: 'DSO', aka: ['Days Sales Outstanding'], cat: 'Receivables',
-    def: 'How long money sits out before it comes in - the average age of open receivables, weighted by amount.',
-    basis: 'Σ(open × days overdue) ÷ Σ(open)\nover OPEN PI invoices only',
-    note: 'PI only, by design. VA and TriCare pay on fixed cycles, so a DSO for them measures the cycle rather than performance.',
-    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'PI Days Sales Outstanding tile', anchor: 'ar-kpis' }],
+    def: 'How long money sits out before it comes in - the average number of days open receivables are past due, weighted by amount, across every vertical.',
+    basis: 'Σ(receivable × days past due) ÷ Σ(receivable), over every open invoice\nreceivable: PI = 15% of the case value (never more than is unpaid) · VA / TriCare / others = full open balance',
+    note: 'One figure for all verticals (2 Oct 2026); the separate PI-only DSO card was removed. Click the card for each vertical’s own DSO, PI included. On PI only the 15% advance counts - the rest settles from the case on no timetable.',
+    locs: [{ view: 'receivables', tab: 'Receivables › AR Overview', section: 'DSO · All Verticals tile', anchor: 'ar-kpis' }],
   },
   {
     term: 'Exception', cat: 'Data & status',
@@ -257,8 +266,8 @@ const GLOSSARY: Entry[] = [
     basis: 'advance = order value × 0.15',
     note: 'The single most important rule in this portal. It is why a PI invoice total is far smaller than the order behind it, why AR Open is a fraction of the order book, and why a PI invoice at zero balance is not a settled case. Measured against the live book, 50 of 57 PI invoices sit at exactly 0.150 of their order.',
     locs: [
-      { view: 'arsheet', tab: 'AR Register', section: 'PI Invoice Book · the book in four parts', anchor: 'pi-1' },
-      { view: 'arsheet', tab: 'AR Register', section: 'INVOICED column · the advance-vs-billed check' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'PI Invoice Book · the book in four parts', anchor: 'pi-1' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'INVOICED column · the advance-vs-billed check' },
     ],
   },
   {
@@ -277,7 +286,7 @@ const GLOSSARY: Entry[] = [
     def: 'Striven’s own unpaid balance for the invoice itself, kept beside the reported receivable.',
     basis: 'Striven open balance − unapplied credit applied to it',
     note: 'This is the figure to reconcile against Striven. Off PI it equals AR Open; on PI the two differ wherever the 15% cap bites.',
-    locs: [{ view: 'receivables', tab: 'AR / AP', section: 'Open Invoices (Received column is derived from it)', anchor: 'open-invoices' }],
+    locs: [{ view: 'receivables', tab: 'Receivables › AR Overview', section: 'Open Invoices (Received column is derived from it)', anchor: 'open-invoices' }],
   },
   {
     term: 'Margin', aka: ['net', 'profit'], cat: 'Accounting',
@@ -295,8 +304,8 @@ const GLOSSARY: Entry[] = [
     basis: 'orders with zero linked invoices, cancelled and DEMO excluded\nwould add to AR = case value × 0.15  (PI)',
     note: 'Flagged in red and deliberately kept OUT of every AR total - it is not a receivable until it is raised. On the current book this is larger than the entire open receivable, which is exactly why it is shown.',
     locs: [
-      { view: 'arsheet', tab: 'AR Register', section: 'PI Invoice Book · section 3, PI orders yet to be invoiced', anchor: 'pi-3' },
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices - red rows and the NOT INVOICED subtotal', anchor: 'open-invoices' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'PI Invoice Book · section 3, PI orders yet to be invoiced', anchor: 'pi-3' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Open Invoices - red rows and the NOT INVOICED subtotal', anchor: 'open-invoices' },
     ],
   },
   {
@@ -313,7 +322,7 @@ const GLOSSARY: Entry[] = [
     def: 'Who actually pays the bill: Veterans Affairs, TriCare, or - on PI - the individual law firm handling the claim.',
     note: 'Never the Striven customer, which on this book is a patient. The programme rule is taken from the VERTICAL, never from the payer text, because there are dozens of PI law firms and only one PI rule.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices · Top Customers by Balance', anchor: 'top-customers' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Open Invoices · Top Customers by Balance', anchor: 'top-customers' },
       { view: 'overview', tab: 'Overview', section: 'AR Due (by payer)' },
       { view: 'repsorders', tab: 'Orders & Revenue', section: 'Accounts filter', differs: 'On the rep boards this is called the ACCOUNT.' },
     ],
@@ -328,8 +337,8 @@ const GLOSSARY: Entry[] = [
     def: 'A de-identified stand-in for a patient, e.g. PT-385. Where a name is shown it is a first INITIAL and a surname, never a full first name.',
     note: 'Minimum-necessary by design: full first names, dates of birth and addresses are never stored or cached anywhere in this portal, and access is audit-logged.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Open Invoices · Recent Payments', anchor: 'recent-payments' },
-      { view: 'accounts', tab: 'Accounts', section: 'Recent Payments Received' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Open Invoices · Recent Customer Payments Received', anchor: 'recent-payments' },
+      { view: 'accounts', tab: 'Accounts', section: 'Recent Customer Payments Received' },
       { view: 'reports', tab: 'Reports', section: 'Patient items' },
     ],
   },
@@ -338,8 +347,8 @@ const GLOSSARY: Entry[] = [
     def: 'Personal Injury. The device is supplied against a lien on the patient’s legal claim, so the bill settles out of an eventual award rather than by an insurer on a cycle.',
     note: 'PI is the reason so much of this portal has a special case. Striven raises only the 15% advance as the invoice, so an invoice showing no balance means the ADVANCE is settled, not the case.',
     locs: [
-      { view: 'arsheet', tab: 'AR Register', section: 'PI Invoice Book · the book in four parts', anchor: 'pi-book' },
-      { view: 'arsheet', tab: 'AR Register', section: 'Invoice Book · AR Receivable' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'PI Invoice Book · the book in four parts', anchor: 'pi-book' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'Invoice Book · AR Receivable' },
       { view: 'orders', tab: 'Orders', section: 'Order Value by Type · All Sales Orders' },
       { view: 'repspipeline', tab: 'PI & PIP', section: 'The PI stage board', differs: 'Here PI is a pipeline of stages, not a money basis.' },
       { view: 'commission', tab: 'Commission', section: 'Per-rep breakdown' },
@@ -362,7 +371,7 @@ const GLOSSARY: Entry[] = [
     locs: [
       { view: 'orders', tab: 'Orders', section: 'All Purchase Orders · Top Vendors by PO Spend' },
       { view: 'vendors', tab: 'Vendors & Items', section: 'PO Spend by Vendor' },
-      { view: 'payables', tab: 'AR / AP › Payables', section: 'Top Vendors by PO Spend' },
+      { view: 'payables', tab: 'Payables › AP Overview', section: 'Top Vendors by PO Spend' },
     ],
   },
   {
@@ -412,7 +421,7 @@ const GLOSSARY: Entry[] = [
     term: 'Sub-ledger', cat: 'Payables',
     def: 'One vendor’s block of the AP ledger sheet - their bills, their payments and their running outstanding.',
     note: 'Payments with no invoice on the sheet to account for them are surfaced rather than netted away: obtain the bill and the row reconciles.',
-    locs: [{ view: 'apsheet', tab: 'AP Register', section: 'SUB-LEDGER SUMMARY' }],
+    locs: [{ view: 'apsheet', tab: 'Payables › AP Register', section: 'SUB-LEDGER SUMMARY' }],
   },
   {
     term: 'System of record', cat: 'Accounting',
@@ -433,12 +442,21 @@ const GLOSSARY: Entry[] = [
     ],
   },
   {
+    term: 'DOL', aka: ['Department of Labor', 'OWCP'], cat: 'Programmes',
+    def: 'Department of Labor. A single-payer programme like VA and TriCare: the Department is billed, not a law firm, and the invoice is the receivable in full.',
+    note: 'An order is DOL when its Striven order type or its payer names DOL, the Department of Labor or OWCP. DOL commission stays owed until a DOL payout month is recorded.',
+    locs: [
+      { view: 'orders', tab: 'Orders', section: 'Order Value by Type' },
+      { view: 'commission', tab: 'Commission', section: 'Per-vertical totals' },
+    ],
+  },
+  {
     term: 'TriCare', cat: 'Programmes',
     def: 'Military health insurance. Like VA it pays on a fixed cycle, and like VA the invoice is the receivable in full.',
     note: 'DSO is deliberately not computed for VA or TriCare: a fixed-cycle payer has no meaningful days-sales-outstanding.',
     locs: [
       { view: 'orders', tab: 'Orders', section: 'Order Value by Type' },
-      { view: 'arsheet', tab: 'AR Register', section: 'Invoice Book' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'Invoice Book' },
       { view: 'commission', tab: 'Commission', section: 'Per-vertical totals' },
     ],
   },
@@ -448,7 +466,7 @@ const GLOSSARY: Entry[] = [
     basis: 'netted against that customer’s open invoices, oldest due first',
     note: 'Exactly as Striven does it. PI advances always leave a residual by design, so they are excluded from the anomaly report.',
     locs: [
-      { view: 'receivables', tab: 'AR / AP', section: 'Insights · netted out of AR', anchor: 'ar-insights' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Insights · netted out of AR', anchor: 'ar-insights' },
       { view: 'exceptions', tab: 'Exceptions', section: 'Unapplied customer payments' },
     ],
   },
@@ -458,7 +476,7 @@ const GLOSSARY: Entry[] = [
     locs: [
       { view: 'vapipeline', tab: 'VA Pipeline', section: 'The VA stage board' },
       { view: 'orders', tab: 'Orders', section: 'Order Value by Type' },
-      { view: 'arsheet', tab: 'AR Register', section: 'Invoice Book' },
+      { view: 'arsheet', tab: 'Receivables › AR Register', section: 'Invoice Book' },
     ],
   },
   {
@@ -606,7 +624,7 @@ const GLOSSARY: Entry[] = [
     note: 'On PI this is also the PAYER - the bill settles out of the claim the firm is running. A firm the sheet marks “DO NOT ACCEPT ORDERS” is shown in red wherever it appears.',
     locs: [
       { view: 'repsterritory', tab: 'My Territory · Reps & Territories', section: 'Law Firms tile · the Law Firm column of each rep’s list' },
-      { view: 'receivables', tab: 'AR / AP', section: 'Top Customers by Balance', differs: 'Here the firm appears as the payer on PI invoices, not as a territory contact.' },
+      { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Top Customers by Balance', differs: 'Here the firm appears as the payer on PI invoices, not as a territory contact.' },
     ],
   },
   {

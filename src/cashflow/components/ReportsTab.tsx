@@ -447,7 +447,7 @@ function FragmentRow({ rank, name, a, b, c, open, onToggle, columns, rows }: {
 
 // SO-wise patient orders (client SOW): one row per sales order, with the shared
 // patient reference, last name (minimum-necessary PHI) and its line items.
-const PROG_C: Record<string, string> = { PI: '#0A369F', VA: '#16A34A', TriCare: '#0D9488', Other: '#94A3B8' };
+const PROG_C: Record<string, string> = { PI: '#0A369F', VA: '#16A34A', TriCare: '#0D9488', DOL: '#7C3AED', Other: '#94A3B8' };
 /** "2026-08-05T10:20:35.73" → "Aug 5, 2026". An unparseable date reads "-"
  *  rather than "Invalid Date", which is the browser talking, not the data. */
 const fmtOrderDate = (s: string | null) => {
