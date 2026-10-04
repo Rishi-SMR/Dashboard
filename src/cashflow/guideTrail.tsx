@@ -66,6 +66,16 @@ export const termSlug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-
  */
 export const trailHref = (view: string, term: string, anchor?: string) =>
   `#${view}${SEP}${termSlug(term)}${anchor ? SEP + anchor : ''}`;
+/**
+ * A SECTION LINK THAT DID NOT COME FROM THE GUIDE — one card pointing at the
+ * card that holds its detail (`#receivables~~ar-cei`).
+ *
+ * The term half is left EMPTY on purpose. The landing still scrolls to the
+ * section and outlines it, but there is no glossary entry to go back to, so
+ * neither the return chip nor the "User Guide sent you here" marker appears —
+ * both would be claiming an origin the reader never had.
+ */
+export const sectionHref = (view: string, anchor: string) => `#${view}${SEP}${SEP}${anchor}`;
 /** Where a reader goes back to: the guide, opened on one entry. */
 export const guideHref = (term: string) => `#guide${SEP}${termSlug(term)}`;
 
@@ -161,6 +171,8 @@ export function GuideReturn() {
   // The TERM half only: the anchor is where the reader landed, not what they
   // were reading, and "AR Open ar aging" is not the name of anything.
   const { term } = parseTrail(trail);
+  // No term: a card-to-card section link (sectionHref), not a trip from the guide.
+  if (!term) return null;
   const label = TRAIL_LABELS.get(term) ?? deSlug(term);
   return (
     <div className="guide-return" role="note">
@@ -257,6 +269,8 @@ export function GuideLanding() {
 
   if (!landed) return null;
   const { term } = parseTrail(trail);
+  // Scrolled and outlined either way; the marker is only for a guide arrival.
+  if (!term) return null;
   const label = TRAIL_LABELS.get(term) ?? deSlug(term);
   return (
     <div className="guide-land" role="status">

@@ -522,6 +522,10 @@ export function RankBar({ data, money = false, colorAt, onSelect, labelWidth }: 
 
 // Vertical aging bar: accepts the shared aging object; per-bucket severity
 // color. money=false renders counts (integer axis) instead of $.
+/** An aging bucket as the reader sees it: "Current" is Due (within its due
+ *  date); every other band is Overdue by that many days. */
+export const dueLabel = (l: string) => (l === 'Current' ? 'Due' : `Overdue ${l}d`);
+
 export function AgingBar({ aging, onSelect, money = true }: { aging: Record<string, number>; onSelect?: (label: string) => void; money?: boolean }) {
   const data = AGING_LABELS.map((b) => ({ label: b.label, value: aging[b.key] || 0 }));
   const fmt = (v: number) => (money ? formatCurrency(v) : v.toLocaleString());
@@ -531,9 +535,24 @@ export function AgingBar({ aging, onSelect, money = true }: { aging: Record<stri
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 20, right: 16, left: 4, bottom: 2 }}>
           <CartesianGrid {...gridProps} />
-          <XAxis dataKey="label" {...axisProps} />
+          {/* DUE vs OVERDUE (2 Oct 2026, on request): within its due date a
+              balance is "Due"; past it, "Overdue", banded by days. Display only -
+              the bucket keys/labels stay, since colours and drills key on them. */}
+          {/* WRAPPED ONTO TWO LINES. "Overdue 31–60d" is wider than a bar slot in
+              a narrow card, so on one line the five labels ran into each other.
+              "Overdue" sits above its day band; "Due" stays a single line. */}
+          <XAxis dataKey="label" {...axisProps} interval={0} height={38}
+            tick={({ x, y, payload }: any) => {
+              const [head, ...rest] = dueLabel(String(payload?.value ?? '')).split(' ');
+              return (
+                <text x={x} y={y + 12} textAnchor="middle" fill={C.muted} fontSize={11}>
+                  <tspan x={x}>{head}</tspan>
+                  {rest.length > 0 && <tspan x={x} dy={13}>{rest.join(' ')}</tspan>}
+                </text>
+              );
+            }} />
           <YAxis {...axisProps} width={54} tickFormatter={tick} allowDecimals={false} />
-          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.10)' }} formatter={(v: number | string) => fmt(Number(v))} />
+          <Tooltip {...tooltipStyle} cursor={{ fill: 'rgba(148,163,184,0.10)' }} formatter={(v: number | string) => fmt(Number(v))} labelFormatter={(l: string) => dueLabel(l)} />
           <Bar {...NOANIM} dataKey="value" radius={[6, 6, 0, 0]} barSize={46} cursor={onSelect ? 'pointer' : undefined} onClick={onSelect ? (p: any) => onSelect(p?.label) : undefined}>
             {data.map((d) => <Cell key={d.label} fill={SEVERITY[d.label] ?? C.brand} />)}
             <LabelList dataKey="value" position="top" formatter={(v: number) => (v ? (money ? compactMoney(Number(v)) : String(v)) : '')} style={{ fill: C.muted, fontSize: 10.5, fontWeight: 600 }} />

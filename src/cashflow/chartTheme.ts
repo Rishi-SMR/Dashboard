@@ -101,14 +101,18 @@ export const SEVERITY: Record<string, string> = {
 // Generic 6-color categorical ramp when keys are arbitrary (mirrors the KPI hues).
 export const CAT6 = ['#0A369F', '#16A34A', '#0D9488', '#D97706', '#7C3AED', '#DB2777'];
 
-// Which program pays: payer text → PI (law firm) / VA / TriCare. Payers are
-// non-PHI (law firms, Veterans Affairs, TriCare) so this is safe to classify on.
-export type Program = 'PI' | 'VA' | 'TriCare' | 'Unassigned';
+// Which program pays: payer text → PI (law firm) / VA / TriCare / DOL. Payers
+// are non-PHI (law firms, Veterans Affairs, TriCare, the Department of Labor) so
+// this is safe to classify on. Mirrors programOfPayer() on the server.
+export type Program = 'PI' | 'VA' | 'TriCare' | 'DOL' | 'Unassigned';
+/** DOL by order type OR payer text. Word-bounded, so "Dolan Law" stays PI. */
+export const isDol = (s: string | null | undefined): boolean => /\bdol\b|department of labor|\bowcp\b/i.test(String(s ?? ''));
 export const programOfPayer = (payer: string | null | undefined): Program => {
   const s = String(payer ?? '').trim();
   if (!s) return 'Unassigned';
   if (/tri.?care/i.test(s)) return 'TriCare';
   if (/veteran|\bva\b/i.test(s)) return 'VA';
+  if (isDol(s)) return 'DOL';
   return 'PI';
 };
 

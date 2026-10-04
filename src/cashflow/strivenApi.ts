@@ -20,7 +20,7 @@ export type SoRecent = { id: number; ref: string; type: string; rep: string; pay
   patient?: string };
 /** getSO() emits a bucket per soClass(), which includes DEMO and Contract — the
  *  type listed only four and was silently narrower than the payload. */
-export type SoPivaKey = 'PI' | 'VA' | 'TriCare' | 'DEMO' | 'Contract' | 'Other';
+export type SoPivaKey = 'PI' | 'VA' | 'TriCare' | 'DOL' | 'DEMO' | 'Contract' | 'Other';
 export type SoStatusGroup = 'active' | 'completed' | 'cancelled';
 export type SoResult = {
   // count/totalValue/piva/byType/byRep = the ORDER BOOK: cancelled excluded,
@@ -305,6 +305,82 @@ export type ApLedger = {
   droppedHeaderRows?: number; fetchedAt?: string;
 };
 export const fetchApLedger = () => get<ApLedger>('/api/ap-ledger');
+/** Monthly Collection Effectiveness Index (see getArCei on the server). */
+export type ArCeiMonth = { month: string; opening: number; invoiced: number; closing: number; closingCurrent: number; collected: number; collectible: number; cei: number | null; band: 'Excellent' | 'Good' | 'Fair' | 'Low' | null; inProgress: boolean };
+export type ArCei = { ok: boolean; months: ArCeiMonth[]; fifoCheck?: { matched: number; checked: number } };
+export const fetchArCei = () => get<ArCei>('/api/ar-cei');
+/** AP by vendor from the Master File For SMR "AP" tab: billed (Invoice Amount)
+ *  − paid (Amount Paid), cancelled excluded, NO offsetting between vendors. */
+export type MasterFileApVendor = { vendor: string; billed: number; paid: number; owed: number; billsRequired: number };
+export type MasterFileAp = { ok: boolean; note?: string; vendors: MasterFileApVendor[]; apOpen?: number; billsRequired?: number; billed?: number; paid?: number; cancelledExcluded?: number;
+  /** The tab's bills, in the AP ledger's bill shape (see getMasterFileAp). */
+  bills?: ApLedgerBill[]; billsOpen?: number;
+  /** Every row with an Amount Paid; sums to `paid`. */
+  payments?: { subLedger: string; date: string; amount: number; invoice: string }[] };
+export const fetchMasterFileAp = () => get<MasterFileAp>('/api/master-file-ap');
+
+/** PI: Striven (order value, invoiced) against the Master File's "PI Lienstar
+ *  Funding" tab (case value, To be Funded), matched case by case on patient
+ *  initial + surname. See getPiLienstar on the server. */
+export type PiLienKind = 'agrees' | 'differs' | 'striven-only' | 'lienstar-only';
+export type PiLienRow = {
+  kind: PiLienKind; reason: string; patient: string; soId: string; ref: string; rep: string; lawFirm: string;
+  status: string; paidOn: string; batch: string;
+  strivenValue: number; lienValue: number; valueDiff: number;
+  invoiced: number; toBeFunded: number; fundDiff: number;
+};
+export type PiLienstar = {
+  ok: boolean; note?: string;
+  striven?: { cases: number; orderValue: number; invoiced: number; invoicedCases: number };
+  lienstar?: { cases: number; caseValue: number; toBeFunded: number; byStatus: Record<string, { count: number; caseValue: number; toBeFunded: number }>; rowsOnTab?: number };
+  /** Cancelled/lost PI orders, and the Lienstar rows tied to them — left out of
+   *  every figure above and listed here so the exclusion is visible. */
+  excluded?: {
+    orders: number; orderValue: number; invoiced: number;
+    lienRows: number; lienValue: number; lienToBeFunded: number;
+    rows: { soId: string; ref: string; patient: string; status: string; strivenValue: number; invoiced: number; lienStatus: string; lienValue: number; toBeFunded: number }[];
+    /** Lienstar rows whose status is not Approved — out of every figure. */
+    notApproved?: { count: number; caseValue: number; toBeFunded: number; byStatus: Record<string, number>;
+      rows: { patient: string; status: string; lawFirm: string; caseValue: number; toBeFunded: number }[] };
+  };
+  /** 'report' = Striven read live from STRIVEN_PI_REPORT_URL; 'cache' = the cached order book. */
+  source?: 'report' | 'cache';
+  /** Live PI orders the report does not list (scoped in Striven), not counted. */
+  reportGaps?: { soId: string; ref: string; status: string; value: number }[];
+  diff?: { cases: number; value: number; funding: number };
+  match?: Record<PiLienKind, { count: number; strivenValue: number; lienValue: number; invoiced: number; toBeFunded: number }>;
+  rows?: PiLienRow[];
+  /** Invoiced in Striven, not yet funded by Lienstar (Approved = funded). */
+  receivable?: { count: number; outstanding: number; invoiced: number; received: number; overFunded: number;
+    rows: { patient: string; soId: string; ref: string; lawFirm: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
+};
+export const fetchPiLienstar = () => get<PiLienstar>('/api/pi-lienstar');
+
+/** VA: Striven (order value, invoiced — the live VA report) against the Master
+ *  File's "VA Remmittances" tab (what the distributors paid), per patient.
+ *  See getVaRemittances on the server. */
+export type VaRemitKind = 'agrees' | 'differs' | 'striven-only' | 'remit-only';
+export type VaRemitRow = {
+  kind: VaRemitKind; reason: string; patient: string;
+  orders: { soId: string; ref: string; status: string }[]; rep: string;
+  lines: number; payer: string; lastPaid: string; flagged: boolean;
+  value: number; invoiced: number; remitted: number; diff: number;
+};
+export type VaRemittances = {
+  ok: boolean; note?: string; source?: 'report';
+  reportGaps?: { soId: string; ref: string; status: string; value: number }[];
+  striven?: { orders: number; patients: number; orderValue: number; invoiced: number; invoicedOrders: number };
+  remit?: { lines: number; patients: number; remitted: number; byPayer: Record<string, { lines: number; amount: number }>; lastPaid: string; flaggedCells: number };
+  diff?: { patients: number; funding: number };
+  excluded?: { orders: number; orderValue: number; invoiced: number;
+    rows: { soId: string; ref: string; patient: string; status: string; labels: string; value: number; invoiced: number }[] };
+  match?: Record<VaRemitKind, { count: number; invoiced: number; remitted: number }>;
+  rows?: VaRemitRow[];
+  /** Invoiced in Striven, not yet remitted, per patient. */
+  receivable?: { count: number; outstanding: number; invoiced: number; received: number; overRemitted: number;
+    rows: { patient: string; orders: { soId: string; ref: string; status: string }[]; payer: string; lastPaid: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
+};
+export const fetchVaRemittances = () => get<VaRemittances>('/api/va-remittances');
 
 /** AR REGISTER — the invoice book behind the AR tab.
  *
@@ -536,7 +612,7 @@ export type TrackingResult = { ok: boolean; configured: boolean; count: number; 
 export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
 
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
-export type CommissionLine = { ref: string; device: string; prog: 'TriCare' | 'VA' | 'PI'; comm: number; status: 'same' | 'diff' | 'none'; under: string | null };
+export type CommissionLine = { ref: string; device: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; comm: number; status: 'same' | 'diff' | 'none'; under: string | null };
 export type CommissionRecon = {
   same: number; diff: number; none: number;
   commSame: number; commDiff: number; commNone: number;
@@ -550,7 +626,7 @@ export type CommissionRep = {
   rep: string;
   // Dollar fields are `null` when the row belongs to another rep: the server
   // redacts them before serialization, so there is nothing to hide client-side.
-  tricare: number | null; pi: number | null; va: number | null; total: number | null;
+  tricare: number | null; pi: number | null; va: number | null; dol?: number | null; total: number | null;
   payableTotal: number | null;   // fillable + reimbursed → payable/due
   waitingTotal: number | null;   // waiting for reimbursement → pending
   count: number;
@@ -564,7 +640,7 @@ export type CommissionRep = {
   redacted?: boolean;
   flag: 'no-striven' | 'high-ratio' | 'attribution' | null;
 };
-export type CommissionPeriodRep = { rep: string; tricare: number | null; va: number | null; pi: number | null; total: number | null; count: number; redacted?: boolean };
+export type CommissionPeriodRep = { rep: string; tricare: number | null; va: number | null; pi: number | null; dol?: number | null; total: number | null; count: number; redacted?: boolean };
 export type CommissionPeriod = { workbook: string; gid: string; label: string; key: string; lines: number; total: number; reps: CommissionPeriodRep[] };
 export type ReconcileRep = { rep: string; sheet: number | null; striven: number | null; sheetProg: { TriCare: number; VA: number; PI: number } | null; strivenProg: { TriCare: number; VA: number; PI: number } | null; sheetProgLines?: { TriCare: number; VA: number; PI: number }; strivenProgOrders?: { TriCare: number; VA: number; PI: number }; lines: number; orders: number; matchRate: number | null; diff: number | null; onSheet: boolean; inStriven: boolean; redacted?: boolean };
 export type CommissionReconcile = { reps: ReconcileRep[]; totals: { sheet: number | null; striven: number | null; diff: number | null } };
@@ -581,6 +657,9 @@ export type StrivenOrderLine = { ref: string; patient?: string; item: string; pr
   /** When the SALES ORDER was raised — not the payout cycle. null on a row that
    *  ties to no live Striven order, which has no date to show. */
   date?: string | null;
+  /** The payout run the sheet/workbook settles this line in, e.g.
+   *  "Paid ~10/15/2026", and the month that run pays for. */
+  cycle?: string; month?: string;
   /** Set when the reconciliation sheet could not tie this row to a Striven
    *  record. The line is still paid; the remark says the match is missing. */
   unmatched?: boolean;
@@ -590,20 +669,20 @@ export type StrivenOrderLine = { ref: string; patient?: string; item: string; pr
    *  patient and no sales order, and both of those are correct rather than
    *  missing, which is the whole reason the flag has to travel with it. */
   bonus?: boolean };
-/** nTricare/nVa/nPi are ORDERS per vertical; uTricare/… are units per vertical. */
-/** Volume fields (`orders`, `units`, `nTricare`/`nVa`/`nPi`) are the FULL order
+/** nTricare/nVa/nPi/nDol are ORDERS per vertical; uTricare/… are units per vertical. */
+/** Volume fields (`orders`, `units`, `nTricare`/`nVa`/`nPi`/`nDol`) are the FULL order
  *  book from Striven. `commOrders`/`commUnits` are the subset the commission was
  *  actually computed on: the two differ wherever an order could not be tied to
  *  device lines, which is why a rep can show real orders against $0. */
 export type StrivenCommRep = {
   commOrders?: number; commUnits?: number;
-  rep: string; tricare: number | null; va: number | null; pi: number | null; total: number | null;
+  rep: string; tricare: number | null; va: number | null; pi: number | null; dol?: number | null; total: number | null;
   payableTotal: number | null; waitingTotal: number | null;
   /** Already paid out. Part of `total`, deliberately NOT part of `payableTotal`
    *  — a rep is not owed money they have already had. */
   paidTotal?: number | null;
   orders: number; units: number; value: number | null;
-  nTricare?: number; nVa?: number; nPi?: number; uTricare?: number; uVa?: number; uPi?: number;
+  nTricare?: number; nVa?: number; nPi?: number; nDol?: number; uTricare?: number; uVa?: number; uPi?: number; uDol?: number;
   lines?: StrivenOrderLine[]; redacted?: boolean;
   /** Did the RECONCILIATION SHEET carry this rep at all?
    *
@@ -625,7 +704,7 @@ export type StrivenCommRep = {
  *
  *  `reconciled` false means the month has no payout run yet: it is still being
  *  booked, nothing in it is payable, and its earnings sit in `waitingTotal`. */
-export type StrivenCommMonth = { month: string; total: number | null; TriCare: number | null; VA: number | null; PI: number | null; orders: number; units: number; value: number | null; oTriCare?: number; oVA?: number; oPI?: number; payableTotal?: number | null; waitingTotal?: number | null; paidTotal?: number | null; reconciled?: boolean; reps: StrivenCommRep[] };
+export type StrivenCommMonth = { month: string; total: number | null; TriCare: number | null; VA: number | null; PI: number | null; DOL?: number | null; orders: number; units: number; value: number | null; oTriCare?: number; oVA?: number; oPI?: number; oDOL?: number; payableTotal?: number | null; waitingTotal?: number | null; paidTotal?: number | null; reconciled?: boolean; reps: StrivenCommRep[] };
 export type StrivenCommission = {
   available: boolean; grandTotal: number | null;
   payableTotal?: number | null; waitingTotal?: number | null; heldOrders?: number;
@@ -633,8 +712,8 @@ export type StrivenCommission = {
    *  (vertical → last paid month, inclusive). */
   paidTotal?: number | null; paidThrough?: Record<string, string>;
   zeroValueOrders?: number;                              // $0 order value → earns nothing
-  byProgram: { TriCare: number | null; VA: number | null; PI: number | null };
-  byProgramOrders?: { TriCare: number; VA: number; PI: number };
+  byProgram: { TriCare: number | null; VA: number | null; PI: number | null; DOL?: number | null };
+  byProgramOrders?: { TriCare: number; VA: number; PI: number; DOL?: number };
   months: StrivenCommMonth[]; byRep: StrivenCommRep[];
   /** Orders the commission engine could price, and the full book it sits in. */
   commissionedOrders?: number; bookOrders?: number;
@@ -642,7 +721,7 @@ export type StrivenCommission = {
    *  the table's columns tie to the order book instead of falling short. */
   offRoster?: {
     orders: number; units: number; value: number;
-    nTricare: number; nVa: number; nPi: number; reps: string[];
+    nTricare: number; nVa: number; nPi: number; nDol?: number; reps: string[];
   };
   rateGaps?: string[];                                   // devices priced off the fallback
   unmatched?: UnmatchedOrder[];                          // no sales order → not commissioned
@@ -658,8 +737,8 @@ export type UnmatchedOrder = {
 };
 export type CommissionResult = {
   ok: boolean; configured?: boolean; note?: string;
-  grandTotal: number | null; byProgram: { TriCare: number | null; PI: number | null; VA: number | null };
-  byProgramCount?: { TriCare: number; PI: number; VA: number };
+  grandTotal: number | null; byProgram: { TriCare: number | null; PI: number | null; VA: number | null; DOL?: number | null };
+  byProgramCount?: { TriCare: number; PI: number; VA: number; DOL?: number };
   payableTotal?: number | null; waitingTotal?: number | null; heldOrders?: number;
   minMatchRate?: number;
   scopedToRep?: string | null;      // set when the payload was scoped to one rep

@@ -7,9 +7,9 @@ import { GuideReturn, GuideLanding, splitHash } from './guideTrail';
 // Lazy-loaded so recharts (heavy) only downloads when a chart tab is opened.
 const OverviewCharts = lazy(() => import('./components/OverviewCharts').then((m) => ({ default: m.OverviewCharts })));
 const OrdersTab = lazy(() => import('./components/OrdersTab').then((m) => ({ default: m.OrdersTab })));
-const ArApTab = lazy(() => import('./components/ArApTab').then((m) => ({ default: m.ArApTab })));
-const ApSheetTab = lazy(() => import('./components/ApSheetTab').then((m) => ({ default: m.ApSheetTab })));
-const ArSheetTab = lazy(() => import('./components/ArSheetTab').then((m) => ({ default: m.ArSheetTab })));
+// Receivables = AR overview + AR Register; Payables = AP overview + AP Register.
+const ReceivablesGroup = lazy(() => import('./components/ArApTab').then((m) => ({ default: m.ReceivablesGroup })));
+const PayablesGroup = lazy(() => import('./components/ArApTab').then((m) => ({ default: m.PayablesGroup })));
 const PLTab = lazy(() => import('./components/PLTab').then((m) => ({ default: m.PLTab })));
 const VendorsItemsTab = lazy(() => import('./components/VendorsItemsTab').then((m) => ({ default: m.VendorsItemsTab })));
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
@@ -187,10 +187,12 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
 
   const TABS: Record<ViewKey, ReactNode> = {
     overview: <OverviewCharts />,
-    receivables: <ArApTab initialMode="ar" />,
-    payables: <ArApTab initialMode="ap" />,
-    arsheet: <ArSheetTab />,
-    apsheet: <ApSheetTab />,
+    receivables: <ReceivablesGroup />,
+    payables: <PayablesGroup />,
+    // The registers' own keys still route (old links, the User Guide), opening
+    // their side's page on the Register tab.
+    arsheet: <ReceivablesGroup initialMode="register" />,
+    apsheet: <PayablesGroup initialMode="register" />,
     pl: <PLTab />,
     orders: <OrdersTab />,
     tracking: <OrdersTab initialMode="tracking" />,
