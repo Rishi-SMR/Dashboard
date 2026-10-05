@@ -112,7 +112,7 @@ const SB_KEY = () => process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SE
  *
  * Every cfgValue() call used to be its own Supabase round trip, and there are
  * thirteen call sites — sheet ids, report URLs, the recon config, the paid-
- * through map, the Shippo token. A single cold page load therefore spent most of
+ * through map. A single cold page load therefore spent most of
  * a second re-reading the same fifteen-row table over and over, serially,
  * because each caller awaited its own copy.
  *
@@ -606,7 +606,7 @@ export function scrubPhi(key, data, refMap = null) {
  * ALLOW-LIST, NOT DENY-LIST. Only the big out-of-band datasets are memoised. A
  * key that is WRITTEN during normal operation must keep reading straight through
  * or the writer would not see its own write: `pi_stages` (a rep dragging an order
- * in the pipeline) and `shipment_tracking`. Anything not listed keeps exactly the
+ * in the pipeline). Anything not listed keeps exactly the
  * behaviour it has today, so a key added later is fresh-by-default rather than
  * silently cached.
  */
@@ -2954,7 +2954,7 @@ async function getExceptions() {
   push({ key: 'item_price', severity: 'info', title: 'Active items missing a cost or price', count: noPrice.length, note: 'Needed for margin / COGS. Not every missing value is an error.', columns: ['item', 'cost', 'price'], rows: noPrice.slice(0, 25).map((i) => ({ item: i.name || '-', cost: round2(Number(i.cost || 0)), price: round2(Number(i.price || 0)) })) });
 
   const totalOpen = groups.reduce((s, g) => s + g.count, 0);
-  return { totalOpen, groups, note: 'Reconciliation with bank/card, QuickBooks, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources - pending client input.' };
+  return { totalOpen, groups, note: 'Reconciliation with bank/card, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources - pending client input.' };
 }
 async function getTasks() {
   const rows = await allTasks();
@@ -3126,7 +3126,7 @@ export async function getDeviceMix(viewer = null) {
 // checks." Needs-review and Unmatched rows are carried as counts so the money
 // held back is visible, but they are never added to a payable figure.
 // WHERE THE SHEET ID COMES FROM. Supabase `app_config` first, environment
-// second — the same order as shippoToken(), and for the same reason: a value
+// second, for one reason: a value
 // that lives in the table can be changed without a redeploy, and one host
 // forgetting to set it is not a silent outage.
 //
@@ -4806,18 +4806,8 @@ export async function getArRegister() {
   }, 300_000);
 }
 
-// ============================================================================
-// SHIPMENT TRACKING — vendor tracking numbers matched to a patient (last name /
-// ship-to), with LIVE carrier status via Shippo. Vendor invoices carry NO SO
-// number, so entries are keyed by last name / ship-to (client-authorized min-
-// necessary PHI). Store = Supabase cache `shipment_tracking`. Token read from
-// app_config SHIPPO_TOKEN (or env) — never in code/git.
-// ============================================================================
-async function shippoToken() {
-  const t = await readConfigTable().catch(() => ({}));
-  return t.SHIPPO_TOKEN || process.env.SHIPPO_TOKEN || '';
-}
-// Heuristic carrier detection → Shippo carrier token (user can override in the UI).
+// Carrier of a tracking number, from its shape alone. Used to link a number on
+// the order book to the carrier's own tracking page.
 function detectCarrier(tnRaw) {
   const tn = String(tnRaw || '').replace(/\s+/g, '').toUpperCase();
   if (!tn) return null;
@@ -4836,65 +4826,6 @@ const CARRIER_URL = {
   usps: (tn) => `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(tn)}`,
   dhl_express: (tn) => `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encodeURIComponent(tn)}`,
 };
-const SHIPPO_STATUS = { PRE_TRANSIT: 'Label created', TRANSIT: 'In transit', DELIVERED: 'Delivered', RETURNED: 'Returned', FAILURE: 'Exception', UNKNOWN: 'Unknown' };
-async function shippoTrack(carrier, tn) {
-  const token = await shippoToken();
-  if (!token) return { ok: false, error: 'no_token', status: 'Shippo not configured' };
-  if (!carrier) return { ok: false, error: 'no_carrier', status: 'Pick a carrier' };
-  try {
-    const r = await fetch(`https://api.goshippo.com/tracks/${carrier}/${encodeURIComponent(tn)}`, { headers: { Authorization: `ShippoToken ${token}` } });
-    if (r.status === 401) return { ok: false, error: 'bad_token', status: 'Shippo token invalid' };
-    if (!r.ok) return { ok: false, error: `http_${r.status}`, status: 'Lookup failed' };
-    const j = await r.json();
-    const ts = j.tracking_status || {};
-    return {
-      ok: true, raw: ts.status || 'UNKNOWN', status: SHIPPO_STATUS[ts.status] || ts.status || 'Unknown',
-      detail: ts.status_details || '', eta: j.eta || null, updatedAt: ts.status_date || null,
-      location: ts.location ? [ts.location.city, ts.location.state].filter(Boolean).join(', ') : '',
-    };
-  } catch { return { ok: false, error: 'fetch_failed', status: 'Lookup failed' }; }
-}
-async function trackingStore() { const sb = await sbCacheRead('shipment_tracking'); return (sb && sb.data) || { entries: [] }; }
-async function trackingList() {
-  const store = await trackingStore();
-  const entries = store.entries || [];
-  const configured = Boolean(await shippoToken());
-  const out = await Promise.all(entries.map(async (e) => {
-    const carrier = e.carrier || detectCarrier(e.tn) || '';
-    const st = await shippoTrack(carrier, e.tn);
-    return {
-      id: e.id, patient: e.patient || '', vendor: e.vendor || '', tn: e.tn, addedAt: e.addedAt || null,
-      carrier, carrierName: CARRIER_NAME[carrier] || (carrier ? carrier.toUpperCase() : '-'),
-      trackingUrl: (CARRIER_URL[carrier] || (() => ''))(e.tn),
-      status: st.status, statusRaw: st.raw || '', detail: st.detail || '', eta: st.eta || null,
-      statusUpdatedAt: st.updatedAt || null, location: st.location || '', lookupError: st.ok ? null : st.error,
-    };
-  }));
-  return { ok: true, configured, count: out.length, entries: out };
-}
-async function trackingAdd(body) {
-  const tn = String(body?.tn || '').replace(/\s+/g, '').trim();
-  if (!tn) return { ok: false, error: 'tracking number required' };
-  const store = await trackingStore();
-  const id = `TRK-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`;
-  const entry = { id, patient: String(body?.patient || '').trim(), vendor: String(body?.vendor || '').trim(),
-    carrier: String(body?.carrier || '').trim() || detectCarrier(tn) || '', tn, addedAt: new Date().toISOString() };
-  store.entries = [entry, ...(store.entries || [])].slice(0, 2000);
-  await sbCacheWrite('shipment_tracking', store);
-  return { ok: true, id };
-}
-async function trackingRemove(id) {
-  const store = await trackingStore();
-  store.entries = (store.entries || []).filter((e) => e.id !== String(id));
-  await sbCacheWrite('shipment_tracking', store);
-  return { ok: true };
-}
-export async function trackingRun(params = {}, body = null) {
-  const action = params.action || 'list';
-  if (action === 'add') return trackingAdd(body || {});
-  if (action === 'remove') return trackingRemove(params.id);
-  return trackingList();
-}
 
 // ============================================================================
 // COMMISSION — reads Crystal's commission workbook(s) (Google Sheets, public CSV
@@ -4906,7 +4837,7 @@ export async function trackingRun(params = {}, body = null) {
 // ============================================================================
 // No sheet IDs are hardcoded — the commission workbook(s) live in Supabase
 // app_config key COMMISSION_SHEETS (JSON array of {id,gid,label}), the same
-// config-not-code pattern as the Striven / Shippo creds. Empty = not set up.
+// config-not-code pattern as the Striven creds. Empty = not set up.
 const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 // Folds a raw Striven "Sales Rep" value to the roster name used everywhere else.

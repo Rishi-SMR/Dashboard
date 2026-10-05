@@ -502,15 +502,6 @@ export type PatientItemsReport = { patients: ReportPatient[]; orders?: ReportOrd
 export const fetchVendorItemsReport = () => get<VendorItemsReport>('/api/reports/vendor-items');
 export const fetchPatientItemsReport = () => get<PatientItemsReport>('/api/reports/patient-items');
 
-// ── Shipment tracking (vendor tracking # → live carrier status via Shippo) ──
-export type TrackingEntry = {
-  id: string; patient: string; vendor: string; tn: string; addedAt: string | null;
-  carrier: string; carrierName: string; trackingUrl: string;
-  status: string; statusRaw: string; detail: string; eta: string | null; statusUpdatedAt: string | null; location: string; lookupError: string | null;
-};
-export type TrackingResult = { ok: boolean; configured: boolean; count: number; entries: TrackingEntry[] };
-export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
-
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
 export type CommissionLine = { ref: string; device: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; comm: number; status: 'same' | 'diff' | 'none'; under: string | null };
 export type CommissionRecon = {
@@ -937,9 +928,6 @@ export const fetchRepTerritories = (as?: string | null, fresh = false) => {
   if (fresh) qs.set('fresh', '1');
   return get<RepTerritories>(`/api/rep-territories${qs.size ? `?${qs}` : ''}`);
 };
-/** Add a tracking row. Last name goes in the POST body (never the URL). */
-export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);
-export const trackingRemove = (id: string) => get<{ ok: boolean }>(`/api/tracking?action=remove&id=${encodeURIComponent(id)}`);
 
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };

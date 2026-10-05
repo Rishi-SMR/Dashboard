@@ -3,7 +3,7 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -40,20 +40,6 @@ const server = http.createServer(async (req, res) => {
   const { gateEnabled } = await getAuth();
   const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
   let currentUser = null;
-
-  // Shipment tracking (last name / ship-to → live carrier status via Shippo) — session only.
-  if (pathname === '/api/tracking') {
-    if (!verifySession(cookieVal(req.headers.cookie, 'smr_session'))) {
-      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
-    }
-    try {
-      const body = req.method === 'POST' ? await readBody(req) : null;
-      const out = await trackingRun({ action: reqUrl.searchParams.get('action') || undefined, id: reqUrl.searchParams.get('id') || undefined }, body);
-      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
-    } catch (e) {
-      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
-    }
-  }
 
   if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {

@@ -2,7 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -25,14 +25,6 @@ export default async function handler(req, res) {
   const { gateEnabled } = await getAuth();
   const clientIp = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   let currentUser = null;
-
-  if (pathname === '/api/tracking') {
-    if (!verifySession(cookieVal(req.headers.cookie, 'smr_session'))) return res.status(401).json({ error: 'auth required' });
-    try {
-      const body = req.method === 'POST' ? req.body : null;
-      return res.status(200).json(await trackingRun({ action: url.searchParams.get('action') || undefined, id: url.searchParams.get('id') || undefined }, body));
-    } catch (e) { return res.status(500).json({ error: e.message }); }
-  }
 
   // ---- access gate — always on: every route below serves patient-derived data ----
   if (gateEnabled) {

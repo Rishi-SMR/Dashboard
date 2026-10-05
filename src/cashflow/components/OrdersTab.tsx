@@ -18,9 +18,8 @@ import { StatusPill } from './StatusPill';
 import { SoLink } from './SoLink';
 import { SO_REF_STYLE, soIdFromRef } from '../soRef';
 import { OrderTrackingTab } from './OrderTrackingTab';
-import { TrackingTab } from './TrackingTab';
 
-type Mode = 'sales' | 'purchase' | 'tracking' | 'shipments';
+type Mode = 'sales' | 'purchase' | 'tracking';
 
 /**
  * Chip colour for a Striven label, by what the label MEANS rather than by which
@@ -410,14 +409,10 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Orders</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · live from Striven{records != null ? ` · ${records.toLocaleString()} records` : mode === 'shipments' ? ' · carrier status via Shippo' : ' · SO → PO → invoice chain'}{agoText ? ` · updated ${agoText}` : ''}
-            {/* Not on Shipment Tracking: that list shows patient last names by
-                design, so the pill would be a false claim there. */}
-            {mode !== 'shipments' && (
-              <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>
-                🔒 PHI masked
-              </span>
-            )}
+            <span className="live-dot" /> Sports Med Recovery · live from Striven{records != null ? ` · ${records.toLocaleString()} records` : ' · SO → PO → invoice chain'}{agoText ? ` · updated ${agoText}` : ''}
+            <span style={{ marginLeft: 10, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: C.brandLight, color: C.brandDark }}>
+              🔒 PHI masked
+            </span>
           </div>
         </div>
         <div className="ov-headright">
@@ -435,9 +430,6 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
         </button>
         <button className={`ov-tab${mode === 'tracking' ? ' active' : ''}`} onClick={() => switchMode('tracking')}>
           Order Tracking
-        </button>
-        <button className={`ov-tab${mode === 'shipments' ? ' active' : ''}`} onClick={() => switchMode('shipments')}>
-          Shipment Tracking
         </button>
       </div>
 
@@ -776,10 +768,6 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
 
       {/* ── ORDER TRACKING (embedded, full chain) ────────────────── */}
       {mode === 'tracking' && <OrderTrackingTab embedded />}
-
-      {/* ── SHIPMENT TRACKING (vendor tracking numbers, live carrier status).
-          It used to be reachable only through the Automation hub. ── */}
-      {mode === 'shipments' && <TrackingTab embedded />}
 
       {/* ── CHART DRILL (shared kit modal) ───────────────────────── */}
       {drill && (
