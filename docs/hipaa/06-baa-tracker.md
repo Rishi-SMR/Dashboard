@@ -91,6 +91,11 @@ regardless, so this gap exists with or without the dashboard.
 
 ## 4. Intuit / QuickBooks Online — the deliberate exception
 
+**Update 2026-10-05:** the QuickBooks integration was removed from the dashboard.
+It no longer connects to Intuit or sends it anything. Records posted before that
+date remain in QuickBooks, so the rest of this section still describes what
+Intuit holds.
+
 Intuit does **not** sign BAAs for QuickBooks Online; QBO is not offered as a
 HIPAA-compliant service. The architecture responds to that by keeping PHI out of
 QuickBooks entirely rather than by seeking an agreement:
@@ -101,12 +106,9 @@ QuickBooks entirely rather than by seeking an agreement:
   amounts. No name, no clinical detail, no contact information.
 - The legacy sales-order path that had sent names was removed.
 
-**Verification you can repeat any time** — every customer name in QuickBooks
-should match `PT-<digits>`:
-
-```
-node scripts/qb-migrate-customers-to-refs.mjs      # dry run; must report 0 to rename
-```
+**Verification:** every customer name in QuickBooks should match `PT-<digits>`.
+The script that checked this was retired with the integration, so check the
+customer list in QuickBooks itself.
 
 **Ask your compliance reviewer to confirm** the residual judgement: an account
 label plus an invoice amount, with the key held only by SMR, is intended to fall

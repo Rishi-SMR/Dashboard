@@ -86,11 +86,11 @@ that predates and outlives this project.
 
 No action. Intuit does not offer BAAs for QuickBooks Online, and the system is
 built so that none is needed: QuickBooks receives `PT-<id>` references and
-amounts only. Verify any time with:
+amounts only.
 
-```
-node scripts/qb-migrate-customers-to-refs.mjs      # dry run — must report 0 to rename
-```
+The dashboard's QuickBooks integration was removed on 2026-10-05, so nothing
+further is sent. To verify what is already there, check the customer list in
+QuickBooks itself: every name should match `PT-<digits>`.
 
 Ask your compliance reviewer to confirm and document this judgement rather than
 assuming it. See [06-baa-tracker.md §4](06-baa-tracker.md).

@@ -86,7 +86,7 @@ const GLOSSARY: Entry[] = [
     def: 'Accrual counts revenue when it is billed; cash counts it when the money actually arrives.',
     note: 'Revenue, the P&L and the cash-flow chart are ACCRUAL. Cash Received is CASH. They will not agree, and are not meant to.',
     locs: [
-      { view: 'pl', tab: 'P&L', section: 'Source toggle · Income Statement' },
+      { view: 'pl', tab: 'P&L', section: 'Income Statement' },
       { view: 'overview', tab: 'Overview', section: 'Revenue vs Expense · Cash Flow Overview' },
     ],
   },
@@ -142,18 +142,6 @@ const GLOSSARY: Entry[] = [
     basis: 'cash received ÷ (cash received + AR open)\n≥90% Excellent · ≥75% Good · ≥60% Fair · else Low',
     note: 'NOT the same calculation as Collection Rate, despite both sounding like collection performance. This one divides by cash plus what is still owed; Collection Rate divides by revenue billed in the period. Compare the two bases before quoting either.',
     locs: [{ view: 'receivables', tab: 'Receivables › AR Overview', section: 'A/R Health Score', anchor: 'ar-health' }],
-  },
-  {
-    term: 'Auto-PO', cat: 'Data & status',
-    def: 'Raising a vendor purchase order automatically from a sales order, cloned from the most recent live PO that contained the same item.',
-    note: 'Dry-run by default. Nothing is created in Striven unless it is explicitly switched to live mode.',
-    locs: [{ view: 'automation', tab: 'Automation', section: 'Auto-PO' }],
-  },
-  {
-    term: 'Auto-SO', cat: 'Data & status',
-    def: 'Creating a repeat sales order for a patient due a resupply.',
-    note: 'Same gate as Auto-PO: dry-run unless deliberately switched to live.',
-    locs: [{ view: 'automation', tab: 'Automation', section: 'Auto-SO' }],
   },
   {
     term: 'Bills Paid', cat: 'Payables',
@@ -223,8 +211,8 @@ const GLOSSARY: Entry[] = [
   {
     term: 'Data sync', aka: ['cache', 'refresh', 'freshness'], cat: 'Data & status',
     def: 'How current the figures are. Base data is pulled from Striven on a six-hourly cycle and served from a cache in between.',
-    note: 'Figures are not live to the second, and one or two derived datasets are rebuilt by hand rather than on the cycle - the sync panel reports the age of each.',
-    locs: [{ view: 'automation', tab: 'Automation', section: 'Data sync' }],
+    note: 'Figures are not live to the second, and one or two derived datasets are rebuilt by hand rather than on the cycle.',
+    locs: [{ view: 'overview', tab: 'Overview', section: 'Live pill in the page header' }],
   },
   {
     term: 'DEMO order', aka: ['test order'], cat: 'Programmes',
@@ -254,7 +242,7 @@ const GLOSSARY: Entry[] = [
   {
     term: 'Expenses', cat: 'Accounting',
     def: 'What the business spent, on the operational view of the books.',
-    basis: 'Σ vendor bill totals in the period · voided excluded\n(QuickBooks view: the posted P&L instead)',
+    basis: 'Σ vendor bill totals in the period · voided excluded',
     locs: [
       { view: 'pl', tab: 'P&L', section: 'Income Statement · Revenue vs Expenses by Month' },
       { view: 'overview', tab: 'Overview', section: 'Revenue vs Expense' },
@@ -383,7 +371,7 @@ const GLOSSARY: Entry[] = [
   {
     term: 'Revenue', cat: 'Accounting',
     def: 'What the business billed, on the operational view of the books.',
-    basis: 'Σ invoice totals in the period · voided excluded · ACCRUAL\n(QuickBooks view: the posted P&L instead)',
+    basis: 'Σ invoice totals in the period · voided excluded · ACCRUAL',
     note: 'On PI an invoice is only the 15% advance, so PI revenue here is the advance billed, not the case value written.',
     locs: [
       { view: 'pl', tab: 'P&L', section: 'Income Statement · Monthly P&L' },
@@ -424,21 +412,11 @@ const GLOSSARY: Entry[] = [
     locs: [{ view: 'apsheet', tab: 'Payables › AP Register', section: 'SUB-LEDGER SUMMARY' }],
   },
   {
-    term: 'System of record', cat: 'Accounting',
-    def: 'QuickBooks Online. The books an accountant would close the year on.',
-    note: 'It can only report on documents posted to it, and this portal posts invoices one at a time on request - so a QuickBooks figure can be missing revenue the Striven view already has.',
-    locs: [
-      { view: 'pl', tab: 'P&L', section: 'Source toggle' },
-      { view: 'quickbooks', tab: 'QuickBooks', section: 'Connection · reconciliation' },
-    ],
-  },
-  {
     term: 'Tracking number', cat: 'Orders',
     def: 'The carrier consignment number for a shipped device, with live status from the carrier.',
     note: 'Comes from a saved Striven report rather than the order detail, which returns the shipping method empty on every order sampled.',
     locs: [
       { view: 'tracking', tab: 'Orders › Tracking', section: 'The tracking table' },
-      { view: 'automation', tab: 'Automation', section: 'Shipment Tracking' },
     ],
   },
   {

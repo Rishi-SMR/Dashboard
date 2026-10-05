@@ -47,6 +47,10 @@ account label plus an invoice amount is enough to make Intuit a Business
 Associate is a judgement call your compliance reviewer should confirm; the
 architecture is built to make the answer "no."
 
+As of 2026-10-05 the dashboard's QuickBooks integration has been removed: it no
+longer connects to Intuit or posts anything to it. What was posted before that
+date remains in QuickBooks.
+
 ---
 
 ## Current technical state (verified 2026-07-18)

@@ -159,14 +159,6 @@ await check('C2', 'The browser only ever receives PT- references', '164.502(b)',
   return { ok: bad.length === 0, detail: `${data.length} cached customers, ${bad.length} with a non-reference name` };
 });
 
-await check('C3', 'QuickBooks holds no patient name', '164.502(e)', async () => {
-  const Q = await import('../api/_qb.js');
-  const res = await Q.qbApi('query?query=' + encodeURIComponent('select Id, DisplayName from Customer maxresults 1000'));
-  const list = res?.QueryResponse?.Customer ?? [];
-  const named = list.filter((c) => !/^PT-\d+$/.test(String(c.DisplayName ?? '')));
-  return { ok: named.length === 0, detail: `${list.length} QuickBooks customers, ${named.length} not a PT- reference${named.length ? ': ' + named.map((c) => c.DisplayName).join(', ') : ''}` };
-});
-
 // ---- Transmission security -------------------------------------------------
 
 await check('D1', 'Site is served over TLS only', '164.312(e)(1)', async () => {

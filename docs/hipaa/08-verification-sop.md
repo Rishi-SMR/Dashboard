@@ -2,8 +2,8 @@
 
 **Purpose:** a repeatable procedure that answers "is this dashboard actually
 following HIPAA?" with evidence rather than opinion.
-**Frequency:** monthly, plus before any release that touches auth, caching, the
-QuickBooks path, or any new data field.
+**Frequency:** monthly, plus before any release that touches auth, caching, or
+any new data field.
 **Owner:** system maintainer (technical part) + Security Officer (manual part).
 
 ---
@@ -52,7 +52,7 @@ lock a real colleague out.
 | **B2** | Every PHI read attributed to a user | §164.312(b) | You cannot answer "who accessed this?" — an audit failure. |
 | **C1** | No patient name in the Supabase cache | §164.502(b) | A name is at rest outside Striven. See below. |
 | **C2** | Browser receives only PT- references | §164.502(b) | Names are reaching the client. |
-| **C3** | QuickBooks holds no patient name | §164.502(e) | PHI is at Intuit, who will not sign a BAA. |
+| **C3** | Retired 2026-10-05 | n/a | The QuickBooks integration was removed from the dashboard, so nothing is sent to Intuit and this check no longer runs. |
 | **D1** | TLS only | §164.312(e)(1) | Traffic can travel unencrypted. |
 
 ### About C1 — read this before "fixing" a failure
@@ -116,7 +116,6 @@ when nothing was found — the record is the deliverable.
 Re-run the technical check before shipping any change that:
 - touches login, sessions, or cookies
 - adds a new cached dataset or a new field to an existing one
-- adds or changes anything posted to QuickBooks
 - adds a new external service of any kind (that also needs a BAA first)
 
 ## 5. Result log

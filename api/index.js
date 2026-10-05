@@ -2,8 +2,7 @@
 // The Striven credentials live in Vercel Environment Variables (server-side);
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
-import { qbHandle } from './_qb.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -26,48 +25,6 @@ export default async function handler(req, res) {
   const { gateEnabled } = await getAuth();
   const clientIp = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   let currentUser = null;
-
-  // ---- QuickBooks OAuth callback — Intuit redirects here after authorize.
-  // The registered redirect is /auth/callback (also accept /api/qb/callback).
-  // Handled BEFORE the gate: the OAuth `state` param is the CSRF guard. ----
-  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
-    try {
-      const out = await qbHandle('/api/qb/callback', Object.fromEntries(url.searchParams), req.method);
-      if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
-      if (out) return res.status(out.status ?? 200).json(out.json);
-    } catch (e) { return res.status(500).json({ error: e.message }); }
-  }
-
-  // ---- auto-PO (SO placed → PO raised) — cron token OR a logged-in session ----
-  if (pathname === '/api/auto-po') {
-    const keyOk = autoPoTokenOk(url.searchParams.get('key') || req.headers['x-auto-po-key']);
-    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
-    if (!keyOk && !sessionOk) return res.status(401).json({ error: 'auth required' });
-    try {
-      return res.status(200).json(await autoPoRun({
-        so: url.searchParams.get('so') || undefined,
-        mode: url.searchParams.get('mode') || undefined,
-        action: url.searchParams.get('action') || undefined,
-        po: url.searchParams.get('po') || undefined,
-        to: url.searchParams.get('to') || undefined,
-        subject: url.searchParams.get('subject') || undefined,
-        body: url.searchParams.get('body') || undefined,
-      }));
-    } catch (e) { return res.status(500).json({ error: e.message }); }
-  }
-
-  if (pathname === '/api/auto-so') {
-    const keyOk = autoSoTokenOk(url.searchParams.get('key') || req.headers['x-auto-so-key']);
-    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
-    if (!keyOk && !sessionOk) return res.status(401).json({ error: 'auth required' });
-    try {
-      return res.status(200).json(await autoSoRun({
-        so: url.searchParams.get('so') || undefined,
-        mode: url.searchParams.get('mode') || undefined,
-        action: url.searchParams.get('action') || undefined,
-      }));
-    } catch (e) { return res.status(500).json({ error: e.message }); }
-  }
 
   if (pathname === '/api/tracking') {
     if (!verifySession(cookieVal(req.headers.cookie, 'smr_session'))) return res.status(401).json({ error: 'auth required' });
@@ -223,17 +180,6 @@ export default async function handler(req, res) {
   if (pathname === '/api/device-mix') {
     try {
       return res.status(200).json(await getDeviceMix(viewerFor(await getMe({ user: currentUser }), url.searchParams.get('as'))));
-    } catch (e) { return res.status(500).json({ error: e.message }); }
-  }
-
-  // ---- QuickBooks Online (OAuth + posting) — behind the session gate ----
-  if (pathname.startsWith('/api/qb/')) {
-    try {
-      let body = req.body;
-      if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
-      const out = await qbHandle(pathname, Object.fromEntries(url.searchParams), req.method, body);
-      if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
-      if (out) return res.status(out.status ?? 200).json(out.json);
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
