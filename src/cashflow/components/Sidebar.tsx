@@ -19,15 +19,11 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
   pl: svg(<><line x1="6" y1="20" x2="6" y2="12" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="18" y1="20" x2="18" y2="9" /></>),
   orders: svg(<><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M3 4h2l2.4 11.4a1 1 0 0 0 1 .6h8.8a1 1 0 0 0 1-.8L20 8H6" /></>),
   tracking: svg(<><circle cx="6" cy="6" r="2.2" /><circle cx="6" cy="18" r="2.2" /><circle cx="18" cy="6" r="2.2" /><path d="M6 8.2v7.6" /><path d="M18 8.2A9 9 0 0 1 9 17" /></>),
-  autopo: svg(<><path d="M3 4h2l2.4 11.4a1 1 0 0 0 1 .6h8.8a1 1 0 0 0 1-.8L20 8H6" /><circle cx="9" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /><path d="M13 4.5l1.8 1.8L18 3" /></>),
-  autoso: svg(<><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" /><path d="M20.5 4v4.2h-4.2" /></>),
-  automation: svg(<><rect x="7" y="7" width="10" height="10" rx="1.6" /><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3" /></>),
   vendors: svg(<><circle cx="9" cy="8" r="3.4" /><path d="M2.8 20a6.4 6.4 0 0 1 12.4 0" /><path d="M16 5a3.4 3.4 0 0 1 0 6.4" /><path d="M17.6 14.6a6.4 6.4 0 0 1 3.6 5.4" /></>),
   catalog: svg(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="M12 12 20 7.5" /><path d="M12 12v9" /><path d="M12 12 4 7.5" /></>),
   accounts: svg(<><path d="m3 9 9-6 9 6" /><path d="M5 9v9" /><path d="M9.7 9v9" /><path d="M14.3 9v9" /><path d="M19 9v9" /><path d="M3 21h18" /></>),
   exceptions: svg(<><path d="M12 3 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5L12 3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="17.2" x2="12" y2="17.3" /></>),
   guide: svg(<><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H11v16H5.5A1.5 1.5 0 0 0 4 20.5z" /><path d="M20 4.5A1.5 1.5 0 0 0 18.5 3H13v16h5.5a1.5 1.5 0 0 1 1.5 1.5z" /><path d="M12 19v2" /></>),
-  quickbooks: svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 8.5c-1.7 0-2.8.9-2.8 2.2 0 2.6 4.4 1.6 4.4 3.6 0 .9-.8 1.4-1.9 1.4" /><path d="M12 7v10" /></>),
   reports: svg(<><path d="M4 4v16h16" /><rect x="7" y="11" width="3" height="6" /><rect x="12" y="7" width="3" height="10" /><rect x="17" y="13" width="3" height="4" /></>),
   commission: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7v10" /><path d="M14.5 9.3c-.5-.8-1.5-1.3-2.6-1.3-1.5 0-2.6.8-2.6 1.9 0 2.4 5.2 1.4 5.2 3.9 0 1.1-1.1 1.9-2.6 1.9-1.1 0-2.1-.5-2.6-1.3" /></>),
   // Reps: a person with a rising bar behind them: people plus performance.
@@ -49,7 +45,7 @@ const NAV_ICONS: Record<ViewKey, React.ReactNode> = {
 // Views that live inside another tab: highlight the parent nav item.
 // The registers live inside their side's page (2 Oct 2026): #arsheet opens
 // Receivables on its AR Register tab, #apsheet opens Payables on AP Register.
-const VIEW_ALIAS: Partial<Record<ViewKey, ViewKey>> = { arsheet: 'receivables', apsheet: 'payables', tracking: 'orders', catalog: 'vendors', autopo: 'automation', autoso: 'automation' };
+const VIEW_ALIAS: Partial<Record<ViewKey, ViewKey>> = { arsheet: 'receivables', apsheet: 'payables', tracking: 'orders', catalog: 'vendors' };
 
 // ── Role-driven navigation ───────────────────────────────────────────────────
 // One app, two sides. An admin runs the business AND oversees the reps, so they
@@ -72,12 +68,10 @@ export const COMPANY_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'payables', label: 'Payables' },
   { key: 'pl', label: 'P&L' },
   { key: 'orders', label: 'Orders' },
-  { key: 'automation', label: 'Automation' },
   { key: 'vendors', label: 'Vendors & Items' },
   { key: 'accounts', label: 'Accounts' },
   { key: 'exceptions', label: 'Exceptions' },
   { key: 'reports', label: 'Reports' },
-  { key: 'quickbooks', label: 'QuickBooks' },
   // Last on the company side: it explains the tabs above it, so it reads as a
   // reference you drop out to rather than a step in the workflow.
   { key: 'guide', label: 'User Guide' },
@@ -245,7 +239,7 @@ export function Sidebar({ view, onChange, identifier, connected, onSignOut, role
     };
   }, [ITEMS]);
 
-  // OPEN ON THE ROW YOU ARE ON. Landing on a deep Company tab (#quickbooks, say)
+  // OPEN ON THE ROW YOU ARE ON. Landing on a deep Company tab (#reports, say)
   // on a short window used to leave the highlighted row below the fold, so the
   // rail looked like it had lost your place. `block: 'nearest'` scrolls the
   // minimum — a row already in view does not move the list at all.
