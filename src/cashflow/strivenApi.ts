@@ -327,7 +327,9 @@ export const fetchMasterFileAp = () => get<MasterFileAp>('/api/master-file-ap');
  *  initial + surname. See getPiLienstar on the server. */
 export type PiLienKind = 'agrees' | 'differs' | 'striven-only' | 'lienstar-only';
 export type PiLienRow = {
-  kind: PiLienKind; reason: string; patient: string; soId: string; ref: string; rep: string; lawFirm: string;
+  kind: PiLienKind; reason: string; patient: string; soId: string; ref: string;
+  /** On the Lienstar tab but NOT Approved (On Hold, Rejected, …): its status. */
+  lienHold?: string; rep: string; lawFirm: string;
   status: string; paidOn: string; batch: string;
   strivenValue: number; lienValue: number; valueDiff: number;
   invoiced: number; toBeFunded: number; fundDiff: number;
@@ -360,17 +362,20 @@ export type PiLienstar = {
   receivable?: { count: number; outstanding: number; invoiced: number; received: number; overFunded: number;
     /** Cases invoiced at full value with the 15% advance funded — not receivable. */
     fullInvoiced15?: { count: number; funded: number; settlementBalance: number };
-    rows: { patient: string; soId: string; ref: string; lawFirm: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
+    rows: { patient: string; soId: string; ref: string; lawFirm: string; dueDate?: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
 };
 export const fetchPiLienstar = () => get<PiLienstar>('/api/pi-lienstar');
 
 /** VA: Striven (order value, invoiced — the live VA report) against the Master
  *  File's "VA Remmittances" tab (what the distributors paid), per patient.
  *  See getVaRemittances on the server. */
-export type VaRemitKind = 'agrees' | 'differs' | 'striven-only' | 'remit-only';
+export type VaRemitKind = 'agrees' | 'awaiting' | 'differs' | 'striven-only' | 'remit-only';
 export type VaRemitRow = {
   kind: VaRemitKind; reason: string; patient: string;
-  orders: { soId: string; ref: string; status: string }[]; rep: string;
+  /** Each of the patient's orders with its OWN remittance state — the patient's
+   *  remittance spread over them (exact amount first, then oldest). */
+  orders: { soId: string; ref: string; status: string; date?: string; dueDate?: string; invoiced?: number; remitted?: number;
+    state?: 'remitted' | 'part-remitted' | 'awaiting' | 'not-remitted' | 'not-invoiced' }[]; rep: string;
   lines: number; payer: string; lastPaid: string; flagged: boolean;
   value: number; invoiced: number; remitted: number; diff: number;
 };
@@ -386,7 +391,7 @@ export type VaRemittances = {
   rows?: VaRemitRow[];
   /** Invoiced in Striven, not yet remitted, per patient. */
   receivable?: { count: number; outstanding: number; invoiced: number; received: number; overRemitted: number;
-    rows: { patient: string; orders: { soId: string; ref: string; status: string }[]; payer: string; lastPaid: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
+    rows: { patient: string; orders: { soId: string; ref: string; status: string; date?: string; dueDate?: string; invoiced?: number; remitted?: number; state?: string }[]; payer: string; lastPaid: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
 };
 export const fetchVaRemittances = () => get<VaRemittances>('/api/va-remittances');
 

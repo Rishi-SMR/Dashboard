@@ -1492,6 +1492,9 @@ code {
    same fact in a form that survives a printout and a colour-blind reader. */
 .data-table tr.row-overrate > td { background: var(--warn-soft); }
 .data-table tr.row-overrate > td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+/* Held by Lienstar — on the tab, but On Hold / Rejected / anything not Approved. */
+.data-table tr.row-lien-hold > td { background: rgba(220,38,38,0.08); }
+.data-table tr.row-lien-hold > td:first-child { box-shadow: inset 3px 0 0 #DC2626; }
 
 .cell-pos { color: var(--pos); font-weight: 600; }
 .cell-neg { color: var(--danger); font-weight: 600; }
@@ -2477,16 +2480,19 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
    when the legend is short. */
 .donut-list { display:flex; align-items:center; gap:var(--sp-4); flex:1 1 auto; flex-wrap:wrap; }
 .donut-list .dl-chart { flex:none; width:124px; height:124px; }
-.donut-list .dl-legend { flex:1 1 165px; min-width:0; display:flex; flex-direction:column; justify-content:center; }
+/* 200px, not 165: below that the amount and percent squeeze the label column to
+   nothing, so the legend drops under the chart instead of overlapping itself. */
+.donut-list .dl-legend { flex:1 1 200px; min-width:0; display:flex; flex-direction:column; justify-content:center; }
 /* FOUR COLUMNS, NOT A FLEX ROW: dot, label, amount, percent. `margin-left:auto`
    put the money "somewhere right of the label", which is not the same as a
    column — a longer label pushed its amount out of line with the row above.
    Fixed tracks put every amount and every percent on one edge. */
 .dl-item { display:grid; grid-template-columns: var(--sp-3) 1fr auto var(--sp-8);
   align-items:baseline; gap:var(--sp-2); padding:var(--sp-1) 0; font-size:var(--fs-1); }
-/* No ellipsis: these labels are short and fixed ("Current", "1–30", "90+"), so
-   the row should give them their width rather than trim them. */
-.dl-item .dl-name { color:var(--muted-strong); font-weight:600; min-width:0; white-space:nowrap; }
+/* WRAPS RATHER THAN OVERLAPS (5 Oct 2026). `nowrap` assumed short labels, but
+   "AR Expected" and "Commission Due" in a narrow card ran under the amounts
+   beside them. A long label now takes a second line; nothing is trimmed. */
+.dl-item .dl-name { color:var(--muted-strong); font-weight:600; min-width:0; white-space:normal; overflow-wrap:anywhere; line-height:1.25; }
 /* `margin-left:auto` pins the money to the right edge whatever the label is,
    so the figures still form a column down the legend. */
 .dl-item .dl-val { font-weight:700; color:var(--text); font-variant-numeric:tabular-nums; text-align:right; }
