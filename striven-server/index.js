@@ -3,7 +3,8 @@
 // same code that runs as the Vercel serverless function in production, so the
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
-import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
+import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, autoPoTokenOk, autoPoRun, autoSoTokenOk, autoSoRun, trackingRun, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
+import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -20,6 +21,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const reqUrl = new URL(req.url, `http://localhost:${PORT}`);
   const pathname = reqUrl.pathname;
+  // ACCESS LOG, one line per API request: time, method, path, status and how
+  // long it took. Path only — never the query string, a body or a cookie — so
+  // nothing patient-identifying is written. Added to diagnose a browser that
+  // could not load the Master File comparisons while direct requests could.
+  const t0 = Date.now();
+  if (pathname.startsWith('/api/')) {
+    res.on('finish', () => console.log(`${new Date().toISOString()} ${req.method} ${pathname} ${res.statusCode} ${Date.now() - t0}ms`));
+  }
 
   if (pathname === '/api/refresh') {
     if (!refreshTokenOk(reqUrl.searchParams.get('token') || req.headers['x-refresh-token'])) {
@@ -33,6 +42,48 @@ const server = http.createServer(async (req, res) => {
   const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
   let currentUser = null;
 
+  // Auto-PO (SO placed → PO raised) — cron token OR a logged-in session (UI).
+  if (pathname === '/api/auto-po') {
+    const keyOk = autoPoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-po-key']);
+    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
+    if (!keyOk && !sessionOk) {
+      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
+    }
+    try {
+      const out = await autoPoRun({
+        so: reqUrl.searchParams.get('so') || undefined,
+        mode: reqUrl.searchParams.get('mode') || undefined,
+        action: reqUrl.searchParams.get('action') || undefined,
+        po: reqUrl.searchParams.get('po') || undefined,
+        to: reqUrl.searchParams.get('to') || undefined,
+        subject: reqUrl.searchParams.get('subject') || undefined,
+        body: reqUrl.searchParams.get('body') || undefined,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // Auto-SO (recurring resupply → SO created) — cron token OR a logged-in session.
+  if (pathname === '/api/auto-so') {
+    const keyOk = autoSoTokenOk(reqUrl.searchParams.get('key') || req.headers['x-auto-so-key']);
+    const sessionOk = Boolean(verifySession(cookieVal(req.headers.cookie, 'smr_session')));
+    if (!keyOk && !sessionOk) {
+      res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'auth required' }));
+    }
+    try {
+      const out = await autoSoRun({
+        so: reqUrl.searchParams.get('so') || undefined,
+        mode: reqUrl.searchParams.get('mode') || undefined,
+        action: reqUrl.searchParams.get('action') || undefined,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
   // Shipment tracking (last name / ship-to → live carrier status via Shippo) — session only.
   if (pathname === '/api/tracking') {
     if (!verifySession(cookieVal(req.headers.cookie, 'smr_session'))) {
@@ -42,6 +93,17 @@ const server = http.createServer(async (req, res) => {
       const body = req.method === 'POST' ? await readBody(req) : null;
       const out = await trackingRun({ action: reqUrl.searchParams.get('action') || undefined, id: reqUrl.searchParams.get('id') || undefined }, body);
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // QuickBooks OAuth callback (registered redirect /auth/callback) — before the gate.
+  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+    try {
+      const out = await qbHandle('/api/qb/callback', Object.fromEntries(reqUrl.searchParams), req.method);
+      if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
+      if (out) { res.writeHead(out.status ?? 200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out.json)); }
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
     }
@@ -227,6 +289,18 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // QuickBooks Online (OAuth + posting) — behind the session gate.
+  if (pathname.startsWith('/api/qb/')) {
+    try {
+      const body = req.method === 'POST' ? await readBody(req) : null;
+      const out = await qbHandle(pathname, Object.fromEntries(reqUrl.searchParams), req.method, body);
+      if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
+      if (out) { res.writeHead(out.status ?? 200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out.json)); }
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
     }
   }
 
