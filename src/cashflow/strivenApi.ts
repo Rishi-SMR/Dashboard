@@ -4,6 +4,9 @@
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { Accept: 'application/json' } });
+  // Signed out (session expired): tell the app shell, which shows the sign-in
+  // screen. See the 'smr:auth-required' listener in CashflowApp.
+  if (res.status === 401) window.dispatchEvent(new Event('smr:auth-required'));
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((json as any)?.error || `Request failed: ${res.status}`);
   return json as T;
@@ -352,6 +355,8 @@ export type PiLienstar = {
   rows?: PiLienRow[];
   /** Invoiced in Striven, not yet funded by Lienstar (Approved = funded). */
   receivable?: { count: number; outstanding: number; invoiced: number; received: number; overFunded: number;
+    /** Cases invoiced at full value with the 15% advance funded — not receivable. */
+    fullInvoiced15?: { count: number; funded: number; settlementBalance: number };
     rows: { patient: string; soId: string; ref: string; lawFirm: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
 };
 export const fetchPiLienstar = () => get<PiLienstar>('/api/pi-lienstar');
@@ -424,6 +429,25 @@ export type ArRegisterInvoice = {
   status: 'open' | 'paid' | 'credited' | 'zero-value';
   /** False when Striven has this invoice but the sheet does not. */
   inSheet: boolean;
+  /** PI ONLY: was the invoiced amount actually received from Lienstar, per the
+   *  Master File's PI Lienstar Funding tab? See verification in getArRegister.
+   *  Absent off PI, or when the Master File could not be read. */
+  lienstar?: {
+    status: 'funded' | 'full-15' | 'part-funded' | 'not-funded' | 'on-hold' | 'rejected' | 'not-on-lienstar' | 'no-order';
+    /** On 'full-15': the 85% case balance due at settlement (not owed by Lienstar). */
+    settlementBalance?: number;
+    soId: string | null; lienStatus: string;
+    received: number; outstanding: number; toBeFunded: number; caseValue: number;
+    paidOn: string; batch: string; fundedBy: string[];
+  };
+  /** VA ONLY: was the invoiced amount actually remitted, per the Master File's
+   *  VA Remmittances tab (matched through the order's patient)? */
+  remit?: {
+    status: 'remitted' | 'part-remitted' | 'not-remitted' | 'no-order';
+    soId: string | null; received: number; outstanding: number;
+    patientRemitted: number; lastPaid: string; payer: string; flagged: boolean;
+    afterLastRemit: boolean; lastRemitOnTab: string;
+  };
   /** Present only when the sheet disagrees with Striven on the amount. */
   sheetAmount: number | null; variance: number | null;
 };

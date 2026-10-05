@@ -33,6 +33,16 @@ export default function App() {
   useEffect(() => {
     fetch('/api/status').then((r) => setAuthed(r.status !== 401)).catch(() => setAuthed(true));
   }, []);
+  // A SESSION CAN END WHILE THE TAB IS OPEN — it expires after 12 hours, and a
+  // page loaded while the server was down skipped the check above. Either way
+  // every data request then answered "auth required" on a dashboard that still
+  // looked signed in. strivenApi raises this event on any 401, so the reader is
+  // sent to the sign-in screen instead of being shown the error.
+  useEffect(() => {
+    const onAuthRequired = () => setAuthed(false);
+    window.addEventListener('smr:auth-required', onAuthRequired);
+    return () => window.removeEventListener('smr:auth-required', onAuthRequired);
+  }, []);
   const signOut = () => {
     try { localStorage.removeItem('smr_user'); } catch { /* ignore */ }
     fetch('/api/logout', { method: 'POST' }).catch(() => {}).finally(() => window.location.reload());
