@@ -488,8 +488,8 @@ export function redactCommissionPayload(payload, viewer) {
   // sees their OWN totals here; admins keep the true company figures.
   out.grandTotal = ownSheet ? ownSheet.total : null;
   out.byProgram = ownSheet
-    ? { TriCare: ownSheet.tricare ?? 0, PI: ownSheet.pi ?? 0, VA: ownSheet.va ?? 0 }
-    : { TriCare: null, PI: null, VA: null };
+    ? { TriCare: ownSheet.tricare ?? 0, PI: ownSheet.pi ?? 0, VA: ownSheet.va ?? 0, DOL: ownSheet.dol ?? 0 }
+    : { TriCare: null, PI: null, VA: null, DOL: null };
   // payableTotal / waitingTotal / heldOrders were NOT scoped here, so a rep
   // received the COMPANY's figures under names that read like their own — the
   // whole book's $216,815.64 sitting beside their own $29,250. grandTotal was
@@ -537,8 +537,8 @@ export function redactCommissionPayload(payload, viewer) {
       // and belongs only to an admin.
       recon: null,
       byProgram: ownStriven
-        ? { TriCare: ownStriven.tricare ?? 0, VA: ownStriven.va ?? 0, PI: ownStriven.pi ?? 0 }
-        : { TriCare: null, VA: null, PI: null },
+        ? { TriCare: ownStriven.tricare ?? 0, VA: ownStriven.va ?? 0, PI: ownStriven.pi ?? 0, DOL: ownStriven.dol ?? 0 }
+        : { TriCare: null, VA: null, PI: null, DOL: null },
       byRep: keepOwn(payload.striven.byRep),
       // A month's headline figures are scoped the same way the all-months ones
       // are: the caller's OWN numbers for that month, not the company's. Nulling
@@ -551,6 +551,7 @@ export function redactCommissionPayload(payload, viewer) {
           TriCare: ownM ? ownM.tricare ?? 0 : null,
           VA: ownM ? ownM.va ?? 0 : null,
           PI: ownM ? ownM.pi ?? 0 : null,
+          DOL: ownM ? ownM.dol ?? 0 : null,
           value: ownM ? ownM.value : null,
           payableTotal: ownM ? ownM.payableTotal : null,
           paidTotal: ownM ? (ownM.paidTotal ?? 0) : null,

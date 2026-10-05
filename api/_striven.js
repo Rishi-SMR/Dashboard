@@ -615,7 +615,8 @@ export function scrubPhi(key, data, refMap = null) {
  * ALLOW-LIST, NOT DENY-LIST. Only the big out-of-band datasets are memoised. A
  * key that is WRITTEN during normal operation must keep reading straight through
  * or the writer would not see its own write: `pi_stages` (a rep dragging an order
- * in the pipeline) and `shipment_tracking`. Anything not listed keeps exactly the
+ * in the pipeline), `shipment_tracking`, and the QuickBooks OAuth rows, where a
+ * stale token read breaks the integration. Anything not listed keeps exactly the
  * behaviour it has today, so a key added later is fresh-by-default rather than
  * silently cached.
  */
@@ -792,6 +793,7 @@ function soPayerOf(d) {
   if (explicit) return explicit;
   if (/tri.?care/i.test(type)) return 'TriCare';
   if (/\bva\b|veteran/i.test(type)) return 'Veterans Affairs';
+  if (isDolType(type)) return DOL_PAYER;
   if (/\bpi\b|personal injury/i.test(type)) return String(soCustomField(d, 'Law Firm') || '').trim();
   return '';
 }
@@ -815,9 +817,19 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
   // only until the staleness test asks for it by name. Testing the KEY means
   // each old entry is re-fetched once and then left alone — an order Striven has
   // no order date for stores null and still satisfies `'orderDate' in`.
+  // EDITED SINCE IT WAS READ (5 Oct 2026). The cache was read once and never
+  // again, so an order changed in Striven afterwards kept its old value, date
+  // and status for good — a live audit found 10 order values and 4 order dates
+  // out of date. The order LIST, which is refreshed, carries each order's
+  // lastUpdatedDate; storing it on the entry and re-reading when the two differ
+  // is what lets an edit in Striven reach the portal. Entries written before
+  // the field existed are re-read once, by the same key test as above.
+  const updatedById = new Map(soRows.map((r) => [r.id, r.lastUpdatedDate ?? null]));
   const stale = (id) => !(id in detail)
     || !('tracking' in (detail[id] || {}))
-    || !('orderDate' in (detail[id] || {}));
+    || !('orderDate' in (detail[id] || {}))
+    || !('lastUpdatedDate' in (detail[id] || {}))
+    || (updatedById.get(id) && detail[id].lastUpdatedDate && updatedById.get(id) !== detail[id].lastUpdatedDate);
   const missing = soRows.map((r) => r.id).filter(stale);
   const todo = missing.slice(0, maxOrders);
 
@@ -851,6 +863,9 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
           // that the order never shipped.
           tracking: String(d?.trackingNumber ?? '').trim(),
           shipVia: d?.shipVia?.name ?? d?.shipVia ?? '',
+          // When Striven last changed the order — compared with the order list
+          // on every run, so an edit is re-read (see `stale` above).
+          lastUpdatedDate: d?.lastUpdatedDate ?? null,
         };
         fetched++;
       } catch { failed++; }
@@ -904,6 +919,7 @@ const reportProgram = (t) => {
   const s = String(t?.name ?? t ?? '').toLowerCase();
   if (/tri.?care/.test(s)) return 'TriCare';
   if (/\bva\b|veteran/.test(s)) return 'VA';
+  if (isDolType(s)) return 'DOL';
   if (/\bpi\b|personal injury/.test(s)) return 'PI';
   return 'Other';
 };
@@ -1213,7 +1229,7 @@ const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(r
  *
  * Every CACHED dataset already carries `PT-<id>` in this position: scrubPhi()
  * rewrites the name at write time and persistentCached() does the same on its
- * bootstrap path, so the AR register and the order book both show the
+ * bootstrap path, so the AR register, the order book and QuickBooks all show the
  * reference. The two LIVE reads — getSODetail and getPODetail — go straight to
  * Striven, get the real name back, and maskName() blanked it. The result was a
  * customer shown as PT-1234 on every list and as "-" on the one card you open to
@@ -1252,6 +1268,7 @@ function payerOf(d) {
   if (explicit) return explicit;
   if (/tri.?care/i.test(type)) return 'TriCare';
   if (/\bva\b|veteran/i.test(type)) return 'Veterans Affairs';
+  if (isDolType(type)) return DOL_PAYER;
   if (/\bpi\b|personal injury/i.test(type)) return String(cfVal(d, 'Law Firm') ?? '').trim();
   return '';
 }
@@ -1305,13 +1322,15 @@ export const isRealAccount = (payer) => {
 };
 
 // Payer text → program bucket (mirrors the client's programOfPayer). PI = a law
-// firm / attorney's office (anything not VA or TriCare); VA = Veterans Affairs;
-// TriCare = the TriCare program. Empty payer → Unassigned.
+// firm / attorney's office (anything not VA, TriCare or DOL); VA = Veterans
+// Affairs; TriCare = the TriCare program; DOL = the Department of Labor.
+// Empty payer → Unassigned.
 const programOfPayer = (payer) => {
   const s = String(payer ?? '').trim();
   if (!s) return 'Unassigned';
   if (/tri.?care/i.test(s)) return 'TriCare';
   if (/veteran|\bva\b/i.test(s)) return 'VA';
+  if (isDolType(s)) return 'DOL';
   return 'PI';
 };
 
@@ -2184,6 +2203,7 @@ const verticalOfPayer = (payer) => {
   if (!s) return '';
   if (/veteran|\bva\b/i.test(s)) return 'VA';
   if (/tri.?care/i.test(s)) return 'TriCare';
+  if (isDolType(s)) return 'DOL';
   return 'PI';                       // payerOf() only names a law firm for PI
 };
 
@@ -2307,10 +2327,23 @@ export function dedupeById(rows) {
  */
 export const isPipType = (t) => /\bpip\b|personal injury protection/i.test(String(t || ''));
 
+/**
+ * DOL = Department of Labor (OWCP): a single-payer programme like VA and
+ * TriCare, billed to the Department rather than to a law firm.
+ *
+ * ONE test for both the order TYPE and the PAYER text, so the two can never
+ * disagree about what counts as DOL. Word-bounded for the same reason PI is: a
+ * name merely containing the letters ("Dolan Law") must not be booked as DOL.
+ */
+export const isDolType = (t) => /\bdol\b|department of labor|\bowcp\b/i.test(String(t || ''));
+/** What a DOL order's payer reads as when the order names none of its own. */
+const DOL_PAYER = 'Department of Labor';
+
 const soClass = (t) => {
   const s = (t || '').toLowerCase();
   if (/tri.?care/.test(s)) return 'TriCare';
   if (/\bva\b|veteran/.test(s)) return 'VA';
+  if (isDolType(s)) return 'DOL';
   // PIP before PI: it reports as PI, but it must be caught explicitly rather
   // than by accident, and it must never reach the 'Other' fallback.
   if (isPipType(s)) return 'PI';
@@ -2394,7 +2427,7 @@ async function getSO() {
   const book = live.filter((r) => soGroupOf(soStatusOf(r)) !== 'cancelled');
   const totalValue = round2(book.reduce((s, r) => s + Number(r.d.total || 0), 0));
 
-  const piva = { PI: { count: 0, value: 0 }, VA: { count: 0, value: 0 }, TriCare: { count: 0, value: 0 }, DEMO: { count: 0, value: 0 }, Contract: { count: 0, value: 0 }, Other: { count: 0, value: 0 } };
+  const piva = { PI: { count: 0, value: 0 }, VA: { count: 0, value: 0 }, TriCare: { count: 0, value: 0 }, DOL: { count: 0, value: 0 }, DEMO: { count: 0, value: 0 }, Contract: { count: 0, value: 0 }, Other: { count: 0, value: 0 } };
   for (const r of book) { const c = soClass(r.d.type); piva[c].count++; piva[c].value = round2(piva[c].value + Number(r.d.total || 0)); }
   // raw type breakdown (PI Order / VA Order / Tri-Care …) minus demo + cancelled
   const byTypeMap = {};
@@ -2882,7 +2915,7 @@ async function getExceptions() {
   const noRep = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && repIsUnassigned(det[r.id]?.rep); });
   push({ key: 'missing_rep', severity: 'warn', title: 'Sales orders with no sales rep', count: noRep.length, note: 'Rep is blank or "House Account" - needed for rep reporting.', columns: ['ref', 'rep', 'type'], rows: noRep.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, rep: cleanRep(det[r.id]?.rep) || '(none)', type: det[r.id]?.type || '' })) });
   const unclassified = sos.filter((r) => { const t = det[r.id]?.type; return t && !isDemoType(t) && soClass(t) === 'Other'; });
-  push({ key: 'missing_pi_va', severity: 'warn', title: 'Sales orders not classified PI / VA / Tri-Care', count: unclassified.length, note: 'Order type does not map to PI, VA or Tri-Care.', columns: ['ref', 'type'], rows: unclassified.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '(none)' })) });
+  push({ key: 'missing_pi_va', severity: 'warn', title: 'Sales orders not classified PI / VA / Tri-Care / DOL', count: unclassified.length, note: 'Order type does not map to PI, VA, Tri-Care or DOL.', columns: ['ref', 'type'], rows: unclassified.slice(0, 25).map((r) => ({ ref: `SO-${r.id}`, type: det[r.id]?.type || '(none)' })) });
 
   // ── SALES ORDERS PRICED AT NOTHING ──────────────────────────────────────────
   // 38 live orders carry line items and a total of $0 — 36 of them TriCare, and
@@ -4504,6 +4537,185 @@ export async function getArRegister() {
     const missing = invoices.filter((i) => !i.inSheet);
     // The reverse lookup: sheet rows no Striven invoice claimed. Built from the
     // invoice numbers actually consumed above, so it cannot drift from them.
+    // ── INVOICE → ORDER, LIVE WHERE THE CACHE HAS NOT CAUGHT UP ──────────────
+    // Both verifications below join an invoice to its sales order through
+    // order_chain, which is rebuilt by a script and lags the newest invoices —
+    // three VA invoices of 2 Oct 2026 had no link and so fell back to Striven's
+    // ledger "Paid", unverified. Striven's own invoice record names its order
+    // (`order.id`), so a PI/VA invoice the cache cannot place is asked live.
+    // Read-only, per-invoice cached, and capped so a cold cache cannot fan out.
+    const liveSoByNo = new Map();
+    try {
+      const ordMap0 = await invoiceOrderMap();
+      const custByNo0 = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.customer?.id]));
+      const idByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.id]));
+      // VA too where the cached link points at an order the VA report does not
+      // hold: the customer-reference fallback can land on the patient's OTHER
+      // order (#476 did), so the live record is asked to confirm.
+      const vaSoKey = await getVaRemittances().then((v) => (v?.ok ? v.soKey : {})).catch(() => ({}));
+      const need = invoices.filter((i) => {
+        if (!((i.vertical === 'PI' || i.vertical === 'VA') && i.total > 0.005)) return false;
+        const cachedSo = ordMap0.byInvoice[String(i.no)]?.soId ?? ordMap0.byCustRef.get(`PT-${custByNo0.get(String(i.no))}`)?.soId;
+        return !cachedSo || (i.vertical === 'VA' && !vaSoKey[cachedSo]);
+      });
+      const queue = need.slice(0, 80);
+      await Promise.all(Array.from({ length: 4 }, async () => {
+        while (queue.length) {
+          const i = queue.shift();
+          const id = idByNo.get(String(i.no));
+          if (!id) continue;
+          // eslint-disable-next-line no-await-in-loop
+          const d = await cached(`inv-detail-${id}`, () => striven('GET', `/v1/invoices/${id}`)).catch(() => null);
+          if (d?.order?.id) liveSoByNo.set(String(i.no), String(d.order.id));
+        }
+      }));
+    } catch { /* falls back to the cached join alone */ }
+
+    // ── PI: WAS THE INVOICED AMOUNT ACTUALLY RECEIVED FROM LIENSTAR? ─────────
+    // (5 Oct 2026, on request.) Striven calls a PI invoice "Paid" when its
+    // ledger balance is nil — which says nothing about whether Lienstar funded
+    // it. So every PI row is checked against the Master File's PI Lienstar
+    // Funding tab, through the case its sales order was matched to in
+    // getPiLienstar(), and given a `lienstar` verdict:
+    //   funded        Approved, and To be Funded covers this invoice
+    //   part-funded   Approved, but funding covers only part of it
+    //   on-hold / rejected   on the tab with that status — nothing funded
+    //   not-on-lienstar      its order has no Lienstar case at all
+    //   no-order      the invoice joins to no sales order, so it cannot be checked
+    // An order's funding is spread over its PI invoices OLDEST FIRST, so two
+    // invoices on one case cannot both claim the same advance.
+    try {
+      const [lienRes, ordMap] = await Promise.all([getPiLienstar(), invoiceOrderMap()]);
+      const lienBySo = lienRes?.ok ? lienRes.lienBySo || {} : null;
+      if (lienBySo) {
+        const custByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.customer?.id]));
+        const soOf = (no) => ordMap.byInvoice[no]?.soId ?? ordMap.byCustRef.get(`PT-${custByNo.get(no)}`)?.soId ?? liveSoByNo.get(no) ?? null;
+        const piRows = invoices.filter((i) => i.vertical === 'PI' && i.total > 0.005)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }));
+        // Group by order, then allocate each Approved case's funding: an invoice
+        // struck at EXACTLY the funded amount takes it first (SO-11 carries a
+        // $1,599 invoice and a $239.85 one against $239.85 funded — the second
+        // is plainly the advance), then oldest first. An invoice left with
+        // nothing is 'not-funded' and names the invoice that took the money.
+        const bySo = new Map();
+        for (const i of piRows) {
+          const soId = soOf(String(i.no));
+          bySo.set(soId ?? `none:${i.no}`, [...(bySo.get(soId ?? `none:${i.no}`) ?? []), i]);
+        }
+        for (const [key, list] of bySo) {
+          const soId = key.startsWith('none:') ? null : key;
+          const l = soId ? lienBySo[soId] : null;
+          const approved = l && /^approved$/i.test(l.status);
+          const got = new Map();
+          if (approved) {
+            let avail = l.toBeFunded;
+            const order = [...list].sort((a, b) => (Math.abs(a.total - l.toBeFunded) < 0.01 ? -1 : 0) - (Math.abs(b.total - l.toBeFunded) < 0.01 ? -1 : 0));
+            for (const i of order) { const r = round2(Math.min(i.total, Math.max(0, avail))); got.set(i, r); avail = round2(avail - r); }
+          }
+          const fundedNos = list.filter((i) => (got.get(i) ?? 0) > 0.005).map((i) => `#${i.no}`);
+          for (const i of list) {
+            const received = got.get(i) ?? 0;
+            // FULLY INVOICED, 15% FUNDED (5 Oct 2026, on request): the invoice
+            // bills the WHOLE case value, and Lienstar has paid the full 15%
+            // advance it funds. Nothing is short — the other 85% is the case
+            // balance that arrives at settlement, not unpaid Lienstar money.
+            const fullCase15 = approved && l.caseValue > 0
+              && Math.abs(i.total - l.caseValue) < 1 && received >= l.toBeFunded - 0.5 && l.toBeFunded > 0;
+            const status = !soId ? 'no-order'
+              : !l ? 'not-on-lienstar'
+                : !approved ? (/reject/i.test(l.status) ? 'rejected' : 'on-hold')
+                  : received >= i.total - 0.5 ? 'funded'
+                    : fullCase15 ? 'full-15'
+                      : received > 0.005 ? 'part-funded' : 'not-funded';
+            i.lienstar = {
+              status, soId, lienStatus: l ? l.status : '',
+              // On a fully-invoiced case the 85% is settlement balance, not owed
+              // by Lienstar, so nothing is outstanding against Lienstar.
+              received, outstanding: status === 'full-15' ? 0 : round2(i.total - received),
+              settlementBalance: status === 'full-15' ? round2(i.total - received) : 0,
+              toBeFunded: l ? l.toBeFunded : 0, caseValue: l ? l.caseValue : 0,
+              paidOn: l ? l.paidOn : '', batch: l ? l.batch : '',
+              fundedBy: status === 'not-funded' ? fundedNos : [],
+            };
+          }
+        }
+      }
+    } catch { /* verification is additive: the register stands without it */ }
+
+    // ── VA: WAS THE INVOICED AMOUNT ACTUALLY REMITTED? ───────────────────────
+    // (5 Oct 2026, on request.) The VA twin of the Lienstar check above. The
+    // Master File's VA Remmittances tab names no order or invoice — only the
+    // patient — so an invoice is joined invoice → sales order → that order's
+    // patient → the remittance lines getVaRemittances() matched to them. Each
+    // patient's remitted money is spread over their VA invoices, an invoice of
+    // EXACTLY the remitted line amount first, then oldest first, so one payout
+    // is never counted twice. `remit` verdict:
+    //   remitted       the payout covers this invoice
+    //   part-remitted  covers part of it
+    //   not-remitted   nothing remitted for it (yet)
+    //   no-order       joins to no sales order, so it cannot be checked
+    try {
+      const [vaRes, ordMap] = await Promise.all([getVaRemittances(), invoiceOrderMap()]);
+      if (vaRes?.ok) {
+        const custByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.customer?.id]));
+        // The order: the cached link where it leads to a VA order the report
+        // holds, otherwise Striven's live invoice record (see liveSoByNo).
+        const soOf = (no) => {
+          const cachedSo = ordMap.byInvoice[no]?.soId ?? ordMap.byCustRef.get(`PT-${custByNo.get(no)}`)?.soId ?? null;
+          if (cachedSo && vaRes.soKey[cachedSo]) return cachedSo;
+          return liveSoByNo.get(no) ?? cachedSo;
+        };
+        const lastRemit = vaRes.remit?.lastPaid || '';
+        const vaRows = invoices.filter((i) => i.vertical === 'VA' && i.total > 0.005)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }));
+        // The patient's remittance GROUP. Through the report's patient where the
+        // order is in it; for an order OUTSIDE the report, through the patient on
+        // Striven's live order record — reduced to the match key here and never
+        // stored or sent. An exact key wins; a surname only when it is unique.
+        const remitKeyOf = async (soId) => {
+          const sKey = vaRes.soKey[soId];
+          if (sKey) return { known: true, rKey: vaRes.strivenToRemit[sKey] ?? null };
+          const so = await cached(`so-${soId}`, () => striven('GET', `/v1/sales-orders/${soId}`)).catch(() => null);
+          if (!so || !/\bva\b|veteran/i.test(so.type?.name || '')) return { known: false, rKey: null };
+          const { key, sur } = vaKeyParts(commInitialLastDisp(so.customer?.name));
+          const bySur = vaRes.remitBySur[sur] ?? [];
+          return { known: true, rKey: vaRes.remitGroups[key] ? key : bySur.length === 1 ? bySur[0] : null };
+        };
+        const byGroup = new Map();
+        for (const i of vaRows) {
+          const soId = soOf(String(i.no));
+          // eslint-disable-next-line no-await-in-loop
+          const { known, rKey } = soId ? await remitKeyOf(soId) : { known: false, rKey: null };
+          const g = rKey ? `r:${rKey}` : `none:${i.no}`;
+          byGroup.set(g, [...(byGroup.get(g) ?? []), { i, soId, known }]);
+        }
+        for (const [g, list] of byGroup) {
+          const R = g.startsWith('r:') ? vaRes.remitGroups[g.slice(2)] : null;
+          const got = new Map();
+          if (R) {
+            let avail = R.remitted;
+            const order = [...list].sort((a, b) => (Math.abs(a.i.total - avail) < 0.01 ? -1 : 0) - (Math.abs(b.i.total - avail) < 0.01 ? -1 : 0));
+            for (const x of order) { const r = round2(Math.min(x.i.total, Math.max(0, avail))); got.set(x.i, r); avail = round2(avail - r); }
+          }
+          for (const { i, soId, known } of list) {
+            const received = got.get(i) ?? 0;
+            const status = !soId || !known ? 'no-order'
+              : received >= i.total - 0.5 ? 'remitted'
+                : received > 0.005 ? 'part-remitted' : 'not-remitted';
+            i.remit = {
+              status, soId: soId || null, received, outstanding: round2(i.total - received),
+              patientRemitted: R ? R.remitted : 0, lastPaid: R ? R.lastPaid : '', payer: R ? R.payer : '',
+              flagged: R ? R.flagged : false,
+              // Raised after the newest payment on the tab: the remittance may
+              // simply not have been entered yet.
+              afterLastRemit: Boolean(lastRemit && i.date && i.date > lastRemit),
+              lastRemitOnTab: lastRemit,
+            };
+          }
+        }
+      }
+    } catch { /* verification is additive: the register stands without it */ }
+
     const claimed = new Set(invoices.map((i) => String(i.no)));
     const orphanSheet = [...detail.entries()]
       .filter(([no]) => !claimed.has(String(no)))
@@ -4602,6 +4814,125 @@ export async function getArRegister() {
       fetchedAt: new Date().toISOString(),
     };
   }, 300_000);
+}
+
+// AUTO-SO (recurring resupply) — READ-ONLY candidate preview. Reads the SO-wise
+// order cache (built by scripts/gen-reports.mjs) and, per patient, surfaces their
+// most recent order + how long ago it was, so staff can see who is due for a
+// resupply and one-click-draft a repeat order. Creates NOTHING — live SO creation
+// is a deliberate, separately-gated follow-up. Nothing is written to Striven here.
+async function getAutoSoCandidates() {
+  const r = await sbCacheRead('report_patient_items');
+  const orders = r?.data?.orders || [];
+  if (!orders.length) {
+    return { ok: true, ready: false, candidates: [], count: 0, dueCount: 0,
+      note: 'Run `node scripts/gen-reports.mjs` to build the sales-order-wise data this reads.' };
+  }
+  const DUE_DAYS = Number(process.env.AUTO_SO_DUE_DAYS || 30);
+  const byPatient = new Map();
+  for (const o of orders) {
+    if (o.incomplete) continue;
+    const key = o.custRef || o.ref || `SO-${o.soId}`;
+    if (!byPatient.has(key)) byPatient.set(key, []);
+    byPatient.get(key).push(o);
+  }
+  const now = Date.now();
+  const candidates = [];
+  for (const [key, os] of byPatient) {
+    os.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    const last = os[0];
+    const lastMs = last.date ? new Date(last.date).getTime() : NaN;
+    const daysSince = Number.isFinite(lastMs) ? Math.floor((now - lastMs) / 86_400_000) : null;
+    candidates.push({
+      patient: key, lastName: last.lastName || '', program: last.program || '-',
+      orderCount: os.length, lastSo: last.so, lastSoId: last.soId, lastDate: last.date || null, daysSince,
+      due: daysSince != null && daysSince >= DUE_DAYS,
+      items: (last.items || []).map((i) => ({ item: i.item, qty: i.qty })),
+      value: last.value || 0,
+    });
+  }
+  candidates.sort((a, b) => (b.daysSince ?? -1) - (a.daysSince ?? -1));
+  return { ok: true, ready: true, dueDays: DUE_DAYS, count: candidates.length, demoOnly: autoSoDemoOnly(),
+    dueCount: candidates.filter((c) => c.due).length, generatedAt: r?.data?.generatedAt ?? null, candidates };
+}
+
+// ---- AUTO-SO: create a resupply Sales Order (dry-run default, DEMO-gated) ----
+// Mirrors the Auto-PO safety model: cron-key OR UI-session, dry-run unless
+// mode=live, and a pilot gate so only DEMO/test patients can create until the
+// client flips AUTO_SO_DEMO_ONLY=false. Nothing is written to Striven unless
+// mode=live AND the gate passes.
+export const autoSoTokenOk = (t) => { const want = process.env.AUTO_SO_KEY || ''; return Boolean(want) && String(t ?? '') === want; };
+const autoSoDemoOnly = () => (process.env.AUTO_SO_DEMO_ONLY ?? 'true') !== 'false';
+async function autoSoState() { const sb = await sbCacheRead('auto_so_state'); return (sb && sb.data) || { created: [] }; }
+
+// Build the new SO payload by cloning the patient's last order — reset every
+// transaction/audit/status field and line id, keep customer + type + shipTo +
+// case customFields + the line items, stamp today's order date.
+function autoSoBuildPayload(lastSo) {
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const p = clone(lastSo);
+  p.id = 0;
+  for (const k of ['orderNumber', 'number', 'dateCreated', 'createdDate', 'createdBy', 'lastUpdatedDate',
+    'lastUpdatedBy', 'total', 'subTotal', 'subtotal', 'taxTotal', 'balance', 'invoiceStatus', 'invoiceStatusName',
+    'status', 'statusName', 'shippedDate', 'completedDate', 'closedDate']) delete p[k];
+  p.orderDate = new Date().toISOString();
+  p.title = 'Auto resupply';
+  if ('memo' in p) p.memo = 'Auto-created resupply (repeat of the patient’s prior order)';
+  p.lineItems = (lastSo.lineItems ?? []).map((l) => {
+    const nl = clone(l);
+    nl.id = 0;
+    for (const k of ['salesOrderLineItemId', 'salesOrderId', 'quantityShipped', 'quantityInvoiced',
+      'quantityBackordered', 'amountInvoiced', 'amountShipped']) delete nl[k];
+    return nl;
+  });
+  return p;
+}
+
+const soIsTesty = (so) => isDemoType(so?.type?.name ?? '') || /demo|test/i.test(so?.customer?.name ?? '') || /demo|test/i.test(so?.name ?? '');
+
+// Dry preview: what the resupply SO WOULD contain (no write, no patient name).
+async function autoSoPreview(soId) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const payload = autoSoBuildPayload(so);
+  const items = (payload.lineItems ?? []).map((l) => ({ itemName: l.item?.name ?? l.itemName ?? '', qty: Number(l.quantity ?? l.qty ?? 0) }));
+  return {
+    ok: true, mode: 'dry', demoOnly: autoSoDemoOnly(), testy: soIsTesty(so),
+    templateSo: safeRef('SO', soId, so.orderNumber ?? so.number), customerId: so.customer?.id ?? null,
+    type: so.type?.name ?? '', itemCount: items.length, items,
+  };
+}
+
+// Create the resupply SO for the patient whose last order is `soId`.
+async function autoSoCreate(soId, mode) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const testy = soIsTesty(so);
+  const entry = { at: new Date().toISOString(), templateSoId: Number(soId), mode, testy, ref: safeRef('SO', soId, so.orderNumber ?? so.number) };
+  if (autoSoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test patient (pilot gate)'; return { ok: true, mode, demoOnly: true, processed: [entry] }; }
+  // Idempotency: don't re-create a resupply for the same customer within the window.
+  const state = await autoSoState();
+  const custId = so.customer?.id ?? 0;
+  const dedupMs = Number(process.env.AUTO_SO_DEDUP_DAYS || 14) * 86_400_000;
+  const recent = (state.created ?? []).find((c) => c.custId === custId && (Date.now() - new Date(c.at).getTime()) < dedupMs);
+  if (recent) { entry.skipped = `resupply already created for this patient on ${String(recent.at).slice(0, 10)}`; return { ok: true, mode, demoOnly: autoSoDemoOnly(), processed: [entry] }; }
+  const payload = autoSoBuildPayload(so);
+  entry.itemCount = (payload.lineItems ?? []).length;
+  if (mode !== 'live') { entry.dryRun = true; return { ok: true, mode: 'dry', demoOnly: autoSoDemoOnly(), processed: [entry] }; }
+  const created = await striven('POST', '/v1/sales-orders', payload);
+  const newId = created?.id ?? created?.Id ?? null;
+  entry.createdSoId = newId;
+  state.created = [...(state.created ?? []), { custId, at: entry.at, soId: newId }].slice(-1000);
+  await sbCacheWrite('auto_so_state', state);
+  return { ok: true, mode: 'live', demoOnly: autoSoDemoOnly(), processed: [entry], createdSoId: newId };
+}
+
+// Dispatcher for /api/auto-so — action=candidates (default) | preview | create.
+export async function autoSoRun(params = {}) {
+  const action = params.action || '';
+  const soId = params.so;
+  const mode = params.mode || (process.env.AUTO_SO_MODE || 'dry');
+  if (action === 'preview' && soId) return autoSoPreview(soId);
+  if (soId && action !== 'candidates') return autoSoCreate(soId, mode);
+  return getAutoSoCandidates();
 }
 
 // ============================================================================
@@ -4704,7 +5035,7 @@ export async function trackingRun(params = {}, body = null) {
 // ============================================================================
 // No sheet IDs are hardcoded — the commission workbook(s) live in Supabase
 // app_config key COMMISSION_SHEETS (JSON array of {id,gid,label}), the same
-// config-not-code pattern as the Striven / Shippo creds. Empty = not set up.
+// config-not-code pattern as the Striven / Shippo / QB creds. Empty = not set up.
 const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 // Folds a raw Striven "Sales Rep" value to the roster name used everywhere else.
@@ -4897,7 +5228,7 @@ function commParseCsv(csv) {
   let prog = null; const rows = [];
   for (const line of csv.split(/\r?\n/)) {
     const c = commParseRow(line); const a = (c[0] || '').trim().toUpperCase();
-    if (a.includes('TRICARE')) prog = 'TriCare'; else if (a.includes('PERSONAL INJURY')) prog = 'PI'; else if (a.includes('VA COMMISSION')) prog = 'VA';
+    if (a.includes('TRICARE')) prog = 'TriCare'; else if (a.includes('PERSONAL INJURY')) prog = 'PI'; else if (a.includes('VA COMMISSION')) prog = 'VA'; else if (/\bDOL\b.*COMMISSION|DEPARTMENT OF LABOR/.test(a)) prog = 'DOL';
     if (!prog || !c[1]) continue;
     const p = (c[0] || '').trim(); if (!/^[A-Za-z]/.test(p) || p.toUpperCase() === 'PATIENT') continue;
     const comm = commMoney(c[3]); if (!comm) continue;
@@ -4998,15 +5329,15 @@ export async function getCommission(viewer = null) {
   // and must never appear as one. An order booked under a non-rep is reported as
   // unmatched rather than silently commissioned to somebody.
   const rosterReps = new Set(REP_NAMES);
-  const months = {}; const sByRep = {}; const sByProgram = { TriCare: 0, VA: 0, PI: 0 };
-  const sByProgramOrders = { TriCare: 0, VA: 0, PI: 0 }; let sGrand = 0;
+  const months = {}; const sByRep = {}; const sByProgram = { TriCare: 0, VA: 0, PI: 0, DOL: 0 };
+  const sByProgramOrders = { TriCare: 0, VA: 0, PI: 0, DOL: 0 }; let sGrand = 0;
   let sPayable = 0, sWaiting = 0, sHeld = 0, sZeroValue = 0, sCancelled = 0;
   const rateGaps = new Set();
   const strivenLinesByRep = {};
   // Empty per-vertical volume buckets, so every rep/month row has the same shape.
-  const zeroVol = () => ({ nTricare: 0, nVa: 0, nPi: 0, uTricare: 0, uVa: 0, uPi: 0 });
+  const zeroVol = () => ({ nTricare: 0, nVa: 0, nPi: 0, nDol: 0, uTricare: 0, uVa: 0, uPi: 0, uDol: 0 });
   const zeroState = () => ({ payableTotal: 0, waitingTotal: 0, heldOrders: 0 });
-  const zeroRepRow = (rep) => ({ rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0, ...zeroVol(), ...zeroState() });
+  const zeroRepRow = (rep) => ({ rep, tricare: 0, va: 0, pi: 0, dol: 0, total: 0, orders: 0, units: 0, value: 0, ...zeroVol(), ...zeroState() });
 
   // Seed EVERY rep on the roster, so the table lists the whole team rather than
   // only those with a commissioned order. Previously a rep row was created on
@@ -5080,20 +5411,22 @@ export async function getCommission(viewer = null) {
 
     const month = (info.date || '').slice(0, 7) || 'unknown';
     const c = res.commission;
-    const pk = program === 'TriCare' ? 'tricare' : program === 'VA' ? 'va' : 'pi';
-    const nk = program === 'TriCare' ? 'nTricare' : program === 'VA' ? 'nVa' : 'nPi';   // orders in this vertical
-    const uk = program === 'TriCare' ? 'uTricare' : program === 'VA' ? 'uVa' : 'uPi';   // units in this vertical
+    // DOL has its own keys. It used to fall through to the PI ones — the filter
+    // above let a DOL order in and these three then banked it as PI money.
+    const pk = program === 'TriCare' ? 'tricare' : program === 'VA' ? 'va' : program === 'DOL' ? 'dol' : 'pi';
+    const nk = program === 'TriCare' ? 'nTricare' : program === 'VA' ? 'nVa' : program === 'DOL' ? 'nDol' : 'nPi';   // orders in this vertical
+    const uk = program === 'TriCare' ? 'uTricare' : program === 'VA' ? 'uVa' : program === 'DOL' ? 'uDol' : 'uPi';   // units in this vertical
     const bump = (t) => {
       t[pk] += c; t.total += c; t.orders += 1; t.units += res.units; t.value += value;
       t[nk] += 1; t[uk] += res.units;
       // `hold` and `waiting` are both earned-but-not-payable.
       if (res.state === 'waiting' || res.state === 'hold') t.waitingTotal += c; else t.payableTotal += c;
     };
-    const M = months[month] = months[month] || { month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, ...zeroState(), reps: zeroMonthReps() };
+    const M = months[month] = months[month] || { month, total: 0, TriCare: 0, VA: 0, PI: 0, DOL: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, oDOL: 0, ...zeroState(), reps: zeroMonthReps() };
     M[program] += c; M.total += c; M.orders += 1; M.units += res.units; M.value += value;
-    if (program !== 'DOL') M[`o${program}`] += 1;
+    M[`o${program}`] += 1;
     if (res.state === 'waiting' || res.state === 'hold') M.waitingTotal += c; else M.payableTotal += c;
-    bump(M.reps[rep] = M.reps[rep] || { rep, tricare: 0, va: 0, pi: 0, total: 0, orders: 0, units: 0, value: 0, ...zeroVol(), ...zeroState() });
+    bump(M.reps[rep] = M.reps[rep] || zeroRepRow(rep));
     bump(sByRep[rep] = sByRep[rep] || zeroRepRow(rep));
 
     if (sByProgram[program] != null) { sByProgram[program] += c; sByProgramOrders[program] += 1; }
@@ -5121,9 +5454,9 @@ export async function getCommission(viewer = null) {
     });
   }
 
-  const MONEY = ['tricare', 'va', 'pi', 'total', 'value', 'payableTotal', 'waitingTotal'];
+  const MONEY = ['tricare', 'va', 'pi', 'dol', 'total', 'value', 'payableTotal', 'waitingTotal'];
   const rnd = (o, ks) => { for (const k of ks) o[k] = round2(o[k]); return o; };
-  const sMonths = Object.values(months).map((M) => rnd({ ...M, reps: Object.values(M.reps).map((r) => rnd(r, MONEY)).sort((a, b) => b.total - a.total) }, ['total', 'TriCare', 'VA', 'PI', 'value', 'payableTotal', 'waitingTotal'])).sort((a, b) => b.month.localeCompare(a.month));
+  const sMonths = Object.values(months).map((M) => rnd({ ...M, reps: Object.values(M.reps).map((r) => rnd(r, MONEY)).sort((a, b) => b.total - a.total) }, ['total', 'TriCare', 'VA', 'PI', 'DOL', 'value', 'payableTotal', 'waitingTotal'])).sort((a, b) => b.month.localeCompare(a.month));
   const striven = {
     available: rcOrders.length > 0,
     grandTotal: round2(sGrand),
@@ -5132,7 +5465,7 @@ export async function getCommission(viewer = null) {
     heldOrders: sHeld,
     zeroValueOrders: sZeroValue,          // $0 order value → no commission earned
     cancelledOrders: sCancelled,          // cancelled → never earned, never counted
-    byProgram: { TriCare: round2(sByProgram.TriCare), VA: round2(sByProgram.VA), PI: round2(sByProgram.PI) },
+    byProgram: { TriCare: round2(sByProgram.TriCare), VA: round2(sByProgram.VA), PI: round2(sByProgram.PI), DOL: round2(sByProgram.DOL) },
     byProgramOrders: { ...sByProgramOrders },              // orders per vertical, all months
     months: sMonths,
     // Earners first, then anyone at zero by name — without the tiebreakers the
@@ -5192,8 +5525,8 @@ export async function getCommission(viewer = null) {
       if (isExcludedRep(s.rep)) continue;
       if (striven.byRep.some((r) => r.rep === s.rep)) continue;
       striven.byRep.push({
-        rep: s.rep, tricare: 0, va: 0, pi: 0, total: s.payableTotal,
-        orders: 0, units: 0, value: 0, nTricare: 0, nVa: 0, nPi: 0,
+        rep: s.rep, tricare: 0, va: 0, pi: 0, dol: 0, total: s.payableTotal,
+        orders: 0, units: 0, value: 0, nTricare: 0, nVa: 0, nPi: 0, nDol: 0,
         payableTotal: s.payableTotal, waitingTotal: 0, heldOrders: 0,
         strivenPayable: 0, reviewTotal: s.reviewTotal, unmatchedTotal: s.unmatchedTotal,
         reconciled: true, lines: s.lines.slice().sort((a, b) => b.comm - a.comm),
@@ -5374,7 +5707,7 @@ export async function getCommission(viewer = null) {
     const zeroMoney = (row) => {
       row.strivenPayable = row.payableTotal;      // keep the engine's, for comparison
       row.payableTotal = 0; row.paidTotal = 0; row.total = 0;
-      row.tricare = 0; row.va = 0; row.pi = 0;
+      row.tricare = 0; row.va = 0; row.pi = 0; row.dol = 0;
       row.lines = []; row.reconciled = false;
     };
     // month → rep → its signed-off lines
@@ -5394,7 +5727,7 @@ export async function getCommission(viewer = null) {
         // A month the sheet pays for but the order book has no orders in — the
         // sheet reaches further back than report_patient_items does. It is a
         // real payout and must not vanish for want of a Striven bucket.
-        M = { month, total: 0, TriCare: 0, VA: 0, PI: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, ...zeroState(), reps: [] };
+        M = { month, total: 0, TriCare: 0, VA: 0, PI: 0, DOL: 0, orders: 0, units: 0, value: 0, oTriCare: 0, oVA: 0, oPI: 0, oDOL: 0, ...zeroState(), reps: [] };
         striven.months.push(M); known.set(month, M);
       }
       const rowOf = new Map(M.reps.map((r) => [r.rep, r]));
@@ -5421,6 +5754,7 @@ export async function getCommission(viewer = null) {
         row.tricare = prog(/tri.?care/i);
         row.va = prog(/\bva\b|veteran/i);
         row.pi = prog(/\bpi\b|personal injury/i);
+        row.dol = prog(/\bdol\b|department of labor|\bowcp\b/i);
       }
       // A rep with orders that month but no signed-off line is owed nothing for
       // it. Leaving the engine's figure would mix the two bases back together.
@@ -5431,6 +5765,7 @@ export async function getCommission(viewer = null) {
       M.TriCare = round2(M.reps.reduce((s, r) => s + (r.tricare || 0), 0));
       M.VA = round2(M.reps.reduce((s, r) => s + (r.va || 0), 0));
       M.PI = round2(M.reps.reduce((s, r) => s + (r.pi || 0), 0));
+      M.DOL = round2(M.reps.reduce((s, r) => s + (r.dol || 0), 0));
       M.reconciled = true;
     }
 
@@ -5452,7 +5787,7 @@ export async function getCommission(viewer = null) {
         row.waitingTotal = earned;
       }
       M.waitingTotal = round2(M.reps.reduce((s, r) => s + (r.waitingTotal || 0), 0));
-      M.payableTotal = 0; M.paidTotal = 0; M.total = 0; M.TriCare = 0; M.VA = 0; M.PI = 0;
+      M.payableTotal = 0; M.paidTotal = 0; M.total = 0; M.TriCare = 0; M.VA = 0; M.PI = 0; M.DOL = 0;
       M.reconciled = false;
     }
     striven.months.sort((a, b) => b.month.localeCompare(a.month));
@@ -5520,7 +5855,7 @@ export async function getCommission(viewer = null) {
     // bases hid from each other in the first place.
     let unassigned = 0;
     for (const r of striven.byRep) {
-      const v = { TriCare: 0, VA: 0, PI: 0 };
+      const v = { TriCare: 0, VA: 0, PI: 0, DOL: 0 };
       for (const l of r.lines || []) {
         // PAID LINES ONLY — the same rule as the month rows, and for the same
         // reason: this split decomposes `total`, which is now the paid figure.
@@ -5531,12 +5866,13 @@ export async function getCommission(viewer = null) {
         if (k) v[k] = round2(v[k] + (l.comm || 0));
         else unassigned = round2(unassigned + (l.comm || 0));
       }
-      r.tricare = v.TriCare; r.va = v.VA; r.pi = v.PI;
+      r.tricare = v.TriCare; r.va = v.VA; r.pi = v.PI; r.dol = v.DOL;
     }
     striven.byProgram = {
       TriCare: round2(striven.byRep.reduce((s, r) => s + (r.tricare || 0), 0)),
       VA: round2(striven.byRep.reduce((s, r) => s + (r.va || 0), 0)),
       PI: round2(striven.byRep.reduce((s, r) => s + (r.pi || 0), 0)),
+      DOL: round2(striven.byRep.reduce((s, r) => s + (r.dol || 0), 0)),
     };
     striven.byProgramUnassigned = unassigned;
   }
@@ -5577,6 +5913,7 @@ export async function getCommission(viewer = null) {
       r.nTricare = b?.TriCare ?? 0;
       r.nVa = b?.VA ?? 0;
       r.nPi = b?.PI ?? 0;
+      r.nDol = b?.DOL ?? 0;
     }
     striven.commissionedOrders = striven.byRep.reduce((s, r) => s + (r.commOrders || 0), 0);
     striven.bookOrders = (an.orders || []).length;
@@ -5597,6 +5934,7 @@ export async function getCommission(viewer = null) {
       nTricare: offRows.filter((o) => o.vertical === 'TriCare').length,
       nVa: offRows.filter((o) => o.vertical === 'VA').length,
       nPi: offRows.filter((o) => o.vertical === 'PI').length,
+      nDol: offRows.filter((o) => o.vertical === 'DOL').length,
       // The NAMES are filtered; the volume above is not. An excluded rep's
       // orders are still real orders and still have to be counted somewhere, or
       // this block stops doing the job it was added for (making the commission
@@ -5618,12 +5956,12 @@ export async function getCommission(viewer = null) {
     const sv = svByRep2.get(rep);
     return {
       rep,
-      tricare: round2(sv?.tricare ?? 0), va: round2(sv?.va ?? 0), pi: round2(sv?.pi ?? 0),
+      tricare: round2(sv?.tricare ?? 0), va: round2(sv?.va ?? 0), pi: round2(sv?.pi ?? 0), dol: round2(sv?.dol ?? 0),
       total: round2(sv?.total ?? 0),
       count: sv?.orders ?? 0,
-      nTricare: sv?.nTricare ?? 0, nVa: sv?.nVa ?? 0, nPi: sv?.nPi ?? 0,
+      nTricare: sv?.nTricare ?? 0, nVa: sv?.nVa ?? 0, nPi: sv?.nPi ?? 0, nDol: sv?.nDol ?? 0,
       strivenOrders: sv?.orders ?? 0, strivenUnits: sv?.units ?? 0, strivenValue: round2(sv?.value ?? 0),
-      orderCounts: { TriCare: sv?.nTricare || 0, VA: sv?.nVa || 0, PI: sv?.nPi || 0, DOL: 0 },
+      orderCounts: { TriCare: sv?.nTricare || 0, VA: sv?.nVa || 0, PI: sv?.nPi || 0, DOL: sv?.nDol || 0 },
       // PAID WAS COMPUTED AND THEN DROPPED ON THE FLOOR.
       //
       // splitPaid() sets `paidTotal` on every striven.byRep row further up, but
@@ -5652,7 +5990,7 @@ export async function getCommission(viewer = null) {
     // sheet's numbers, which is exactly why the two never agreed.
     grandTotal: striven.grandTotal,
     byProgram: { ...striven.byProgram },
-    byProgramCount: { ...(striven.byProgramOrders || { TriCare: 0, VA: 0, PI: 0 }) },
+    byProgramCount: { ...(striven.byProgramOrders || { TriCare: 0, VA: 0, PI: 0, DOL: 0 }) },
     payableTotal: striven.payableTotal, waitingTotal: striven.waitingTotal, heldOrders: striven.heldOrders,
     reps,
     striven,
@@ -7299,6 +7637,754 @@ export async function getInventoryItems() {
   });
 }
 
+// ── AR · COLLECTION EFFECTIVENESS INDEX (CEI), BY MONTH ──────────────────────
+// Added 2 Oct 2026 as the monthly AR health measure:
+//
+//   CEI = (Opening AR + Invoiced − Closing AR) ÷ (Opening AR + Invoiced − Closing Current AR) × 100
+//
+// "What was collected, out of what could have been collected": bills not yet
+// due at month end (Closing CURRENT AR) are not counted against the month, and
+// an old balance cannot drag every later month down the way it does in the
+// A/R Health Score (cash ÷ (cash + all open AR)).
+//
+// AR AT PAST MONTH-ENDS IS REBUILT, because Striven keeps only today's balance.
+// Payments carry no invoice link, so each customer's payments are applied to
+// their oldest invoices first (FIFO) - the standard rule when application is
+// unrecorded. Checked on 2 Oct 2026: it reproduces today's open balance on 444
+// of 445 invoices. Money left over after every invoice is paid is unapplied
+// credit and is not AR. Voided invoices and payments are excluded. On PI the
+// invoice IS the 15% advance, so the case value never enters it.
+//
+// The CURRENT month is returned as in progress and is never scored.
+export async function getArCei() {
+  return cached('derived:ar-cei', async () => {
+    const [invBlob, payBlob] = await Promise.all([sbCacheRead('invoices'), sbCacheRead('payments')]);
+    const dead = (s) => isVoidStatus(s) || /\blost\b/i.test(s || '');
+    const inv = (invBlob?.data ?? []).filter((r) => !dead(INVOICE_STATUS[r.id] ?? ''));
+    const pay = (payBlob?.data ?? []).filter((p) => !dead(p?.status?.name ?? ''));
+    const d10 = (s) => String(s ?? '').slice(0, 10);
+    const byCust = new Map();
+    const slot = (c) => { if (!byCust.has(c)) byCust.set(c, { inv: [], pay: [] }); return byCust.get(c); };
+    for (const i of inv) {
+      slot(i.customer?.id).inv.push({
+        date: d10(i.dateCreated), due: d10(i.dueDate) || d10(i.dateCreated),
+        total: round2(Number(i.invoiceTotal || 0)), open: round2(Number(i.openBalance || 0)), apps: [],
+      });
+    }
+    for (const p of pay) slot(p.customer?.id).pay.push({ date: d10(p.paymentDate || p.dateCreated), amt: round2(Number(p.paymentAmount || 0)) });
+    let matched = 0, checked = 0;
+    for (const c of byCust.values()) {
+      c.inv.sort((a, b) => a.date.localeCompare(b.date));
+      c.pay.sort((a, b) => a.date.localeCompare(b.date));
+      for (const p of c.pay) {
+        let left = p.amt;
+        for (const i of c.inv) {
+          if (left <= 0.005) break;
+          const rem = i.total - i.apps.reduce((s, a) => s + a.amt, 0);
+          if (rem <= 0.005) continue;
+          const x = Math.min(rem, left);
+          i.apps.push({ date: p.date, amt: x });
+          left -= x;
+        }
+      }
+      for (const i of c.inv) {
+        checked += 1;
+        if (Math.abs(i.total - i.apps.reduce((s, a) => s + a.amt, 0) - i.open) < 0.01) matched += 1;
+      }
+    }
+    const all = [...byCust.values()].flatMap((c) => c.inv);
+    const openAt = (i, d) => (i.date <= d ? Math.max(0, i.total - i.apps.filter((a) => a.date <= d).reduce((s, a) => s + a.amt, 0)) : 0);
+    const eom = (y, mo) => new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
+    const firstMonth = all.reduce((m, i) => (i.date && (!m || i.date < m) ? i.date : m), '').slice(0, 7);
+    const today = new Date().toISOString().slice(0, 10);
+    const months = [];
+    if (firstMonth) {
+      let [y, mo] = firstMonth.split('-').map(Number);
+      for (;;) {
+        const key = `${y}-${String(mo).padStart(2, '0')}`;
+        if (key > today.slice(0, 7)) break;
+        const start = eom(y, mo - 1), end = eom(y, mo);
+        const opening = round2(all.reduce((t, i) => t + openAt(i, start), 0));
+        const invoiced = round2(all.filter((i) => i.date > start && i.date <= end).reduce((t, i) => t + i.total, 0));
+        const closing = round2(all.reduce((t, i) => t + openAt(i, end), 0));
+        const closingCurrent = round2(all.filter((i) => i.due >= end).reduce((t, i) => t + openAt(i, end), 0));
+        const collected = round2(opening + invoiced - closing);
+        const collectible = round2(opening + invoiced - closingCurrent);
+        const inProgress = key === today.slice(0, 7);
+        const cei = !inProgress && collectible > 0 ? round2((collected / collectible) * 100) : null;
+        const band = cei == null ? null : cei >= 90 ? 'Excellent' : cei >= 75 ? 'Good' : cei >= 60 ? 'Fair' : 'Low';
+        months.push({ month: key, opening, invoiced, closing, closingCurrent, collected, collectible, cei, band, inProgress });
+        mo += 1; if (mo > 12) { mo = 1; y += 1; }
+      }
+    }
+    return { ok: true, months, fifoCheck: { matched, checked } };
+  });
+}
+
+// ── MASTER FILE FOR SMR · AP, BY VENDOR ──────────────────────────────────────
+// AP Open's source from 1 Oct 2026, on request: the "AP" tab of the Master File
+// For SMR workbook (the same workbook as Inventory and Reps).
+//
+// THE RULE, as stated by the business:
+//   Invoice Amount = billed · Amount Paid = paid to date
+//   vendor balance = Σ Invoice Amount − Σ Amount Paid, over that vendor's rows
+// Cancelled bills are left out (not owed). Credit notes carry a negative Invoice
+// Amount and net into billing. Lump payments - rows with no invoice number -
+// count toward Amount Paid, which is why this is worked BY VENDOR: those
+// payments are not matched to bills, so a per-bill balance would overstate.
+//
+// NO OFFSETTING. A vendor paid more than billed does NOT reduce what is owed to
+// the others. AP Open is the sum of positive balances only; an overpaid vendor
+// is reported as BILLS REQUIRED - bills the sheet still needs to account for
+// money already paid out.
+const MASTER_FILE_AP_GID = () => cfgValue('MASTER_FILE_AP_GID', '788374151');
+
+export async function getMasterFileAp() {
+  const id = await MASTER_DATA_ID();
+  const gid = await MASTER_FILE_AP_GID();
+  return cached('derived:master-file-ap', async () => {
+    const res = await fetch(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`).catch(() => null);
+    const csv = res?.ok ? await res.text() : '';
+    if (!csv || /^\s*<(!doctype|html)/i.test(csv)) return { ok: false, vendors: [], note: 'Master File "AP" tab is unreachable.' };
+    const all = parseCsvRows(csv).map((r) => r.map((c) => String(c ?? '').trim()));
+    const hIdx = all.findIndex((r) => r.some((c) => /invoice amount/i.test(c)) && r.some((c) => /amount paid/i.test(c)));
+    if (hIdx < 0) return { ok: false, vendors: [], note: 'Master File "AP" tab has no Invoice Amount / Amount Paid columns.' };
+    const col = (re) => all[hIdx].findIndex((h) => re.test(h));
+    const cVendor = col(/sub-?ledger/i), cBilled = col(/invoice amount/i), cPaid = col(/amount paid/i), cStatus = col(/payment status/i);
+    const cNo = col(/invoice no/i), cDate = col(/invoice date/i), cDue = col(/due date/i), cTerms = col(/payment terms/i), cOut = col(/outstanding/i);
+    // "$ (27.20)" is a credit note: parentheses mean negative, which sheetMoney
+    // (built for plain "-") would read as positive.
+    const amt = (s) => { const t = String(s ?? '').replace(/[$\s,]/g, ''); return /^\(.*\)$/.test(t) ? -sheetMoney(t) : sheetMoney(t); };
+    const byVendor = new Map();
+    let cancelled = 0;
+    // THE BILLS THEMSELVES, for the AP Register's aging, status cards and bill
+    // tables. Same shape as getApLedger's bills so the page reads either.
+    // A bill's open balance is the tab's own Outstanding Amount for Unpaid /
+    // Partially Paid rows (Invoice − Paid where that cell is blank); Paid and
+    // Cancelled owe nothing; a credit note is its negative amount. Aging is
+    // worked from the due date as of today, not the tab's typed category.
+    // NOTE these bill balances do NOT add to the vendor totals above them: lump
+    // payments (rows with no invoice number) are not applied to any bill.
+    const bills = [];
+    // EVERY PAYMENT: each row with an Amount Paid - a bill's own payment or a
+    // lump payment row - dated by its Payment Date. Sums to `paid` below, so
+    // Bills Paid and Paid to Date are one figure everywhere.
+    const payments = [];
+    const cPayDate = col(/payment date/i);
+    const today = Date.now();
+    for (const r of all.slice(hIdx + 1)) {
+      const no = cNo >= 0 ? r[cNo] || '' : '';
+      const vendorName = r[cVendor] || '';
+      if (!no || !vendorName) continue;                       // payment rows carry no invoice number
+      const status = (r[cStatus] || '').trim();
+      const face = round2(amt(r[cBilled]));
+      const kind = /cancel/i.test(status) ? 'cancelled' : (/^cm/i.test(no) || face < 0) ? 'credit-note' : 'bill';
+      let open = 0;
+      if (kind === 'credit-note') open = face;
+      else if (kind === 'bill' && /^(unpaid|partially paid)$/i.test(status)) {
+        const out = round2(amt(r[cOut]));
+        open = out > 0 ? out : round2(Math.max(0, face - amt(r[cPaid])));
+      }
+      // NO DUE DATE → THE INVOICE DATE (1 Oct 2026, on request): several bills
+      // (mostly Hi-Dow) carry none, and treating the invoice date as due lets
+      // them age and land in the dues buckets instead of reading as Current.
+      const due = sheetDate(r[cDue]) || sheetDate(r[cDate]);
+      const past = due ? Math.floor((today - new Date(`${due}T00:00:00`).getTime()) / 86_400_000) : 0;
+      const aging = past <= 0 ? 'Current' : past <= 30 ? '0-30 Days' : past <= 60 ? '31-60 Days' : past <= 90 ? '61-90 Days' : '91-120 Days';
+      const terms = cTerms >= 0 ? r[cTerms] || '' : '';
+      const tDays = /(\d+)/.exec(terms);
+      bills.push({
+        no, subLedger: vendorName, date: sheetDate(r[cDate]), due,
+        total: kind === 'cancelled' ? 0 : face, faceValue: face, kind,
+        status: kind === 'credit-note' ? '' : status, terms, dueDays: Math.max(0, past), aging, open,
+        termsDays: tDays ? Number(tDays[1]) : null, termsSource: tDays ? 'sheet' : 'none',
+      });
+    }
+    for (const r of all.slice(hIdx + 1)) {
+      const vendor = r[cVendor] || '';
+      if (!vendor) continue;
+      if (/cancel/i.test(r[cStatus] || '')) { cancelled += 1; continue; }
+      const paidAmt = round2(amt(r[cPaid]));
+      if (paidAmt !== 0) payments.push({ subLedger: vendor, date: sheetDate(r[cPayDate]) || '', amount: paidAmt, invoice: (cNo >= 0 ? r[cNo] : '') || '' });
+      const v = byVendor.get(vendor) ?? { vendor, billed: 0, paid: 0 };
+      v.billed = round2(v.billed + amt(r[cBilled]));
+      v.paid = round2(v.paid + amt(r[cPaid]));
+      byVendor.set(vendor, v);
+    }
+    const vendors = [...byVendor.values()].map((v) => {
+      const bal = round2(v.billed - v.paid);
+      return { ...v, owed: bal > 0 ? bal : 0, billsRequired: bal < 0 ? -bal : 0 };
+    }).sort((a, b) => b.owed - a.owed || b.billsRequired - a.billsRequired);
+    return {
+      ok: true, vendors, bills, payments, cancelledExcluded: cancelled,
+      billsOpen: round2(bills.filter((b) => b.kind === 'bill').reduce((s, b) => s + b.open, 0)),
+      apOpen: round2(vendors.reduce((s, v) => s + v.owed, 0)),
+      billsRequired: round2(vendors.reduce((s, v) => s + v.billsRequired, 0)),
+      billed: round2(vendors.reduce((s, v) => s + v.billed, 0)),
+      paid: round2(vendors.reduce((s, v) => s + v.paid, 0)),
+    };
+  });
+}
+
+// ── PI · STRIVEN AGAINST THE MASTER FILE'S LIENSTAR FUNDING ──────────────────
+// The comparison asked for on 3 Oct 2026: what Striven holds for PI (order value
+// and what was invoiced) beside the Master File's "PI Lienstar Funding" tab, and
+// the difference between them.
+//
+// THE TAB IS ONE ROW PER CASE: "Invoice" is the case value, "Rate" the lien rate
+// (15), "To be Funded" the 15% Lienstar advances, "Status" Approved / On Hold /
+// Rejected. Striven's side is the PI order book (order value) and the PI
+// invoices raised against it (the 15% advance invoice) — so the two pairs line
+// up: order value ↔ Invoice, invoiced ↔ To be Funded.
+//
+// MATCHED BY PATIENT, first initial + surname: the only key both carry. Striven
+// rows already hold exactly that (the portal never carries a full first name),
+// and the tab's full names and dates of birth are reduced to the same form HERE
+// and never leave the server. Where one key has several cases on a side, the
+// closest case value pairs first, so two cases for one surname still line up.
+//
+// STRIVEN'S SIDE IS READ LIVE FROM THE PI ORDER REPORT (3 Oct 2026, on
+// request) — a saved Striven report, STRIVEN_PI_REPORT_URL, one row per PI
+// order with Total (order value) and InvoicedTotal (what has been invoiced).
+// Checked against live sales-order detail the day it was wired: status, type
+// and value agreed on all 155 rows. The cached order book it replaces had
+// drifted ($8,495 of order value, $1,599 of invoicing), because so_detail is
+// read once and never re-read. Without the report the cached book is used and
+// `source` says so.
+//
+// The report is SCOPED IN STRIVEN: three live PI orders were outside it on that
+// day. They are not guessed back in; `reportGaps` names them so the card can.
+//
+// Cancelled and lost orders are not cases: left out, counted and listed.
+// Lienstar counts APPROVED ROWS ONLY (on request): On Hold and Rejected are
+// left out of every figure the same way, counted and listed, never dropped.
+const MASTER_FILE_PI_LIEN_GID = () => cfgValue('MASTER_FILE_PI_LIEN_GID', '1039792254');
+const PI_REPORT_URL = () => cfgValue('STRIVEN_PI_REPORT_URL');
+
+export async function getPiLienstar() {
+  const id = await MASTER_DATA_ID();
+  const gid = await MASTER_FILE_PI_LIEN_GID();
+  return cached('derived:pi-lienstar', async () => {
+    const reportUrl = await PI_REPORT_URL();
+    const [res, so, ar, report, soBlob] = await Promise.all([
+      fetch(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`).catch(() => null),
+      getSO(),
+      getAR().catch(() => null),
+      reportUrl ? fetchSavedReport(reportUrl).catch(() => []) : Promise.resolve([]),
+      sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
+    ]);
+    const csv = res?.ok ? await res.text() : '';
+    if (!csv || /^\s*<(!doctype|html)/i.test(csv)) return { ok: false, note: 'Master File "PI Lienstar Funding" tab is unreachable.' };
+    const all = parseCsvRows(csv).map((r) => r.map((c) => String(c ?? '').trim()));
+    const hIdx = all.findIndex((r) => r.some((c) => /to be funded/i.test(c)) && r.some((c) => /^last name$/i.test(c)));
+    if (hIdx < 0) return { ok: false, note: 'Master File "PI Lienstar Funding" tab has no Last Name / To be Funded columns.' };
+    const col = (re) => all[hIdx].findIndex((h) => re.test(h));
+    const cFirst = col(/^first name$/i), cLast = col(/^last name$/i), cInv = col(/^invoice$/i), cFund = col(/to be funded/i);
+    const cStatus = col(/^status$/i), cPayDate = col(/date of payment/i), cFirm = col(/law firm/i), cBatch = col(/^batch$/i), cDos = col(/^dos$/i);
+
+    /** "Daniel", "Butler" → "D. Butler" (display) and "dbutler" (match key). */
+    const disp = (first, last) => `${first ? `${first.trim()[0].toUpperCase()}. ` : ''}${last.trim()}`;
+    const keyOf = (s) => {
+      const t = String(s ?? '').trim();
+      const m = /^([A-Za-z])\.?\s+(.+)$/.exec(t);
+      const [ini, sur] = m ? [m[1], m[2]] : ['', t];
+      return `${ini}${sur}`.toLowerCase().replace(/[^a-z]/g, '');
+    };
+
+    const lienAll = [];
+    for (const r of all.slice(hIdx + 1)) {
+      const last = r[cLast] || '';
+      if (!last) continue;
+      const patient = disp(r[cFirst] || '', last);
+      lienAll.push({
+        patient, key: keyOf(patient),
+        caseValue: round2(sheetMoney(r[cInv])), toBeFunded: round2(sheetMoney(r[cFund])),
+        status: (r[cStatus] || '').trim() || 'Unknown',
+        paidOn: sheetDate(r[cPayDate]) || '', lawFirm: cFirm >= 0 ? r[cFirm] || '' : '',
+        batch: cBatch >= 0 ? r[cBatch] || '' : '', dos: cDos >= 0 ? (r[cDos] || '').slice(0, 10) : '',
+      });
+    }
+
+    // Striven: live PI orders, with what has been invoiced against each.
+    const invBySo = new Map();
+    for (const sec of ['received', 'awaiting', 'balance']) {
+      for (const i of ar?.piBook?.[sec]?.invoices ?? []) {
+        if (!i.soId) continue;
+        const e = invBySo.get(String(i.soId)) ?? new Map();
+        e.set(i.number, i.invoiced);                 // one invoice can sit in two sections
+        invBySo.set(String(i.soId), e);
+      }
+    }
+    // CANCELLED ORDERS ARE NOT CASES, and are excluded on BOTH sides: from
+    // Striven's figures here, and — further down — any Lienstar row that belongs
+    // to one. Lost is treated the same way. They are counted and listed as
+    // EXCLUDED rather than silently dropped, so the card can say what it left out.
+    const isCancelled = (o) => soGroupOf(o.status) === 'cancelled' || /\blost\b/i.test(o.status || '');
+    const asCase = (o) => {
+      const inv = [...(invBySo.get(String(o.id))?.values() ?? [])];
+      return {
+        soId: String(o.id), ref: o.ref, patient: o.patient || '', key: keyOf(o.patient || ''), rep: o.rep || '', payer: o.payer || '',
+        status: o.status || '', date: String(o.date || '').slice(0, 10),
+        caseValue: round2(Number(o.value || 0)), invoiced: round2(inv.reduce((s, v) => s + v, 0)), invoices: inv.length,
+      };
+    };
+    // APPROVED ONLY. On Hold / Rejected rows are not cases Lienstar is funding.
+    const isApproved = (l) => /^approved$/i.test(l.status);
+    const lien = lienAll.filter(isApproved);
+    const lienNotApproved = lienAll.filter((l) => !isApproved(l));
+
+    const piOrders = (so.recent ?? []).filter((o) => o.type === 'PI');
+    let cancelled, striven, source, reportGaps = [];
+    if (report.length) {
+      // THE REPORT. Its Number is the order NUMBER, which is often text (a
+      // patient's initial + surname), so it is joined to the order id through
+      // the cached order list — the same join the labels reports use — and the
+      // raw number never leaves this function (safeRef masks it).
+      const idByNum = new Map();
+      for (const o of Array.isArray(soBlob) ? soBlob : []) {
+        const k = String(o?.number ?? '').trim().toLowerCase();
+        if (k && !idByNum.has(k)) idByNum.set(k, String(o.id));
+      }
+      const fromReport = report.map((r) => {
+        const num = String(r.Number ?? '').trim();
+        const soId = idByNum.get(num.toLowerCase()) || '';
+        const patient = commInitialLastDisp(r.PatientName);
+        return {
+          soId, ref: soId ? safeRef('SO', soId, num) : (/[a-zA-Z]/.test(num) ? '(order not in cache)' : num),
+          patient, key: keyOf(patient), rep: cleanRep(r.SalesRepFullName || ''), payer: '',
+          status: String(r.Status ?? '').trim(), date: '',
+          caseValue: round2(sheetMoney(r.Total)), invoiced: round2(sheetMoney(r.InvoicedTotal)),
+          invoices: sheetMoney(r.InvoicedTotal) > 0 ? 1 : 0,
+        };
+      });
+      cancelled = fromReport.filter(isCancelled);
+      striven = fromReport.filter((o) => !isCancelled(o));
+      source = 'report';
+      const inReport = new Set(fromReport.map((o) => o.soId).filter(Boolean));
+      reportGaps = piOrders.filter((o) => !isCancelled(o) && !inReport.has(String(o.id)))
+        .map((o) => ({ soId: String(o.id), ref: o.ref, status: o.status || '', value: round2(Number(o.value || 0)) }));
+    } else {
+      cancelled = piOrders.filter(isCancelled).map(asCase);
+      striven = piOrders.filter((o) => !isCancelled(o)).map(asCase);
+      source = 'cache';
+    }
+
+    // PAIRING, IN PASSES FROM STRICTEST TO LOOSEST. Each pass only sees what the
+    // ones before it left, so a loose rule can never steal a case a strict one
+    // would have paired correctly.
+    //
+    // The INITIAL is the weak part of the key: the two books often carry a
+    // different first initial for one patient (a nickname, a typo), while the
+    // surname and the case value agree to the dollar. Name alone is also weak
+    // the other way — one surname can be two cases — which is why the case
+    // value is in the first three passes:
+    //   1 initial + surname, same value       2 surname, same value
+    //   3 near-identical surname (≤1 edit, same first letter), same value
+    //   4 initial + surname, different value  5 surname, different value
+    // Passes 4–5 are the rows that DIFFER; a value only ever pairs with a name.
+    const surOf = (key, p) => String(p ?? '').trim().split(/\s+/).pop().toLowerCase().replace(/[^a-z]/g, '') || key;
+    for (const x of [...striven, ...cancelled, ...lien]) x.sur = surOf(x.key, x.patient);
+    const near = (a, b) => {
+      if (!a || !b || a[0] !== b[0] || Math.abs(a.length - b.length) > 1) return false;
+      let i = 0, j = 0, edits = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++edits > 1) return false;
+        if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+      }
+      return edits + (a.length - i) + (b.length - j) <= 1;
+    };
+    const sameVal = (s, l) => Math.abs(s.caseValue - l.caseValue) < 1;
+    const passes = [
+      (s, l) => s.key && s.key === l.key && sameVal(s, l),
+      (s, l) => s.sur && s.sur === l.sur && sameVal(s, l),
+      (s, l) => near(s.sur, l.sur) && sameVal(s, l),
+      (s, l) => s.key && s.key === l.key,
+      (s, l) => s.sur && s.sur === l.sur,
+    ];
+    const pairUp = (S, L, rules) => {
+      const out = []; const usedS = new Set(); const usedL = new Set();
+      for (const ok of rules) {
+        S.forEach((s, si) => {
+          if (usedS.has(si)) return;
+          let best = -1;
+          L.forEach((l, li) => {
+            if (usedL.has(li) || !ok(s, l)) return;
+            if (best < 0 || Math.abs(l.caseValue - s.caseValue) < Math.abs(L[best].caseValue - s.caseValue)) best = li;
+          });
+          if (best >= 0) { usedS.add(si); usedL.add(best); out.push({ s, l: L[best] }); }
+        });
+      }
+      return { pairs: out, restS: S.filter((_, i) => !usedS.has(i)), restL: L.filter((_, i) => !usedL.has(i)) };
+    };
+    const { pairs, restS: unmatchedS, restL: leftL } = pairUp(striven, lien, passes);
+    // A Lienstar row left over that is a CANCELLED order's case — same patient
+    // AND same value (passes 1–3 only; a name alone is not enough to strike a
+    // row out) — is excluded with that order rather than reported as missing.
+    const { pairs: cancelPairs, restL: unmatchedL } = pairUp(cancelled, leftL, passes.slice(0, 3));
+    const excludedLien = new Set(cancelPairs.map((p) => p.l));
+    const lienLive = lien.filter((l) => !excludedLien.has(l));
+    // ON HOLD / REJECTED, FOR STATUS ONLY. Those rows are in no figure (only
+    // Approved counts), but an order still unmatched may BE one of them, and
+    // "Lienstar has it on hold" is a different answer from "not on Lienstar".
+    // Name AND value must agree (passes 1–3), as for the cancelled tie above.
+    const { pairs: holdPairs } = pairUp(unmatchedS, lienNotApproved, passes.slice(0, 3));
+    const holdBySo = new Map(holdPairs.map((p) => [p.s.soId, p.l]));
+    /** soId → the Lienstar case it was matched to, for per-invoice verification
+     *  (see verifyPiInvoices). Approved pairs and the on-hold/rejected ties. */
+    const lienBySo = {};
+    const lienInfo = (l) => ({ status: l.status, caseValue: l.caseValue, toBeFunded: l.toBeFunded, paidOn: l.paidOn, batch: l.batch });
+    for (const { s, l } of pairs) if (s.soId) lienBySo[s.soId] = lienInfo(l);
+    for (const { s, l } of holdPairs) if (s.soId) lienBySo[s.soId] = lienInfo(l);
+
+    const sum = (list, k) => round2(list.reduce((t, x) => t + (x[k] || 0), 0));
+    const rows = [
+      ...pairs.map(({ s, l }) => ({
+        kind: Math.abs(s.caseValue - l.caseValue) > 0.5 || Math.abs(s.invoiced - l.toBeFunded) > 0.5 ? 'differs' : 'agrees',
+        // WHY A PAIR DIFFERS, first reason that applies: the case value itself,
+        // else nothing invoiced in Striven yet, else a different invoice amount.
+        reason: Math.abs(s.caseValue - l.caseValue) > 0.5 ? 'Case value differs'
+          : Math.abs(s.invoiced - l.toBeFunded) <= 0.5 ? ''
+            : s.invoiced === 0 ? 'Not invoiced in Striven' : 'Invoice ≠ To be Funded',
+        patient: s.patient || l.patient, soId: s.soId, ref: s.ref, rep: s.rep, lawFirm: l.lawFirm || s.payer, status: l.status, paidOn: l.paidOn, batch: l.batch,
+        strivenValue: s.caseValue, lienValue: l.caseValue, valueDiff: round2(s.caseValue - l.caseValue),
+        invoiced: s.invoiced, toBeFunded: l.toBeFunded, fundDiff: round2(s.invoiced - l.toBeFunded),
+      })),
+      ...unmatchedS.map((s) => ({
+        kind: 'striven-only',
+        reason: holdBySo.has(s.soId) ? `On the Lienstar tab as ${holdBySo.get(s.soId).status}`
+          : s.invoices ? 'Invoiced, not on the Lienstar tab' : 'Not on the Lienstar tab', patient: s.patient || '(no patient on order)', soId: s.soId, ref: s.ref, rep: s.rep, lawFirm: s.payer, status: s.status, paidOn: '', batch: '',
+        strivenValue: s.caseValue, lienValue: 0, valueDiff: s.caseValue, invoiced: s.invoiced, toBeFunded: 0, fundDiff: s.invoiced,
+      })),
+      ...unmatchedL.map((l) => ({
+        kind: 'lienstar-only', reason: 'No matching Striven PI order', patient: l.patient, soId: '', ref: '', rep: '', lawFirm: l.lawFirm, status: l.status, paidOn: l.paidOn, batch: l.batch,
+        strivenValue: 0, lienValue: l.caseValue, valueDiff: -l.caseValue, invoiced: 0, toBeFunded: l.toBeFunded, fundDiff: -l.toBeFunded,
+      })),
+    ];
+    const byStatus = {};
+    for (const l of lienLive) {
+      const b = byStatus[l.status] ?? { count: 0, caseValue: 0, toBeFunded: 0 };
+      b.count += 1; b.caseValue = round2(b.caseValue + l.caseValue); b.toBeFunded = round2(b.toBeFunded + l.toBeFunded);
+      byStatus[l.status] = b;
+    }
+    const kinds = ['agrees', 'differs', 'striven-only', 'lienstar-only'];
+    return {
+      ok: true,
+      striven: { cases: striven.length, orderValue: sum(striven, 'caseValue'), invoiced: sum(striven, 'invoiced'), invoicedCases: striven.filter((s) => s.invoices > 0).length },
+      source, reportGaps, lienBySo,
+      lienstar: { cases: lienLive.length, caseValue: sum(lienLive, 'caseValue'), toBeFunded: sum(lienLive, 'toBeFunded'), byStatus, rowsOnTab: lienAll.length },
+      diff: {
+        cases: striven.length - lienLive.length,
+        value: round2(sum(striven, 'caseValue') - sum(lienLive, 'caseValue')),
+        funding: round2(sum(striven, 'invoiced') - sum(lienLive, 'toBeFunded')),
+      },
+      // WHAT WAS LEFT OUT, and why: every cancelled PI order, and the Lienstar
+      // rows that belong to one. None of it is in any figure above.
+      excluded: {
+        orders: cancelled.length, orderValue: sum(cancelled, 'caseValue'), invoiced: sum(cancelled, 'invoiced'),
+        lienRows: cancelPairs.length,
+        lienValue: round2(cancelPairs.reduce((t, p) => t + p.l.caseValue, 0)),
+        lienToBeFunded: round2(cancelPairs.reduce((t, p) => t + p.l.toBeFunded, 0)),
+        // Lienstar rows that are not Approved — out of every figure, listed.
+        notApproved: {
+          count: lienNotApproved.length, caseValue: sum(lienNotApproved, 'caseValue'), toBeFunded: sum(lienNotApproved, 'toBeFunded'),
+          byStatus: lienNotApproved.reduce((a, l) => ({ ...a, [l.status]: (a[l.status] || 0) + 1 }), {}),
+          rows: lienNotApproved.map((l) => ({ patient: l.patient, status: l.status, lawFirm: l.lawFirm, caseValue: l.caseValue, toBeFunded: l.toBeFunded })),
+        },
+        rows: cancelled.slice().sort((a, b) => b.caseValue - a.caseValue).map((c) => {
+          const p = cancelPairs.find((x) => x.s === c);
+          return {
+            soId: c.soId, ref: c.ref, patient: c.patient || '(no patient on order)', status: c.status,
+            strivenValue: c.caseValue, invoiced: c.invoiced,
+            lienStatus: p ? p.l.status : '', lienValue: p ? p.l.caseValue : 0, toBeFunded: p ? p.l.toBeFunded : 0,
+          };
+        }),
+      },
+      match: Object.fromEntries(kinds.map((k) => {
+        const list = rows.filter((r) => r.kind === k);
+        return [k, { count: list.length, strivenValue: sum(list, 'strivenValue'), lienValue: sum(list, 'lienValue'), invoiced: sum(list, 'invoiced'), toBeFunded: sum(list, 'toBeFunded') }];
+      })),
+      // RECEIVABLE PER LIENSTAR: invoiced in Striven, not yet funded. Every
+      // Lienstar row carries a payment date and batch whatever its status, so
+      // APPROVED is what marks the advance as funded — and only Approved rows
+      // are on this side at all. Outstanding = invoiced − funded, never below
+      // zero; a case funded above its invoice is reported as `overFunded`,
+      // which is money in, not a negative receivable.
+      receivable: (() => {
+        // A case invoiced at its FULL value whose 15% Lienstar advance has been
+        // funded in full is not a receivable: the 85% left is settlement
+        // balance (5 Oct 2026, on request). Counted separately, never as owed.
+        const fullCase15 = (r) => r.lienValue > 0 && r.toBeFunded > 0
+          && Math.abs(r.invoiced - r.lienValue) < 1 && Math.abs(r.strivenValue - r.lienValue) < 1;
+        const list = rows
+          .filter((r) => r.kind !== 'lienstar-only' && r.invoiced > 0.005 && !fullCase15(r))
+          .map((r) => ({
+            patient: r.patient, soId: r.soId, ref: r.ref, lawFirm: r.lawFirm,
+            invoiced: r.invoiced, received: r.toBeFunded, outstanding: round2(Math.max(0, r.invoiced - r.toBeFunded)),
+            reason: r.kind === 'striven-only' ? 'Invoiced, no Approved Lienstar row' : r.toBeFunded > 0 ? 'Funded less than invoiced' : 'Not funded',
+          }))
+          .filter((r) => r.outstanding > 0.005)
+          .sort((a, b) => b.outstanding - a.outstanding);
+        const over = rows.filter((r) => r.kind !== 'lienstar-only' && r.toBeFunded > r.invoiced + 0.005 && r.invoiced > 0.005);
+        return {
+          count: list.length, outstanding: sum(list, 'outstanding'), invoiced: sum(list, 'invoiced'), received: sum(list, 'received'),
+          overFunded: round2(over.reduce((t, r) => t + (r.toBeFunded - r.invoiced), 0)), rows: list,
+          fullInvoiced15: (() => {
+            const f = rows.filter((r) => r.kind !== 'lienstar-only' && r.invoiced > 0.005 && fullCase15(r));
+            return { count: f.length, funded: sum(f, 'toBeFunded'), settlementBalance: round2(f.reduce((t, r) => t + (r.invoiced - r.toBeFunded), 0)) };
+          })(),
+        };
+      })(),
+      rows: rows.sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind) || Math.abs(b.valueDiff) - Math.abs(a.valueDiff)),
+    };
+  });
+}
+
+// ── VA · STRIVEN AGAINST THE MASTER FILE'S VA REMITTANCES ────────────────────
+// The VA twin of getPiLienstar (3 Oct 2026, on request): what Striven holds for
+// VA — order value and what was invoiced — beside the Master File's
+// "VA Remmittances" tab, i.e. what the distributors (Integrated Surgical,
+// HiDow) actually paid SMR, and the difference.
+//
+// STRIVEN: the VA order report, STRIVEN_VA_REPORT_URL, read live — Subtotal is
+// the order value, InvoicedTotal what was invoiced. Checked against live order
+// detail when wired: type and status agreed on all 429 rows. A cancellation
+// here is a LABEL ("CANCELLED"), not a status — one such order was still "In
+// Progress" in Striven — so either one excludes the order.
+//
+// REMITTANCES: one row per patient per device. "Dist. Payout" is the money
+// remitted for that line. The tab's "Total" column is a per-batch SUBTOTAL on
+// the last row of each payout, so it is never summed — it would double-count.
+// A payout cell formatted as a DATE (two HiDow rows read "2/8/1904") is the
+// spreadsheet's display of the number underneath, and is read as that number
+// (1,500) and flagged.
+//
+// MATCHED BY PATIENT, not by order: the tab carries the VA's PO number, never a
+// Striven order number. Both sides are totalled PER PATIENT — invoiced against
+// remitted — so a patient with two devices on one order, or two orders, still
+// lines up. Initial + surname first, then surname alone, then a surname one
+// edit apart with equal money. Names are reduced to initial + surname here and
+// never leave the server.
+const MASTER_FILE_VA_REMIT_GID = () => cfgValue('MASTER_FILE_VA_REMIT_GID', '1796053580');
+const VA_REPORT_URL = () => cfgValue('STRIVEN_VA_REPORT_URL');
+/** "D. Butler" → { key: 'dbutler', sur: 'butler' } — the VA match key, shared by
+ *  getVaRemittances and the register's per-invoice check so the two agree. */
+const vaKeyParts = (disp) => {
+  const m = /^([A-Za-z])\.\s+(.+)$/.exec(String(disp ?? '').trim());
+  const sur = (m ? m[2] : String(disp ?? '')).toLowerCase().replace(/[^a-z]/g, '');
+  return { key: `${m ? m[1].toLowerCase() : ''}${sur}`, sur };
+};
+
+export async function getVaRemittances() {
+  const id = await MASTER_DATA_ID();
+  const gid = await MASTER_FILE_VA_REMIT_GID();
+  return cached('derived:va-remittances', async () => {
+    const reportUrl = await VA_REPORT_URL();
+    if (!reportUrl) return { ok: false, note: 'STRIVEN_VA_REPORT_URL is not configured.' };
+    const [res, report, soBlob, so] = await Promise.all([
+      fetch(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`).catch(() => null),
+      fetchSavedReport(reportUrl).catch(() => []),
+      sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
+      getSO().catch(() => null),
+    ]);
+    if (!report.length) return { ok: false, note: 'The Striven VA report returned no rows.' };
+    const csv = res?.ok ? await res.text() : '';
+    if (!csv || /^\s*<(!doctype|html)/i.test(csv)) return { ok: false, note: 'Master File "VA Remmittances" tab is unreachable.' };
+    const all = parseCsvRows(csv).map((r) => r.map((c) => String(c ?? '').trim()));
+    const hIdx = all.findIndex((r) => r.some((c) => /dist\.?\s*payout/i.test(c)) && r.some((c) => /patient/i.test(c)));
+    if (hIdx < 0) return { ok: false, note: 'Master File "VA Remmittances" tab has no Patient Name / Dist. Payout columns.' };
+    const col = (re) => all[hIdx].findIndex((h) => re.test(h));
+    const cPat = col(/patient/i), cPay = col(/dist\.?\s*payout/i), cPaid = col(/paid date/i), cPeriod = col(/^period$/i);
+    const cPayer = col(/^payer$/i), cFac = col(/facility/i), cDev = col(/device/i), cPo = col(/po total/i);
+
+    /** Money, and a date-formatted money cell read as the number under it. */
+    const money = (s) => {
+      const t = String(s ?? '').trim();
+      const d = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t);
+      if (d) return { v: round2((Date.UTC(+d[3], +d[1] - 1, +d[2]) - Date.UTC(1899, 11, 30)) / 86_400_000), asDate: true };
+      return { v: round2(sheetMoney(t)), asDate: false };
+    };
+    const keyParts = (disp) => {
+      const m = /^([A-Za-z])\.\s+(.+)$/.exec(String(disp ?? '').trim());
+      const sur = (m ? m[2] : String(disp ?? '')).toLowerCase().replace(/[^a-z]/g, '');
+      return { key: `${m ? m[1].toLowerCase() : ''}${sur}`, sur };
+    };
+
+    // Remittance lines.
+    const remit = [];
+    for (const r of all.slice(hIdx + 1)) {
+      const raw = r[cPat] || '';
+      if (!raw) continue;
+      const patient = commInitialLastDisp(raw);
+      const pay = money(r[cPay]);
+      remit.push({
+        patient, ...keyParts(patient), payout: pay.v, payoutAsDate: pay.asDate,
+        paidOn: sheetDate(r[cPaid]) || '', period: cPeriod >= 0 ? r[cPeriod] || '' : '',
+        payer: cPayer >= 0 ? (r[cPayer] || '').trim() : '', facility: cFac >= 0 ? r[cFac] || '' : '',
+        device: cDev >= 0 ? r[cDev] || '' : '', poTotal: cPo >= 0 ? money(r[cPo]).v : 0,
+      });
+    }
+
+    // Striven orders, from the report.
+    const idByNum = new Map();
+    for (const o of Array.isArray(soBlob) ? soBlob : []) {
+      const k = String(o?.number ?? '').trim().toLowerCase();
+      if (k && !idByNum.has(k)) idByNum.set(k, String(o.id));
+    }
+    const orders = report.map((r) => {
+      const num = String(r.Number ?? '').trim();
+      const soId = idByNum.get(num.toLowerCase()) || '';
+      const patient = commInitialLastDisp(r.PatientName);
+      const labels = String(r.Labels ?? '');
+      return {
+        soId, ref: soId ? safeRef('SO', soId, num) : (/[a-zA-Z]/.test(num) ? '(order not in cache)' : num),
+        patient, ...keyParts(patient), rep: cleanRep(r.SalesRepFullName || ''),
+        status: String(r.Status ?? '').trim(), labels,
+        cancelled: /cancel/i.test(labels) || /cancel|void|lost/i.test(String(r.Status ?? '')),
+        value: round2(sheetMoney(r.Subtotal)), invoiced: round2(sheetMoney(r.InvoicedTotal)),
+      };
+    });
+    const live = orders.filter((o) => !o.cancelled);
+    const cancelled = orders.filter((o) => o.cancelled);
+
+    // PER PATIENT, both sides.
+    const group = (list, amt) => {
+      const g = new Map();
+      for (const x of list) {
+        if (!x.key) continue;
+        const e = g.get(x.key) ?? { key: x.key, sur: x.sur, patient: x.patient, items: [], amount: 0 };
+        e.items.push(x); e.amount = round2(e.amount + amt(x)); g.set(x.key, e);
+      }
+      return [...g.values()];
+    };
+    const S = group(live, (o) => o.invoiced);
+    const R = group(remit, (l) => l.payout);
+    const near = (a, b) => {
+      if (!a || !b || a[0] !== b[0] || Math.abs(a.length - b.length) > 1) return false;
+      let i = 0, j = 0, edits = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++edits > 1) return false;
+        if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+      }
+      return edits + (a.length - i) + (b.length - j) <= 1;
+    };
+    const passes = [
+      (s, r) => s.key === r.key,
+      (s, r) => s.sur && s.sur === r.sur,
+      (s, r) => near(s.sur, r.sur) && Math.abs(s.amount - r.amount) < 1,
+    ];
+    const pairs = []; const usedS = new Set(); const usedR = new Set();
+    for (const ok of passes) {
+      S.forEach((s, si) => {
+        if (usedS.has(si)) return;
+        let best = -1;
+        R.forEach((r, ri) => {
+          if (usedR.has(ri) || !ok(s, r)) return;
+          if (best < 0 || Math.abs(r.amount - s.amount) < Math.abs(R[best].amount - s.amount)) best = ri;
+        });
+        if (best >= 0) { usedS.add(si); usedR.add(best); pairs.push({ s, r: R[best] }); }
+      });
+    }
+    const lastPaid = (g) => g.items.reduce((m, l) => (l.paidOn > m ? l.paidOn : m), '');
+    /** For per-invoice verification in getArRegister: order → patient key, and
+     *  each matched patient's remittances. Keys are internal match keys, never
+     *  shown; the remittance detail carries no name. */
+    const soKey = {};
+    for (const o of live) if (o.soId && o.key) soKey[o.soId] = o.key;
+    const remitInfo = (r) => ({
+      remitted: r.amount, lastPaid: lastPaid(r), lines: r.items.length,
+      payer: [...new Set(r.items.map((l) => l.payer).filter(Boolean))].join(', '),
+      flagged: r.items.some((l) => l.payoutAsDate),
+    });
+    const remitByKey = {};
+    for (const { s, r } of pairs) remitByKey[s.key] = remitInfo(r);
+    // EVERY remittance group by its own key (matched or not), which Striven
+    // patient key it was paired with, and surname → group keys — so an invoice
+    // whose order is outside the report can still be placed by its patient,
+    // and allocation can be done per GROUP, never counting one payout twice.
+    const remitGroups = {};
+    for (const r of R) remitGroups[r.key] = remitInfo(r);
+    const strivenToRemit = {};
+    for (const { s, r } of pairs) strivenToRemit[s.key] = r.key;
+    const remitBySur = {};
+    for (const r of R) if (r.sur) (remitBySur[r.sur] = remitBySur[r.sur] || []).push(r.key);
+    const rowOf = (kind, s, r) => {
+      const invoiced = s ? s.amount : 0, remitted = r ? r.amount : 0;
+      const value = s ? round2(s.items.reduce((t, o) => t + o.value, 0)) : 0;
+      const diff = round2(invoiced - remitted);
+      return {
+        kind,
+        reason: kind === 'striven-only' ? (invoiced > 0 ? 'Invoiced, nothing remitted yet' : 'Not invoiced, nothing remitted')
+          : kind === 'remit-only' ? 'Remitted, no matching Striven VA order'
+            : kind === 'differs' ? (diff > 0 ? 'Remitted less than invoiced' : 'Remitted more than invoiced') : '',
+        patient: (s || r).patient,
+        orders: s ? s.items.map((o) => ({ soId: o.soId, ref: o.ref, status: o.status })) : [],
+        rep: s ? s.items[0].rep : '',
+        lines: r ? r.items.length : 0, payer: r ? [...new Set(r.items.map((l) => l.payer).filter(Boolean))].join(', ') : '',
+        lastPaid: r ? lastPaid(r) : '', flagged: r ? r.items.some((l) => l.payoutAsDate) : false,
+        value, invoiced, remitted, diff,
+      };
+    };
+    const rows = [
+      ...pairs.map(({ s, r }) => rowOf(Math.abs(s.amount - r.amount) < 1 ? 'agrees' : 'differs', s, r)),
+      ...S.filter((_, i) => !usedS.has(i)).map((s) => rowOf('striven-only', s, null)),
+      ...R.filter((_, i) => !usedR.has(i)).map((r) => rowOf('remit-only', null, r)),
+    ];
+    const sum = (list, k) => round2(list.reduce((t, x) => t + (x[k] || 0), 0));
+    const kinds = ['agrees', 'differs', 'striven-only', 'remit-only'];
+
+    // Live VA orders the report is not scoped to — named, never guessed in.
+    const inReport = new Set(orders.map((o) => o.soId).filter(Boolean));
+    const reportGaps = (so?.recent ?? [])
+      .filter((o) => o.type === 'VA' && soGroupOf(o.status) !== 'cancelled' && !/\blost\b/i.test(o.status || '') && !inReport.has(String(o.id)))
+      .map((o) => ({ soId: String(o.id), ref: o.ref, status: o.status || '', value: round2(Number(o.value || 0)) }));
+
+    const byPayer = {};
+    for (const l of remit) {
+      const k = l.payer || 'Unknown';
+      const b = byPayer[k] ?? { lines: 0, amount: 0 };
+      b.lines += 1; b.amount = round2(b.amount + l.payout); byPayer[k] = b;
+    }
+    return {
+      ok: true, source: 'report', reportGaps, soKey, remitByKey, remitGroups, strivenToRemit, remitBySur,
+      striven: { orders: live.length, patients: S.length, orderValue: sum(live, 'value'), invoiced: sum(live, 'invoiced'), invoicedOrders: live.filter((o) => o.invoiced > 0).length },
+      remit: {
+        lines: remit.length, patients: R.length, remitted: sum(remit, 'payout'), byPayer,
+        lastPaid: remit.reduce((m, l) => (l.paidOn > m ? l.paidOn : m), ''),
+        flaggedCells: remit.filter((l) => l.payoutAsDate).length,
+      },
+      diff: { patients: S.length - R.length, funding: round2(sum(live, 'invoiced') - sum(remit, 'payout')) },
+      excluded: {
+        orders: cancelled.length, orderValue: sum(cancelled, 'value'), invoiced: sum(cancelled, 'invoiced'),
+        rows: cancelled.map((o) => ({ soId: o.soId, ref: o.ref, patient: o.patient || '(no patient on order)', status: o.status, labels: o.labels, value: o.value, invoiced: o.invoiced })),
+      },
+      match: Object.fromEntries(kinds.map((k) => {
+        const list = rows.filter((r) => r.kind === k);
+        return [k, { count: list.length, invoiced: sum(list, 'invoiced'), remitted: sum(list, 'remitted') }];
+      })),
+      // RECEIVABLE PER THE REMITTANCES: invoiced in Striven, not yet remitted,
+      // per patient. Remitted above invoiced is `overRemitted`, not a negative.
+      receivable: (() => {
+        const list = rows
+          .filter((r) => r.kind !== 'remit-only' && r.diff > 0.005)
+          .map((r) => ({
+            patient: r.patient, orders: r.orders, payer: r.payer, lastPaid: r.lastPaid,
+            invoiced: r.invoiced, received: r.remitted, outstanding: r.diff,
+            reason: r.remitted > 0 ? 'Remitted less than invoiced' : 'Invoiced, nothing remitted yet',
+          }))
+          .sort((a, b) => b.outstanding - a.outstanding);
+        const over = rows.filter((r) => r.kind !== 'remit-only' && r.diff < -0.005);
+        return {
+          count: list.length, outstanding: sum(list, 'outstanding'), invoiced: sum(list, 'invoiced'), received: sum(list, 'received'),
+          overRemitted: round2(over.reduce((t, r) => t - r.diff, 0)), rows: list,
+        };
+      })(),
+      rows: rows.sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind) || Math.abs(b.diff) - Math.abs(a.diff)),
+    };
+  });
+}
+
 // ── MASTER DATA · REPS WITH ITS CLINICS & LAW FIRMS ──────────────────────────
 // Each rep's territory: the clinics they cover and the law firms under each.
 // Admin → every rep. Rep → ONLY the blocks that are theirs, cut here on the
@@ -7422,6 +8508,17 @@ export const ROUTES = {
   '/api/ar': getAR,
   '/api/ap': getAP,
   '/api/ap-ledger': getApLedger,
+  // Monthly Collection Effectiveness Index - see getArCei().
+  '/api/ar-cei': getArCei,
+  // AP Open by vendor, from the Master File's AP tab - see getMasterFileAp().
+  '/api/master-file-ap': getMasterFileAp,
+  // PI: Striven order value / invoiced against the Master File's Lienstar tab.
+  // Carries patient initial + surname, so — like the route below — it is closed
+  // to reps by the allow-list in index.js.
+  '/api/pi-lienstar': getPiLienstar,
+  // VA: Striven order value / invoiced against the Master File's VA remittances.
+  // Patient initial + surname — closed to reps by the same allow-list.
+  '/api/va-remittances': getVaRemittances,
   // Carries patient initials + surnames. Admin-only by construction: the gate in
   // index.js is an allow-list, so this is closed to reps unless someone opens it
   // deliberately. Do not add it to OPEN_TO_REPS.
@@ -7457,3 +8554,422 @@ export const DYNAMIC = [
 // Out-of-band cache refresh (called by pg_cron every 6h). Guarded by a secret token.
 export { refreshAll };
 export const refreshTokenOk = (t) => { const want = process.env.REFRESH_TOKEN || ''; return Boolean(want) && String(t ?? '') === want; };
+
+// ============================================================================
+// AUTO-PO — raise a vendor Purchase Order automatically when a Sales Order is
+// placed. DEMO-gated pilot + dry-run by default; nothing is created unless
+// AUTO_PO_MODE=live (or ?mode=live) AND the order passes the gate.
+// Trigger:  /api/auto-po?key=<AUTO_PO_KEY>[&so=<id>][&mode=dry|live]
+// State:    striven_cache key 'auto_po_state' { lastSoId, processed[], log[] }
+// ============================================================================
+export const autoPoTokenOk = (t) => { const want = process.env.AUTO_PO_KEY || ''; return Boolean(want) && String(t ?? '') === want; };
+const autoPoDemoOnly = () => (process.env.AUTO_PO_DEMO_ONLY ?? 'true') !== 'false';
+
+async function autoPoState() {
+  const sb = await sbCacheRead('auto_po_state');
+  const s = (sb && sb.data) || {};
+  return {
+    lastSoId: Number(s.lastSoId || 0),
+    processed: Array.isArray(s.processed) ? s.processed : [],
+    log: Array.isArray(s.log) ? s.log : [],
+  };
+}
+
+// A PO that no longer counts: cancelled/voided/rejected in Striven. Such a PO
+// must not be used as a template, must not show as "already created", and must
+// not block a re-run — otherwise one bad run keeps an order stuck forever.
+const poIsDead = (status) => /cancel|void|reject|denied/i.test(String(status ?? ''));
+
+// Latest active PO that actually CONTAINS this item → vendor + a template line.
+// The containment check means we stay correct even if the search filter is
+// ignored by the API — we just scan the most recent POs.
+async function previousPoForItem(itemId) {
+  const b = await striven('POST', '/v1/purchase-orders/search', {
+    ItemId: Number(itemId), PageIndex: 0, PageSize: 25, SortExpression: 'PurchaseOrderDate', SortOrder: '2',
+  });
+  const rows = b.data ?? b.Data ?? [];
+  for (const r of rows.slice(0, 25)) {
+    try {
+      const po = await striven('GET', `/v1/purchase-orders/${r.id}`);
+      if (poIsDead(po.status?.name)) continue;
+      const lines = po.lineItems ?? [];
+      const line = lines.find((l) => Number(l.item?.id ?? l.itemId ?? 0) === Number(itemId));
+      if (line && po.vendor?.id) return { po, line };
+    } catch { /* skip unreadable PO */ }
+  }
+  return null;
+}
+
+// Build ONE purchase order for a vendor from a template PO, carrying ALL the
+// order's items for that vendor as separate line items (each `items[i]` =
+// { itemId, itemName, qty, templateLine }). This is the streamlining: same vendor
+// → one PO, not one PO per item.
+function buildAutoPoPayloadMulti(prevPo, items, { soNumber, soCustomer, soShipTo }) {
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const p = clone(prevPo);
+  p.id = 0;
+  for (const k of ['purchaseOrderNumber', 'poNumber', 'number', 'dateCreated', 'createdDate', 'createdBy',
+    'lastUpdatedDate', 'lastUpdatedBy', 'total', 'subTotal', 'subtotal', 'taxTotal', 'balance', 'customFields']) delete p[k];
+  const now = new Date();
+  p.purchaseOrderDate = now.toISOString();
+  p.promiseDate = new Date(now.getTime() + 7 * 86_400_000).toISOString();
+  // Drop-ship to the CURRENT order's customer AND its OWN ship-to location. The
+  // cloned template still carries the PREVIOUS customer's dropShipLocation, which
+  // Striven rejects ("Drop Ship Location does not match Drop Ship Customer") — so
+  // both must be overwritten together. No ship-to on the order → don't drop-ship.
+  if (p.dropShipPO === true || 'dropShipLocation' in p || 'dropShipCustomer' in p) {
+    if (soShipTo && soShipTo.id) {
+      if (soCustomer) p.dropShipCustomer = clone(soCustomer);
+      p.dropShipLocation = clone(soShipTo);
+      p.dropShipPO = true;
+    } else {
+      p.dropShipPO = false;
+      delete p.dropShipLocation;
+      delete p.dropShipCustomer;
+    }
+  }
+  p.title = `Auto PO for SO ${soNumber}`;
+  if ('memo' in p) p.memo = `Auto-created from Sales Order ${soNumber}`;
+  p.lineItems = items.map((it) => {
+    const nl = clone(it.templateLine);
+    nl.id = 0;
+    for (const k of ['purchaseOrderLineItemId', 'purchaseOrderId', 'quantityReceived', 'quantityBilled',
+      'amountReceived', 'amountBilled']) delete nl[k];
+    nl.item = { ...(nl.item ?? {}), id: Number(it.itemId), name: String(it.itemName ?? nl.item?.name ?? '') };
+    nl.quantity = Number(it.qty);
+    return nl;
+  });
+  return p;
+}
+
+async function autoPoProcessSo(soId, mode) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const soNumber = String(so.orderNumber ?? so.number ?? soId);
+  const typeName = so.type?.name ?? '';
+  // soNumber is NOT logged: Striven order numbers embed the patient's surname
+  // ("ADubberly DEMO Hidow"). soId identifies the order without carrying a name.
+  // pos = one entry PER VENDOR (grouped); unmatched = items with no vendor found.
+  const entry = { at: new Date().toISOString(), soId: Number(soId), type: typeName, mode, pos: [], unmatched: [] };
+  const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
+  if (autoPoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test order (pilot gate)'; return entry; }
+  const chainSb = await sbCacheRead('order_chain');
+  const chain = (chainSb && chainSb.data) || {};
+  // Cancelled POs don't count as "linked" — the order still needs a real PO.
+  if ((chain[String(soId)]?.pos ?? []).some((p) => !poIsDead(p.status))) { entry.skipped = 'SO already has a linked PO'; return entry; }
+  const lines = so.lineItems ?? [];
+  if (!lines.length) { entry.skipped = 'no line items on SO'; return entry; }
+
+  // 1. Resolve each SO line to a vendor + template line, then GROUP BY VENDOR.
+  const groups = new Map();   // vendorKey → { vendor, template, items: [{itemId,itemName,qty,unit,templateLine}] }
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const itemId = l.item?.id ?? l.itemId ?? null;
+    const itemName = l.item?.name ?? l.itemName ?? `Line ${i + 1}`;
+    const qty = Number(l.quantity ?? l.qty ?? 0);
+    if (!itemId || qty <= 0) { entry.unmatched.push({ itemName, qty, reason: 'missing item id or quantity' }); continue; }
+    const prev = await previousPoForItem(itemId);
+    if (!prev) { entry.unmatched.push({ itemId, itemName, qty, reason: 'no vendor - this item has no prior purchase order to copy from' }); continue; }
+    const vName = prev.po.vendor?.name ?? '';
+    const vKey = String(prev.po.vendor?.id ?? vName);
+    if (!groups.has(vKey)) groups.set(vKey, { vendor: prev.po.vendor ?? { name: vName }, template: prev.po, items: [] });
+    groups.get(vKey).items.push({ itemId, itemName, qty, unit: prev.line?.unitPrice ?? prev.line?.price ?? null, templateLine: prev.line });
+  }
+
+  // 2. One PO per vendor group — all that vendor's items on a single PO.
+  for (const g of groups.values()) {
+    const vendorName = g.vendor?.name ?? '';
+    const items = g.items.map((it) => ({ itemName: it.itemName, qty: it.qty, unit: it.unit }));
+    if (mode === 'live') {
+      const payload = buildAutoPoPayloadMulti(g.template, g.items, { soNumber, soCustomer: so.customer ?? null, soShipTo: so.shipToLocation ?? so.shipTo ?? null });
+      const created = await striven('POST', '/v1/purchase-orders', payload);
+      const poId = created?.id ?? created?.data?.id ?? null;
+      const vendorEmail = await vendorContactEmail(vendorName);
+      entry.pos.push({ poId, vendor: vendorName, vendorEmail, items });
+    } else {
+      entry.pos.push({ poId: null, vendor: vendorName, vendorEmail: '', items, dryRun: true });
+    }
+  }
+  return entry;
+}
+
+// Recent sales orders for the UI to pick from — ONE live search call (no per-SO
+// detail fetch, so it stays fast and can't time out). PHI stays server-side:
+// only the id-based ref, date, a non-PHI class and two booleans leave the server.
+async function autoPoCandidates() {
+  const b = await striven('POST', '/v1/sales-orders/search', { PageIndex: 0, PageSize: 25, SortExpression: 'DateCreated', SortOrder: '2' });
+  const rows = b.data ?? b.Data ?? [];
+  const chainSb = await sbCacheRead('order_chain');
+  const chain = (chainSb && chainSb.data) || {};
+  return rows.map((r) => {
+    const soId = Number(r.id);
+    const c = chain[String(soId)] || {};
+    const type = c.type || '';
+    // 'testy' is derived from PHI-bearing fields (order number embeds the patient
+    // surname, customer name) here on the server — only the boolean is emitted.
+    const testy = isDemoType(type)
+      || /demo|test|sample/i.test(r.number ?? r.orderNumber ?? '')
+      || /demo|test/i.test(r.customerName ?? r.customer?.name ?? '');
+    return {
+      soId,
+      ref: safeRef('SO', soId, r.number ?? r.orderNumber),
+      date: r.dateCreated ?? r.orderDate ?? null,
+      kind: testy ? 'DEMO / test' : (type ? soClass(type) : '-'),
+      testy,
+      hasPo: (c.pos ?? []).length > 0,
+    };
+  });
+}
+
+// item(name) → primary vendor, from the cached vendor-items report — instant, no
+// live PO scan. This IS the "which item we buy from which vendor" mapping the
+// Reports tab already computes; preview reads it so the vendor pops up at once.
+async function itemVendorMap() {
+  const r = await sbCacheRead('report_vendor_items');
+  const vendors = r?.data?.vendors || [];
+  const m = new Map();
+  for (const v of vendors) for (const it of (v.items || [])) {
+    const k = String(it.item || '').toLowerCase().trim();
+    if (!k) continue;
+    const cur = m.get(k);
+    if (!cur || Number(it.poCount || 0) > cur.poCount) {
+      const qty = Number(it.qty || 0);
+      m.set(k, { vendor: v.vendor, poCount: Number(it.poCount || 0), unit: qty ? round2(Number(it.cost || 0) / qty) : null });
+    }
+  }
+  return m;
+}
+
+// Fast preview for the UI: the order's items + the reports-based vendor for each
+// (no slow previous-PO scan — that runs only when the PO is actually generated).
+async function autoPoPreview(soId) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const soNumber = String(so.orderNumber ?? so.number ?? soId);
+  const typeName = so.type?.name ?? '';
+  const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
+  const vm = await itemVendorMap();
+  // Group items by their reports-vendor; items with no reports match go to
+  // `pending` (they usually still resolve from a prior PO at generate time).
+  const groups = new Map();   // vendor → items[]
+  const pending = [];
+  let lineCount = 0;
+  for (const l of (so.lineItems ?? [])) {
+    lineCount++;
+    const itemName = l.item?.name ?? l.itemName ?? `Line ${lineCount}`;
+    const qty = Number(l.quantity ?? l.qty ?? 0);
+    const hit = vm.get(String(itemName).toLowerCase().trim());
+    const unit = hit?.unit ?? (l.unitPrice ?? l.price ?? null);
+    if (hit?.vendor) {
+      if (!groups.has(hit.vendor)) groups.set(hit.vendor, []);
+      groups.get(hit.vendor).push({ itemName, qty, unit });
+    } else {
+      pending.push({ itemName, qty, unit });
+    }
+  }
+  const vendorGroups = [...groups.entries()].map(([vendor, items]) => ({ vendor, items }));
+  return {
+    ok: true, soId: Number(soId), ref: safeRef('SO', soId, soNumber),
+    type: testy ? 'DEMO / test' : (typeName ? soClass(typeName) : '-'), testy,
+    demoOnly: autoPoDemoOnly(), orderDate: so.orderDate ?? so.dateCreated ?? null,
+    lineCount, vendorGroups, pending,
+  };
+}
+
+// Fetch a PO's own PDF (Striven document format 15) as base64 for the UI/email.
+// striven() returns JSON, so this does a dedicated binary fetch with the token.
+async function autoPoFetchPdf(poId) {
+  const token = await getToken();
+  const res = await fetch(`${BASE}/v1/purchase-orders/${poId}/format/15`, {
+    headers: { Authorization: `Bearer ${token}`, 'User-Agent': UA, Accept: 'application/pdf' },
+  });
+  if (!res.ok) throw new Error(`PO PDF ${poId} → HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { ok: true, poId: Number(poId), filename: `PO-${poId}.pdf`, size: buf.length, pdfBase64: buf.toString('base64') };
+}
+
+// Vendor's primary contact email — search contacts by the vendor's account name,
+// then read the contact detail for its primary active email (mirrors the SMR n8n
+// flow). '' if none found; failures are swallowed so the field stays editable.
+async function vendorContactEmail(vendorName) {
+  if (!vendorName) return '';
+  try {
+    const s = await striven('POST', '/v1/contacts/search', { accountName: String(vendorName), pageIndex: 0, pageSize: 20 });
+    const cid = (s.data ?? s.Data ?? [])[0]?.id;
+    if (!cid) return '';
+    const c = await striven('GET', `/v1/contacts/${cid}`);
+    const emails = Array.isArray(c.emails) ? c.emails.filter((e) => e.active !== false) : [];
+    const pick = emails.find((e) => e.isPrimary) ?? emails[0] ?? {};
+    return String(pick.email ?? pick.emailAddress ?? c.email ?? c.emailAddress ?? c.primaryEmail ?? '').trim();
+  } catch { return ''; }
+}
+
+// A professional PO email body (adapted from the SMR n8n template) — vendor-facing,
+// no patient data. Built from the PO detail so it's correct and self-contained.
+function autoPoEmailHtml(po, poId) {
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const poNo = po.poNumber ?? po.purchaseOrderNumber ?? `PO-${poId}`;
+  const vendor = po.vendor?.name ?? 'Vendor';
+  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const lines = po.lineItems ?? po.purchaseOrderLineItems ?? [];
+  const rows = (lines.length ? lines : [{ item: { name: 'Requested item' } }]).map((l, i) => {
+    const name = esc(l.item?.name ?? l.itemName ?? 'Item');
+    const qty = esc(l.quantity ?? l.qty ?? '');
+    const unit = l.unitPrice ?? l.price ?? null;
+    const unitStr = unit != null ? `$${Number(unit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-';
+    return `<tr><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${i + 1}</td><td style="padding:10px;border:1px solid #d6d6d6"><b>${name}</b></td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center;font-weight:bold">${qty}</td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${unitStr}</td></tr>`;
+  }).join('');
+  return `<div style="margin:0;padding:24px;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#222">
+  <div style="max-width:720px;margin:0 auto;background:#fff;border:1px solid #ddd">
+    <div style="padding:22px 28px;border-bottom:4px solid #1f4e78">
+      <div style="font-size:24px;font-weight:bold;color:#1f4e78;letter-spacing:.5px">PURCHASE ORDER</div>
+      <div style="margin-top:6px;font-size:13px;color:#666">Confirmation required &middot; <b>${esc(poNo)}</b> &middot; ${esc(dateStr)}</div>
+    </div>
+    <div style="padding:24px 28px">
+      <p style="margin:0 0 16px;font-size:14px">Dear ${esc(vendor)},</p>
+      <p style="margin:0 0 20px;font-size:14px;line-height:1.7">Please process the following Purchase Order and confirm acceptance, expected dispatch date, and delivery date.</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:22px;font-size:13px">
+        <thead><tr style="background:#1f4e78;color:#fff">
+          <th style="width:8%;padding:11px;border:1px solid #1f4e78">Sr.</th>
+          <th style="padding:11px;border:1px solid #1f4e78;text-align:left">Item</th>
+          <th style="width:16%;padding:11px;border:1px solid #1f4e78">Qty</th>
+          <th style="width:18%;padding:11px;border:1px solid #1f4e78">Unit</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="padding:14px;margin-bottom:20px;border:1px solid #d6d6d6;background:#fafafa;font-size:13px;line-height:1.7">
+        <b>Please confirm:</b>
+        <ol style="margin:8px 0 0 20px;padding:0"><li>Acceptance of this PO</li><li>Unit price &amp; total</li><li>Taxes &amp; freight</li><li>Expected dispatch &amp; delivery dates</li><li>Payment terms</li></ol>
+      </div>
+      <p style="margin:0 0 6px;font-size:14px">Please reply confirming acceptance of <b>${esc(poNo)}</b>, and mention the PO number on all invoices &amp; documents.</p>
+      <p style="margin:16px 0 0;font-size:14px">Regards,<br><b>Purchasing Team &middot; Sports Med Recovery</b></p>
+    </div>
+    <div style="padding:12px 28px;background:#f2f5f8;border-top:1px solid #ddd;text-align:center;font-size:11px;color:#666">Auto-generated Purchase Order &middot; PDF attached.</div>
+  </div></div>`;
+}
+
+// Email the PO (rich HTML body + PDF attachment) via Resend (HTTPS → serverless-safe,
+// native attachments, no npm dependency). RESEND_API_KEY (+ optional AUTO_PO_EMAIL_FROM).
+// Recipient is passed per-call and is editable in the UI.
+async function autoPoEmail({ poId, to, subject, body }) {
+  const key = process.env.RESEND_API_KEY || '';
+  if (!key) return { ok: false, error: 'Email not configured yet - set RESEND_API_KEY (see the Auto-PO email note).' };
+  if (!to || !/.+@.+\..+/.test(String(to))) return { ok: false, error: 'A valid recipient email is required.' };
+  let po = {};
+  try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal template fallback */ }
+  const pdf = await autoPoFetchPdf(poId);
+  const from = process.env.AUTO_PO_EMAIL_FROM || 'SMR Auto-PO <onboarding@resend.dev>';
+  const html = body || autoPoEmailHtml(po, poId);
+  const subj = subject || `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` - ${po.vendor.name}` : ''}`;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to: [String(to)], subject: subj, html, attachments: [{ filename: pdf.filename, content: pdf.pdfBase64 }] }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: `Email send failed (HTTP ${res.status}): ${j?.message || JSON.stringify(j)}` };
+  return { ok: true, poId: Number(poId), to: String(to), id: j.id ?? null };
+}
+
+// POs already created for a sales order (from the auto-po run log) — so an
+// already-processed SO can still show its PDF/email delivery step in the UI.
+async function autoPoSoPos(soId) {
+  const state = await autoPoState();
+  const seen = new Set(); const logged = [];
+  for (const e of (state.log || [])) {
+    if (Number(e.soId) !== Number(soId)) continue;
+    for (const p of (e.pos || [])) {           // new grouped structure
+      if (p.poId && !seen.has(p.poId)) {
+        seen.add(p.poId);
+        logged.push({ poId: p.poId, vendor: p.vendor || '', vendorEmail: p.vendorEmail || '', items: p.items || [] });
+      }
+    }
+    for (const l of (e.lines || [])) {          // backward-compat with old per-line logs
+      if (l.poId && !seen.has(l.poId)) {
+        seen.add(l.poId);
+        logged.push({ poId: l.poId, vendor: l.vendor || '', vendorEmail: l.vendorEmail || '', items: [{ itemName: l.itemName || '', qty: l.qty ?? null }] });
+      }
+    }
+  }
+  // Drop the ones cancelled/voided in Striven since. Without this, a PO from an
+  // OLD run (e.g. the pre-grouping one-PO-per-item code) keeps showing up as if
+  // it were today's output, and the order can never be re-run cleanly.
+  const pos = [];
+  for (const p of logged) {
+    let dead = false;
+    try { dead = poIsDead((await striven('GET', `/v1/purchase-orders/${p.poId}`)).status?.name); }
+    catch { /* unreadable → keep it rather than hide a real PO */ }
+    if (!dead) pos.push(p);
+  }
+  return { ok: true, soId: Number(soId), pos };
+}
+
+// Render the email that WOULD be sent — subject, HTML body, and the resolved
+// vendor email — WITHOUT sending. Needs no RESEND_API_KEY, so the user can review
+// the mail in the UI before anything goes out ("jaane se pehle dikhe").
+async function autoPoEmailPreview(poId) {
+  let po = {};
+  try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal fallback */ }
+  const subject = `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` - ${po.vendor.name}` : ''}`;
+  const vendorEmail = await vendorContactEmail(po.vendor?.name ?? '');
+  return { ok: true, poId: Number(poId), subject, vendor: po.vendor?.name ?? '', vendorEmail, html: autoPoEmailHtml(po, poId) };
+}
+
+export async function autoPoRun(params = {}) {
+  const mode = params.mode === 'live' ? 'live' : (process.env.AUTO_PO_MODE === 'live' ? 'live' : 'dry');
+  const state = await autoPoState();
+  if (params.action === 'candidates') {
+    return { ok: true, mode, demoOnly: autoPoDemoOnly(), candidates: await autoPoCandidates() };
+  }
+  if (params.action === 'preview' && params.so) return autoPoPreview(Number(params.so));
+  if (params.action === 'pdf' && params.po) return autoPoFetchPdf(Number(params.po));
+  if (params.action === 'so-pos' && params.so) return autoPoSoPos(Number(params.so));
+  if (params.action === 'email-preview' && params.po) return autoPoEmailPreview(Number(params.po));
+  if (params.action === 'email' && params.po) return autoPoEmail({ poId: Number(params.po), to: params.to, subject: params.subject, body: params.body });
+  if (params.action === 'status') {
+    return {
+      ok: true, mode, demoOnly: autoPoDemoOnly(), checkpoint: state.lastSoId,
+      processedCount: state.processed.length, log: state.log.slice(0, 20),
+    };
+  }
+  const results = [];
+  if (params.so) {
+    // Debug/demo: push ONE specific SO through the pipeline.
+    const soId = Number(params.so);
+    if (mode === 'live' && state.processed.includes(soId)) {
+      // Guard on LIVE POs only. If every PO the earlier run created was later
+      // cancelled in Striven, the order genuinely has no PO — let it run again.
+      const prior = await autoPoSoPos(soId);
+      if (prior.pos.length) {
+        return { ok: true, mode, note: `SO ${soId} already processed - idempotency guard`, checkpoint: state.lastSoId };
+      }
+      state.processed = state.processed.filter((n) => Number(n) !== soId);
+    }
+    const entry = await autoPoProcessSo(soId, mode);
+    results.push(entry);
+    if (mode === 'live' && !entry.skipped) state.processed.push(soId);
+  } else {
+    // Poll: process new SOs beyond the checkpoint (max 3 per run).
+    const b = await striven('POST', '/v1/sales-orders/search', { PageIndex: 0, PageSize: 25, SortExpression: 'DateCreated', SortOrder: '2' });
+    const ids = (b.data ?? b.Data ?? []).map((r) => Number(r.id)).filter((n) => n > 0);
+    if (!ids.length) return { ok: true, mode, note: 'no sales orders returned' };
+    if (!state.lastSoId) {
+      state.lastSoId = Math.max(...ids);
+      await sbCacheWrite('auto_po_state', state);
+      return { ok: true, mode, note: `baselined checkpoint at SO id ${state.lastSoId} - nothing processed, older orders are safe` };
+    }
+    const fresh = ids.filter((n) => n > state.lastSoId && !state.processed.includes(n)).sort((a, b) => a - b).slice(0, 3);
+    for (const soId of fresh) {
+      const entry = await autoPoProcessSo(soId, mode);
+      results.push(entry);
+      // Advance the checkpoint ONLY for actually-processed live orders — else a
+      // dry run marches the checkpoint past orders that live mode would then skip.
+      if (mode === 'live' && !entry.skipped) {
+        state.lastSoId = Math.max(state.lastSoId, soId);
+        state.processed.push(soId);
+      }
+    }
+  }
+  state.processed = state.processed.slice(-500);
+  state.log = [...results, ...state.log].slice(0, 50);
+  await sbCacheWrite('auto_po_state', state);
+  return { ok: true, mode, demoOnly: autoPoDemoOnly(), processed: results, checkpoint: state.lastSoId };
+}

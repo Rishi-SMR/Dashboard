@@ -383,7 +383,7 @@ test('i. a month the caller has no row in stays blank', () => {
 test("i. a rep's own aggregates are scoped to them, not the company", () => {
   const out = redactCommissionPayload(payload(), CASSIE);
   assert.equal(out.grandTotal, 3000, "grandTotal is the caller's own total");
-  assert.deepEqual(out.byProgram, { TriCare: 500, PI: 700, VA: 1800 });
+  assert.deepEqual(out.byProgram, { TriCare: 500, PI: 700, VA: 1800, DOL: 0 });
   assert.equal(out.scopedToRep, 'Cassie');
 });
 
@@ -715,4 +715,18 @@ test('a money tie resolves the same way whatever order the books were read in', 
   fillVerticalFromSiblings(a, 'TriCare');
   fillVerticalFromSiblings(b, 'TriCare');
   assert.equal(a[2].prog, b[2].prog);
+});
+
+// ── DOL is its own vertical ──────────────────────────────────────────────────
+test('a DOL line folds to DOL, and a name that merely contains the letters does not', async () => {
+  const { verticalOfCommissionLine } = await import('./_commission-config.js');
+  assert.equal(verticalOfCommissionLine('DOL'), 'DOL');
+  assert.equal(verticalOfCommissionLine('DOL Order'), 'DOL');
+  assert.equal(verticalOfCommissionLine('Department of Labor'), 'DOL');
+  assert.equal(verticalOfCommissionLine('OWCP'), 'DOL');
+  assert.equal(verticalOfCommissionLine('Dolan'), '');
+  // The existing three are unmoved by the new branch.
+  assert.equal(verticalOfCommissionLine('VA Order'), 'VA');
+  assert.equal(verticalOfCommissionLine('Tri-Care'), 'TriCare');
+  assert.equal(verticalOfCommissionLine('Personal Injury'), 'PI');
 });

@@ -164,8 +164,8 @@ export function arExpectedFor({ vertical, billed }) {
 }
 
 /**
- * The reconciliation sheet's Vertical column → the three programme names the
- * rest of the portal is keyed by.
+ * The reconciliation sheet's Vertical column → the four programme names the
+ * rest of the portal is keyed by (TriCare, VA, DOL, PI).
  *
  * The sheet is typed by hand and spells it loosely — "VA Order", "va",
  * "Tri-Care", "Personal Injury" — so a raw string comparison misses most of it.
@@ -174,12 +174,13 @@ export function arExpectedFor({ vertical, billed }) {
  * one of them learns a new spelling.
  *
  * Returns '' for anything unrecognised, so an unfoldable line is visibly
- * unassigned rather than quietly banked into one of the three.
+ * unassigned rather than quietly banked into one of the four.
  */
 export function verticalOfCommissionLine(prog) {
   const s = String(prog ?? '');
   if (/tri.?care/i.test(s)) return 'TriCare';
   if (/\bva\b|veteran/i.test(s)) return 'VA';
+  if (/\bdol\b|department of labor|\bowcp\b/i.test(s)) return 'DOL';
   if (/\bpi\b|personal injury/i.test(s)) return 'PI';
   return '';
 }
@@ -648,8 +649,9 @@ export const COMMISSION_PAID_THROUGH = {
   // "nothing paid", which would swing the error the other way.
   TriCare: '2026-08',
   PI: '2026-08',
-  // No DOL key: verticalOfCommissionLine() folds a line to TriCare, VA or PI and
-  // nothing else, so a DOL entry here could never match a line.
+  // NO DOL KEY YET, ON PURPOSE. verticalOfCommissionLine() now folds a DOL line
+  // to 'DOL', and an absent vertical means "nothing paid" — which is true: no
+  // DOL payout run has gone out. Add `DOL: 'YYYY-MM'` here after the first one.
 };
 
 // ── Standings masking ────────────────────────────────────────────────────────
@@ -1056,7 +1058,7 @@ export const REP_DIRECTORY = [
   { email: 'admin@sportsmedrecovery.com', repName: null, role: 'admin' },
   { email: 'crystal@sportsmedrecovery.com', repName: null, role: 'admin' },
   { email: 'rishi@sportsmedrecovery.com', repName: null, role: 'admin' },
-  // Kevin: FULL admin — the entire Company side (P&L, AR/AP) and
+  // Kevin: FULL admin — the entire Company side (P&L, AR/AP, QuickBooks) and
   // every rep's revenue and commission. There is no partial-company role, so
   // "decide what he sees later" currently means widening from nothing or
   // narrowing from everything; this is the latter, chosen deliberately.
