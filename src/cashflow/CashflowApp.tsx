@@ -14,7 +14,9 @@ const PLTab = lazy(() => import('./components/PLTab').then((m) => ({ default: m.
 const VendorsItemsTab = lazy(() => import('./components/VendorsItemsTab').then((m) => ({ default: m.VendorsItemsTab })));
 const AccountsTab = lazy(() => import('./components/AccountsTab').then((m) => ({ default: m.AccountsTab })));
 const ExceptionsTab = lazy(() => import('./components/ExceptionsTab').then((m) => ({ default: m.ExceptionsTab })));
+const QuickBooksTab = lazy(() => import('./components/QuickBooksTab').then((m) => ({ default: m.QuickBooksTab })));
 const ReportsTab = lazy(() => import('./components/ReportsTab').then((m) => ({ default: m.ReportsTab })));
+const AutomationHub = lazy(() => import('./components/AutomationHub').then((m) => ({ default: m.AutomationHub })));
 const CommissionTab = lazy(() => import('./components/Commission').then((m) => ({ default: m.CommissionTab })));
 const RepsTab = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.RepsTab })));
 const TeamStandings = lazy(() => import('./components/RepsTab').then((m) => ({ default: m.TeamStandings })));
@@ -23,7 +25,7 @@ const UserGuideTab = lazy(() => import('./components/UserGuideTab').then((m) => 
 
 const LazyLoading = () => <div className="section" style={{ padding: 18, color: 'var(--muted)' }}>Loading…</div>;
 
-export type ViewKey = 'overview' | 'receivables' | 'payables' | 'arsheet' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'vapipeline' | 'repsterritory' | 'repsroster' | 'standings' | 'reports' | 'guide';
+export type ViewKey = 'overview' | 'receivables' | 'payables' | 'arsheet' | 'apsheet' | 'pl' | 'orders' | 'tracking' | 'automation' | 'autopo' | 'autoso' | 'vendors' | 'catalog' | 'accounts' | 'exceptions' | 'commission' | 'reps' | 'repsorders' | 'repspipeline' | 'vapipeline' | 'repsterritory' | 'repsroster' | 'standings' | 'reports' | 'quickbooks' | 'guide';
 
 export default function App() {
   // null = checking, true = allowed, false = needs login (gate enabled server-side).
@@ -111,7 +113,7 @@ function LoginScreen({ onOk }: { onOk: () => void }) {
  * every destination the glossary names, so the next omission fails a test
  * instead of quietly deadening a link.
  */
-const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'arsheet', 'apsheet', 'pl', 'orders', 'tracking', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsterritory', 'repsroster', 'standings', 'reports', 'guide'];
+const VIEW_KEYS: ViewKey[] = ['overview', 'receivables', 'payables', 'arsheet', 'apsheet', 'pl', 'orders', 'tracking', 'automation', 'autopo', 'autoso', 'vendors', 'catalog', 'accounts', 'exceptions', 'commission', 'reps', 'repsorders', 'repspipeline', 'vapipeline', 'repsterritory', 'repsroster', 'standings', 'reports', 'quickbooks', 'guide'];
 /**
  * THE VIEW ON THE CURRENT HASH.
  *
@@ -204,6 +206,9 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     pl: <PLTab />,
     orders: <OrdersTab />,
     tracking: <OrdersTab initialMode="tracking" />,
+    automation: <AutomationHub />,
+    autopo: <AutomationHub initialTab="autopo" />,
+    autoso: <AutomationHub initialTab="autoso" />,
     vendors: <VendorsItemsTab initialMode="vendors" />,
     catalog: <VendorsItemsTab initialMode="items" />,
     accounts: <AccountsTab />,
@@ -225,6 +230,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     repsroster: <RepsTab initialSub="overview" />,
     standings: <TeamStandings />,
     reports: <ReportsTab />,
+    quickbooks: <QuickBooksTab />,
     guide: <UserGuideTab />,
   };
 

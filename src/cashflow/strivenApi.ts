@@ -202,6 +202,37 @@ export const fetchStrivenAR = () => get<ArResult>('/api/ar');
 export const fetchStrivenAP = () => get<ApResult>('/api/ap');
 export const fetchStrivenAccounts = () => get<AccountsResult>('/api/accounts');
 export const fetchStrivenPL = (period?: PlPeriod) => get<PlResult>(`/api/pl${periodQuery(period)}`);
+
+/**
+ * THE SAME STATEMENT, FROM THE BOOKS.
+ *
+ * QuickBooks is the accounting system of record; /api/pl derives its figures
+ * from Striven invoices and bills instead, which is an OPERATIONAL view of the
+ * same business. The two will not agree, and `coverage` is how the UI explains
+ * why rather than leaving a reader to assume one of them is broken.
+ */
+export type QbPl = {
+  ok: boolean; source: 'quickbooks';
+  basis: string; currency: string;
+  periodFrom: string; periodTo: string; generatedAt: string | null;
+  income: number | null; cogs: number | null; grossProfit: number | null;
+  expenses: number | null; netOperating: number | null; netIncome: number | null;
+  net: number; margin: number;
+  /** Leaf accounts only — never the subtotals, or the column adds to double. */
+  accounts: { label: string; value: number; depth: number }[];
+  /** Expenses grouped as the chart of accounts groups them: the level
+   *  QuickBooks subtotals at. Each category's accounts sum to its own total,
+   *  and the categories sum to COGS + Expenses.
+   *  `section` says which cost line it belongs to — 'cogs' or 'opex' — so the
+   *  statement can break each line into its own categories instead of one lump.
+   *  Optional: a response cached before this field existed simply omits it. */
+  categories: { category: string; section?: 'cogs' | 'opex'; total: number; accounts: { label: string; value: number }[] }[];
+  series: { month: string; revenue: number; expenses: number; net: number }[];
+  /** How much of the Striven book has actually been posted into QuickBooks.
+   *  A statement can only report on documents it has been given. */
+  coverage: { qbInvoices: number | null; qbBills: number | null; postedFromStriven: number } | null;
+};
+export const fetchQbPL = (period?: PlPeriod) => get<QbPl>(`/api/qb/pl${periodQuery(period)}`);
 export const fetchStrivenSO = () => get<SoResult>('/api/so');
 
 /** AP REGISTER — vendor bills from the "AP Ledgers" tab of the AP workbook, NOT
@@ -322,6 +353,9 @@ export type PiLienstar = {
   diff?: { cases: number; value: number; funding: number };
   match?: Record<PiLienKind, { count: number; strivenValue: number; lienValue: number; invoiced: number; toBeFunded: number }>;
   rows?: PiLienRow[];
+  /** soId → the Lienstar case its order was matched to (Approved, or the
+   *  on-hold/rejected tie). Used to verify the advance per invoice. */
+  lienBySo?: Record<string, { status: string; caseValue: number; toBeFunded: number; paidOn: string; batch: string }>;
   /** Invoiced in Striven, not yet funded by Lienstar (Approved = funded). */
   receivable?: { count: number; outstanding: number; invoiced: number; received: number; overFunded: number;
     /** Cases invoiced at full value with the 15% advance funded — not receivable. */
@@ -480,12 +514,50 @@ export type ExceptionGroup = { key: string; severity: 'high' | 'warn' | 'info'; 
 export type ExceptionsResult = { totalOpen: number; groups: ExceptionGroup[]; note: string };
 export const fetchStrivenExceptions = () => get<ExceptionsResult>('/api/exceptions');
 
+// ── QuickBooks Online ──────────────────────────────────────────────────────
+export type QbStatus = { connected: boolean; env: 'sandbox' | 'production'; configured?: boolean; realmId?: string; company?: string; country?: string; connectedAt?: string | null; error?: string };
+export type QbPosted = { invoiceId: string; docNumber: string; total?: number; customer?: string; at: string };
+export type QbPostResult = { ok: boolean; invoice?: QbPosted; steps?: { step: string; action: string; name: string; id: string }[]; soNumber?: string; alreadyPosted?: QbPosted; message?: string };
+
+/** For customers, `missingInQb[].name` carries a PT-<id> REFERENCE (phi=true), not a patient name.
+ *  For vendors, `missingInQb[].ref` (VN-<id>) is a display alias: `name` (the real vendor name) is still what QB stores. */
+export type QbReconcile = { strivenCount: number; qbCount: number; matchedCount: number; missingCount: number; missingInQb: { name: string; ref?: string }[]; phi?: boolean };
+export type QbCreateMissingResult = { kind: string; created: { name: string; id: string }[]; createdCount: number; failed: { name: string; error: string }[]; remaining: number; totalMissing: number };
+export type QbEntityKind = 'customers' | 'vendors' | 'items';
+
+/** `customer` is a PT-<id> REFERENCE, never a patient name (PHI stays server-side). */
+export type QbInvoiceRow = { id: number; number: string; customer: string; date: string | null; total: number; open: number; posted: QbPosted | null };
+export type QbInvoicesResult = { count: number; postedCount: number; invoices: QbInvoiceRow[] };
+export type QbPlanLine = { name: string; qty: number; unit: number; amount: number; item: { status: 'matched' | 'create'; id?: string; qbName?: string } };
+export type QbInvoiceDocPlan = {
+  invoice: { id: number; number: string; date: string | null; dueDate: string | null; customerRef: string; order: string };
+  customer: { status: 'matched' | 'create'; ref: string; id?: string };
+  lines: QbPlanLine[];
+  computedTotal: number;
+  alreadyPosted: QbPosted | null;
+  warnings: string[];
+};
+
+export const fetchQbStatus = () => get<QbStatus>('/api/qb/status');
+export const fetchQbReconcile = (kind: QbEntityKind) =>
+  get<QbReconcile>(kind === 'customers' ? '/api/qb/reconcile-customers' : `/api/qb/reconcile-${kind}`);
+const post = async <T>(path: string): Promise<T> => {
+  const r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json' } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { error?: string })?.error || `Request failed: ${r.status}`);
+  return j as T;
+};
+export const qbCreateMissing = (kind: QbEntityKind, limit = 30) => post<QbCreateMissingResult>(`/api/qb/create-missing?kind=${kind}&limit=${limit}`);
 const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as { error?: string })?.error || `Request failed: ${r.status}`);
   return j as T;
 };
+export const qbCreateSelected = (kind: QbEntityKind, names: string[]) => postJson<QbCreateMissingResult>(`/api/qb/create-selected?kind=${kind}`, { names });
+export const fetchQbInvoices = () => get<QbInvoicesResult>('/api/qb/invoices');
+export const qbPrepareInvoiceDoc = (invId: number) => get<QbInvoiceDocPlan>(`/api/qb/prepare-invoice-doc?inv=${invId}`);
+export const qbPostInvoiceDoc = (invId: number, force = false) => post<QbPostResult>(`/api/qb/post-invoice-doc?inv=${invId}${force ? '&force=1' : ''}`);
 
 // ── Reports (vendor purchases, patient orders): cancelled excluded ─────────
 export type ReportVendorItem = { item: string; qty: number; cost: number; poCount: number };
@@ -501,6 +573,70 @@ export type ReportOrder = { soId: number; so: string; ref: string; custRef?: str
 export type PatientItemsReport = { patients: ReportPatient[]; orders?: ReportOrder[]; count: number; orderCount?: number; generatedAt: string | null; note: string };
 export const fetchVendorItemsReport = () => get<VendorItemsReport>('/api/reports/vendor-items');
 export const fetchPatientItemsReport = () => get<PatientItemsReport>('/api/reports/patient-items');
+
+// ── Auto-PO (Sales Order → vendor Purchase Order) ────────────────────────────
+/** One recent sales order the user can raise a PO for. `ref` is id-based (SO-<id>);
+ *  patient names never reach the browser. `testy` = passes the pilot demo/test gate. */
+export type AutoPoCandidate = { soId: number; ref: string; date: string | null; kind: string; testy: boolean; hasPo: boolean };
+export type AutoPoCandidatesResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly: boolean; candidates: AutoPoCandidate[] };
+/** SO→PO run result, GROUPED BY VENDOR: `pos` = one PO per vendor (all its items);
+ *  `unmatched` = items with no vendor. In dry mode `poId` is null. */
+export type AutoPoPoItem = { itemName: string; qty: number; unit?: number | null };
+export type AutoPoPoGroup = { poId: number | null; vendor: string; vendorEmail?: string; items: AutoPoPoItem[]; dryRun?: boolean };
+export type AutoPoUnmatched = { itemId?: number | null; itemName: string; qty: number; reason?: string };
+export type AutoPoEntry = { at: string; soId: number; type: string; mode: 'dry' | 'live'; pos: AutoPoPoGroup[]; unmatched: AutoPoUnmatched[]; skipped?: string };
+export type AutoPoRunResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly?: boolean; note?: string; processed?: AutoPoEntry[]; checkpoint?: number };
+
+/** Instant preview: order items GROUPED BY reports-vendor; `pending` = items with
+ *  no reports match (usually still resolve from a prior PO at generate time). */
+export type AutoPoPreview = {
+  ok: boolean; soId: number; ref: string; type: string; testy: boolean; demoOnly: boolean;
+  orderDate: string | null; lineCount: number;
+  vendorGroups: { vendor: string; items: AutoPoPoItem[] }[];
+  pending: AutoPoPoItem[];
+};
+export type AutoPoPdf = { ok: boolean; poId: number; filename: string; size: number; pdfBase64: string };
+export type AutoPoEmailResult = { ok: boolean; poId?: number; to?: string; id?: string | null; error?: string };
+
+export const fetchAutoPoCandidates = () => get<AutoPoCandidatesResult>('/api/auto-po?action=candidates');
+export const fetchAutoPoPreview = (soId: number) => get<AutoPoPreview>(`/api/auto-po?action=preview&so=${soId}`);
+export const fetchAutoPoPdf = (poId: number) => get<AutoPoPdf>(`/api/auto-po?action=pdf&po=${poId}`);
+/** Render the email that WOULD be sent (subject + HTML body + resolved vendor email) without sending. */
+export type AutoPoEmailPreview = { ok: boolean; poId: number; subject: string; vendor: string; vendorEmail: string; html: string };
+export const fetchAutoPoEmailPreview = (poId: number) => get<AutoPoEmailPreview>(`/api/auto-po?action=email-preview&po=${poId}`);
+/** POs already created for a sales order: so an already-processed order still shows its delivery step. */
+export type AutoPoSoPos = { ok: boolean; soId: number; pos: AutoPoPoGroup[] };
+export const fetchAutoPoSoPos = (soId: number) => get<AutoPoSoPos>(`/api/auto-po?action=so-pos&so=${soId}`);
+export const autoPoSendEmail = (poId: number, to: string, subject?: string, body?: string) =>
+  get<AutoPoEmailResult>(`/api/auto-po?action=email&po=${poId}&to=${encodeURIComponent(to)}${subject ? `&subject=${encodeURIComponent(subject)}` : ''}${body ? `&body=${encodeURIComponent(body)}` : ''}`);
+/** Actually create the vendor PO(s) in Striven for one SO (live). Demo-gated server-side. */
+export const autoPoRaise = (soId: number) => get<AutoPoRunResult>(`/api/auto-po?so=${soId}&mode=live`);
+
+// ── Auto-SO (recurring resupply) ─────────────────────────────────────────────
+/** READ-ONLY resupply candidate: a patient's most recent order + how long ago it
+ *  was, so staff can see who's due and draft a repeat. `lastName` is minimum-
+ *  necessary PHI (authorized); creates nothing. */
+export type AutoSoItem = { item: string; qty: number };
+export type AutoSoCandidate = { patient: string; lastName: string; program: string; orderCount: number; lastSo: string; lastSoId: number; lastDate: string | null; daysSince: number | null; due: boolean; items: AutoSoItem[]; value: number };
+export type AutoSoResult = { ok: boolean; ready: boolean; note?: string; dueDays?: number; count?: number; dueCount?: number; demoOnly?: boolean; generatedAt?: string | null; candidates: AutoSoCandidate[] };
+export const fetchAutoSoCandidates = () => get<AutoSoResult>('/api/auto-so?action=candidates');
+/** Dry preview of the resupply SO that WOULD be created (no write). */
+export type AutoSoPreview = { ok: boolean; mode: 'dry'; demoOnly: boolean; testy: boolean; templateSo: string; customerId: number | null; type: string; itemCount: number; items: { itemName: string; qty: number }[] };
+export const fetchAutoSoPreview = (soId: number) => get<AutoSoPreview>(`/api/auto-so?action=preview&so=${soId}`);
+/** Create the resupply SO in Striven (live). Demo-gated + idempotent server-side. */
+export type AutoSoEntry = { at: string; templateSoId: number; mode: string; testy: boolean; ref: string; skipped?: string; dryRun?: boolean; itemCount?: number; createdSoId?: number | null };
+export type AutoSoRunResult = { ok: boolean; mode: 'dry' | 'live'; demoOnly?: boolean; processed?: AutoSoEntry[]; createdSoId?: number | null };
+/** Create the resupply SO (live). */
+export const autoSoCreate = (soId: number) => get<AutoSoRunResult>(`/api/auto-so?so=${soId}&mode=live`);
+
+// ── Shipment tracking (vendor tracking # → live carrier status via Shippo) ──
+export type TrackingEntry = {
+  id: string; patient: string; vendor: string; tn: string; addedAt: string | null;
+  carrier: string; carrierName: string; trackingUrl: string;
+  status: string; statusRaw: string; detail: string; eta: string | null; statusUpdatedAt: string | null; location: string; lookupError: string | null;
+};
+export type TrackingResult = { ok: boolean; configured: boolean; count: number; entries: TrackingEntry[] };
+export const fetchTracking = () => get<TrackingResult>('/api/tracking?action=list');
 
 // ── Commission (accrual from Crystal's commission workbook sheets) ──
 export type CommissionLine = { ref: string; device: string; prog: 'TriCare' | 'VA' | 'PI' | 'DOL'; comm: number; status: 'same' | 'diff' | 'none'; under: string | null };
@@ -918,8 +1054,10 @@ export type Me = { email: string | null; repName: string | null; role: 'rep' | '
 export const fetchMe = () => get<Me>('/api/me');
 /** Master Data → "Reps With Its Clinics & Law Firms". An admin gets every rep
  *  (`scope: 'all'`); a rep gets only their own blocks, cut on the server. */
-export type TerritoryLawFirm = { name: string; doNotAccept: boolean };
-export type TerritoryRep = { rep: string; emails: string[]; clinics: { name: string; lawFirms: TerritoryLawFirm[] }[]; clinicCount: number; lawFirmCount: number };
+/** Law firms are NOT in this payload (5 Oct 2026): each clinic carries only its
+ *  firm COUNT. The names are looked up on demand — fetchTerritoryLawFirms(). */
+export type TerritoryClinic = { name: string; lawFirmCount: number; flaggedCount: number };
+export type TerritoryRep = { rep: string; emails: string[]; clinics: TerritoryClinic[]; clinicCount: number; lawFirmCount: number };
 export type RepTerritories = { ok: boolean; scope: 'all' | 'own'; repName?: string | null; reps: TerritoryRep[]; totals: { reps: number; clinics: number; lawFirms: number }; note?: string };
 /** `fresh` re-reads the sheet on the server instead of its cached copy. */
 export const fetchRepTerritories = (as?: string | null, fresh = false) => {
@@ -928,6 +1066,22 @@ export const fetchRepTerritories = (as?: string | null, fresh = false) => {
   if (fresh) qs.set('fresh', '1');
   return get<RepTerritories>(`/api/rep-territories${qs.size ? `?${qs}` : ''}`);
 };
+/** One law firm linked to one clinic of one rep, from the on-demand lookup. */
+export type TerritoryLawFirmHit = { firm: string; doNotAccept: boolean; clinic: string; rep: string };
+export type TerritoryLawFirmResult = { ok: boolean; results: TerritoryLawFirmHit[]; count?: number; firms?: number; truncated?: boolean; note?: string };
+/** Law firms within the caller's territories: free text `q` (2+ characters,
+ *  matching firm, clinic or rep), or an exact `rep` and/or `clinic`. Scoped on
+ *  the server exactly like the territories themselves. */
+export const fetchTerritoryLawFirms = (p: { q?: string; rep?: string; clinic?: string }) => {
+  const qs = new URLSearchParams();
+  if (p.q) qs.set('q', p.q);
+  if (p.rep) qs.set('rep', p.rep);
+  if (p.clinic) qs.set('clinic', p.clinic);
+  return get<TerritoryLawFirmResult>(`/api/rep-territories/law-firms?${qs}`);
+};
+/** Add a tracking row. Last name goes in the POST body (never the URL). */
+export const trackingAdd = (e: { patient: string; vendor: string; carrier: string; tn: string }) => postJson<{ ok: boolean; id?: string; error?: string }>('/api/tracking?action=add', e);
+export const trackingRemove = (id: string) => get<{ ok: boolean }>(`/api/tracking?action=remove&id=${encodeURIComponent(id)}`);
 
 export type OrderPo = { ref: string; vendor: string; value: number; status: string };
 export type OrderInv = { ref: string; total: number; open: number; status: string };
