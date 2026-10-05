@@ -96,7 +96,7 @@ export function PLTab() {
     if (!silent) { setLoading(true); setError(null); }
     try {
       // Striven's payments endpoint does not take a period, so `cashReceived`
-      // stays the year to date: the tile that shows it says "collected to
+      // stays the year to date — the tile that shows it says "collected to
       // date", not "collected this month".
       const range = { start: period.start, end: period.end };
       const [p, pay] = await Promise.all([fetchStrivenPL(range), fetchStrivenPayments().catch(() => null)]);
@@ -108,8 +108,8 @@ export function PLTab() {
   }
   // Initial load + silent live refresh every 90s.
   useEffect(() => {
-    // Drop the previous period's figures FIRST, so one period's number can never
-    // sit under another's heading while the request is in flight.
+    // Drop the previous period's figures FIRST, so they can never sit under the
+    // new period's heading while the request is in flight.
     setPl(null); setPayments(null);
     load();
     const r = setInterval(() => load(true), 90_000);
@@ -164,7 +164,7 @@ export function PLTab() {
     sub: `Every vendor bill in ${period.label} (voided excluded), by vendor`,
     // NO SILENT CAP. This listed the top 10 and then printed the true total
     // underneath, so any book with an eleventh line showed a column that did not
-    // add up, and gave the reader no way to know rows had been dropped. A
+    // add up — and gave the reader no way to know rows had been dropped. A
     // breakdown whose rows do not reconcile to its own total is worse than a
     // long list. If the list ever gets unwieldy the fix is an explicit
     // "+N more" row carrying the remainder, not a quiet slice.
@@ -260,13 +260,12 @@ export function PLTab() {
 
       {pl && (
         <>
-          {/* EVERY FOOT CARRIES A FACT THE VALUE CANNOT. A count or a margin,
-              never a restatement of the number above it. */}
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
             <KpiR ico="cash" tint="#16A34A" label="Revenue" value={pl.revenue} format={formatCurrency}
               delta={revD} deltaText={`${pl.invoiceCount.toLocaleString()} invoices`}
               foot={`${pl.invoiceCount.toLocaleString()} invoices · voided excluded`}
               onClick={explainRevenue} />
+
             <KpiR ico="trend" tint="#DC2626" label="Expenses" value={pl.expenses} format={formatCurrency}
               delta={expD} deltaInvert deltaText={`${pl.billCount.toLocaleString()} bills`}
               foot={`${pl.billCount.toLocaleString()} vendor bills`} onClick={explainExpenses} />
@@ -274,7 +273,7 @@ export function PLTab() {
               delta={cashD} deltaText="collected to date" foot={`${(payments?.count ?? 0).toLocaleString()} payments collected`} />
 
             {/* NET PROFIT CLOSES THE ROW, because it is what the other three
-                come to: the same parts-then-total rule the commission strip
+                come to — the same parts-then-total rule the commission strip
                 follows. */}
             <KpiR ico="pie" tint="#0A369F" label="Net Profit" value={pl.net} format={formatCurrency}
               delta={netD} deltaText={`${pct(pl.margin)} net margin`}
@@ -302,8 +301,7 @@ export function PLTab() {
               <div style={{ display: 'flex', gap: 28, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                 {/* THE % OF REVENUE COLUMN is the common-size statement an
                     accountant reads before the dollars: the one figure that
-                    survives a change in volume, and the only way this year is
-                    comparable with a bigger or smaller one.
+                    survives a change in volume.
 
                     Rows with a breakdown behind them open it on click. */}
                 <div className="pl-statement" style={{ flex: '1 1 420px', maxWidth: 660 }}>

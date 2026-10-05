@@ -212,7 +212,7 @@ const GLOSSARY: Entry[] = [
     term: 'Data sync', aka: ['cache', 'refresh', 'freshness'], cat: 'Data & status',
     def: 'How current the figures are. Base data is pulled from Striven on a six-hourly cycle and served from a cache in between.',
     note: 'Figures are not live to the second, and one or two derived datasets are rebuilt by hand rather than on the cycle.',
-    locs: [{ view: 'overview', tab: 'Overview', section: 'Live pill in the page header' }],
+    locs: [{ view: 'overview', tab: 'Overview', section: 'All figures' }],
   },
   {
     term: 'DEMO order', aka: ['test order'], cat: 'Programmes',

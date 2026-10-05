@@ -21,9 +21,9 @@ import { fetchStrivenPL } from '../strivenApi';
  * be cut from one book or the ratio is meaningless: putting P&L profit over the
  * ORDER BOOK's revenue (the number in the tiles above, $1.38M against the
  * accounting book's $564k) would print a margin no statement supports. So this
- * card reads the P&L for both, and says so in its own subtitle rather than
- * leaving the reader to assume it matches the tiles. It does not, and it is not
- * meant to.
+ * card reads the P&L — Striven invoices as revenue, bills as expense — for both,
+ * and says so in its own subtitle rather than leaving the reader to assume it
+ * matches the tiles. It does not, and it is not meant to.
  *
  * ONE AXIS, BECAUSE EVERYTHING PLOTTED IS MONEY. Margin is a percentage and is
  * NOT drawn: it would need a second scale, which is the one chart mistake this
@@ -125,8 +125,8 @@ export function BusinessGrowth() {
         <div>
           <h2 className="section-title">Business growth</h2>
           <div className="section-sub">
-            Revenue and net profit each month, accrual basis, from the <b>Striven</b> P&amp;L
-            (invoices as revenue, bills as expense).
+            Revenue and net profit each month, accrual basis, from{' '}
+            the <b>Striven</b> P&amp;L — invoices as revenue, bills as expense.
             Both come off the same statement, so the margin is the statement's own.
             Bars are each month's revenue; the curve is net profit across them.
             This is a different book from the order counts above and will not match them.

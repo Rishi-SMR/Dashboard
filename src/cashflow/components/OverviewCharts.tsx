@@ -10,16 +10,13 @@ import {
 import { formatCurrency, clickableProps, isCancelledStatus, isCompletedStatus } from '../format';
 import { C, SERIES, CAT6, VERTICAL_COLORS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
 import { sectionHref } from '../guideTrail';
-import { PiLienstarCard } from './PiLienstarCard';
 import { arDueParts } from '../arDue';
-import { VaRemittanceCard } from './VaRemittanceCard';
 import { ChartCard, BarsLine, LegendDots, BarList, DonutList, GaugeRing, DrillModal, useSyncAgo, pctText, HUE, AnimatedNumber } from '../chartKit';
 import { shortDeviceName } from './DeviceChips';
 import { UnitsByDevice } from './UnitsByDevice';
 import { CommissionBreakdown } from './CommissionBreakdown';
 import { MetricDetail } from './MetricDetail';
 import { SoLink } from './SoLink';
-import { YetToInvoice } from './YetToInvoice';
 
 /**
  * Chip colour for a Striven label, by what the label MEANS — stopped, money in,
@@ -1361,10 +1358,11 @@ export function OverviewCharts() {
 
               Hideable like every other panel here, so a profile can drop it
               without touching this file. */}
-          {/* YET TO BE INVOICED IS OFF KEVIN'S BOARD (5 Oct 2026, on request).
-              It sat beside Business growth here; Business growth now takes the
-              row on both boards. Crystal's board still carries the card, lower
-              down (the `!kevinLook` YetToInvoice further on). */}
+          {/* YET TO BE INVOICED IS OFF BOTH BOARDS (5 Oct 2026, on request).
+              It sat beside Business growth on Kevin's board and beside
+              Financial Insights on Crystal's; Business growth takes its row
+              and Financial Insights the full width. The same orders are still
+              listed on Receivables and in the PI Invoice Book. */}
           {!hide('overview.growth') && <BusinessGrowth />}
 
           <div className="exec-grid12">
@@ -1551,15 +1549,11 @@ export function OverviewCharts() {
               </ChartCard>
             )}
 
-            {/* PI · STRIVEN VS LIENSTAR (3 Oct 2026, on request): Striven's PI
-                order value and invoicing against the Master File's PI Lienstar
-                Funding tab, with the difference and the cases behind it. Full
-                width, so it takes a row of its own under AR Due / AP Due. */}
-            {!hide('overview.piLienstar') && <PiLienstarCard className="g12-12" />}
-            {/* VA · STRIVEN VS REMITTANCES (3 Oct 2026, on request): the VA twin
-                — Striven's VA invoicing against what the distributors remitted,
-                per the Master File's VA Remmittances tab. */}
-            {!hide('overview.vaRemittances') && <VaRemittanceCard className="g12-12" />}
+            {/* PI · STRIVEN VS LIENSTAR and VA · STRIVEN VS REMITTANCES ARE OFF
+                THIS BOARD (5 Oct 2026, on request). They took a full-width row
+                each under AR Due / AP Due. The comparisons themselves still
+                feed AR Due and the AR Register; the cards are kept in
+                PiLienstarCard.tsx / VaRemittanceCard.tsx, unmounted. */}
 
             {/* OPEN BALANCES sits where Units by programme was (2 Oct 2026, on
                 request); Units by programme moved down beside Position summary.
@@ -1866,7 +1860,7 @@ export function OverviewCharts() {
 
             <div className={`section chart-card ${kevinLook
               ? (hide('overview.exceptions') ? (kevinUnits ? 'g12-6' : 'g12-12') : 'g12-8')
-              : 'g12-6'}`}>
+              : 'g12-12'}`}>
               <div className="section-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                 <div>
                   <h2 className="section-title">Financial Insights</h2>
@@ -1915,10 +1909,6 @@ export function OverviewCharts() {
               />
             </ChartCard>
             )}
-
-            {/* Between the two: every live sales order nobody has invoiced.
-                On Kevin's board it sits beside Business growth instead (below). */}
-            {!kevinLook && <YetToInvoice pending={ar?.pending} className="g12-6" />}
 
           </div>
 
