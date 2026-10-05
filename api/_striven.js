@@ -112,7 +112,7 @@ const SB_KEY = () => process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SE
  *
  * Every cfgValue() call used to be its own Supabase round trip, and there are
  * thirteen call sites — sheet ids, report URLs, the recon config, the paid-
- * through map. A single cold page load therefore spent most of
+ * through map, the Shippo token. A single cold page load therefore spent most of
  * a second re-reading the same fifteen-row table over and over, serially,
  * because each caller awaited its own copy.
  *
@@ -515,8 +515,11 @@ export async function customerRefMap() {
 // siblings like `rep` (a sales rep) and `createdBy` (staff) are left untouched,
 // because workforce names are business data, not PHI.
 const PHI_NAME_FIELDS = {
+  qb_posted: ['customer'],
+  qb_posted_inv: ['customer'],
   so_detail: ['payer'],
   order_chain: ['payer'],
+  auto_po_state: ['dropShipTo'],
 };
 // Free-text fields where a patient's name is EMBEDDED rather than being the whole
 // value — "Temple - Fidel Castillo", "Jan Vaiz AFO- L1971" (that L-code is an
@@ -536,12 +539,17 @@ function redactFreeText(str, refMap) {
   }
   return out;
 }
+// Internal automation log fields that embed a patient's name or an abbreviation
+// of it (Striven order numbers look like "ADubberly DEMO Hidow"). Nothing in the
+// UI reads them, so they are dropped rather than mapped.
+const PHI_DROP_FIELDS = { auto_po_state: ['title', 'soNumber'] };
 
-function redactNode(node, nameFields, refMap, freeFields = []) {
-  if (Array.isArray(node)) return node.map((v) => redactNode(v, nameFields, refMap, freeFields));
+function redactNode(node, nameFields, dropFields, refMap, freeFields = []) {
+  if (Array.isArray(node)) return node.map((v) => redactNode(v, nameFields, dropFields, refMap, freeFields));
   if (!node || typeof node !== 'object') return node;
   const out = {};
   for (const [k, v] of Object.entries(node)) {
+    if (dropFields.includes(k)) continue;
     if (freeFields.includes(k) && typeof v === 'string') { out[k] = redactFreeText(v, refMap); continue; }
     // { id, name } under a `customer` key → resolve by id, no lookup needed
     if (k === 'customer' && v && typeof v === 'object' && !Array.isArray(v) && 'name' in v) {
@@ -553,7 +561,7 @@ function redactNode(node, nameFields, refMap, freeFields = []) {
       out[k] = hit ?? v;
       continue;
     }
-    out[k] = redactNode(v, nameFields, refMap, freeFields);
+    out[k] = redactNode(v, nameFields, dropFields, refMap, freeFields);
   }
   return out;
 }
@@ -571,9 +579,10 @@ export function scrubPhi(key, data, refMap = null) {
     }
   }
   const nameFields = PHI_NAME_FIELDS[key] ?? [];
+  const dropFields = PHI_DROP_FIELDS[key] ?? [];
   const freeFields = PHI_FREETEXT_FIELDS[key] ?? [];
   // Every dataset still gets the `{ customer: { id, name } }` rule.
-  if (data && typeof data === 'object') return redactNode(data, nameFields, refMap, freeFields);
+  if (data && typeof data === 'object') return redactNode(data, nameFields, dropFields, refMap, freeFields);
   return data;
 }
 
@@ -606,7 +615,8 @@ export function scrubPhi(key, data, refMap = null) {
  * ALLOW-LIST, NOT DENY-LIST. Only the big out-of-band datasets are memoised. A
  * key that is WRITTEN during normal operation must keep reading straight through
  * or the writer would not see its own write: `pi_stages` (a rep dragging an order
- * in the pipeline). Anything not listed keeps exactly the
+ * in the pipeline), `shipment_tracking`, and the QuickBooks OAuth rows, where a
+ * stale token read breaks the integration. Anything not listed keeps exactly the
  * behaviour it has today, so a key added later is fresh-by-default rather than
  * silently cached.
  */
@@ -1219,7 +1229,7 @@ const safeRef = (prefix, id, rawNumber) => (MASK_PHI || /[a-zA-Z]/.test(String(r
  *
  * Every CACHED dataset already carries `PT-<id>` in this position: scrubPhi()
  * rewrites the name at write time and persistentCached() does the same on its
- * bootstrap path, so the AR register and the order book both show the
+ * bootstrap path, so the AR register, the order book and QuickBooks all show the
  * reference. The two LIVE reads — getSODetail and getPODetail — go straight to
  * Striven, get the real name back, and maskName() blanked it. The result was a
  * customer shown as PT-1234 on every list and as "-" on the one card you open to
@@ -2954,7 +2964,7 @@ async function getExceptions() {
   push({ key: 'item_price', severity: 'info', title: 'Active items missing a cost or price', count: noPrice.length, note: 'Needed for margin / COGS. Not every missing value is an error.', columns: ['item', 'cost', 'price'], rows: noPrice.slice(0, 25).map((i) => ({ item: i.name || '-', cost: round2(Number(i.cost || 0)), price: round2(Number(i.price || 0)) })) });
 
   const totalOpen = groups.reduce((s, g) => s + g.count, 0);
-  return { totalOpen, groups, note: 'Reconciliation with bank/card, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources - pending client input.' };
+  return { totalOpen, groups, note: 'Reconciliation with bank/card, QuickBooks, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources - pending client input.' };
 }
 async function getTasks() {
   const rows = await allTasks();
@@ -3126,7 +3136,7 @@ export async function getDeviceMix(viewer = null) {
 // checks." Needs-review and Unmatched rows are carried as counts so the money
 // held back is visible, but they are never added to a payable figure.
 // WHERE THE SHEET ID COMES FROM. Supabase `app_config` first, environment
-// second, for one reason: a value
+// second — the same order as shippoToken(), and for the same reason: a value
 // that lives in the table can be changed without a redeploy, and one host
 // forgetting to set it is not a silent outage.
 //
@@ -4806,8 +4816,137 @@ export async function getArRegister() {
   }, 300_000);
 }
 
-// Carrier of a tracking number, from its shape alone. Used to link a number on
-// the order book to the carrier's own tracking page.
+// AUTO-SO (recurring resupply) — READ-ONLY candidate preview. Reads the SO-wise
+// order cache (built by scripts/gen-reports.mjs) and, per patient, surfaces their
+// most recent order + how long ago it was, so staff can see who is due for a
+// resupply and one-click-draft a repeat order. Creates NOTHING — live SO creation
+// is a deliberate, separately-gated follow-up. Nothing is written to Striven here.
+async function getAutoSoCandidates() {
+  const r = await sbCacheRead('report_patient_items');
+  const orders = r?.data?.orders || [];
+  if (!orders.length) {
+    return { ok: true, ready: false, candidates: [], count: 0, dueCount: 0,
+      note: 'Run `node scripts/gen-reports.mjs` to build the sales-order-wise data this reads.' };
+  }
+  const DUE_DAYS = Number(process.env.AUTO_SO_DUE_DAYS || 30);
+  const byPatient = new Map();
+  for (const o of orders) {
+    if (o.incomplete) continue;
+    const key = o.custRef || o.ref || `SO-${o.soId}`;
+    if (!byPatient.has(key)) byPatient.set(key, []);
+    byPatient.get(key).push(o);
+  }
+  const now = Date.now();
+  const candidates = [];
+  for (const [key, os] of byPatient) {
+    os.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    const last = os[0];
+    const lastMs = last.date ? new Date(last.date).getTime() : NaN;
+    const daysSince = Number.isFinite(lastMs) ? Math.floor((now - lastMs) / 86_400_000) : null;
+    candidates.push({
+      patient: key, lastName: last.lastName || '', program: last.program || '-',
+      orderCount: os.length, lastSo: last.so, lastSoId: last.soId, lastDate: last.date || null, daysSince,
+      due: daysSince != null && daysSince >= DUE_DAYS,
+      items: (last.items || []).map((i) => ({ item: i.item, qty: i.qty })),
+      value: last.value || 0,
+    });
+  }
+  candidates.sort((a, b) => (b.daysSince ?? -1) - (a.daysSince ?? -1));
+  return { ok: true, ready: true, dueDays: DUE_DAYS, count: candidates.length, demoOnly: autoSoDemoOnly(),
+    dueCount: candidates.filter((c) => c.due).length, generatedAt: r?.data?.generatedAt ?? null, candidates };
+}
+
+// ---- AUTO-SO: create a resupply Sales Order (dry-run default, DEMO-gated) ----
+// Mirrors the Auto-PO safety model: cron-key OR UI-session, dry-run unless
+// mode=live, and a pilot gate so only DEMO/test patients can create until the
+// client flips AUTO_SO_DEMO_ONLY=false. Nothing is written to Striven unless
+// mode=live AND the gate passes.
+export const autoSoTokenOk = (t) => { const want = process.env.AUTO_SO_KEY || ''; return Boolean(want) && String(t ?? '') === want; };
+const autoSoDemoOnly = () => (process.env.AUTO_SO_DEMO_ONLY ?? 'true') !== 'false';
+async function autoSoState() { const sb = await sbCacheRead('auto_so_state'); return (sb && sb.data) || { created: [] }; }
+
+// Build the new SO payload by cloning the patient's last order — reset every
+// transaction/audit/status field and line id, keep customer + type + shipTo +
+// case customFields + the line items, stamp today's order date.
+function autoSoBuildPayload(lastSo) {
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const p = clone(lastSo);
+  p.id = 0;
+  for (const k of ['orderNumber', 'number', 'dateCreated', 'createdDate', 'createdBy', 'lastUpdatedDate',
+    'lastUpdatedBy', 'total', 'subTotal', 'subtotal', 'taxTotal', 'balance', 'invoiceStatus', 'invoiceStatusName',
+    'status', 'statusName', 'shippedDate', 'completedDate', 'closedDate']) delete p[k];
+  p.orderDate = new Date().toISOString();
+  p.title = 'Auto resupply';
+  if ('memo' in p) p.memo = 'Auto-created resupply (repeat of the patient’s prior order)';
+  p.lineItems = (lastSo.lineItems ?? []).map((l) => {
+    const nl = clone(l);
+    nl.id = 0;
+    for (const k of ['salesOrderLineItemId', 'salesOrderId', 'quantityShipped', 'quantityInvoiced',
+      'quantityBackordered', 'amountInvoiced', 'amountShipped']) delete nl[k];
+    return nl;
+  });
+  return p;
+}
+
+const soIsTesty = (so) => isDemoType(so?.type?.name ?? '') || /demo|test/i.test(so?.customer?.name ?? '') || /demo|test/i.test(so?.name ?? '');
+
+// Dry preview: what the resupply SO WOULD contain (no write, no patient name).
+async function autoSoPreview(soId) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const payload = autoSoBuildPayload(so);
+  const items = (payload.lineItems ?? []).map((l) => ({ itemName: l.item?.name ?? l.itemName ?? '', qty: Number(l.quantity ?? l.qty ?? 0) }));
+  return {
+    ok: true, mode: 'dry', demoOnly: autoSoDemoOnly(), testy: soIsTesty(so),
+    templateSo: safeRef('SO', soId, so.orderNumber ?? so.number), customerId: so.customer?.id ?? null,
+    type: so.type?.name ?? '', itemCount: items.length, items,
+  };
+}
+
+// Create the resupply SO for the patient whose last order is `soId`.
+async function autoSoCreate(soId, mode) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const testy = soIsTesty(so);
+  const entry = { at: new Date().toISOString(), templateSoId: Number(soId), mode, testy, ref: safeRef('SO', soId, so.orderNumber ?? so.number) };
+  if (autoSoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test patient (pilot gate)'; return { ok: true, mode, demoOnly: true, processed: [entry] }; }
+  // Idempotency: don't re-create a resupply for the same customer within the window.
+  const state = await autoSoState();
+  const custId = so.customer?.id ?? 0;
+  const dedupMs = Number(process.env.AUTO_SO_DEDUP_DAYS || 14) * 86_400_000;
+  const recent = (state.created ?? []).find((c) => c.custId === custId && (Date.now() - new Date(c.at).getTime()) < dedupMs);
+  if (recent) { entry.skipped = `resupply already created for this patient on ${String(recent.at).slice(0, 10)}`; return { ok: true, mode, demoOnly: autoSoDemoOnly(), processed: [entry] }; }
+  const payload = autoSoBuildPayload(so);
+  entry.itemCount = (payload.lineItems ?? []).length;
+  if (mode !== 'live') { entry.dryRun = true; return { ok: true, mode: 'dry', demoOnly: autoSoDemoOnly(), processed: [entry] }; }
+  const created = await striven('POST', '/v1/sales-orders', payload);
+  const newId = created?.id ?? created?.Id ?? null;
+  entry.createdSoId = newId;
+  state.created = [...(state.created ?? []), { custId, at: entry.at, soId: newId }].slice(-1000);
+  await sbCacheWrite('auto_so_state', state);
+  return { ok: true, mode: 'live', demoOnly: autoSoDemoOnly(), processed: [entry], createdSoId: newId };
+}
+
+// Dispatcher for /api/auto-so — action=candidates (default) | preview | create.
+export async function autoSoRun(params = {}) {
+  const action = params.action || '';
+  const soId = params.so;
+  const mode = params.mode || (process.env.AUTO_SO_MODE || 'dry');
+  if (action === 'preview' && soId) return autoSoPreview(soId);
+  if (soId && action !== 'candidates') return autoSoCreate(soId, mode);
+  return getAutoSoCandidates();
+}
+
+// ============================================================================
+// SHIPMENT TRACKING — vendor tracking numbers matched to a patient (last name /
+// ship-to), with LIVE carrier status via Shippo. Vendor invoices carry NO SO
+// number, so entries are keyed by last name / ship-to (client-authorized min-
+// necessary PHI). Store = Supabase cache `shipment_tracking`. Token read from
+// app_config SHIPPO_TOKEN (or env) — never in code/git.
+// ============================================================================
+async function shippoToken() {
+  const t = await readConfigTable().catch(() => ({}));
+  return t.SHIPPO_TOKEN || process.env.SHIPPO_TOKEN || '';
+}
+// Heuristic carrier detection → Shippo carrier token (user can override in the UI).
 function detectCarrier(tnRaw) {
   const tn = String(tnRaw || '').replace(/\s+/g, '').toUpperCase();
   if (!tn) return null;
@@ -4826,6 +4965,65 @@ const CARRIER_URL = {
   usps: (tn) => `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(tn)}`,
   dhl_express: (tn) => `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encodeURIComponent(tn)}`,
 };
+const SHIPPO_STATUS = { PRE_TRANSIT: 'Label created', TRANSIT: 'In transit', DELIVERED: 'Delivered', RETURNED: 'Returned', FAILURE: 'Exception', UNKNOWN: 'Unknown' };
+async function shippoTrack(carrier, tn) {
+  const token = await shippoToken();
+  if (!token) return { ok: false, error: 'no_token', status: 'Shippo not configured' };
+  if (!carrier) return { ok: false, error: 'no_carrier', status: 'Pick a carrier' };
+  try {
+    const r = await fetch(`https://api.goshippo.com/tracks/${carrier}/${encodeURIComponent(tn)}`, { headers: { Authorization: `ShippoToken ${token}` } });
+    if (r.status === 401) return { ok: false, error: 'bad_token', status: 'Shippo token invalid' };
+    if (!r.ok) return { ok: false, error: `http_${r.status}`, status: 'Lookup failed' };
+    const j = await r.json();
+    const ts = j.tracking_status || {};
+    return {
+      ok: true, raw: ts.status || 'UNKNOWN', status: SHIPPO_STATUS[ts.status] || ts.status || 'Unknown',
+      detail: ts.status_details || '', eta: j.eta || null, updatedAt: ts.status_date || null,
+      location: ts.location ? [ts.location.city, ts.location.state].filter(Boolean).join(', ') : '',
+    };
+  } catch { return { ok: false, error: 'fetch_failed', status: 'Lookup failed' }; }
+}
+async function trackingStore() { const sb = await sbCacheRead('shipment_tracking'); return (sb && sb.data) || { entries: [] }; }
+async function trackingList() {
+  const store = await trackingStore();
+  const entries = store.entries || [];
+  const configured = Boolean(await shippoToken());
+  const out = await Promise.all(entries.map(async (e) => {
+    const carrier = e.carrier || detectCarrier(e.tn) || '';
+    const st = await shippoTrack(carrier, e.tn);
+    return {
+      id: e.id, patient: e.patient || '', vendor: e.vendor || '', tn: e.tn, addedAt: e.addedAt || null,
+      carrier, carrierName: CARRIER_NAME[carrier] || (carrier ? carrier.toUpperCase() : '-'),
+      trackingUrl: (CARRIER_URL[carrier] || (() => ''))(e.tn),
+      status: st.status, statusRaw: st.raw || '', detail: st.detail || '', eta: st.eta || null,
+      statusUpdatedAt: st.updatedAt || null, location: st.location || '', lookupError: st.ok ? null : st.error,
+    };
+  }));
+  return { ok: true, configured, count: out.length, entries: out };
+}
+async function trackingAdd(body) {
+  const tn = String(body?.tn || '').replace(/\s+/g, '').trim();
+  if (!tn) return { ok: false, error: 'tracking number required' };
+  const store = await trackingStore();
+  const id = `TRK-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`;
+  const entry = { id, patient: String(body?.patient || '').trim(), vendor: String(body?.vendor || '').trim(),
+    carrier: String(body?.carrier || '').trim() || detectCarrier(tn) || '', tn, addedAt: new Date().toISOString() };
+  store.entries = [entry, ...(store.entries || [])].slice(0, 2000);
+  await sbCacheWrite('shipment_tracking', store);
+  return { ok: true, id };
+}
+async function trackingRemove(id) {
+  const store = await trackingStore();
+  store.entries = (store.entries || []).filter((e) => e.id !== String(id));
+  await sbCacheWrite('shipment_tracking', store);
+  return { ok: true };
+}
+export async function trackingRun(params = {}, body = null) {
+  const action = params.action || 'list';
+  if (action === 'add') return trackingAdd(body || {});
+  if (action === 'remove') return trackingRemove(params.id);
+  return trackingList();
+}
 
 // ============================================================================
 // COMMISSION — reads Crystal's commission workbook(s) (Google Sheets, public CSV
@@ -4837,7 +5035,7 @@ const CARRIER_URL = {
 // ============================================================================
 // No sheet IDs are hardcoded — the commission workbook(s) live in Supabase
 // app_config key COMMISSION_SHEETS (JSON array of {id,gid,label}), the same
-// config-not-code pattern as the Striven creds. Empty = not set up.
+// config-not-code pattern as the Striven / Shippo / QB creds. Empty = not set up.
 const COMMISSION_DEFAULT = [];
 const commMoney = (s) => Number(String(s || '').replace(/[$,]/g, '')) || 0;
 // Folds a raw Striven "Sales Rep" value to the roster name used everywhere else.
@@ -4934,10 +5132,21 @@ export const commRep = (r, vertical) => {
   return s || 'Unknown';
 };
 // Patient last name from either "Last, First" or "FIRST LAST" — normalized for join.
-const commLastName = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z]/g, '').toUpperCase(); };
+/**
+ * NAME SUFFIXES OFF, before any name is read. "Larry Jacoway, Jr" was read as
+ * surname "LarryJacoway", first name "Jr" — the comma looks like "Last, First"
+ * — and "Jacoway Jr" took "Jr" as the surname, so the same patient could not
+ * match across Striven and the Master File (SO-70). Jr / Sr / II / III / IV are
+ * dropped wherever they sit: at the end, or just before the comma.
+ */
+const stripNameSuffix = (name) => String(name || '')
+  .replace(/\s+(?:jr|sr|ii|iii|iv)\.?(?=\s*,)/gi, '')
+  .replace(/[,\s]+(?:jr|sr|ii|iii|iv)\.?\s*$/i, '')
+  .trim();
+const commLastName = (name) => { let s = stripNameSuffix(name); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z]/g, '').toUpperCase(); };
 // Display last name — original case, HIPAA minimum-necessary (last name only, no
 // first name), matching the authorized last-name pattern used in order-tracking.
-const commLastDisp = (name) => { let s = String(name || '').trim(); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z\-']/g, '').trim(); };
+const commLastDisp = (name) => { let s = stripNameSuffix(name); if (!s) return ''; if (s.includes(',')) s = s.split(',')[0]; else { const t = s.split(/\s+/); s = t[t.length - 1]; } return s.replace(/[^A-Za-z\-']/g, '').trim(); };
 /**
  * INITIAL + SURNAME, WHERE THE SALES ORDER NUMBER PROVES THE INITIAL.
  *
@@ -4988,7 +5197,7 @@ const initialLastFromOrderNumber = (orderNumber, surname) => {
  * always has and the two never disagree about which token is the surname.
  */
 const commInitialLastDisp = (name) => {
-  const s = String(name || '').trim();
+  const s = stripNameSuffix(name);
   if (!s) return '';
   const clean = (v) => v.replace(/[^A-Za-z\-']/g, '').trim();
   let last = '';
@@ -7600,6 +7809,9 @@ export async function getMasterFileAp() {
         total: kind === 'cancelled' ? 0 : face, faceValue: face, kind,
         status: kind === 'credit-note' ? '' : status, terms, dueDays: Math.max(0, past), aging, open,
         termsDays: tDays ? Number(tDays[1]) : null, termsSource: tDays ? 'sheet' : 'none',
+        // What this bill's own row says is unpaid (invoice − paid), whatever its
+        // status label. Feeds the netting below.
+        shortfall: kind === 'cancelled' ? 0 : round2(face - amt(r[cPaid])),
       });
     }
     for (const r of all.slice(hIdx + 1)) {
@@ -7617,6 +7829,41 @@ export async function getMasterFileAp() {
       const bal = round2(v.billed - v.paid);
       return { ...v, owed: bal > 0 ? bal : 0, billsRequired: bal < 0 ? -bal : 0 };
     }).sort((a, b) => b.owed - a.owed || b.billsRequired - a.billsRequired);
+
+    // ── ONE AP DUE: THE BILLS NOW ADD UP TO THE VENDOR BALANCE (5 Oct 2026) ──
+    // The vendor balance (billed − paid, no offsetting) was AP Open everywhere,
+    // but every bill-level figure — the open-bills tables, ageing, due/overdue,
+    // the Action Center — summed each bill's own balance instead: $38,374 against
+    // $29,808. Lump payments (rows with no invoice number) count toward a
+    // vendor's paid total but were attached to no bill, and some bills marked
+    // "Paid" were not paid in full (Wholesale Medical Devices).
+    //
+    // So each bill's open balance is now its OWN shortfall (invoice − paid,
+    // whatever its status label), with the vendor's unattached money — lump
+    // payments, credit notes, overpayments on other bills — applied to that
+    // vendor's OLDEST shortfalls first, the way customer credits are netted on
+    // the AR side. Per vendor the bills then sum to exactly `owed`; an overpaid
+    // vendor's bills net to nothing (it is in `billsRequired`). `grossOpen`
+    // keeps what the bill showed before netting.
+    const owedOf = new Map(vendors.map((v) => [v.vendor, v.owed]));
+    const byVendorBills = new Map();
+    for (const b of bills) {
+      b.grossOpen = b.open;
+      if (b.kind === 'cancelled') { b.open = 0; continue; }
+      const a = byVendorBills.get(b.subLedger) ?? []; a.push(b); byVendorBills.set(b.subLedger, a);
+    }
+    for (const [v, list] of byVendorBills) {
+      const owed = owedOf.get(v) ?? 0;
+      const positives = list.filter((b) => b.shortfall > 0.005)
+        .sort((a, b) => String(a.due || a.date || '').localeCompare(String(b.due || b.date || '')));
+      let credit = round2(positives.reduce((s, b) => s + b.shortfall, 0) - owed);   // unattached money to apply
+      for (const b of list) b.open = 0;
+      for (const b of positives) {
+        const applied = round2(Math.min(b.shortfall, Math.max(0, credit)));
+        credit = round2(credit - applied);
+        b.open = round2(b.shortfall - applied);
+      }
+    }
     return {
       ok: true, vendors, bills, payments, cancelledExcluded: cancelled,
       billsOpen: round2(bills.filter((b) => b.kind === 'bill').reduce((s, b) => s + b.open, 0)),
@@ -7660,6 +7907,31 @@ export async function getMasterFileAp() {
 // Cancelled and lost orders are not cases: left out, counted and listed.
 // Lienstar counts APPROVED ROWS ONLY (on request): On Hold and Rejected are
 // left out of every figure the same way, counted and listed, never dropped.
+/**
+ * A SURNAME AS IT SOUNDS, for spelling slips the one-edit rule cannot reach:
+ * s and z are one letter, and a doubled letter counts once — "Grissell" and
+ * "Grizzell" both read "grisel". Used only together with an EXACT money match,
+ * so a sound-alike name alone never pairs two cases.
+ */
+const soundKey = (sur) => String(sur ?? '').toLowerCase().replace(/[^a-z]/g, '').replace(/z/g, 's').replace(/(.)\1+/g, '$1');
+/**
+ * SALES ORDER → THE DUE DATE OF ITS (LATEST) INVOICE, from Striven's invoices
+ * joined through the invoice → order map. Lets AR Due be aged by days past due
+ * on the same items it is made of (5 Oct 2026). An order with no joinable
+ * invoice is simply absent; callers fall back to the order's own date.
+ */
+async function invoiceDueBySo() {
+  const [inv, ordMap] = await Promise.all([allInvoices().catch(() => []), invoiceOrderMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }))]);
+  const out = new Map();
+  for (const r of inv) {
+    const no = String(r.txnNumber ?? r.id);
+    const soId = ordMap.byInvoice[no]?.soId ?? ordMap.byCustRef.get(`PT-${r.customer?.id}`)?.soId;
+    const due = String(r.dueDate ?? r.dateCreated ?? '').slice(0, 10);
+    if (!soId || !due) continue;
+    if (!out.has(soId) || due > out.get(soId)) out.set(soId, due);
+  }
+  return out;
+}
 const MASTER_FILE_PI_LIEN_GID = () => cfgValue('MASTER_FILE_PI_LIEN_GID', '1039792254');
 const PI_REPORT_URL = () => cfgValue('STRIVEN_PI_REPORT_URL');
 
@@ -7668,12 +7940,13 @@ export async function getPiLienstar() {
   const gid = await MASTER_FILE_PI_LIEN_GID();
   return cached('derived:pi-lienstar', async () => {
     const reportUrl = await PI_REPORT_URL();
-    const [res, so, ar, report, soBlob] = await Promise.all([
+    const [res, so, ar, report, soBlob, dueBySo] = await Promise.all([
       fetch(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`).catch(() => null),
       getSO(),
       getAR().catch(() => null),
       reportUrl ? fetchSavedReport(reportUrl).catch(() => []) : Promise.resolve([]),
       sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
+      invoiceDueBySo().catch(() => new Map()),
     ]);
     const csv = res?.ok ? await res.text() : '';
     if (!csv || /^\s*<(!doctype|html)/i.test(csv)) return { ok: false, note: 'Master File "PI Lienstar Funding" tab is unreachable.' };
@@ -7685,7 +7958,7 @@ export async function getPiLienstar() {
     const cStatus = col(/^status$/i), cPayDate = col(/date of payment/i), cFirm = col(/law firm/i), cBatch = col(/^batch$/i), cDos = col(/^dos$/i);
 
     /** "Daniel", "Butler" → "D. Butler" (display) and "dbutler" (match key). */
-    const disp = (first, last) => `${first ? `${first.trim()[0].toUpperCase()}. ` : ''}${last.trim()}`;
+    const disp = (first, last) => `${first ? `${first.trim()[0].toUpperCase()}. ` : ''}${stripNameSuffix(last)}`;
     const keyOf = (s) => {
       const t = String(s ?? '').trim();
       const m = /^([A-Za-z])\.?\s+(.+)$/.exec(t);
@@ -7792,6 +8065,9 @@ export async function getPiLienstar() {
       while (i < a.length && j < b.length) {
         if (a[i] === b[j]) { i++; j++; continue; }
         if (++edits > 1) return false;
+        // Two neighbouring letters swapped is ONE slip, not two: "Garciafigureoa"
+        // in Striven is "Garciafigueroa" on the remittance tab (SO-551).
+        if (a.length === b.length && a[i] === b[j + 1] && a[i + 1] === b[j]) { i += 2; j += 2; continue; }
         if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
       }
       return edits + (a.length - i) + (b.length - j) <= 1;
@@ -7801,6 +8077,9 @@ export async function getPiLienstar() {
       (s, l) => s.key && s.key === l.key && sameVal(s, l),
       (s, l) => s.sur && s.sur === l.sur && sameVal(s, l),
       (s, l) => near(s.sur, l.sur) && sameVal(s, l),
+      // Sound-alike surname, same value: "Grissell" on Lienstar is "Grizzell"
+      // in Striven (SO-540) — two letters apart, so the one-edit rule misses it.
+      (s, l) => soundKey(s.sur) && soundKey(s.sur) === soundKey(l.sur) && sameVal(s, l),
       (s, l) => s.key && s.key === l.key,
       (s, l) => s.sur && s.sur === l.sur,
     ];
@@ -7854,6 +8133,9 @@ export async function getPiLienstar() {
       })),
       ...unmatchedS.map((s) => ({
         kind: 'striven-only',
+        // The case IS on the Lienstar tab, but not Approved (On Hold, Rejected,
+        // or any other status) — named so the card can flag it in red.
+        lienHold: holdBySo.has(s.soId) ? holdBySo.get(s.soId).status : '',
         reason: holdBySo.has(s.soId) ? `On the Lienstar tab as ${holdBySo.get(s.soId).status}`
           : s.invoices ? 'Invoiced, not on the Lienstar tab' : 'Not on the Lienstar tab', patient: s.patient || '(no patient on order)', soId: s.soId, ref: s.ref, rep: s.rep, lawFirm: s.payer, status: s.status, paidOn: '', batch: '',
         strivenValue: s.caseValue, lienValue: 0, valueDiff: s.caseValue, invoiced: s.invoiced, toBeFunded: 0, fundDiff: s.invoiced,
@@ -7922,6 +8204,8 @@ export async function getPiLienstar() {
           .filter((r) => r.kind !== 'lienstar-only' && r.invoiced > 0.005 && !fullCase15(r))
           .map((r) => ({
             patient: r.patient, soId: r.soId, ref: r.ref, lawFirm: r.lawFirm,
+            // For ageing AR Due by days past due (see invoiceDueBySo).
+            dueDate: (r.soId && dueBySo.get(r.soId)) || '',
             invoiced: r.invoiced, received: r.toBeFunded, outstanding: round2(Math.max(0, r.invoiced - r.toBeFunded)),
             reason: r.kind === 'striven-only' ? 'Invoiced, no Approved Lienstar row' : r.toBeFunded > 0 ? 'Funded less than invoiced' : 'Not funded',
           }))
@@ -7983,11 +8267,12 @@ export async function getVaRemittances() {
   return cached('derived:va-remittances', async () => {
     const reportUrl = await VA_REPORT_URL();
     if (!reportUrl) return { ok: false, note: 'STRIVEN_VA_REPORT_URL is not configured.' };
-    const [res, report, soBlob, so] = await Promise.all([
+    const [res, report, soBlob, so, dueBySo] = await Promise.all([
       fetch(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`).catch(() => null),
       fetchSavedReport(reportUrl).catch(() => []),
       sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
       getSO().catch(() => null),
+      invoiceDueBySo().catch(() => new Map()),
     ]);
     if (!report.length) return { ok: false, note: 'The Striven VA report returned no rows.' };
     const csv = res?.ok ? await res.text() : '';
@@ -8044,6 +8329,9 @@ export async function getVaRemittances() {
         status: String(r.Status ?? '').trim(), labels,
         cancelled: /cancel/i.test(labels) || /cancel|void|lost/i.test(String(r.Status ?? '')),
         value: round2(sheetMoney(r.Subtotal)), invoiced: round2(sheetMoney(r.InvoicedTotal)),
+        // "09/24/2026 10:39 AM" → "2026-09-24", to tell an order raised after the
+        // newest remittance on the tab (likely not entered yet) from an old one.
+        date: (() => { const d = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(r.DateCreated ?? '')); return d ? `${d[3]}-${d[1].padStart(2, '0')}-${d[2].padStart(2, '0')}` : ''; })(),
       };
     });
     const live = orders.filter((o) => !o.cancelled);
@@ -8067,6 +8355,9 @@ export async function getVaRemittances() {
       while (i < a.length && j < b.length) {
         if (a[i] === b[j]) { i++; j++; continue; }
         if (++edits > 1) return false;
+        // Two neighbouring letters swapped is ONE slip, not two: "Garciafigureoa"
+        // in Striven is "Garciafigueroa" on the remittance tab (SO-551).
+        if (a.length === b.length && a[i] === b[j + 1] && a[i + 1] === b[j]) { i += 2; j += 2; continue; }
         if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
       }
       return edits + (a.length - i) + (b.length - j) <= 1;
@@ -8075,6 +8366,7 @@ export async function getVaRemittances() {
       (s, r) => s.key === r.key,
       (s, r) => s.sur && s.sur === r.sur,
       (s, r) => near(s.sur, r.sur) && Math.abs(s.amount - r.amount) < 1,
+      (s, r) => soundKey(s.sur) && soundKey(s.sur) === soundKey(r.sur) && Math.abs(s.amount - r.amount) < 1,
     ];
     const pairs = []; const usedS = new Set(); const usedR = new Set();
     for (const ok of passes) {
@@ -8111,17 +8403,47 @@ export async function getVaRemittances() {
     for (const { s, r } of pairs) strivenToRemit[s.key] = r.key;
     const remitBySur = {};
     for (const r of R) if (r.sur) (remitBySur[r.sur] = remitBySur[r.sur] || []).push(r.key);
+    const lastRemitAll = remit.reduce((mx, l) => (l.paidOn > mx ? l.paidOn : mx), '');
     const rowOf = (kind, s, r) => {
       const invoiced = s ? s.amount : 0, remitted = r ? r.amount : 0;
       const value = s ? round2(s.items.reduce((t, o) => t + o.value, 0)) : 0;
       const diff = round2(invoiced - remitted);
+      // PER ORDER, where a patient has several (5 Oct 2026). Totalling them hid
+      // the real picture: S. Riano read "remitted less than invoiced" when the
+      // June order was paid in full and the September one was simply raised
+      // after the newest payment on the tab. The patient's remittance is spread
+      // over their orders the way the register spreads it over invoices — an
+      // order of exactly a remitted amount first, then oldest first.
+      const perOrder = (() => {
+        if (!s) return [];
+        let avail = remitted;
+        const order = [...s.items].sort((a, b) => (Math.abs(a.invoiced - avail) < 0.01 ? -1 : 0) - (Math.abs(b.invoiced - avail) < 0.01 ? -1 : 0)
+          || String(a.date).localeCompare(String(b.date)));
+        const got = new Map();
+        for (const o of order) { const x = round2(Math.min(o.invoiced, Math.max(0, avail))); got.set(o, x); avail = round2(avail - x); }
+        return s.items.map((o) => {
+          const rec = got.get(o) ?? 0;
+          const state = o.invoiced <= 0.005 ? 'not-invoiced'
+            : rec >= o.invoiced - 0.5 ? 'remitted'
+              : rec > 0.005 ? 'part-remitted'
+                : lastRemitAll && o.date && o.date > lastRemitAll ? 'awaiting' : 'not-remitted';
+          // dueDate: the order's invoice due date, for ageing AR Due; the order
+          // date where no invoice joins.
+          return { soId: o.soId, ref: o.ref, status: o.status, date: o.date, dueDate: (o.soId && dueBySo.get(o.soId)) || o.date, invoiced: o.invoiced, remitted: rec, state };
+        });
+      })();
+      const n = (st) => perOrder.filter((o) => o.state === st).length;
+      // Several orders, the paid ones paid in full and every unpaid one raised
+      // after the newest remittance: nothing is wrong, the tab is just behind.
+      const allClear = perOrder.length > 1 && n('remitted') > 0 && n('remitted') + n('awaiting') + n('not-invoiced') === perOrder.length && n('awaiting') > 0;
       return {
-        kind,
+        kind: kind === 'differs' && allClear ? 'awaiting' : kind,
         reason: kind === 'striven-only' ? (invoiced > 0 ? 'Invoiced, nothing remitted yet' : 'Not invoiced, nothing remitted')
           : kind === 'remit-only' ? 'Remitted, no matching Striven VA order'
-            : kind === 'differs' ? (diff > 0 ? 'Remitted less than invoiced' : 'Remitted more than invoiced') : '',
+            : allClear ? `${n('remitted')} order${n('remitted') === 1 ? '' : 's'} remitted in full · ${n('awaiting')} invoiced after the last remittance on the tab`
+              : kind === 'differs' ? (diff > 0 ? 'Remitted less than invoiced' : 'Remitted more than invoiced') : '',
         patient: (s || r).patient,
-        orders: s ? s.items.map((o) => ({ soId: o.soId, ref: o.ref, status: o.status })) : [],
+        orders: perOrder,
         rep: s ? s.items[0].rep : '',
         lines: r ? r.items.length : 0, payer: r ? [...new Set(r.items.map((l) => l.payer).filter(Boolean))].join(', ') : '',
         lastPaid: r ? lastPaid(r) : '', flagged: r ? r.items.some((l) => l.payoutAsDate) : false,
@@ -8134,7 +8456,7 @@ export async function getVaRemittances() {
       ...R.filter((_, i) => !usedR.has(i)).map((r) => rowOf('remit-only', null, r)),
     ];
     const sum = (list, k) => round2(list.reduce((t, x) => t + (x[k] || 0), 0));
-    const kinds = ['agrees', 'differs', 'striven-only', 'remit-only'];
+    const kinds = ['agrees', 'awaiting', 'differs', 'striven-only', 'remit-only'];
 
     // Live VA orders the report is not scoped to — named, never guessed in.
     const inReport = new Set(orders.map((o) => o.soId).filter(Boolean));
@@ -8277,28 +8599,85 @@ async function readRepTerritories() {
  *   the cached copy (up to CACHE_TTL old), so the page's Refresh shows an edit
  *   made in the sheet a moment ago.
  */
-export async function getRepTerritories(viewer = null, { fresh = false } = {}) {
+/**
+ * THE TERRITORIES A VIEWER MAY SEE — every rep for an admin, only their own
+ * blocks for a rep. Shared by the territories list and the law-firm lookup, so
+ * the two can never disagree about who sees what.
+ */
+async function scopedTerritories(viewer = null, { fresh = false } = {}) {
   if (fresh) _cache.delete('derived:rep-territories');
   const base = await readRepTerritories();
   const isAdmin = viewer?.role === 'admin';
-  const totals = (reps) => ({
-    reps: reps.length,
-    clinics: new Set(reps.flatMap((r) => r.clinics.map((c) => c.name)).filter((n) => n !== '(clinic not listed)')).size,
-    lawFirms: new Set(reps.flatMap((r) => r.clinics.flatMap((c) => c.lawFirms.map((f) => f.name.toLowerCase())))).size,
-  });
-  if (!base.ok) return { ok: false, scope: isAdmin ? 'all' : 'own', reps: [], totals: totals([]), note: base.note };
-  if (isAdmin) return { ok: true, scope: 'all', reps: base.reps, totals: totals(base.reps) };
-
+  if (!base.ok) return { ok: false, isAdmin, reps: [], note: base.note };
+  if (isAdmin) return { ok: true, isAdmin, reps: base.reps };
   const email = String(viewer?.email ?? '').toLowerCase();
   const own = new Set([...identitiesOf(viewer?.repName)].map(nameKey));
   const aliases = await repTerritoryAliases();
   for (const n of [...own]) for (const a of aliases.get(n) ?? []) own.add(nameKey(a));
   const isMine = (r) => (email && r.emails.includes(email))
-    || [r.rep, ...r.rep.split(/\s*[-/]\s*/)].map(nameKey).some((k) => k && own.has(k));
-  const reps = own.size || email ? base.reps.filter(isMine) : [];
+    || [r.rep, ...r.rep.split(/s*[-/]s*/)].map(nameKey).some((k) => k && own.has(k));
+  return { ok: true, isAdmin, reps: own.size || email ? base.reps.filter(isMine) : [] };
+}
+
+/**
+ * LAW FIRMS STAY ON THE SERVER (5 Oct 2026, on request). The list carries each
+ * clinic's law-firm COUNT, never the firms; the names are looked up on demand
+ * with findTerritoryLawFirms(). A clinic can carry dozens of firms, and nobody
+ * reads them all — they search for the one they need.
+ */
+export async function getRepTerritories(viewer = null, opts = {}) {
+  const t = await scopedTerritories(viewer, opts);
+  const totals = (reps) => ({
+    reps: reps.length,
+    clinics: new Set(reps.flatMap((r) => r.clinics.map((c) => c.name)).filter((n) => n !== '(clinic not listed)')).size,
+    lawFirms: new Set(reps.flatMap((r) => r.clinics.flatMap((c) => c.lawFirms.map((f) => f.name.toLowerCase())))).size,
+  });
+  const strip = (reps) => reps.map((r) => ({
+    ...r,
+    clinics: r.clinics.map((c) => ({ name: c.name, lawFirmCount: c.lawFirms.length, flaggedCount: c.lawFirms.filter((f) => f.doNotAccept).length })),
+  }));
+  const scope = t.isAdmin ? 'all' : 'own';
+  if (!t.ok) return { ok: false, scope, reps: [], totals: totals([]), note: t.note };
   return {
-    ok: true, scope: 'own', repName: viewer?.repName ?? null, reps, totals: totals(reps),
-    note: reps.length ? undefined : 'No territory is assigned to you in the Master Data sheet yet.',
+    ok: true, scope, repName: t.isAdmin ? undefined : viewer?.repName ?? null,
+    reps: strip(t.reps), totals: totals(t.reps),
+    note: !t.isAdmin && !t.reps.length ? 'No territory is assigned to you in the Master Data sheet yet.' : undefined,
+  };
+}
+
+/**
+ * LAW-FIRM LOOKUP, on demand, within the viewer's own scope.
+ *   q       free text (2+ characters): matches the firm, the clinic or the rep
+ *   rep +   clinic   exact: every firm linked to that one clinic of that rep
+ *   rep     exact:   every firm across that rep's clinics
+ * One row per firm × clinic, so a firm linked to two clinics shows both — the
+ * link is the answer being looked up. Capped, and says when it was.
+ */
+export async function findTerritoryLawFirms(viewer = null, { q = '', rep = '', clinic = '' } = {}) {
+  const t = await scopedTerritories(viewer);
+  if (!t.ok) return { ok: false, results: [], note: t.note };
+  const needle = String(q ?? '').trim().toLowerCase();
+  const wantRep = String(rep ?? '').trim().toLowerCase();
+  const wantClinic = String(clinic ?? '').trim().toLowerCase();
+  if (!wantRep && !wantClinic && needle.length < 2) return { ok: true, results: [], count: 0, note: 'Type at least 2 characters.' };
+  const out = [];
+  for (const r of t.reps) {
+    if (wantRep && r.rep.toLowerCase() !== wantRep) continue;
+    for (const c of r.clinics) {
+      if (wantClinic && c.name.toLowerCase() !== wantClinic) continue;
+      const repHit = needle && r.rep.toLowerCase().includes(needle);
+      const clinicHit = needle && c.name.toLowerCase().includes(needle);
+      for (const f of c.lawFirms) {
+        if (needle && !repHit && !clinicHit && !f.name.toLowerCase().includes(needle)) continue;
+        out.push({ firm: f.name, doNotAccept: f.doNotAccept, clinic: c.name, rep: r.rep });
+      }
+    }
+  }
+  out.sort((x, y) => x.firm.localeCompare(y.firm) || x.clinic.localeCompare(y.clinic));
+  const CAP = 300;
+  return {
+    ok: true, count: out.length, truncated: out.length > CAP, results: out.slice(0, CAP),
+    firms: new Set(out.map((x) => x.firm.toLowerCase())).size,
   };
 }
 
@@ -8356,3 +8735,422 @@ export const DYNAMIC = [
 // Out-of-band cache refresh (called by pg_cron every 6h). Guarded by a secret token.
 export { refreshAll };
 export const refreshTokenOk = (t) => { const want = process.env.REFRESH_TOKEN || ''; return Boolean(want) && String(t ?? '') === want; };
+
+// ============================================================================
+// AUTO-PO — raise a vendor Purchase Order automatically when a Sales Order is
+// placed. DEMO-gated pilot + dry-run by default; nothing is created unless
+// AUTO_PO_MODE=live (or ?mode=live) AND the order passes the gate.
+// Trigger:  /api/auto-po?key=<AUTO_PO_KEY>[&so=<id>][&mode=dry|live]
+// State:    striven_cache key 'auto_po_state' { lastSoId, processed[], log[] }
+// ============================================================================
+export const autoPoTokenOk = (t) => { const want = process.env.AUTO_PO_KEY || ''; return Boolean(want) && String(t ?? '') === want; };
+const autoPoDemoOnly = () => (process.env.AUTO_PO_DEMO_ONLY ?? 'true') !== 'false';
+
+async function autoPoState() {
+  const sb = await sbCacheRead('auto_po_state');
+  const s = (sb && sb.data) || {};
+  return {
+    lastSoId: Number(s.lastSoId || 0),
+    processed: Array.isArray(s.processed) ? s.processed : [],
+    log: Array.isArray(s.log) ? s.log : [],
+  };
+}
+
+// A PO that no longer counts: cancelled/voided/rejected in Striven. Such a PO
+// must not be used as a template, must not show as "already created", and must
+// not block a re-run — otherwise one bad run keeps an order stuck forever.
+const poIsDead = (status) => /cancel|void|reject|denied/i.test(String(status ?? ''));
+
+// Latest active PO that actually CONTAINS this item → vendor + a template line.
+// The containment check means we stay correct even if the search filter is
+// ignored by the API — we just scan the most recent POs.
+async function previousPoForItem(itemId) {
+  const b = await striven('POST', '/v1/purchase-orders/search', {
+    ItemId: Number(itemId), PageIndex: 0, PageSize: 25, SortExpression: 'PurchaseOrderDate', SortOrder: '2',
+  });
+  const rows = b.data ?? b.Data ?? [];
+  for (const r of rows.slice(0, 25)) {
+    try {
+      const po = await striven('GET', `/v1/purchase-orders/${r.id}`);
+      if (poIsDead(po.status?.name)) continue;
+      const lines = po.lineItems ?? [];
+      const line = lines.find((l) => Number(l.item?.id ?? l.itemId ?? 0) === Number(itemId));
+      if (line && po.vendor?.id) return { po, line };
+    } catch { /* skip unreadable PO */ }
+  }
+  return null;
+}
+
+// Build ONE purchase order for a vendor from a template PO, carrying ALL the
+// order's items for that vendor as separate line items (each `items[i]` =
+// { itemId, itemName, qty, templateLine }). This is the streamlining: same vendor
+// → one PO, not one PO per item.
+function buildAutoPoPayloadMulti(prevPo, items, { soNumber, soCustomer, soShipTo }) {
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const p = clone(prevPo);
+  p.id = 0;
+  for (const k of ['purchaseOrderNumber', 'poNumber', 'number', 'dateCreated', 'createdDate', 'createdBy',
+    'lastUpdatedDate', 'lastUpdatedBy', 'total', 'subTotal', 'subtotal', 'taxTotal', 'balance', 'customFields']) delete p[k];
+  const now = new Date();
+  p.purchaseOrderDate = now.toISOString();
+  p.promiseDate = new Date(now.getTime() + 7 * 86_400_000).toISOString();
+  // Drop-ship to the CURRENT order's customer AND its OWN ship-to location. The
+  // cloned template still carries the PREVIOUS customer's dropShipLocation, which
+  // Striven rejects ("Drop Ship Location does not match Drop Ship Customer") — so
+  // both must be overwritten together. No ship-to on the order → don't drop-ship.
+  if (p.dropShipPO === true || 'dropShipLocation' in p || 'dropShipCustomer' in p) {
+    if (soShipTo && soShipTo.id) {
+      if (soCustomer) p.dropShipCustomer = clone(soCustomer);
+      p.dropShipLocation = clone(soShipTo);
+      p.dropShipPO = true;
+    } else {
+      p.dropShipPO = false;
+      delete p.dropShipLocation;
+      delete p.dropShipCustomer;
+    }
+  }
+  p.title = `Auto PO for SO ${soNumber}`;
+  if ('memo' in p) p.memo = `Auto-created from Sales Order ${soNumber}`;
+  p.lineItems = items.map((it) => {
+    const nl = clone(it.templateLine);
+    nl.id = 0;
+    for (const k of ['purchaseOrderLineItemId', 'purchaseOrderId', 'quantityReceived', 'quantityBilled',
+      'amountReceived', 'amountBilled']) delete nl[k];
+    nl.item = { ...(nl.item ?? {}), id: Number(it.itemId), name: String(it.itemName ?? nl.item?.name ?? '') };
+    nl.quantity = Number(it.qty);
+    return nl;
+  });
+  return p;
+}
+
+async function autoPoProcessSo(soId, mode) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const soNumber = String(so.orderNumber ?? so.number ?? soId);
+  const typeName = so.type?.name ?? '';
+  // soNumber is NOT logged: Striven order numbers embed the patient's surname
+  // ("ADubberly DEMO Hidow"). soId identifies the order without carrying a name.
+  // pos = one entry PER VENDOR (grouped); unmatched = items with no vendor found.
+  const entry = { at: new Date().toISOString(), soId: Number(soId), type: typeName, mode, pos: [], unmatched: [] };
+  const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
+  if (autoPoDemoOnly() && !testy) { entry.skipped = 'not a DEMO/test order (pilot gate)'; return entry; }
+  const chainSb = await sbCacheRead('order_chain');
+  const chain = (chainSb && chainSb.data) || {};
+  // Cancelled POs don't count as "linked" — the order still needs a real PO.
+  if ((chain[String(soId)]?.pos ?? []).some((p) => !poIsDead(p.status))) { entry.skipped = 'SO already has a linked PO'; return entry; }
+  const lines = so.lineItems ?? [];
+  if (!lines.length) { entry.skipped = 'no line items on SO'; return entry; }
+
+  // 1. Resolve each SO line to a vendor + template line, then GROUP BY VENDOR.
+  const groups = new Map();   // vendorKey → { vendor, template, items: [{itemId,itemName,qty,unit,templateLine}] }
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const itemId = l.item?.id ?? l.itemId ?? null;
+    const itemName = l.item?.name ?? l.itemName ?? `Line ${i + 1}`;
+    const qty = Number(l.quantity ?? l.qty ?? 0);
+    if (!itemId || qty <= 0) { entry.unmatched.push({ itemName, qty, reason: 'missing item id or quantity' }); continue; }
+    const prev = await previousPoForItem(itemId);
+    if (!prev) { entry.unmatched.push({ itemId, itemName, qty, reason: 'no vendor - this item has no prior purchase order to copy from' }); continue; }
+    const vName = prev.po.vendor?.name ?? '';
+    const vKey = String(prev.po.vendor?.id ?? vName);
+    if (!groups.has(vKey)) groups.set(vKey, { vendor: prev.po.vendor ?? { name: vName }, template: prev.po, items: [] });
+    groups.get(vKey).items.push({ itemId, itemName, qty, unit: prev.line?.unitPrice ?? prev.line?.price ?? null, templateLine: prev.line });
+  }
+
+  // 2. One PO per vendor group — all that vendor's items on a single PO.
+  for (const g of groups.values()) {
+    const vendorName = g.vendor?.name ?? '';
+    const items = g.items.map((it) => ({ itemName: it.itemName, qty: it.qty, unit: it.unit }));
+    if (mode === 'live') {
+      const payload = buildAutoPoPayloadMulti(g.template, g.items, { soNumber, soCustomer: so.customer ?? null, soShipTo: so.shipToLocation ?? so.shipTo ?? null });
+      const created = await striven('POST', '/v1/purchase-orders', payload);
+      const poId = created?.id ?? created?.data?.id ?? null;
+      const vendorEmail = await vendorContactEmail(vendorName);
+      entry.pos.push({ poId, vendor: vendorName, vendorEmail, items });
+    } else {
+      entry.pos.push({ poId: null, vendor: vendorName, vendorEmail: '', items, dryRun: true });
+    }
+  }
+  return entry;
+}
+
+// Recent sales orders for the UI to pick from — ONE live search call (no per-SO
+// detail fetch, so it stays fast and can't time out). PHI stays server-side:
+// only the id-based ref, date, a non-PHI class and two booleans leave the server.
+async function autoPoCandidates() {
+  const b = await striven('POST', '/v1/sales-orders/search', { PageIndex: 0, PageSize: 25, SortExpression: 'DateCreated', SortOrder: '2' });
+  const rows = b.data ?? b.Data ?? [];
+  const chainSb = await sbCacheRead('order_chain');
+  const chain = (chainSb && chainSb.data) || {};
+  return rows.map((r) => {
+    const soId = Number(r.id);
+    const c = chain[String(soId)] || {};
+    const type = c.type || '';
+    // 'testy' is derived from PHI-bearing fields (order number embeds the patient
+    // surname, customer name) here on the server — only the boolean is emitted.
+    const testy = isDemoType(type)
+      || /demo|test|sample/i.test(r.number ?? r.orderNumber ?? '')
+      || /demo|test/i.test(r.customerName ?? r.customer?.name ?? '');
+    return {
+      soId,
+      ref: safeRef('SO', soId, r.number ?? r.orderNumber),
+      date: r.dateCreated ?? r.orderDate ?? null,
+      kind: testy ? 'DEMO / test' : (type ? soClass(type) : '-'),
+      testy,
+      hasPo: (c.pos ?? []).length > 0,
+    };
+  });
+}
+
+// item(name) → primary vendor, from the cached vendor-items report — instant, no
+// live PO scan. This IS the "which item we buy from which vendor" mapping the
+// Reports tab already computes; preview reads it so the vendor pops up at once.
+async function itemVendorMap() {
+  const r = await sbCacheRead('report_vendor_items');
+  const vendors = r?.data?.vendors || [];
+  const m = new Map();
+  for (const v of vendors) for (const it of (v.items || [])) {
+    const k = String(it.item || '').toLowerCase().trim();
+    if (!k) continue;
+    const cur = m.get(k);
+    if (!cur || Number(it.poCount || 0) > cur.poCount) {
+      const qty = Number(it.qty || 0);
+      m.set(k, { vendor: v.vendor, poCount: Number(it.poCount || 0), unit: qty ? round2(Number(it.cost || 0) / qty) : null });
+    }
+  }
+  return m;
+}
+
+// Fast preview for the UI: the order's items + the reports-based vendor for each
+// (no slow previous-PO scan — that runs only when the PO is actually generated).
+async function autoPoPreview(soId) {
+  const so = await striven('GET', `/v1/sales-orders/${soId}`);
+  const soNumber = String(so.orderNumber ?? so.number ?? soId);
+  const typeName = so.type?.name ?? '';
+  const testy = isDemoType(typeName) || /demo|test/i.test(so.customer?.name ?? '') || /demo|test/i.test(so.name ?? '');
+  const vm = await itemVendorMap();
+  // Group items by their reports-vendor; items with no reports match go to
+  // `pending` (they usually still resolve from a prior PO at generate time).
+  const groups = new Map();   // vendor → items[]
+  const pending = [];
+  let lineCount = 0;
+  for (const l of (so.lineItems ?? [])) {
+    lineCount++;
+    const itemName = l.item?.name ?? l.itemName ?? `Line ${lineCount}`;
+    const qty = Number(l.quantity ?? l.qty ?? 0);
+    const hit = vm.get(String(itemName).toLowerCase().trim());
+    const unit = hit?.unit ?? (l.unitPrice ?? l.price ?? null);
+    if (hit?.vendor) {
+      if (!groups.has(hit.vendor)) groups.set(hit.vendor, []);
+      groups.get(hit.vendor).push({ itemName, qty, unit });
+    } else {
+      pending.push({ itemName, qty, unit });
+    }
+  }
+  const vendorGroups = [...groups.entries()].map(([vendor, items]) => ({ vendor, items }));
+  return {
+    ok: true, soId: Number(soId), ref: safeRef('SO', soId, soNumber),
+    type: testy ? 'DEMO / test' : (typeName ? soClass(typeName) : '-'), testy,
+    demoOnly: autoPoDemoOnly(), orderDate: so.orderDate ?? so.dateCreated ?? null,
+    lineCount, vendorGroups, pending,
+  };
+}
+
+// Fetch a PO's own PDF (Striven document format 15) as base64 for the UI/email.
+// striven() returns JSON, so this does a dedicated binary fetch with the token.
+async function autoPoFetchPdf(poId) {
+  const token = await getToken();
+  const res = await fetch(`${BASE}/v1/purchase-orders/${poId}/format/15`, {
+    headers: { Authorization: `Bearer ${token}`, 'User-Agent': UA, Accept: 'application/pdf' },
+  });
+  if (!res.ok) throw new Error(`PO PDF ${poId} → HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { ok: true, poId: Number(poId), filename: `PO-${poId}.pdf`, size: buf.length, pdfBase64: buf.toString('base64') };
+}
+
+// Vendor's primary contact email — search contacts by the vendor's account name,
+// then read the contact detail for its primary active email (mirrors the SMR n8n
+// flow). '' if none found; failures are swallowed so the field stays editable.
+async function vendorContactEmail(vendorName) {
+  if (!vendorName) return '';
+  try {
+    const s = await striven('POST', '/v1/contacts/search', { accountName: String(vendorName), pageIndex: 0, pageSize: 20 });
+    const cid = (s.data ?? s.Data ?? [])[0]?.id;
+    if (!cid) return '';
+    const c = await striven('GET', `/v1/contacts/${cid}`);
+    const emails = Array.isArray(c.emails) ? c.emails.filter((e) => e.active !== false) : [];
+    const pick = emails.find((e) => e.isPrimary) ?? emails[0] ?? {};
+    return String(pick.email ?? pick.emailAddress ?? c.email ?? c.emailAddress ?? c.primaryEmail ?? '').trim();
+  } catch { return ''; }
+}
+
+// A professional PO email body (adapted from the SMR n8n template) — vendor-facing,
+// no patient data. Built from the PO detail so it's correct and self-contained.
+function autoPoEmailHtml(po, poId) {
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const poNo = po.poNumber ?? po.purchaseOrderNumber ?? `PO-${poId}`;
+  const vendor = po.vendor?.name ?? 'Vendor';
+  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const lines = po.lineItems ?? po.purchaseOrderLineItems ?? [];
+  const rows = (lines.length ? lines : [{ item: { name: 'Requested item' } }]).map((l, i) => {
+    const name = esc(l.item?.name ?? l.itemName ?? 'Item');
+    const qty = esc(l.quantity ?? l.qty ?? '');
+    const unit = l.unitPrice ?? l.price ?? null;
+    const unitStr = unit != null ? `$${Number(unit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-';
+    return `<tr><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${i + 1}</td><td style="padding:10px;border:1px solid #d6d6d6"><b>${name}</b></td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center;font-weight:bold">${qty}</td><td style="padding:10px;border:1px solid #d6d6d6;text-align:center">${unitStr}</td></tr>`;
+  }).join('');
+  return `<div style="margin:0;padding:24px;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#222">
+  <div style="max-width:720px;margin:0 auto;background:#fff;border:1px solid #ddd">
+    <div style="padding:22px 28px;border-bottom:4px solid #1f4e78">
+      <div style="font-size:24px;font-weight:bold;color:#1f4e78;letter-spacing:.5px">PURCHASE ORDER</div>
+      <div style="margin-top:6px;font-size:13px;color:#666">Confirmation required &middot; <b>${esc(poNo)}</b> &middot; ${esc(dateStr)}</div>
+    </div>
+    <div style="padding:24px 28px">
+      <p style="margin:0 0 16px;font-size:14px">Dear ${esc(vendor)},</p>
+      <p style="margin:0 0 20px;font-size:14px;line-height:1.7">Please process the following Purchase Order and confirm acceptance, expected dispatch date, and delivery date.</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:22px;font-size:13px">
+        <thead><tr style="background:#1f4e78;color:#fff">
+          <th style="width:8%;padding:11px;border:1px solid #1f4e78">Sr.</th>
+          <th style="padding:11px;border:1px solid #1f4e78;text-align:left">Item</th>
+          <th style="width:16%;padding:11px;border:1px solid #1f4e78">Qty</th>
+          <th style="width:18%;padding:11px;border:1px solid #1f4e78">Unit</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="padding:14px;margin-bottom:20px;border:1px solid #d6d6d6;background:#fafafa;font-size:13px;line-height:1.7">
+        <b>Please confirm:</b>
+        <ol style="margin:8px 0 0 20px;padding:0"><li>Acceptance of this PO</li><li>Unit price &amp; total</li><li>Taxes &amp; freight</li><li>Expected dispatch &amp; delivery dates</li><li>Payment terms</li></ol>
+      </div>
+      <p style="margin:0 0 6px;font-size:14px">Please reply confirming acceptance of <b>${esc(poNo)}</b>, and mention the PO number on all invoices &amp; documents.</p>
+      <p style="margin:16px 0 0;font-size:14px">Regards,<br><b>Purchasing Team &middot; Sports Med Recovery</b></p>
+    </div>
+    <div style="padding:12px 28px;background:#f2f5f8;border-top:1px solid #ddd;text-align:center;font-size:11px;color:#666">Auto-generated Purchase Order &middot; PDF attached.</div>
+  </div></div>`;
+}
+
+// Email the PO (rich HTML body + PDF attachment) via Resend (HTTPS → serverless-safe,
+// native attachments, no npm dependency). RESEND_API_KEY (+ optional AUTO_PO_EMAIL_FROM).
+// Recipient is passed per-call and is editable in the UI.
+async function autoPoEmail({ poId, to, subject, body }) {
+  const key = process.env.RESEND_API_KEY || '';
+  if (!key) return { ok: false, error: 'Email not configured yet - set RESEND_API_KEY (see the Auto-PO email note).' };
+  if (!to || !/.+@.+\..+/.test(String(to))) return { ok: false, error: 'A valid recipient email is required.' };
+  let po = {};
+  try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal template fallback */ }
+  const pdf = await autoPoFetchPdf(poId);
+  const from = process.env.AUTO_PO_EMAIL_FROM || 'SMR Auto-PO <onboarding@resend.dev>';
+  const html = body || autoPoEmailHtml(po, poId);
+  const subj = subject || `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` - ${po.vendor.name}` : ''}`;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to: [String(to)], subject: subj, html, attachments: [{ filename: pdf.filename, content: pdf.pdfBase64 }] }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: `Email send failed (HTTP ${res.status}): ${j?.message || JSON.stringify(j)}` };
+  return { ok: true, poId: Number(poId), to: String(to), id: j.id ?? null };
+}
+
+// POs already created for a sales order (from the auto-po run log) — so an
+// already-processed SO can still show its PDF/email delivery step in the UI.
+async function autoPoSoPos(soId) {
+  const state = await autoPoState();
+  const seen = new Set(); const logged = [];
+  for (const e of (state.log || [])) {
+    if (Number(e.soId) !== Number(soId)) continue;
+    for (const p of (e.pos || [])) {           // new grouped structure
+      if (p.poId && !seen.has(p.poId)) {
+        seen.add(p.poId);
+        logged.push({ poId: p.poId, vendor: p.vendor || '', vendorEmail: p.vendorEmail || '', items: p.items || [] });
+      }
+    }
+    for (const l of (e.lines || [])) {          // backward-compat with old per-line logs
+      if (l.poId && !seen.has(l.poId)) {
+        seen.add(l.poId);
+        logged.push({ poId: l.poId, vendor: l.vendor || '', vendorEmail: l.vendorEmail || '', items: [{ itemName: l.itemName || '', qty: l.qty ?? null }] });
+      }
+    }
+  }
+  // Drop the ones cancelled/voided in Striven since. Without this, a PO from an
+  // OLD run (e.g. the pre-grouping one-PO-per-item code) keeps showing up as if
+  // it were today's output, and the order can never be re-run cleanly.
+  const pos = [];
+  for (const p of logged) {
+    let dead = false;
+    try { dead = poIsDead((await striven('GET', `/v1/purchase-orders/${p.poId}`)).status?.name); }
+    catch { /* unreadable → keep it rather than hide a real PO */ }
+    if (!dead) pos.push(p);
+  }
+  return { ok: true, soId: Number(soId), pos };
+}
+
+// Render the email that WOULD be sent — subject, HTML body, and the resolved
+// vendor email — WITHOUT sending. Needs no RESEND_API_KEY, so the user can review
+// the mail in the UI before anything goes out ("jaane se pehle dikhe").
+async function autoPoEmailPreview(poId) {
+  let po = {};
+  try { po = await striven('GET', `/v1/purchase-orders/${poId}`); } catch { /* minimal fallback */ }
+  const subject = `Purchase Order ${po.poNumber ?? `PO-${poId}`}${po.vendor?.name ? ` - ${po.vendor.name}` : ''}`;
+  const vendorEmail = await vendorContactEmail(po.vendor?.name ?? '');
+  return { ok: true, poId: Number(poId), subject, vendor: po.vendor?.name ?? '', vendorEmail, html: autoPoEmailHtml(po, poId) };
+}
+
+export async function autoPoRun(params = {}) {
+  const mode = params.mode === 'live' ? 'live' : (process.env.AUTO_PO_MODE === 'live' ? 'live' : 'dry');
+  const state = await autoPoState();
+  if (params.action === 'candidates') {
+    return { ok: true, mode, demoOnly: autoPoDemoOnly(), candidates: await autoPoCandidates() };
+  }
+  if (params.action === 'preview' && params.so) return autoPoPreview(Number(params.so));
+  if (params.action === 'pdf' && params.po) return autoPoFetchPdf(Number(params.po));
+  if (params.action === 'so-pos' && params.so) return autoPoSoPos(Number(params.so));
+  if (params.action === 'email-preview' && params.po) return autoPoEmailPreview(Number(params.po));
+  if (params.action === 'email' && params.po) return autoPoEmail({ poId: Number(params.po), to: params.to, subject: params.subject, body: params.body });
+  if (params.action === 'status') {
+    return {
+      ok: true, mode, demoOnly: autoPoDemoOnly(), checkpoint: state.lastSoId,
+      processedCount: state.processed.length, log: state.log.slice(0, 20),
+    };
+  }
+  const results = [];
+  if (params.so) {
+    // Debug/demo: push ONE specific SO through the pipeline.
+    const soId = Number(params.so);
+    if (mode === 'live' && state.processed.includes(soId)) {
+      // Guard on LIVE POs only. If every PO the earlier run created was later
+      // cancelled in Striven, the order genuinely has no PO — let it run again.
+      const prior = await autoPoSoPos(soId);
+      if (prior.pos.length) {
+        return { ok: true, mode, note: `SO ${soId} already processed - idempotency guard`, checkpoint: state.lastSoId };
+      }
+      state.processed = state.processed.filter((n) => Number(n) !== soId);
+    }
+    const entry = await autoPoProcessSo(soId, mode);
+    results.push(entry);
+    if (mode === 'live' && !entry.skipped) state.processed.push(soId);
+  } else {
+    // Poll: process new SOs beyond the checkpoint (max 3 per run).
+    const b = await striven('POST', '/v1/sales-orders/search', { PageIndex: 0, PageSize: 25, SortExpression: 'DateCreated', SortOrder: '2' });
+    const ids = (b.data ?? b.Data ?? []).map((r) => Number(r.id)).filter((n) => n > 0);
+    if (!ids.length) return { ok: true, mode, note: 'no sales orders returned' };
+    if (!state.lastSoId) {
+      state.lastSoId = Math.max(...ids);
+      await sbCacheWrite('auto_po_state', state);
+      return { ok: true, mode, note: `baselined checkpoint at SO id ${state.lastSoId} - nothing processed, older orders are safe` };
+    }
+    const fresh = ids.filter((n) => n > state.lastSoId && !state.processed.includes(n)).sort((a, b) => a - b).slice(0, 3);
+    for (const soId of fresh) {
+      const entry = await autoPoProcessSo(soId, mode);
+      results.push(entry);
+      // Advance the checkpoint ONLY for actually-processed live orders — else a
+      // dry run marches the checkpoint past orders that live mode would then skip.
+      if (mode === 'live' && !entry.skipped) {
+        state.lastSoId = Math.max(state.lastSoId, soId);
+        state.processed.push(soId);
+      }
+    }
+  }
+  state.processed = state.processed.slice(-500);
+  state.log = [...results, ...state.log].slice(0, 50);
+  await sbCacheWrite('auto_po_state', state);
+  return { ok: true, mode, demoOnly: autoPoDemoOnly(), processed: results, checkpoint: state.lastSoId };
+}
