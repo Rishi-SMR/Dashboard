@@ -515,8 +515,11 @@ export async function customerRefMap() {
 // siblings like `rep` (a sales rep) and `createdBy` (staff) are left untouched,
 // because workforce names are business data, not PHI.
 const PHI_NAME_FIELDS = {
+  qb_posted: ['customer'],
+  qb_posted_inv: ['customer'],
   so_detail: ['payer'],
   order_chain: ['payer'],
+  auto_po_state: ['dropShipTo'],
 };
 // Free-text fields where a patient's name is EMBEDDED rather than being the whole
 // value — "Temple - Fidel Castillo", "Jan Vaiz AFO- L1971" (that L-code is an
@@ -536,12 +539,17 @@ function redactFreeText(str, refMap) {
   }
   return out;
 }
+// Internal automation log fields that embed a patient's name or an abbreviation
+// of it (Striven order numbers look like "ADubberly DEMO Hidow"). Nothing in the
+// UI reads them, so they are dropped rather than mapped.
+const PHI_DROP_FIELDS = { auto_po_state: ['title', 'soNumber'] };
 
-function redactNode(node, nameFields, refMap, freeFields = []) {
-  if (Array.isArray(node)) return node.map((v) => redactNode(v, nameFields, refMap, freeFields));
+function redactNode(node, nameFields, dropFields, refMap, freeFields = []) {
+  if (Array.isArray(node)) return node.map((v) => redactNode(v, nameFields, dropFields, refMap, freeFields));
   if (!node || typeof node !== 'object') return node;
   const out = {};
   for (const [k, v] of Object.entries(node)) {
+    if (dropFields.includes(k)) continue;
     if (freeFields.includes(k) && typeof v === 'string') { out[k] = redactFreeText(v, refMap); continue; }
     // { id, name } under a `customer` key → resolve by id, no lookup needed
     if (k === 'customer' && v && typeof v === 'object' && !Array.isArray(v) && 'name' in v) {
@@ -553,7 +561,7 @@ function redactNode(node, nameFields, refMap, freeFields = []) {
       out[k] = hit ?? v;
       continue;
     }
-    out[k] = redactNode(v, nameFields, refMap, freeFields);
+    out[k] = redactNode(v, nameFields, dropFields, refMap, freeFields);
   }
   return out;
 }
@@ -571,9 +579,10 @@ export function scrubPhi(key, data, refMap = null) {
     }
   }
   const nameFields = PHI_NAME_FIELDS[key] ?? [];
+  const dropFields = PHI_DROP_FIELDS[key] ?? [];
   const freeFields = PHI_FREETEXT_FIELDS[key] ?? [];
   // Every dataset still gets the `{ customer: { id, name } }` rule.
-  if (data && typeof data === 'object') return redactNode(data, nameFields, refMap, freeFields);
+  if (data && typeof data === 'object') return redactNode(data, nameFields, dropFields, refMap, freeFields);
   return data;
 }
 
@@ -2954,7 +2963,7 @@ async function getExceptions() {
   push({ key: 'item_price', severity: 'info', title: 'Active items missing a cost or price', count: noPrice.length, note: 'Needed for margin / COGS. Not every missing value is an error.', columns: ['item', 'cost', 'price'], rows: noPrice.slice(0, 25).map((i) => ({ item: i.name || '-', cost: round2(Number(i.cost || 0)), price: round2(Number(i.price || 0)) })) });
 
   const totalOpen = groups.reduce((s, g) => s + g.count, 0);
-  return { totalOpen, groups, note: 'Reconciliation with bank/card, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources - pending client input.' };
+  return { totalOpen, groups, note: 'Reconciliation with bank/card, QuickBooks, the 9 emailed AP invoices, and the Evo Health $9,375 item requires those sources - pending client input.' };
 }
 async function getTasks() {
   const rows = await allTasks();
@@ -3126,7 +3135,7 @@ export async function getDeviceMix(viewer = null) {
 // checks." Needs-review and Unmatched rows are carried as counts so the money
 // held back is visible, but they are never added to a payable figure.
 // WHERE THE SHEET ID COMES FROM. Supabase `app_config` first, environment
-// second, for one reason: a value
+// second — and for a reason: a value
 // that lives in the table can be changed without a redeploy, and one host
 // forgetting to set it is not a silent outage.
 //
@@ -4806,8 +4815,7 @@ export async function getArRegister() {
   }, 300_000);
 }
 
-// Carrier of a tracking number, from its shape alone. Used to link a number on
-// the order book to the carrier's own tracking page.
+// Heuristic carrier detection → carrier code, from the tracking number alone.
 function detectCarrier(tnRaw) {
   const tn = String(tnRaw || '').replace(/\s+/g, '').toUpperCase();
   if (!tn) return null;
