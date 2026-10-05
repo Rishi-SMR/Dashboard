@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { type ArResult, type PiBookInvoice } from '../strivenApi';
+import { fetchPiLienstar, type ArResult, type PiBookInvoice, type PiLienstar } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { DrillModal } from '../chartKit';
@@ -223,6 +223,34 @@ function PiTable({ section }: { section: PiSectionDef }) {
 
 export function PiBook({ ar }: { ar: ArResult | null }) {
   /**
+   * WHAT LIENSTAR ACTUALLY FUNDED, per the Master File (5 Oct 2026). Striven's
+   * ledger is all this book read before, and Lienstar's advance is often never
+   * recorded against the invoice there — SO-173's #112 read "Advance also due"
+   * though Lienstar had funded its full 15%. An Approved case whose To be Funded
+   * covers the advance is treated as received. Refreshed with the board; a
+   * failed fetch simply leaves the ledger reading in place.
+   */
+  const [lien, setLien] = useState<PiLienstar | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const pull = () => fetchPiLienstar().then((r) => { if (alive && r?.ok) setLien(r); }).catch(() => {});
+    pull();
+    const t = setInterval(pull, 90_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  /** Lienstar funded this invoice's 15% advance in full (Approved case). */
+  const lienFunded = (r: PiBookInvoice) => {
+    const L = r.soId ? lien?.lienBySo?.[String(r.soId)] : undefined;
+    return Boolean(L && /^approved$/i.test(L.status) && L.toBeFunded > 0 && L.toBeFunded >= r.advance - 0.5);
+  };
+  const lienTip = (r: PiBookInvoice, extra: string) => {
+    const L = r.soId ? lien?.lienBySo?.[String(r.soId)] : undefined;
+    return `Lienstar funded the 15% advance: ${formatCurrency(L?.toBeFunded ?? 0)}${L?.paidOn ? ` on ${L.paidOn}` : ''}${L?.batch ? ` (batch ${L.batch})` : ''}, per the Master File's PI Lienstar Funding tab. Striven's ledger has not recorded it against this invoice. ${extra}`;
+  };
+  const advanceInTag = (r: PiBookInvoice) => (r.overRate
+    ? <span className="pill-tag tag-ok" title={lienTip(r, 'The invoice bills the full case value, so the remaining 85% arrives at settlement.')}>Advance received · fully invoiced</span>
+    : <span className="pill-tag tag-ok" title={lienTip(r, '')}>Advance received (Lienstar)</span>);
+  /**
    * THE PANEL'S OWN LIST: every uninvoiced PI order, PI ONLY.
    *
    * It carried all 298 orders across every programme while the invoice table
@@ -308,7 +336,7 @@ export function PiBook({ ar }: { ar: ArResult | null }) {
       // "Part received" stays as it was: it is a fact about MONEY that has
       // arrived, it sends the reader to section 1 for the other half, and it
       // would be lost if every row read the same.
-      rows: piBook.awaiting.invoices.map((r) => fromInvoice(r, r.advanceOpen, r.advanceReceived > 0.005
+      rows: piBook.awaiting.invoices.map((r) => fromInvoice(r, r.advanceOpen, lienFunded(r) ? advanceInTag(r) : r.advanceReceived > 0.005
         ? <span className="pill-tag tag-warn" title="Part of the advance has arrived. What landed is in section 1.">Part received</span>
         : <span className="pill-tag tag-info" title="The 15% advance is invoiced in full — on a PI case that is the whole invoice, since the balance bills when the case settles. Nothing further is to be raised; the advance is simply unpaid.">Fully Invoiced</span>)),
     });
@@ -336,12 +364,13 @@ export function PiBook({ ar }: { ar: ArResult | null }) {
         book, and the one an AR total cannot see. Cases with no sales order behind them are not here: the invoice is the
         whole bill and nothing follows it.</>,
       amount: piBook.balance.amount, count: piBook.balance.count, caseValue: piBook.balance.caseValue,
-      rows: piBook.balance.invoices.map((r) => fromInvoice(r, r.remainder, r.advanceOpen > 0.005
+      rows: piBook.balance.invoices.map((r) => fromInvoice(r, r.remainder, r.advanceOpen > 0.005 && lienFunded(r) ? advanceInTag(r) : r.advanceOpen > 0.005
         ? <span className="pill-tag tag-danger" title="The 15% advance has not arrived either - this case has returned nothing at all so far.">Advance also due</span>
         : <span className="pill-tag tag-muted" title="The 15% advance has been received. This is the remainder, which settles out of the award.">Awaiting settlement</span>)),
     });
     return out;
-  }, [piBook, piPending, ar]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [piBook, piPending, ar, lien]);
 
   /**
    * WHICH SECTION IS OPEN. Held as the NUMBER, not an index, so it survives a
