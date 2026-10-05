@@ -1058,7 +1058,7 @@ export const REP_DIRECTORY = [
   { email: 'admin@sportsmedrecovery.com', repName: null, role: 'admin' },
   { email: 'crystal@sportsmedrecovery.com', repName: null, role: 'admin' },
   { email: 'rishi@sportsmedrecovery.com', repName: null, role: 'admin' },
-  // Kevin: FULL admin — the entire Company side (P&L, AR/AP, QuickBooks) and
+  // Kevin: FULL admin — the entire Company side (P&L, AR/AP) and
   // every rep's revenue and commission. There is no partial-company role, so
   // "decide what he sees later" currently means widening from nothing or
   // narrowing from everything; this is the latter, chosen deliberately.

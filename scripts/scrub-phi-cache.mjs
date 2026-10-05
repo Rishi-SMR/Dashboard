@@ -3,8 +3,7 @@
 // Idempotent — safe to re-run. Run: node scripts/scrub-phi-cache.mjs
 //
 // Covers every cache key, not just the four obvious ones: the first pass missed
-// tasks, projects, the QuickBooks posted maps and the auto-PO log, which
-// scripts/hipaa-check.mjs later caught.
+// tasks and projects, which scripts/hipaa-check.mjs later caught.
 import fs from 'node:fs';
 for (const line of fs.readFileSync(new URL('../striven-server/.env', import.meta.url), 'utf8').split('\n')) {
   const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
@@ -12,7 +11,7 @@ for (const line of fs.readFileSync(new URL('../striven-server/.env', import.meta
 const S = await import('../api/_striven.js');
 
 const KEYS = ['customers', 'invoices', 'so', 'payments', 'tasks', 'projects',
-  'qb_posted', 'qb_posted_inv', 'so_detail', 'order_chain', 'auto_po_state'];
+  'so_detail', 'order_chain'];
 
 const refMap = await S.customerRefMap();
 if (!refMap.size) { console.error('ABORT — could not read customer names from Striven, so nothing can be mapped.'); process.exit(1); }

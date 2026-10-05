@@ -826,7 +826,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                 {soDetail.phiMasked && (
                   <div className="muted-note">
                     Customer shown as its <b>PT-&lt;id&gt;</b> reference, not a patient name &mdash; the same reference used
-                    across the register, the order book and QuickBooks. Addresses, notes &amp; line descriptions withheld (PHI).
+                    across the register and the order book. Addresses, notes &amp; line descriptions withheld (PHI).
                   </div>
                 )}
               </div>
