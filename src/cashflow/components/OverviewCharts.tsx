@@ -11,6 +11,7 @@ import { formatCurrency, clickableProps, isCancelledStatus, isCompletedStatus } 
 import { C, SERIES, CAT6, VERTICAL_COLORS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
 import { sectionHref } from '../guideTrail';
 import { PiLienstarCard } from './PiLienstarCard';
+import { arDueParts } from '../arDue';
 import { VaRemittanceCard } from './VaRemittanceCard';
 import { ChartCard, BarsLine, LegendDots, BarList, DonutList, GaugeRing, DrillModal, useSyncAgo, pctText, HUE, AnimatedNumber } from '../chartKit';
 import { shortDeviceName } from './DeviceChips';
@@ -584,16 +585,20 @@ export function OverviewCharts() {
   const progOfInv = (i: { vertical?: string; payer?: string | null }) => i.vertical || programOfPayer(i.payer);
   const ledgerOther = arInv.filter((i) => i.open > 0 && !['PI', 'VA'].includes(progOfInv(i)));
   const ledgerOtherSum = ledgerOther.reduce((s, i) => s + i.open, 0);
-  const recvTotal = (recvPi?.outstanding ?? 0) + (recvVa?.outstanding ?? 0) + ledgerOtherSum;
-
-  // ── AR EXPECTED, OFF THE MASTER FILE ONLY (3 Oct 2026, on request) ─────────
-  // What is invoiced and not yet received, per AR Due's PI and VA lines, with
-  // NO Striven ledger balance in it at all — not even for the programmes the
-  // Master File does not cover. Those are stated on the card as left out.
-  // Follows the Program filter: PI or VA alone shows that programme's line.
+  // ── ONE AR DUE FIGURE FOR THE WHOLE BOARD (5 Oct 2026, on request) ─────────
+  // AR Due, AR Expected, Open Balances (subtitle and donut slice) and Collection
+  // Rate's "Outstanding" all read THIS, so they can no longer disagree. It is
+  // the complete receivable: PI per Lienstar + VA per remittances + every other
+  // programme from the Striven ledger. (Supersedes 3 Oct's ledger-free AR
+  // Expected, by decision: the other programmes are real receivables.)
+  // Follows the Program filter: PI or VA alone shows that programme's line, and
+  // `ledgerOther` is already cut to the filter by `arInv`.
   const expPi = prog === 'All' || prog === 'PI' ? recvPi : null;
   const expVa = prog === 'All' || prog === 'VA' ? recvVa : null;
-  const arExp = (expPi?.outstanding ?? 0) + (expVa?.outstanding ?? 0);
+  // From the shared helper, the same call the Receivables tab's AR Open makes.
+  const arDueTotal = arDueParts(piLien, vaRemit, arInv, prog).total;
+  const recvTotal = arDueTotal;
+  const arExp = arDueTotal;
   const arExpDetail = (() => {
     const part = (rows: { received: number; outstanding: number }[] | undefined, partial: boolean) =>
       (rows ?? []).filter((r) => (r.received > 0.005) === partial).reduce((s, r) => s + r.outstanding, 0);
@@ -602,6 +607,8 @@ export function OverviewCharts() {
       { name: 'PI · part funded', value: part(expPi?.rows, true), color: '#6B8BD6' },
       { name: 'VA · nothing remitted', value: part(expVa?.rows, false), color: VERTICAL_COLORS.VA },
       { name: 'VA · part remitted', value: part(expVa?.rows, true), color: '#7CC79A' },
+      // The rest of AR Due: programmes the Master File does not cover.
+      { name: 'Other programmes · Striven', value: ledgerOtherSum, color: C.muted },
     ].filter((x) => x.value > 0.005);
     const invoiced = (expPi?.invoiced ?? 0) + (expVa?.invoiced ?? 0);
     const received = (expPi?.received ?? 0) + (expVa?.received ?? 0);
@@ -1035,7 +1042,7 @@ export function OverviewCharts() {
     (prog === 'All' || o.pi === prog) && o.pos.length === 0 && !/cancel|void|complete|closed/i.test(o.status));
   type AcItem = { n: string; l1: string; l2: string; view: string; ico: ReactNode };
   const acItems: AcItem[] = [];
-  if (overdue.length) acItems.push({ n: String(overdue.length), l1: 'Invoices Overdue', l2: formatCurrency(overdueSum), view: 'receivables', ico: '!' });
+  if (overdue.length) acItems.push({ n: String(overdue.length), l1: 'Overdue invoices (Striven)', l2: formatCurrency(overdueSum), view: 'receivables', ico: '!' });
   if (billsDue.length) acItems.push({ n: String(billsDue.length), l1: 'Vendor Bills Due', l2: formatCurrency(billsDueSum), view: 'payables', ico: '$' });
   if (waitingPo.length) acItems.push({ n: String(waitingPo.length), l1: 'Sales Orders', l2: 'Waiting for PO', view: 'tracking', ico: '›' });
   if (exc?.totalOpen) acItems.push({ n: String(exc.totalOpen), l1: 'Exceptions', l2: 'Needs Review', view: 'exceptions', ico: '▲' });
@@ -1354,13 +1361,11 @@ export function OverviewCharts() {
 
               Hideable like every other panel here, so a profile can drop it
               without touching this file. */}
-          {kevinLook ? (
-            // Kevin's board: Yet to be Invoiced beside Business growth, on request.
-            <div className="exec-grid12">
-              {!hide('overview.growth') && <div className="g12-8 g12-fill"><BusinessGrowth /></div>}
-              <YetToInvoice pending={ar?.pending} className={hide('overview.growth') ? 'g12-12' : 'g12-4'} fill={!hide('overview.growth')} />
-            </div>
-          ) : (!hide('overview.growth') && <BusinessGrowth />)}
+          {/* YET TO BE INVOICED IS OFF KEVIN'S BOARD (5 Oct 2026, on request).
+              It sat beside Business growth here; Business growth now takes the
+              row on both boards. Crystal's board still carries the card, lower
+              down (the `!kevinLook` YetToInvoice further on). */}
+          {!hide('overview.growth') && <BusinessGrowth />}
 
           <div className="exec-grid12">
             {/* COMMISSION, INTERACTIVE. Replaces the flat tile: same headline,
@@ -1564,7 +1569,7 @@ export function OverviewCharts() {
                 being missed. See periodLabel. */}
             {donutSlices.length > 0 && (
               <ChartCard className="g12-3" title={`Open balances${balScoped ? ` · ${periodLabel}` : ''}`}
-                sub={`${formatCurrency(arOpenF)} owed to us · ${formatCurrency(apTotal + commDue.payable)} owed out`}>
+                sub={`${formatCurrency(arDueTotal)} owed to us (AR Due) · ${formatCurrency(apTotal + commDue.payable)} owed out`}>
                 <DonutList data={donutSlices} totalLabel="Total outstanding"
                   onSelect={(n) => { location.hash = n === 'AR Expected' ? 'receivables' : n === 'AP Due' ? 'payables' : 'commission'; }} />
               </ChartCard>
@@ -1581,7 +1586,7 @@ export function OverviewCharts() {
                 which were all ledger facts) is no longer in this card. */}
             {(recvPi || recvVa) && (
               <ChartCard className="g12-4" title="AR Expected"
-                sub={`Invoiced, not yet received · PI per Lienstar · VA per remittances · ${PROG_LABEL[prog]}`}>
+                sub={`Invoiced, not yet received · PI per Lienstar · VA per remittances · others per Striven · ${PROG_LABEL[prog]}`}>
                 <div className="ard">
                   <div className="ard-top"><AnimatedNumber value={arExp} format={formatCurrency} duration={700} /></div>
                   <div className="ard-sub">
@@ -1641,8 +1646,8 @@ export function OverviewCharts() {
                   </div>
 
                   <div className="ard-note">
-                    No Striven ledger balance is included.
-                    {prog === 'All' && ledgerOtherSum > 0 && <> {formatCurrency(ledgerOtherSum)} open on the ledger for programmes the Master File does not cover (TriCare, DOL, unassigned) is left out.</>}
+                    Same figure as AR Due.
+                    {ledgerOtherSum > 0 && <> {formatCurrency(ledgerOtherSum)} of it is programmes the Master File does not cover (TriCare, DOL, unassigned), from the Striven ledger.</>}
                     {' '}Click AR Due → PI · Lienstar or VA · Remit for the cases.
                   </div>
                 </div>
@@ -1774,7 +1779,7 @@ export function OverviewCharts() {
               </div>
               <div className="cfoot">
                 <div className="cf-i"><div className="l">Collected</div><div className="v pos">{formatCurrency(cashFY)}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding</div><div className="v">{formatCurrency(arOpenF)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding (AR Due)</div><div className="v">{formatCurrency(arDueTotal)}</div></div>
               </div>
               <div className="cfoot" style={{ marginTop: 0 }}>
                 <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${pctText(cashD.pct)}` : '-'}</div></div>

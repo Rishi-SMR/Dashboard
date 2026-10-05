@@ -480,7 +480,7 @@ function piStatusTag(i: ArRegisterInvoice): ReactNode {
       L.fundedBy.length ? `The case's funding was matched to ${L.fundedBy.join(', ')}.` : '',
       `Striven ledger says: ${ledger}.`,
     ].filter(Boolean).join('\n');
-    const tone = L.status === 'funded' || L.status === 'full-15' ? 'tag-ok' : L.status === 'part-funded' || L.status === 'on-hold' ? 'tag-warn' : 'tag-danger';
+    const tone = L.status === 'funded' || L.status === 'full-15' ? 'tag-ok' : L.status === 'part-funded' ? 'tag-warn' : 'tag-danger';
     return (
       <span title={tip} style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
         <span className={`pill-tag ${tone}`} style={{ fontWeight: 700 }}>{L.status === 'funded' ? '✓ ' : ''}{label}</span>

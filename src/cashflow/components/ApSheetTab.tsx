@@ -1214,7 +1214,7 @@ export function ApSheetTab() {
           sub={mfOk
             // Said on the table, because the two totals on this page differ and
             // the reader should not have to work out why.
-            ? `Every bill, paid and unpaid · Master File AP tab · unpaid bills total ${formatCurrency(mf!.billsOpen ?? 0, true)} by the sheet's own statuses; Outstanding above is ${formatCurrency(mf!.apOpen ?? 0, true)} because lump payments (rows with no invoice number) are counted by vendor but not applied to any bill`
+            ? `Every bill, paid and unpaid · Master File AP tab · unpaid bills total ${formatCurrency(mf!.billsOpen ?? 0, true)}, the same as Outstanding above: each vendor's lump payments and credit notes are applied to its oldest bills first, and a bill marked Paid that was not paid in full stays open for the rest`
             : adjustments.note
               ? `Every bill, paid and unpaid · includes ${adjustments.note}, excluded from the total`
               : 'Every bill, paid and unpaid'}

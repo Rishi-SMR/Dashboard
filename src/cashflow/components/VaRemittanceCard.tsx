@@ -20,6 +20,9 @@ import { Portal } from './Portal';
 const KIND: Record<VaRemitKind, { label: string; note: string; tone: string }> = {
   agrees: { label: 'Agree', note: 'remitted equals invoiced', tone: C.positive },
   differs: { label: 'Differ', note: 'remitted, but not the invoiced amount', tone: C.warning },
+  // Older order(s) paid in full; the unpaid one was raised after the newest
+  // payment on the tab — most likely just not entered yet.
+  awaiting: { label: 'Awaiting remittance', note: 'older orders remitted in full; the newer one invoiced after the last remittance on the tab', tone: C.info },
   'striven-only': { label: 'Not remitted', note: 'VA orders with nothing on the remittance tab', tone: C.negative },
   'remit-only': { label: 'Only on remittances', note: 'remitted, no matching Striven VA order', tone: C.negative },
 };
@@ -184,7 +187,20 @@ export function VaRemittanceCard({ className = 'g12-12' }: { className?: string 
           ]}
           rows={list.map((x) => ({
             p: <><b>{x.patient}</b>{x.rep && <span style={{ display: 'block', fontSize: 11, color: C.muted }}>{x.rep}</span>}</>,
-            so: x.orders.length ? <>{x.orders.map((o, i) => <span key={`${o.ref}-${i}`}>{i > 0 && ', '}{o.soId ? <SoLink soId={o.soId} label={o.ref} /> : o.ref}</span>)}</> : '-',
+            // Each order with its OWN state, so a patient with a paid order and a
+            // new one reads as exactly that rather than as one short total.
+            so: x.orders.length ? <>{x.orders.map((o, i) => (
+              <span key={`${o.ref}-${i}`} style={{ display: 'block', whiteSpace: 'nowrap' }}>
+                {o.soId ? <SoLink soId={o.soId} label={o.ref} /> : o.ref}
+                {x.orders.length > 1 && o.state && (
+                  <span className={`pill-tag ${o.state === 'remitted' ? 'tag-ok' : o.state === 'awaiting' || o.state === 'part-remitted' ? 'tag-warn' : 'tag-danger'}`}
+                    style={{ marginLeft: 6, fontSize: 10.5 }}
+                    title={`${formatCurrency(o.invoiced ?? 0)} invoiced · ${formatCurrency(o.remitted ?? 0)} remitted${o.date ? ` · ordered ${o.date}` : ''}`}>
+                    {o.state === 'remitted' ? 'remitted' : o.state === 'awaiting' ? 'awaiting · after last remittance' : o.state === 'part-remitted' ? 'part remitted' : o.state === 'not-invoiced' ? 'not invoiced' : 'not remitted'}
+                  </span>
+                )}
+              </span>
+            ))}</> : '-',
             why: <>{x.reason || '-'}{x.flagged && <span style={{ display: 'block', fontSize: 11, color: C.warning }}>payout cell formatted as a date</span>}</>,
             py: x.payer || '-',
             lp: x.lastPaid ? day(x.lastPaid) : '-',

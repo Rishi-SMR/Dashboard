@@ -3,7 +3,8 @@ import {
   fetchStrivenAR, fetchStrivenPayments, fetchStrivenCustomers,
   type ArResult, type ArInvoice, type ArPendingOrder, type Payment, type PaymentsResult, type CustomersResult,
 } from '../strivenApi';
-import { fetchArCei, type ArCei } from '../strivenApi';
+import { fetchArCei, fetchPiLienstar, fetchVaRemittances, type ArCei, type PiLienstar, type VaRemittances } from '../strivenApi';
+import { arDueParts, arDueAging, AR_DUE_BUCKETS, type ArDueBucket } from '../arDue';
 import { formatCurrency, pageList, clickableProps } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTheme';
@@ -126,6 +127,21 @@ export function ReceivablesTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<null | { title: string; sub: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] }>(null);
+  // AR OPEN = AR DUE (5 Oct 2026, on request): the same complete receivable the
+  // Overview shows, from the shared arDueParts(). Needs the two Master File
+  // comparisons; refreshed every 90s like the rest, keeping the last good copy.
+  const [piLien, setPiLien] = useState<PiLienstar | null>(null);
+  const [vaRemit, setVaRemit] = useState<VaRemittances | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const pull = () => {
+      fetchPiLienstar().then((r) => { if (alive && r?.ok) setPiLien(r); }).catch(() => {});
+      fetchVaRemittances().then((r) => { if (alive && r?.ok) setVaRemit(r); }).catch(() => {});
+    };
+    pull();
+    const t = setInterval(pull, 90_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
 
   // Dynamic controls.
   const [agingMode, setAgingMode] = useState<'amount' | 'count'>('amount');
@@ -358,9 +374,36 @@ export function ReceivablesTab() {
     columns: [{ key: 'k', label: 'Item' }, { key: 'v', label: 'Value', num: true }],
     rows: rows.map((r) => ({ k: r.k, v: r.v })),
   });
+  const arDue = arDueParts(piLien, vaRemit, ar?.invoices ?? []);
+  // OVERDUE SUMMARY ON THE AR DUE BASIS (5 Oct 2026, on request): the same
+  // items AR Open sums, each at its invoice's due date, so the buckets add back
+  // to AR Open exactly. The ledger buckets stay on the AR Aging chart.
+  const dueAge = arDueAging(piLien, vaRemit, ar?.invoices ?? [], refMs);
+  const DUE_COLORS: Record<ArDueBucket, string> = { current: AGING[0], d1_30: AGING[1], d31_60: AGING[2], d61_90: AGING[3], d90plus: AGING[4] };
+  const drillDueBucket = (k: ArDueBucket) => {
+    const label = AR_DUE_BUCKETS.find((b) => b.key === k)?.label ?? k;
+    const inB = (d: number) => (k === 'current' ? d <= 0 : k === 'd1_30' ? d >= 1 && d <= 30 : k === 'd31_60' ? d >= 31 && d <= 60 : k === 'd61_90' ? d >= 61 && d <= 90 : d > 90);
+    const rows = dueAge.items.filter((it) => inB(it.days));
+    setDrill({
+      title: `AR Due · ${label}`,
+      sub: `${rows.length} item${rows.length === 1 ? '' : 's'} · ${formatCurrency(rows.reduce((t, r) => t + r.amount, 0))} · PI not funded by Lienstar, VA not remitted, other programmes per Striven`,
+      columns: [{ key: 'who', label: 'Patient / payer' }, { key: 'p', label: 'Programme' }, { key: 'ref', label: 'Order / invoice' }, { key: 'due', label: 'Due' }, { key: 'd', label: 'Days past due', num: true }, { key: 'a', label: 'Owed', num: true }],
+      rows: rows.map((r) => ({
+        who: r.label || '-', p: r.kind === 'Other' ? 'Other (Striven)' : r.kind,
+        ref: r.soId ? <SoLink soId={r.soId} label={r.ref} /> : (r.ref || '-'),
+        due: r.dueDate || '-', d: r.days > 0 ? r.days : '-', a: formatCurrency(r.amount),
+      })),
+    });
+  };
   const explainAr = () => setDrill({
-    title: 'AR Open', sub: 'Sum of every open invoice’s remaining balance, split by days past due',
-    ...kv([...AGING_LABELS.map((b) => ({ k: `${b.label}`, v: formatCurrency(ar?.aging[b.key] || 0) })), { k: 'Total', v: formatCurrency(ar?.totalOpen || 0) }]),
+    title: 'AR Open = AR Due', sub: 'The complete receivable, the same figure as AR Due on the Overview: each programme judged by the book that is the authority on it',
+    ...kv([
+      { k: `PI · invoiced, not yet funded by Lienstar (${arDue.piCount} case${arDue.piCount === 1 ? '' : 's'})`, v: arDue.piReady ? formatCurrency(arDue.pi) : 'loading…' },
+      { k: `VA · invoiced, not yet remitted (${arDue.vaCount} patient${arDue.vaCount === 1 ? '' : 's'})`, v: arDue.vaReady ? formatCurrency(arDue.va) : 'loading…' },
+      { k: `Other programmes · Striven ledger (${arDue.otherCount} invoice${arDue.otherCount === 1 ? '' : 's'})`, v: formatCurrency(arDue.other) },
+      { k: 'AR Open (AR Due)', v: formatCurrency(arDue.total) },
+      { k: 'For reference · Striven ledger open balance, all programmes', v: formatCurrency(ar?.totalOpen || 0) },
+    ]),
   });
   const explainCash = () => setDrill({
     // Named for the tile that opens it, or the panel reads as a different figure.
@@ -455,8 +498,9 @@ export function ReceivablesTab() {
       {ar && payments && customers && (
         <>
           <div className="kpi-r-strip" data-guide-anchor="ar-kpis">
-            <KpiR ico="doc" tint="#0A369F" label="AR Open" value={ar.totalOpen} format={formatCurrency}
-              deltaText={`${ar.count} open invoices`} foot="excludes voided invoices" onClick={explainAr} />
+            <KpiR ico="doc" tint="#0A369F" label="AR Open" value={arDue.total} format={formatCurrency}
+              deltaText={arDue.piReady && arDue.vaReady ? `PI ${formatCurrency(arDue.pi)} · VA ${formatCurrency(arDue.va)} · other ${formatCurrency(arDue.other)}` : 'loading the Master File…'}
+              foot="same as AR Due · click for the breakdown" onClick={explainAr} />
             {/* Clickable: jumps to the Open Invoices table below with every
                 filter cleared, so all of them are listed. */}
             <KpiR ico="clip" tint="#16A34A" label="Open Invoices" value={ar.count}
@@ -577,21 +621,22 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
             </ChartCard>
 
             <div className="section chart-card g12-9">
-              <div className="section-head"><div><h2 className="section-title">Overdue Summary</h2><div className="section-sub">Past-due receivables by bucket</div></div></div>
+              <div className="section-head"><div><h2 className="section-title">Overdue Summary</h2><div className="section-sub">AR Due by days past due · PI per Lienstar · VA per remittances · others per Striven · click a bucket for the items</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
+                {!(arDue.piReady && arDue.vaReady) && <div className="muted-note">Loading the Master File…</div>}
                 <div className="rank-list">
-                  {overdueRows.map((r) => (
-                    <div key={r.label} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillBucket(r.label.replace(' days', '')))}>
-                      <span className="donut-dot" style={{ background: r.color }} />
-                      <span className="rk-name">{r.label}</span>
-                      <span className="rk-val">{formatCurrency(r.value)}</span>
+                  {AR_DUE_BUCKETS.filter((b) => b.key !== 'current').map((b) => (
+                    <div key={b.key} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => drillDueBucket(b.key))}>
+                      <span className="donut-dot" style={{ background: DUE_COLORS[b.key] }} />
+                      <span className="rk-name">{b.label}</span>
+                      <span className="rk-val">{formatCurrency(dueAge.buckets[b.key])}</span>
                     </div>
                   ))}
                 </div>
               </div>
               <div className="cfoot">
-                <div className="cf-i"><div className="l">Total Overdue</div><div className="v neg">{formatCurrency(totalOverdue)}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Current (not due)</div><div className="v pos">{formatCurrency(agingEff.current || 0)}</div></div>
+                <div className="cf-i"><div className="l">Total Overdue</div><div className="v neg">{formatCurrency(dueAge.total - dueAge.buckets.current)}</div></div>
+                <div className="cf-i" style={{ textAlign: 'right', cursor: 'pointer' }} {...clickableProps(() => drillDueBucket('current'))}><div className="l">Current (not due)</div><div className="v pos">{formatCurrency(dueAge.buckets.current)}</div></div>
               </div>
             </div>
 

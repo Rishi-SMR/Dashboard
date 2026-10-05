@@ -172,7 +172,7 @@ export function PiLienstarCard({ className = 'g12-12' }: { className?: string })
             { key: 'lv', label: 'Case value', num: true },
             { key: 'fund', label: 'To be Funded', num: true },
           ]}
-          rows={na.rows.map((r) => ({ p: <b>{r.patient}</b>, st: r.status, lf: r.lawFirm || '-', lv: formatCurrency(r.caseValue), fund: formatCurrency(r.toBeFunded) }))}
+          rows={na.rows.map((r) => ({ rowClass: 'row-lien-hold', p: <b>{r.patient}</b>, st: <span className="pill-tag tag-danger" style={{ fontWeight: 700 }}>{r.status}</span>, lf: r.lawFirm || '-', lv: formatCurrency(r.caseValue), fund: formatCurrency(r.toBeFunded) }))}
           total={{ lv: formatCurrency(na.caseValue), fund: formatCurrency(na.toBeFunded) }}
           onClose={() => setShowNotApproved(false)}
         />
@@ -224,10 +224,15 @@ export function PiLienstarCard({ className = 'g12-12' }: { className?: string })
             { key: 'fund', label: 'To be Funded', num: true },
             { key: 'dv', label: 'Value diff', num: true },
           ]}
+          // RED where Lienstar holds the case — on the tab but On Hold, Rejected or
+          // any status other than Approved, so no funding is coming yet.
           rows={list.map((r) => ({
+            rowClass: r.lienHold ? 'row-lien-hold' : undefined,
             p: <><b>{r.patient}</b>{r.lawFirm && <span style={{ display: 'block', fontSize: 11, color: C.muted }}>{r.lawFirm}</span>}</>,
             so: r.soId ? <SoLink soId={r.soId} label={r.ref} /> : '-',
-            why: r.reason || '-',
+            why: r.lienHold
+              ? <span className="pill-tag tag-danger" style={{ fontWeight: 700 }} title="This case is on the Lienstar tab but not Approved, so Lienstar is not funding it yet.">Lienstar: {r.lienHold}</span>
+              : r.reason || '-',
             st: r.kind === 'striven-only' ? '-' : r.status,
             sv: r.strivenValue ? formatCurrency(r.strivenValue) : '-',
             lv: r.lienValue ? formatCurrency(r.lienValue) : '-',
