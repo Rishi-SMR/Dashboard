@@ -1561,7 +1561,7 @@ code {
    On request. SCOPED TO `.drill`, so the full-page tables — the AR sheet, the
    P&L, the rep roster — keep the app default (text left, money right) and only
    the pop-up drills read this way. One selector covers every drill in the app:
-   chartKit's DrillModal plus the Orders tab render the same `.drill` shell.
+   chartKit's DrillModal and the Orders tab both render the same `.drill` shell.
 
    `.num` HAS TO BE OVERRIDDEN TWICE, and the second half is the one that makes
    this visible at all. Its `text-align: right` is the obvious part. Its
@@ -2389,9 +2389,6 @@ button.ar-exp-foot { align-self: flex-start; text-align: left; }
   transition:background .15s ease, color .15s ease; }
 .ov-tab:hover { background:var(--panel-2); color:var(--text); }
 .ov-tab.active { background:var(--accent); color:#fff; box-shadow:0 4px 12px -4px rgba(10,54,159,.45); }
-/* Yet to be Invoiced: every vertical on ONE line, even in a third-width card. */
-.yti-tabs { flex-wrap:nowrap; }
-.yti-tabs .ov-tab { flex:1 1 auto; min-width:0; padding:6px 6px; font-size:12px; }
 @media (max-width:640px){ .ov-tab { padding:10px 8px; font-size:12.5px; } }
 
 /* Table controls (search + bucket filter) + sortable headers + pagination. */
