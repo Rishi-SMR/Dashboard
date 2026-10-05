@@ -40,7 +40,10 @@ export function PiLienstarCard({ className = 'g12-12' }: { className?: string })
     let alive = true;
     const pull = () => fetchPiLienstar()
       .then((r) => { if (alive) setD((prev) => (r?.ok || !prev?.ok ? r : prev)); })
-      .catch(() => { if (alive) setD((prev) => (prev?.ok ? prev : { ok: false, note: 'Could not load the comparison - retrying.' })); });
+      // The REASON and the SITE are shown, so a failure can be diagnosed from a
+      // screenshot: 'not found' on a site that has not been deployed with this
+      // endpoint reads very differently from a sign-in or server error.
+      .catch((e) => { if (alive) setD((prev) => (prev?.ok ? prev : { ok: false, note: `Could not load the comparison (${e instanceof Error ? e.message : 'request failed'} · ${location.host}) - retrying every 90 seconds.` })); });
     pull();
     const t = setInterval(pull, 90_000);
     return () => { alive = false; clearInterval(t); };
