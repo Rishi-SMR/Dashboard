@@ -324,7 +324,16 @@ export function ReceivablesTab() {
    * what guarantees the bar always closes at 100% - there is no third source to
    * drift against.
    */
-  const fValue = fReceived + fOpen;
+  // NOW THE SUM OF THE COLUMN (5 Oct 2026). `received + open` stopped being the
+  // value when PI moved to the 15% basis: on a PI invoice billed at the full
+  // case value, `open` is only the advance, so the headline and the Total
+  // Amount footer read $10,946 under rows summing $32,944. The value is the
+  // Total Amount column itself (valueOf, per row), and what the old identity
+  // left out is named below as case balance due at settlement.
+  const fValue = filtered.reduce((s, i) => s + valueOf(i), 0);
+  /** On PI: case value that is neither received nor counted as receivable —
+   *  the 85% that arrives when the case settles. Never part of AR. */
+  const fSettle = Math.max(0, fValue - fReceived - fOpen);
   /** Invoiced but not yet collected - the ledger's own open balance. `fOpen` is
    *  the CASE basis and is a larger, different thing. */
   const fLedgerOpen = filtered.reduce((s, i) => s + (i.ledgerOpen ?? i.open ?? 0), 0);
@@ -567,7 +576,7 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
               </div>
             </ChartCard>
 
-            <div className="section chart-card g12-4">
+            <div className="section chart-card g12-9">
               <div className="section-head"><div><h2 className="section-title">Overdue Summary</h2><div className="section-sub">Past-due receivables by bucket</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 <div className="rank-list">
@@ -586,22 +595,9 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
               </div>
             </div>
 
-            <div className="section chart-card g12-5" data-guide-anchor="top-customers">
-              <div className="section-head"><div><h2 className="section-title">Top Customers (by Balance)<GuideMark term="Payer" /></h2><div className="section-sub">Payer · largest open balances</div></div></div>
-              <div className="rank-list">
-                {topPayers.map((c) => (
-                  <div key={c.name} className="rk-row" style={{ cursor: 'pointer' }}
-                    {...clickableProps(() => { setQuery(c.name); setBucketFilter('All'); setProgFilter('All'); setPage(1); tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); })}>
-                    <span className="rk-ico">{initials(c.name)}</span>
-                    <span className="rk-name" title={c.name}>{trunc(c.name, 26)}</span>
-                    <span className="rk-val">{formatCurrency(c.open)}</span>
-                  </div>
-                ))}
-                {topPayers.length === 0 && <div className="muted-note">No open balances.</div>}
-              </div>
-              <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }}
-                onClick={() => tableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>View all customers →</button>
-            </div>
+            {/* TOP CUSTOMERS (BY BALANCE) WAS HERE, and is gone on request
+                (5 Oct 2026). Overdue Summary takes its width so the row still
+                fills. The same balances are in the Open PI Invoices table. */}
 
             {/* FULL WIDTH, and `tbl-single` with it. At 7-of-12 the nine
                 columns overflowed the card and Open Balance / Days Past Due sat
@@ -610,7 +606,7 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
             <div className="section chart-card g12-12 tbl-single" ref={tableRef} data-guide-anchor="open-invoices">
               <div className="section-head">
                 <div>
-                  <h2 className="section-title">Open Invoices<GuideMark term="AR Open" /></h2>
+                  <h2 className="section-title">Open PI Invoices<GuideMark term="AR Open" /></h2>
                   <div className="section-sub">
                     Unpaid invoices with a remaining balance: matches Striven's A/R aging
                     {pendingRows.length > 0 && <> · <span style={{ color: C.negative, fontWeight: 700 }}>{pendingRows.length} PI orders</span> with no invoice are flagged in red and excluded from the total</>}
@@ -662,17 +658,24 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
                     <b className="v">{formatCurrency(fValue)}</b>
                   </div>
                   <div className="ar-value-bar" role="img"
-                    aria-label={`${share(fReceived)}% received, ${share(fOpen)}% still outstanding`}>
+                    aria-label={`${share(fReceived)}% received, ${share(fOpen)}% still outstanding${fSettle > 0.005 ? `, ${share(fSettle)}% case balance due at settlement` : ''}`}>
                     <span style={{ width: `${share(fReceived)}%`, background: C.positive }} />
-                    <span style={{ width: `${100 - share(fReceived)}%`, background: C.negative }} />
+                    <span style={{ width: `${share(fOpen)}%`, background: C.negative }} />
+                    {fSettle > 0.005 && <span style={{ width: `${Math.max(0, 100 - share(fReceived) - share(fOpen))}%`, background: C.muted }} />}
                   </div>
                   <div className="ar-value-key">
                     <span><i style={{ background: C.positive }} />Received
                       <b>{formatCurrency(fReceived)}</b>
                       <em>{share(fReceived)}%</em></span>
-                    <span><i style={{ background: C.negative }} />Still outstanding
+                    <span><i style={{ background: C.negative }} />Still outstanding (receivable)
                       <b>{formatCurrency(fOpen)}</b>
                       <em>{share(fOpen)}%</em></span>
+                    {fSettle > 0.005 && (
+                      <span title="PI invoices billed at the full case value count only the 15% advance as receivable. The other 85% arrives when the case settles, so it is not in the open balance.">
+                        <i style={{ background: C.muted }} />PI case balance at settlement
+                        <b>{formatCurrency(fSettle)}</b>
+                        <em>{share(fSettle)}%</em></span>
+                    )}
                   </div>
                   <div className="ar-value-note">
                     <b>{formatCurrency(fTotal)}</b> of that has been invoiced so far

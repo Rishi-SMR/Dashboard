@@ -97,10 +97,11 @@ export function OverviewCharts() {
   // Striven but not yet funded by Lienstar / remitted by the distributors.
   const [piLien, setPiLien] = useState<PiLienstar | null>(null);
   const [vaRemit, setVaRemit] = useState<VaRemittances | null>(null);
-  useEffect(() => {
-    fetchPiLienstar().then(setPiLien).catch(() => setPiLien(null));
-    fetchVaRemittances().then(setVaRemit).catch(() => setVaRemit(null));
-  }, []);
+  // Whether the latest attempt FAILED — distinct from still loading, so the card
+  // says "Loading…" on a cold start rather than "unavailable".
+  const [piLienErr, setPiLienErr] = useState(false);
+  const [vaRemitErr, setVaRemitErr] = useState(false);
+  // Fetched inside load() below, so they follow the board's 90-second live sync.
   const [arView, setArView] = useState<'all' | 'ledger' | 'pi' | 'va'>('all');
   const [pl, setPl] = useState<PlResult | null>(null);
   const [so, setSo] = useState<SoResult | null>(null);
@@ -133,6 +134,13 @@ export function OverviewCharts() {
       // tile whenever it lands. Not awaited, so a slow or failed commission
       // derivation can never hold up the rest of the board.
       fetchCommission().then(setComm).catch(() => setComm(null));
+      // PI / VA RECEIVABLE PER THE MASTER FILE, refreshed WITH the board. It was
+      // fetched once on mount, so a request that failed (e.g. landing during a
+      // server restart) left AR Due reading "comparison unavailable" for the
+      // life of the tab. Not awaited, like commission; a failed refresh keeps
+      // the last good figures rather than blanking them.
+      fetchPiLienstar().then((r) => { if (r?.ok) { setPiLien(r); setPiLienErr(false); } else setPiLienErr(true); }).catch(() => setPiLienErr(true));
+      fetchVaRemittances().then((r) => { if (r?.ok) { setVaRemit(r); setVaRemitErr(false); } else setVaRemitErr(true); }).catch(() => setVaRemitErr(true));
       const [a, p, s, o, t, pay, ord, ex, apl, mf] = await Promise.all([
         fetchStrivenAR(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
         fetchStrivenTrends(), fetchStrivenPayments(),
@@ -1411,8 +1419,8 @@ export function OverviewCharts() {
               {arView === 'all' && (
                 <div className="rank-list is-scroll">
                   {[
-                    { k: 'pi' as const, ico: 'PI', name: 'PI · not funded by Lienstar', sub: recvPi ? `${recvPi.count} case${recvPi.count === 1 ? '' : 's'} · ${formatCurrency(recvPi.invoiced)} invoiced` : 'Master File unavailable', v: recvPi?.outstanding ?? 0, tint: VERTICAL_COLORS.PI },
-                    { k: 'va' as const, ico: 'VA', name: 'VA · not remitted', sub: recvVa ? `${recvVa.count} patient${recvVa.count === 1 ? '' : 's'} · ${formatCurrency(recvVa.invoiced)} invoiced` : 'Master File unavailable', v: recvVa?.outstanding ?? 0, tint: VERTICAL_COLORS.VA },
+                    { k: 'pi' as const, ico: 'PI', name: 'PI · not funded by Lienstar', sub: recvPi ? `${recvPi.count} case${recvPi.count === 1 ? '' : 's'} · ${formatCurrency(recvPi.invoiced)} invoiced` : piLienErr ? 'Master File unavailable · retrying' : 'Loading the Master File…', v: recvPi?.outstanding ?? 0, tint: VERTICAL_COLORS.PI },
+                    { k: 'va' as const, ico: 'VA', name: 'VA · not remitted', sub: recvVa ? `${recvVa.count} patient${recvVa.count === 1 ? '' : 's'} · ${formatCurrency(recvVa.invoiced)} invoiced` : vaRemitErr ? 'Master File unavailable · retrying' : 'Loading the Master File…', v: recvVa?.outstanding ?? 0, tint: VERTICAL_COLORS.VA },
                     { k: 'ledger' as const, ico: 'ST', name: 'Other programmes · Striven', sub: `${ledgerOther.length} open invoice${ledgerOther.length === 1 ? '' : 's'} · TriCare, DOL, unassigned`, v: ledgerOtherSum, tint: C.muted },
                   ].map((r) => (
                     <div key={r.k} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => setArView(r.k))}>
@@ -1445,7 +1453,13 @@ export function OverviewCharts() {
                       <span className="rk-val">{formatCurrency(r.outstanding)}</span>
                     </div>
                   ))}
-                  {(arView === 'pi' ? !recvPi : !recvVa) && <div className="muted-note">Master File comparison unavailable.</div>}
+                  {(arView === 'pi' ? !recvPi : !recvVa) && (
+                    <div className="muted-note">
+                      {(arView === 'pi' ? piLienErr : vaRemitErr)
+                        ? 'Master File comparison unavailable - retrying automatically every 90 seconds.'
+                        : 'Loading the Master File comparison… (the first load after a restart takes up to ~15 seconds)'}
+                    </div>
+                  )}
                   {(arView === 'pi' ? recvPi?.rows.length === 0 : recvVa?.rows.length === 0) && <div className="muted-note">Nothing outstanding.</div>}
                 </div>
               )}

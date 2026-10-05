@@ -368,7 +368,28 @@ const PART = {
 const STATUS_LABEL: Record<string, string> = {
   open: 'Open', paid: 'Paid', credited: 'Credit applied', 'zero-value': 'Zero value',
 };
-const statusLabel = (i: ArRegisterInvoice) => STATUS_LABEL[i.status] ?? i.status;
+/**
+ * VA'S FINAL STATUS IS THE REMITTANCE TAB'S (5 Oct 2026, on request) — the twin
+ * of the Lienstar check on PI. On VA the full case value is expected back (100%,
+ * not PI's 15%), so an invoice is Remitted only when the payout covers all of
+ * it. Striven's "Paid" says the ledger balance is nil, not that the distributor
+ * remitted the money.
+ */
+const REMIT_TEXT: Record<NonNullable<ArRegisterInvoice['remit']>['status'], string> = {
+  remitted: 'Remitted',
+  'part-remitted': 'Part remitted',
+  'not-remitted': 'Not remitted',
+  'no-order': '',
+};
+// "Not remitted" is split in two so the genuine gaps can be filtered on their
+// own: an invoice raised after the newest payment on the tab may simply not
+// have been entered yet, which is a different follow-up from an old one.
+const remitText = (i: ArRegisterInvoice) => {
+  if (!i.remit || i.status === 'zero-value') return '';
+  if (i.remit.status === 'not-remitted' && i.remit.afterLastRemit) return 'Not remitted (after last remittance)';
+  return REMIT_TEXT[i.remit.status];
+};
+const statusLabel = (i: ArRegisterInvoice) => remitText(i) || (STATUS_LABEL[i.status] ?? i.status);
 
 /**
  * Status → pill. `kind` decides before the amount does, because neither a
@@ -407,8 +428,27 @@ const statusLabel = (i: ArRegisterInvoice) => STATUS_LABEL[i.status] ?? i.status
  * and no balance; filing it under either Paid or Open would claim something
  * about money that was never owed.
  */
+/**
+ * THE FINAL PI STATUS IS LIENSTAR'S (5 Oct 2026, on request). Striven reads a
+ * PI invoice as paid when its ledger balance is nil, which does not say the
+ * money came from Lienstar. Where the server could check the invoice against
+ * the Master File's PI Lienstar Funding tab, that verdict is the status.
+ */
+const LIEN_TEXT: Record<NonNullable<ArRegisterInvoice['lienstar']>['status'], string> = {
+  funded: 'Funded (Lienstar)',
+  'full-15': 'Fully Invoiced (15% Funded)',
+  'part-funded': 'Part funded (Lienstar)',
+  'not-funded': 'Not funded',
+  'on-hold': 'Lienstar on hold',
+  rejected: 'Lienstar rejected',
+  'not-on-lienstar': 'Not on Lienstar',
+  'no-order': '',
+};
+const lienText = (i: ArRegisterInvoice) => (i.lienstar ? LIEN_TEXT[i.lienstar.status] : '');
+
 function piStatusText(i: ArRegisterInvoice): string {
   if (i.status === 'zero-value') return 'Zero value';
+  if (lienText(i)) return lienText(i);
   // NOTHING RECEIVED IS OPEN, WHATEVER THE BALANCE SAYS. Not a cent has arrived
   // — not even the advance — so the whole case is outstanding, and "open" is what
   // the rest of the register calls that.
@@ -428,6 +468,30 @@ function piStatusText(i: ArRegisterInvoice): string {
 function piStatusTag(i: ArRegisterInvoice): ReactNode {
   const label = piStatusText(i);
   if (label === 'Zero value') return <span className="pill-tag tag-muted">Zero value</span>;
+  const L = i.lienstar;
+  if (L && lienText(i)) {
+    const day = (s: string) => { const [y, m, d] = s.split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''; };
+    const ledger = i.status === 'open' ? 'Open' : i.status === 'credited' ? 'Credit applied' : 'Paid';
+    const tip = [
+      `Lienstar (Master File): ${L.lienStatus || 'no case'}${L.toBeFunded ? ` · ${formatCurrency(L.toBeFunded, true)} to be funded` : ''}${L.paidOn ? ` · paid ${L.paidOn}` : ''}${L.batch ? ` · batch ${L.batch}` : ''}`,
+      L.status === 'full-15'
+        ? `This invoice bills the full case value (${formatCurrency(i.total, true)}). Lienstar funded the 15% advance in full (${formatCurrency(L.received, true)}); the remaining ${formatCurrency(L.settlementBalance ?? 0, true)} arrives at case settlement.`
+        : `This invoice: ${formatCurrency(i.total, true)} billed · ${formatCurrency(L.received, true)} received · ${formatCurrency(L.outstanding, true)} not received`,
+      L.fundedBy.length ? `The case's funding was matched to ${L.fundedBy.join(', ')}.` : '',
+      `Striven ledger says: ${ledger}.`,
+    ].filter(Boolean).join('\n');
+    const tone = L.status === 'funded' || L.status === 'full-15' ? 'tag-ok' : L.status === 'part-funded' || L.status === 'on-hold' ? 'tag-warn' : 'tag-danger';
+    return (
+      <span title={tip} style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+        <span className={`pill-tag ${tone}`} style={{ fontWeight: 700 }}>{L.status === 'funded' ? '✓ ' : ''}{label}</span>
+        <span style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+          {L.status === 'full-15' ? `${formatCurrency(L.received, true)} funded${L.paidOn ? ` ${day(L.paidOn)}` : ''} · ${formatCurrency(L.settlementBalance ?? 0, true)} at settlement`
+            : L.status === 'funded' ? `${L.paidOn ? `paid ${day(L.paidOn)}` : 'funded'}${L.batch ? ` · batch ${L.batch}` : ''}`
+            : `${formatCurrency(L.outstanding, true)} not received${ledger === 'Paid' ? ' · Striven says Paid' : ''}`}
+        </span>
+      </span>
+    );
+  }
   if (label === 'Paid') return <span className="pill-tag tag-ok" style={{ fontWeight: 700 }}>✓ Paid</span>;
   // GREEN paid · AMBER partially paid · RED open, per the agreed key. The pill
   // grounds already carry those three, so the colour and the words say the same
@@ -437,8 +501,33 @@ function piStatusTag(i: ArRegisterInvoice): ReactNode {
     : <span className="pill-tag tag-danger" title="Nothing has been received on this invoice - not even the advance - so the whole total is outstanding.">Open</span>;
 }
 
+function remitTag(i: ArRegisterInvoice): ReactNode {
+  const R = i.remit!;
+  const day = (s: string) => { const [y, m, d] = String(s || '').split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''; };
+  const ledger = i.status === 'open' ? 'Open' : i.status === 'credited' ? 'Credit applied' : 'Paid';
+  const tip = [
+    `VA Remmittances (Master File): ${R.patientRemitted ? `${formatCurrency(R.patientRemitted, true)} remitted for this patient${R.payer ? ` by ${R.payer}` : ''}${R.lastPaid ? `, last paid ${R.lastPaid}` : ''}` : 'nothing remitted for this patient'}`,
+    `This invoice: ${formatCurrency(i.total, true)} billed (100% expected) · ${formatCurrency(R.received, true)} remitted · ${formatCurrency(R.outstanding, true)} not received`,
+    R.status === 'not-remitted' && R.afterLastRemit ? `Invoiced after the latest payment on the tab (${R.lastRemitOnTab}), so it may just not be entered yet.` : '',
+    R.flagged ? 'One of this patient\'s payout cells is formatted as a date on the tab and was read as the amount underneath.' : '',
+    `Striven ledger says: ${ledger}.`,
+  ].filter(Boolean).join('\n');
+  const tone = R.status === 'remitted' ? 'tag-ok' : R.status === 'part-remitted' || R.afterLastRemit ? 'tag-warn' : 'tag-danger';
+  return (
+    <span title={tip} style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+      <span className={`pill-tag ${tone}`} style={{ fontWeight: 700 }}>{R.status === 'remitted' ? '✓ ' : ''}{remitText(i)}</span>
+      <span style={{ fontSize: 10.5, color: 'var(--muted)' }}>
+        {R.status === 'remitted' ? `${R.lastPaid ? `paid ${day(R.lastPaid)}` : 'remitted'}${R.payer ? ` · ${R.payer.replace(/ International Inc$/, '')}` : ''}`
+          : R.status === 'part-remitted' ? `${formatCurrency(R.outstanding, true)} short`
+            : `${R.afterLastRemit ? 'after last remittance on tab' : `${formatCurrency(R.outstanding, true)} not received`}${ledger === 'Paid' ? ' · Striven says Paid' : ''}`}
+      </span>
+    </span>
+  );
+}
+
 function statusTag(i: ArRegisterInvoice): ReactNode {
   if (i.status === 'zero-value') return <span className="pill-tag tag-muted">Zero value</span>;
+  if (remitText(i)) return remitTag(i);
   if (i.status === 'open') return <span className="pill-tag tag-danger">Open</span>;
   // Settled by a customer credit rather than by a payment against this invoice.
   // Six rows, and the reason the raw balances and the AR tile differ by
@@ -798,6 +887,7 @@ export function ArSheetTab() {
         // the same two, or it is a different report of the same rows.
         rowIsPi(i)
           ? piStatusText(i)
+          : remitText(i) ? remitText(i)
           : i.status === 'credited' ? 'Paid (credit applied)' : i.status === 'zero-value' ? 'Zero value'
             : i.status === 'open' ? 'Open' : 'Paid',
         i.inSheet ? 'yes' : 'NO - Striven only',
@@ -2003,6 +2093,33 @@ export function ArSheetTab() {
                       onClick={() => { setSegment(k); setPage(1); }}>{label}</button>
                   ))}
               </div>
+
+              {/* FILTER BY FINAL STATUS (5 Oct 2026, on request). The tabs above
+                  are Striven's ledger; these are the statuses the Status column
+                  prints — Lienstar-verified on PI, remittance-verified on VA.
+                  One chip per status in view, with its count, toggling the SAME
+                  set as the column's Filter button, so the two never disagree.
+                  Several can be on at once; "All statuses" clears them. */}
+              {statusOpts.length > 1 && (
+                <div className="no-print" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.muted, marginRight: 2 }}>Status:</span>
+                  <button type="button" className={`ins-qtab${pickStatus.size === 0 ? ' on' : ''}`}
+                    onClick={() => { setPickStatus(new Set()); setPage(1); }}>All statuses</button>
+                  {statusOpts.map((o) => {
+                    const on = pickStatus.has(o.value);
+                    return (
+                      <button key={o.value} type="button" className={`ins-qtab${on ? ' on' : ''}`} aria-pressed={on}
+                        onClick={() => {
+                          const next = new Set(pickStatus);
+                          if (on) next.delete(o.value); else next.add(o.value);
+                          setPickStatus(next); setPage(1);
+                        }}>
+                        {o.value} <b style={{ marginLeft: 4 }}>{o.count}</b>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
 
               <div className="table-wrap">
                 <table className="data-table">

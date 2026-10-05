@@ -33,7 +33,18 @@ export function PiLienstarCard({ className = 'g12-12' }: { className?: string })
   const [open, setOpen] = useState<PiLienKind | null>(null);
   const [showExcluded, setShowExcluded] = useState(false);
   const [showNotApproved, setShowNotApproved] = useState(false);
-  useEffect(() => { fetchPiLienstar().then(setD).catch(() => setD({ ok: false, note: 'Could not load the comparison.' })); }, []);
+  // Refreshed every 90 seconds, like the rest of the board, so a request that
+  // failed once (e.g. during a server restart) recovers on its own. A failed
+  // refresh keeps the last good figures instead of blanking the card.
+  useEffect(() => {
+    let alive = true;
+    const pull = () => fetchPiLienstar()
+      .then((r) => { if (alive) setD((prev) => (r?.ok || !prev?.ok ? r : prev)); })
+      .catch(() => { if (alive) setD((prev) => (prev?.ok ? prev : { ok: false, note: 'Could not load the comparison - retrying.' })); });
+    pull();
+    const t = setInterval(pull, 90_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
 
   if (!d) {
     return <ChartCard className={className} title="PI · Striven vs Lienstar" sub="Loading the Master File…"><div className="muted-note">Loading…</div></ChartCard>;
