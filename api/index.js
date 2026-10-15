@@ -3,6 +3,7 @@
 // they are read only here, never sent to the browser. The frontend just calls
 // same-origin /api/* and gets back shaped, PHI-masked JSON.
 import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, findTerritoryLawFirms, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from './_striven.js';
+import { qbHandle } from './_qb.js';
 
 const cookieVal = (header, name) => {
   const m = (header || '').match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -25,6 +26,17 @@ export default async function handler(req, res) {
   const { gateEnabled } = await getAuth();
   const clientIp = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   let currentUser = null;
+
+  // ---- QuickBooks OAuth callback — Intuit redirects here after authorize.
+  // The registered redirect is /auth/callback (also accept /api/qb/callback).
+  // Handled BEFORE the gate: Intuit's redirect carries no session, and the
+  // OAuth `state` param is the CSRF guard. ----
+  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+    try {
+      const out = await qbHandle('/api/qb/callback', Object.fromEntries(url.searchParams));
+      if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
 
   // ---- access gate — always on: every route below serves patient-derived data ----
   if (gateEnabled) {
@@ -199,6 +211,15 @@ export default async function handler(req, res) {
   if (!OPEN_TO_REPS.has(pathname)) {
     const me = await getMe({ user: currentUser });
     if (me?.role !== 'admin') return res.status(403).json({ error: 'admin only' });
+  }
+
+  // ---- QuickBooks (connect + the P&L report) — admin only, read-only ----
+  if (pathname.startsWith('/api/qb/')) {
+    try {
+      const out = await qbHandle(pathname, Object.fromEntries(url.searchParams));
+      if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
+      if (out) return res.status(out.status ?? 200).json(out.json);
+    } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
   let fn = ROUTES[pathname];

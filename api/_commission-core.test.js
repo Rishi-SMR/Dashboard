@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   rateForDevice, classifyOrderLabel, commissionForOrder, splitByState,
   resolveIdentity, redactCommissionPayload, isCancelledStatus, reconcileToWorkbook,
-  fillVerticalFromSiblings,
+  fillVerticalFromSiblings, pickOrderForLine, closePatientKeys,
 } from './_commission-core.js';
 import { COMMISSION_PAID_THROUGH } from './_commission-config.js';
 
@@ -729,4 +729,71 @@ test('a DOL line folds to DOL, and a name that merely contains the letters does 
   assert.equal(verticalOfCommissionLine('VA Order'), 'VA');
   assert.equal(verticalOfCommissionLine('Tri-Care'), 'TriCare');
   assert.equal(verticalOfCommissionLine('Personal Injury'), 'PI');
+});
+
+// ── pickOrderForLine: a patient with more than one order ─────────────────────
+test('a repeat patient: the line takes the order carrying its device', () => {
+  const orders = [
+    { id: 94, date: '2026-05-11', items: ['VA SofPulse Lumbar'] },
+    { id: 669, date: '2026-09-17', items: ['VA Genesys Lumbar'] },
+  ];
+  assert.equal(pickOrderForLine({ item: 'GENESYS LUMBAR', month: '2026-09' }, orders)?.id, 669);
+  assert.equal(pickOrderForLine({ item: 'SofPulse Lumbar', month: '2026-03' }, orders)?.id, 94);
+});
+
+test('hand-typed device names still find their order', () => {
+  const orders = [
+    { id: 1, date: '2026-05-11', items: ['VA SofPulse Lumbar'] },
+    { id: 2, date: '2026-09-25', items: ['VA Genesys Lumbar'] },
+  ];
+  for (const item of ['GENESYS LUBMAR', 'GENEYS LUMBAR', 'GENESYSN LUMBAR']) {
+    assert.equal(pickOrderForLine({ item, month: '2026-09' }, orders)?.id, 2, item);
+  }
+  for (const item of ['SOFTPUSLSE LUMBAR', 'SOFPULSE LUMBAR', 'SOFTPULSE LUMABR']) {
+    assert.equal(pickOrderForLine({ item, month: '2026-06' }, orders)?.id, 1, item);
+  }
+});
+
+test('two orders for the same device are told apart by payout month', () => {
+  const orders = [
+    { id: 332, date: '2026-07-14', items: ['VA Genesys Lumbar'] },
+    { id: 800, date: '2026-09-29', items: ['VA Genesys Lumbar'] },
+  ];
+  assert.equal(pickOrderForLine({ item: 'GENESYS LUMBAR', month: '2026-07' }, orders)?.id, 332);
+  assert.equal(pickOrderForLine({ item: 'GENESYS LUMBAR', month: '2026-09' }, orders)?.id, 800);
+});
+
+test('a line nothing distinguishes stays unmatched rather than guessed', () => {
+  const same = [
+    { id: 1, date: '2026-07-14', items: ['VA Genesys Lumbar'] },
+    { id: 2, date: '2026-07-20', items: ['VA Genesys Lumbar'] },
+  ];
+  assert.equal(pickOrderForLine({ item: 'GENESYS LUMBAR', month: '2026-07' }, same), null);
+  // A device no candidate carries is not evidence for any of them.
+  const other = [
+    { id: 1, date: '2026-05-04', items: ['VA SofPulse Lumbar'] },
+    { id: 2, date: '2026-05-06', items: ['VA Micro Z Mini Glove Kit Large'] },
+  ];
+  assert.equal(pickOrderForLine({ item: 'GENESYS SHOULDER', month: '2026-05' }, other), null);
+});
+
+test('a single order is taken as before, and no orders is no match', () => {
+  const one = [{ id: 7, date: '2026-09-03', items: [] }];
+  assert.equal(pickOrderForLine({ item: 'GENESYS LUMBAR', month: '2026-09' }, one)?.id, 7);
+  assert.equal(pickOrderForLine({ item: 'GENESYS LUMBAR', month: '2026-09' }, []), null);
+});
+
+test('a near spelling nominates an order, and only the device confirms it', () => {
+  const keys = ['j. cargill', 'n. margis', 'd. dailey', 'h. bailey', 'm. ohara', 'm. sharp', 'b. mclaughlin', 'c. garciafigureoa'];
+  assert.deepEqual(closePatientKeys('j. cargil', keys), ['j. cargill']);
+  assert.deepEqual(closePatientKeys('d. daily', keys), ['d. dailey']);
+  assert.deepEqual(closePatientKeys('m. hara', keys), ['m. ohara']);
+  assert.deepEqual(closePatientKeys('b. mcglaughlin', keys), ['b. mclaughlin']);
+  assert.deepEqual(closePatientKeys('c. garciafigueroa', keys), ['c. garciafigureoa']);
+  assert.deepEqual(closePatientKeys('t. cargil', keys), []);           // another initial is another person
+  const order = [{ id: 9, date: '2026-09-10', items: ['VA Genesys Knee'] }];
+  assert.equal(pickOrderForLine({ item: 'GENESYS KNEE', month: '2026-09' }, order, { strict: true })?.id, 9);
+  // Same near-name, wrong device or a far-off month: not the same fitting.
+  assert.equal(pickOrderForLine({ item: 'GENESYS LUMBAR', month: '2026-09' }, order, { strict: true }), null);
+  assert.equal(pickOrderForLine({ item: 'GENESYS KNEE', month: '2026-05' }, order, { strict: true }), null);
 });

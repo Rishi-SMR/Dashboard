@@ -573,3 +573,123 @@ export function redactCommissionPayload(payload, viewer) {
 
   return out;
 }
+
+// ── WHICH OF A PATIENT'S ORDERS A COMMISSION LINE IS FOR ─────────────────────
+// The workbooks carry no order number, so a line joins to Striven on the
+// patient alone — and the join used to REFUSE any patient with more than one
+// order, on the reasoning that a name shared by two orders might be two people.
+// It almost never is. It is one patient who was fitted twice: a SofPulse in May
+// and a Genesys in September is the ordinary VA upgrade path, and by September
+// that described 40 of Alle Ann's 53 "Unmatched from Striven" lines — every one
+// of them a patient who was in Striven, twice.
+//
+// The line itself says which order it means. It names the DEVICE ("GENESYS
+// LUMBAR") and it sits in a payout MONTH, and the orders say what was on them
+// and when they were raised. So the candidates are scored on those two facts
+// and the line takes the winner — but ONLY a clear one. A tie, or a best
+// candidate that agrees with the line on nothing, stays unmatched: attaching a
+// rep's line to the wrong order is worse than saying the tie is missing,
+// because the order's vertical decides whether the line reads paid or due.
+//
+// THE WORKBOOKS ARE TYPED BY HAND. "GENESYS LUBMAR", "GENEYS LUMBAR",
+// "SOFTPUSLSE LUMBAR" and "GENESYSN LUMBAR" are all live rows, so words are
+// compared within a small edit distance rather than exactly. Short words
+// ("knee", "foot") are exempt — two edits is half of a four-letter word.
+const DEVICE_FAMILIES = ['genesys', 'sofpulse', 'onlux', 'microz', 'manaray', 'tens'];
+const BODY_PARTS = ['lumbar', 'knee', 'cervical', 'neck', 'shoulder', 'universal', 'foot', 'ankle', 'hip', 'wrist', 'elbow', 'glove', 'sock'];
+
+function editDistance(a, b) {
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** The vocabulary words a free-text device description mentions. */
+function deviceWords(text, vocab) {
+  // "Micro Z" is the one family written as two words.
+  const words = String(text ?? '').toLowerCase().replace(/micro\s*z/g, 'microz').split(/[^a-z]+/).filter(Boolean);
+  const out = new Set();
+  for (const w of words) {
+    for (const v of vocab) {
+      if (w === v || (w.length >= 5 && v.length >= 5 && editDistance(w, v) <= 2)) out.add(v);
+    }
+  }
+  return out;
+}
+
+const monthIndex = (ym) => {
+  const m = /^(\d{4})-(\d{2})/.exec(String(ym ?? ''));
+  return m ? Number(m[1]) * 12 + Number(m[2]) : null;
+};
+
+/**
+ * @param {{item?:string, month?:string|null}} line a commission line
+ * @param {Array<{id:any, date?:string|null, items?:string[]}>} candidates the
+ *   orders carrying this line's patient
+ * @param {{strict?:boolean}} [opts] strict: the candidates were found on a
+ *   NEAR spelling of the patient, so the name is no longer evidence by itself.
+ *   The order must then carry the line's device AND body part and have been
+ *   raised within a month of the payout month — even when it is the only one.
+ * @returns the one candidate the line clearly means, or null.
+ */
+export function pickOrderForLine(line, candidates, opts = {}) {
+  const list = (candidates || []).filter(Boolean);
+  if (list.length === 0) return null;
+  if (list.length === 1 && !opts.strict) return list[0];   // one order: nothing to choose between
+  const fam = deviceWords(line?.item, DEVICE_FAMILIES);
+  const body = deviceWords(line?.item, BODY_PARTS);
+  const at = monthIndex(line?.month);
+  const scored = list.map((c) => {
+    const text = (c.items || []).join(' ');
+    const cFam = deviceWords(text, DEVICE_FAMILIES);
+    const cBody = deviceWords(text, BODY_PARTS);
+    let evidence = 0, score = 0, gap = null;
+    // A named family the order does not carry counts AGAINST it: a Genesys
+    // line is not for the patient's SofPulse order however close the dates.
+    if (fam.size) { if ([...fam].some((f) => cFam.has(f))) { score += 4; evidence += 1; } else score -= 4; }
+    if (body.size && [...body].some((b) => cBody.has(b))) { score += 2; evidence += 1; }
+    // The month only ever breaks a tie between orders the device left level
+    // (two Genesys Lumbar orders, July and September). It is not evidence on
+    // its own: the first orders were all keyed into Striven in one week.
+    const d = at != null ? monthIndex(c.date) : null;
+    if (d != null) { gap = Math.abs(d - at); score += gap === 0 ? 2 : gap === 1 ? 1 : 0; }
+    return { c, score, evidence, gap };
+  }).sort((a, b) => b.score - a.score);
+  const [best, next] = scored;
+  if (opts.strict && !(best.evidence === 2 && best.gap != null && best.gap <= 1)) return null;
+  if (!best.evidence || (next && best.score <= next.score)) return null;
+  return best.c;
+}
+
+/**
+ * Patient keys ("j. cargill") that are a NEAR spelling of one ("j. cargil").
+ *
+ * The workbooks are typed from paperwork and Striven from the referral, so the
+ * same patient is "Daily" in one and "Dailey" in the other, "Hara" and "O'Hara",
+ * "Mcglaughlin" and "Mclaughlin". Same initial, surname one edit apart — two for
+ * a long surname, where a swapped pair of letters is the usual slip. This only
+ * NOMINATES orders; pickOrderForLine(…, { strict: true }) decides, on the device.
+ */
+export function closePatientKeys(key, keys) {
+  const split = (k) => {
+    const s = String(k ?? '').trim().toLowerCase();
+    return [s[0] ?? '', s.split(' ').slice(1).join('').replace(/[^a-z]/g, '')];
+  };
+  const [ini, sur] = split(key);
+  if (!ini || sur.length < 4) return [];
+  const max = sur.length >= 8 ? 2 : 1;
+  const out = [];
+  for (const k of keys || []) {
+    const [i2, s2] = split(k);
+    if (i2 !== ini || s2 === sur || Math.abs(s2.length - sur.length) > max) continue;
+    if (editDistance(s2, sur) <= max) out.push(k);
+  }
+  return out;
+}

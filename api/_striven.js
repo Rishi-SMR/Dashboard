@@ -26,6 +26,7 @@ import {
 import {
   commissionForOrder, splitByState, resolveIdentity,
   redactCommissionPayload, isCancelledStatus, reconcileToWorkbook, fillVerticalFromSiblings,
+  pickOrderForLine, closePatientKeys,
 } from './_commission-core.js';
 import { INVOICE_STATUS } from './invoice-status.js';
 
@@ -1988,35 +1989,163 @@ async function getPL(q = {}) {
   const bills = (await allBills()).filter((r) => inPeriod(r) && notVoid(r));
   const payments = (await allPayments()).filter((r) => notVoid(r) && inRange(r.paymentDate ?? r.dateCreated));
 
-  const revenue = round2(inv.reduce((s, r) => s + Number(r.invoiceTotal ?? 0), 0));
-  const expenses = round2(bills.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0));
-  const net = round2(revenue - expenses);
+  let revenue = round2(inv.reduce((s, r) => s + Number(r.invoiceTotal ?? 0), 0));
   const cashReceived = round2(payments.reduce((s, r) => s + Number(r.paymentAmount ?? 0), 0));
 
-  // Monthly Revenue / Expenses / Net.
+  // Monthly buckets for every statement line, so the month table and the
+  // statement above it are built from the same additions.
   const months = {};
-  const bump = (dateStr, key, amt) => { if (!dateStr) return; const m = String(dateStr).slice(0, 7); months[m] = months[m] || { month: m, revenue: 0, expenses: 0 }; months[m][key] += amt; };
-  for (const r of inv) bump(r.dateCreated, 'revenue', Number(r.invoiceTotal ?? 0));
-  for (const r of bills) bump(r.dateCreated, 'expenses', Number(r.totalAmount ?? 0));
+  const bump = (dateStr, key, amt) => {
+    if (!dateStr) return;
+    const m = String(dateStr).slice(0, 7);
+    months[m] = months[m] || { month: m, revenue: 0, cogs: 0, opex: 0, commission: 0 };
+    months[m][key] += amt;
+  };
+
+  // ── REVENUE, BY PROGRAMME ──────────────────────────────────────────────────
+  // An invoice carries no vertical of its own; it is resolved exactly as the AR
+  // register resolves it (invoiceVerticalMap), so the two pages agree on which
+  // programme earned what. Whatever resolves to nothing is shown as its own
+  // line rather than folded into a guess.
+  const vertMap = await invoiceVerticalMap().catch(() => ({ byInvoice: {}, byCustRef: new Map() }));
+  const progMap = {};
+  for (const r of inv) {
+    const no = String(r.txnNumber ?? r.id);
+    const prog = vertMap.byInvoice[no] || vertMap.byCustRef.get(`PT-${r.customer?.id}`) || 'Unassigned';
+    progMap[prog] = (progMap[prog] || 0) + Number(r.invoiceTotal ?? 0);
+    bump(r.dateCreated, 'revenue', Number(r.invoiceTotal ?? 0));
+  }
+  let revenueByProgram = Object.entries(progMap)
+    .map(([name, value]) => ({ name, value: round2(value) }))
+    .sort((a, b) => (a.name === 'Unassigned') - (b.name === 'Unassigned') || b.value - a.value);
+
+  // ── VENDOR COSTS: THE AP LEDGER, NOT STRIVEN'S BILLS ───────────────────────
+  // Striven holds 20 bills for the year; the accountant's AP Ledgers workbook
+  // holds 172. Expenses taken from Striven alone left out three quarters of
+  // what the suppliers actually invoiced and printed a 92% margin. The ledger
+  // is the book the payables are kept in, so it is the accrual source here,
+  // by bill date. The two cannot be added together — the same supplier invoice
+  // sits in both under different numbers — so Striven's bills are used only
+  // when the ledger cannot be read, and `sources.costs` says which it was.
+  //
+  // COST OF GOODS vs OPERATING: a supplier of devices is cost of goods; a
+  // consultancy is overhead. Classified by vendor name — anything matching
+  // "consult" is operating — and overridable without a deploy through the
+  // app_config key PL_VENDOR_CLASS: { "<name fragment>": "cogs" | "<opex label>" }.
+  const classRaw = String(await cfgValue('PL_VENDOR_CLASS', '')).trim();
+  let classOver = {};
+  if (classRaw) { try { const v = JSON.parse(classRaw); if (v && typeof v === 'object' && !Array.isArray(v)) classOver = v; } catch { /* defaults stand */ } }
+  const classOf = (vendor) => {
+    const v = String(vendor ?? '').toLowerCase();
+    for (const [frag, cls] of Object.entries(classOver)) if (frag && v.includes(String(frag).toLowerCase())) return String(cls);
+    return /consult/.test(v) ? 'Consulting & services' : 'cogs';
+  };
+  const ledger = await getApLedger().catch(() => null);
+  const useLedger = Boolean(ledger?.ok && ledger.bills?.length);
+  const costRows = useLedger
+    ? ledger.bills.filter((b) => inRange(b.date)).map((b) => ({ vendor: b.subLedger, date: b.date, amount: Number(b.total || 0) }))
+    : bills.map((r) => ({ vendor: r.vendor?.name ?? 'Unknown', date: r.dateCreated, amount: Number(r.totalAmount ?? 0) }));
+  const cogsVendor = {}, opexMap = {};
+  for (const c of costRows) {
+    const cls = classOf(c.vendor);
+    if (cls === 'cogs') { cogsVendor[c.vendor] = (cogsVendor[c.vendor] || 0) + c.amount; bump(c.date, 'cogs', c.amount); }
+    else { opexMap[cls] = opexMap[cls] || { name: cls, value: 0, vendors: {} }; opexMap[cls].value += c.amount; opexMap[cls].vendors[c.vendor] = (opexMap[cls].vendors[c.vendor] || 0) + c.amount; bump(c.date, 'opex', c.amount); }
+  }
+  const cogsByVendor = Object.entries(cogsVendor).map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value);
+  const cogs = round2(cogsByVendor.reduce((s, v) => s + v.value, 0));
+
+  // ── SALES COMMISSION ───────────────────────────────────────────────────────
+  // The largest cost the portal itself knows about, and it was not on the
+  // statement at all. Every signed-off commission line, paid or still due —
+  // accrual means the cost lands when it is earned, not when the cheque goes
+  // out. Bucketed by the line's commission month (its payout cycle's period),
+  // the same month the Commission page reports it under.
+  let commission = 0;
+  try {
+    const c = await getCommissionFor({ repName: null, role: 'admin' });
+    const lo = start.slice(0, 7), hi = end.slice(0, 7);
+    for (const r of c?.striven?.byRep ?? []) {
+      for (const l of r.lines ?? []) {
+        const mo = String(l.month ?? '');
+        if (!mo || mo < lo || mo > hi) continue;
+        commission += Number(l.comm || 0);
+        bump(`${mo}-01`, 'opex', Number(l.comm || 0));
+        bump(`${mo}-01`, 'commission', Number(l.comm || 0));
+      }
+    }
+  } catch { /* commission unreadable: the line is shown as unavailable, not as zero */ }
+  commission = round2(commission);
+  const opex = [
+    { name: 'Sales commission', value: commission, source: 'commission' },
+    ...Object.values(opexMap).map((o) => ({
+      name: o.name, value: round2(o.value), source: useLedger ? 'ap-ledger' : 'striven-bills',
+      vendors: Object.entries(o.vendors).map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value),
+    })),
+  ].filter((o) => o.value !== 0).sort((a, b) => b.value - a.value);
+  const opexTotal = round2(opex.reduce((s, o) => s + o.value, 0));
+
+  // ── SALES FROM QUICKBOOKS, WHEN IT IS CONNECTED ────────────────────────────
+  // QuickBooks is the books the accountant closes on, so its Income figure is
+  // the sales number this statement should agree with. Striven's invoice total
+  // is kept beside it (`strivenRevenue`) so the gap between the two systems is
+  // visible rather than silently replaced. Not connected, or QuickBooks
+  // unreachable: Striven's figure stands and `revenueSource` says so.
+  //
+  // Imported lazily: _qb.js imports this module, and a static import back would
+  // make the two load each other.
+  const strivenRevenue = revenue;
+  let revenueSource = 'striven', qbError = null;
+  try {
+    const { qbProfitAndLoss } = await import('./_qb.js');
+    const qb = await qbProfitAndLoss({ start, end });
+    if (qb?.income != null) {
+      revenueSource = 'quickbooks';
+      revenue = round2(qb.income);
+      revenueByProgram = qb.incomeAccounts ?? [{ name: 'Sales', value: revenue }];
+      for (const m of Object.values(months)) m.revenue = 0;
+      for (const p of qb.series ?? []) bump(`${p.month}-01`, 'revenue', Number(p.revenue || 0));
+    }
+  } catch (e) { qbError = String(e?.message ?? e); }
+
+  const grossProfit = round2(revenue - cogs);
+  const net = round2(grossProfit - opexTotal);
+  const expenses = round2(cogs + opexTotal);
+
   const series = Object.values(months)
-    .map((m) => ({ month: m.month, revenue: round2(m.revenue), expenses: round2(m.expenses), net: round2(m.revenue - m.expenses) }))
+    .map((m) => {
+      const gp = m.revenue - m.cogs;
+      return { month: m.month, revenue: round2(m.revenue), cogs: round2(m.cogs), grossProfit: round2(gp), opex: round2(m.opex), commission: round2(m.commission), expenses: round2(m.cogs + m.opex), net: round2(gp - m.opex) };
+    })
     .sort((a, b) => a.month.localeCompare(b.month));
 
-  // Expenses grouped by vendor (bill totals — not PHI).
+  // Costs by vendor, both sections together — what the vendor chart draws.
   const vmap = {};
-  for (const r of bills) { const v = r.vendor?.name ?? 'Unknown'; vmap[v] = (vmap[v] || 0) + Number(r.totalAmount ?? 0); }
+  for (const c of costRows) vmap[c.vendor] = (vmap[c.vendor] || 0) + c.amount;
   const byVendor = Object.entries(vmap).map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 12);
 
   return {
     periodFrom: `${start}T00:00:00`,
     periodTo: `${end}T00:00:00`,
-    revenue, expenses, net,
+    revenue, revenueByProgram,
+    revenueSource, strivenRevenue, qbError,
+    cogs, cogsByVendor,
+    grossProfit, grossMargin: revenue ? round2((grossProfit / revenue) * 100) : 0,
+    opex, opexTotal,
+    // `expenses` / `net` / `margin` keep their names for older callers: every
+    // cost on the statement, and what is left after all of it.
+    expenses, net,
     margin: revenue ? round2((net / revenue) * 100) : 0,
     cashReceived,
-    invoiceCount: inv.length, billCount: bills.length,
+    invoiceCount: inv.length, billCount: costRows.length,
     avgInvoice: inv.length ? round2(revenue / inv.length) : 0,
-    avgBill: bills.length ? round2(expenses / bills.length) : 0,
+    avgBill: costRows.length ? round2(round2(costRows.reduce((s, c) => s + c.amount, 0)) / costRows.length) : 0,
     series, byVendor,
+    sources: { costs: useLedger ? 'ap-ledger' : 'striven-bills', commission: commission !== 0 },
+    // WHAT THIS STATEMENT CANNOT SEE. Payroll, rent and the rest of overhead
+    // are kept outside Striven and outside the AP workbook, so no figure here
+    // includes them. Said on the page, so "net operating income" is never
+    // read as the bottom line of the business.
+    notCaptured: ['Payroll & wages', 'Rent & occupancy', 'Other overhead not billed through the AP ledger'],
     approximate: true,
   };
 }
@@ -3301,6 +3430,36 @@ export function monthOfPayoutCycle(cycle) {
   return cycleSettles(year, CYCLE_MON.indexOf(m[1].toLowerCase()));
 }
 
+// ── A PATIENT WITH MORE THAN ONE ORDER ───────────────────────────────────────
+// What each order had on it, by SO id — the evidence pickOrderForLine() needs to
+// tell a patient's SofPulse order from their later Genesys one. Empty when the
+// report is unreadable, which simply leaves a multi-order patient unresolved,
+// exactly as before.
+async function soItemNamesById() {
+  try {
+    const rpi = (await sbCacheRead('report_patient_items'))?.data?.orders || [];
+    return new Map(rpi.map((o) => [String(o.soId), (o.items || []).map((i) => String(i?.item ?? ''))]));
+  } catch { return new Map(); }
+}
+/**
+ * The `so` row a commission line means, out of the orders carrying its patient.
+ *
+ * A patient the book spells differently from Striven ("Daily" / "Dailey") has no
+ * orders under the book's spelling at all. Near spellings are then tried, and
+ * held to the strict test: the order must carry the line's own device.
+ */
+const soForLine = (line, patientKey, soByPatient, itemsBySoId) => {
+  const key = String(patientKey ?? '').trim().toLowerCase();
+  if (!key) return null;
+  const cand = (rows) => rows.map((o) => ({
+    id: o.id, date: o.dateCreated, items: itemsBySoId.get(String(o.id)) ?? [], row: o,
+  }));
+  const hit = soByPatient.get(key);
+  if (hit?.length) return pickOrderForLine(line, cand(hit))?.row ?? null;
+  const near = closePatientKeys(key, soByPatient.keys()).flatMap((k) => soByPatient.get(k) ?? []);
+  return pickOrderForLine(line, cand(near), { strict: true })?.row ?? null;
+};
+
 /**
  * Per-rep commission from the reconciliation sheet.
  *
@@ -3344,6 +3503,8 @@ export async function getCommissionRecon() {
       if (!key || !row) continue;
       soByPatient.set(key, [...(soByPatient.get(key) ?? []), row]);
     }
+
+    const itemsBySoId = await soItemNamesById();
 
     const rows = parseCsvRows(csv);
     const hIdx = rows.findIndex((r) => r.some((c) => /match status/i.test(String(c))));
@@ -3415,13 +3576,14 @@ export async function getCommissionRecon() {
       // initials-style number for some VA rows ("LCarpenter", "CBaham",
       // "MMoniz") that Striven never issued — those orders are numbered 442,
       // 443 and 447. The patient in the same cell does identify them, so it is
-      // used, but ONLY when it picks out exactly one order in the whole book:
-      // a surname shared by two patients must stay unresolved rather than
-      // attach a rep's commission to somebody else's order.
+      // used, but ONLY when it picks out one order clearly: a name whose orders
+      // the line's device and month cannot tell apart must stay unresolved
+      // rather than attach a rep's commission to somebody else's order.
       if (!so && matched) {
         const key = commInitialLastDisp(matched).trim().toLowerCase();
-        const hit = key ? soByPatient.get(key) : null;
-        if (hit && hit.length === 1) so = hit[0];
+        // More than one order is usually ONE patient fitted twice — the line's
+        // device and payout month say which. See pickOrderForLine().
+        so = soForLine({ item: r[C.item], month: monthOfPayoutCycle(r[C.cycle]) }, key, soByPatient, itemsBySoId);
       }
       e.lines.push({
         // '' rather than a guess when the sheet row ties to no live order —
@@ -3504,8 +3666,7 @@ export async function getCommissionRecon() {
           // from the same bucket is the only honest source for them.
           for (const a of added) {
             const sib = lines[0] ?? {};
-            const hit = soByPatient.get(String(a.patient).trim().toLowerCase());
-            const so = hit && hit.length === 1 ? hit[0] : null;
+            const so = soForLine({ item: a.item, month }, a.patient, soByPatient, itemsBySoId);
             e.lines.push({
               ref: so ? safeRef('SO', so.id, so.number) : '',
               patient: a.patient,
@@ -3799,8 +3960,8 @@ export async function getCommissionWorkbooks() {
       progBySoId = new Map(rpi.map((o) => [String(o.soId), String(o.program || '')]).filter(([, p]) => p));
     } catch { /* optional: falls back to the book's own vertical */ }
     // patient (initial + surname) → order(s). These workbooks carry no order
-    // number at all, so the patient is the only join available; a name shared
-    // by two orders stays unresolved rather than guessing which one paid.
+    // number at all, so the patient is the only join available; where a name
+    // has several orders, soForLine() picks by device and month or not at all.
     const soByPatient = new Map();
     for (const [soId, tag] of await soLabelsBySoId().catch(() => new Map())) {
       const key = String(tag?.patient ?? '').trim().toLowerCase();
@@ -3808,6 +3969,8 @@ export async function getCommissionWorkbooks() {
       if (!key || !row) continue;
       soByPatient.set(key, [...(soByPatient.get(key) ?? []), row]);
     }
+
+    const itemsBySoId = await soItemNamesById();
 
     const byRep = new Map();
     // rep → the vertical of the book their rows came from, the last resort for
@@ -3832,13 +3995,13 @@ export async function getCommissionWorkbooks() {
       for (const row of commissionBookRows(Buffer.from(buffers[bi]), w.rep)) {
         if (isExcludedRep(row.rep)) continue;
         // These workbooks carry no order number at all, so the patient is the
-        // only join available; a name shared by two orders stays unresolved
-        // rather than guessing which one paid.
+        // only join available.
         // A bonus ties to no order by design, so it is not offered to the join
         // — an empty key would match nothing anyway, and asking makes it look
         // like a lookup that failed.
-        const hit = row.bonus ? null : soByPatient.get(row.patient.trim().toLowerCase());
-        const so = hit && hit.length === 1 ? hit[0] : null;
+        // A patient with two orders is nearly always one patient fitted twice;
+        // the line's device and payout month say which order it is for.
+        const so = row.bonus ? null : soForLine(row, row.patient, soByPatient, itemsBySoId);
 
         const e = byRep.get(row.rep) ?? { rep: row.rep, payableTotal: 0, lines: [] };
         // The matched order's own programme. Empty where nothing matched — the
