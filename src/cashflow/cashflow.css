@@ -687,6 +687,30 @@ code {
 .pl-line.pl-sub .lbl, .pl-line.pl-sub .val, .pl-line.pl-sub .pct { color: var(--muted); font-weight: 600; }
 /* A row that opens its own breakdown. */
 .pl-line.pl-click { cursor: pointer; border-radius: 8px; }
+/* Statement sections: a heading per section, its lines indented under it, and a
+   subtotal that closes it. */
+.pl-sec { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 18px; padding: 6px 4px 4px; font-size: 15px; font-weight: 800; color: var(--text); }
+.pl-step { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 800; }
+.pl-hint { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.pl-line.pl-final { background: var(--accent-soft); border-radius: 10px; padding-left: 10px; padding-right: 10px; margin-top: 6px; }
+.qb-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; line-height: 1.45; }
+.qb-banner.ok { background: #ECFDF5; border: 1px solid #A7F3D0; color: #065F46; }
+.qb-banner.warn { background: #FFF7ED; border: 1px solid #FED7AA; color: #9A3412; }
+.qb-banner .btn { background: #2CA01C; color: #fff; text-decoration: none; white-space: nowrap; }
+.pl-note { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #FFF7ED; border: 1px solid #FED7AA; color: #9A3412; font-size: 13px; line-height: 1.45; }
+.dollar-split { padding: 16px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface, #fff); }
+.ds-title { font-weight: 800; font-size: 14px; margin-bottom: 12px; color: var(--text); }
+.ds-row { margin-bottom: 11px; }
+.ds-lbl { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted-strong); margin-bottom: 4px; }
+.ds-lbl b { color: var(--text); font-variant-numeric: tabular-nums; }
+.ds-track { height: 10px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.ds-bar { height: 100%; border-radius: 999px; }
+.ds-foot { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.pl-line.pl-indent { padding-top: 8px; padding-bottom: 8px; font-size: 13.5px; }
+.pl-line.pl-indent .lbl { padding-left: 16px; }
+.pl-line.pl-indent .val { font-weight: 600; }
+.pl-line.pl-subtotal .lbl { font-weight: 700; color: var(--text); }
+.pl-line.pl-subtotal { border-top: 1px solid var(--border); }
 .pl-line.pl-click:hover { background: var(--accent-soft); }
 .pl-line.pl-click:hover .lbl { color: var(--accent); }
 

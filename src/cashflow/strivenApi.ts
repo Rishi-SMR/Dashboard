@@ -171,7 +171,7 @@ export type ApResult = { totalOpen: number; count: number; aging: Aging; bills: 
 export type GlAccount = { id: number; name: string; extendedName?: string; type: string; number: string; parent?: string; canPost?: boolean; reconcilable?: boolean; active: boolean };
 export type AccountsResult = { count: number; accounts: GlAccount[]; balancesAvailable?: boolean; note?: string };
 
-export type PlMonth = { month: string; revenue: number; expenses: number; net: number };
+export type PlMonth = { month: string; revenue: number; expenses: number; net: number; cogs?: number; grossProfit?: number; opex?: number; commission?: number };
 /**
  * THE PERIOD BOTH P&L ENDPOINTS TAKE.
  *
@@ -195,6 +195,27 @@ export type PlResult = {
   revenue: number; expenses: number; net: number; margin: number; cashReceived: number;
   invoiceCount: number; billCount: number; avgInvoice: number; avgBill: number;
   series: PlMonth[]; byVendor: { name: string; value: number }[]; approximate: boolean;
+  /** The statement's sections. `expenses` above is cogs + opexTotal and `net`
+   *  is what is left after both — net OPERATING income, see `notCaptured`. */
+  revenueByProgram?: { name: string; value: number }[];
+  /** Where Sales came from: QuickBooks' Income (by income account) when it is
+   *  connected, Striven's invoices (by program) otherwise. */
+  revenueSource?: 'quickbooks' | 'striven';
+  /** Striven's invoice total for the same period, kept for comparison. */
+  strivenRevenue?: number;
+  /** Why QuickBooks was not used, when it was not. */
+  qbError?: string | null;
+  cogs?: number;
+  cogsByVendor?: { name: string; value: number }[];
+  grossProfit?: number;
+  grossMargin?: number;
+  opex?: { name: string; value: number; source: 'commission' | 'ap-ledger' | 'striven-bills'; vendors?: { name: string; value: number }[] }[];
+  opexTotal?: number;
+  /** Where vendor costs came from: the AP Ledgers workbook, or Striven's bills
+   *  when the workbook could not be read. */
+  sources?: { costs: 'ap-ledger' | 'striven-bills'; commission: boolean };
+  /** Costs no source available to the portal records — named on the page. */
+  notCaptured?: string[];
 };
 
 export const fetchStrivenStatus = () => get<StrivenStatus>('/api/status');
