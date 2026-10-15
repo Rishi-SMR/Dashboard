@@ -4,6 +4,7 @@
 // two never drift). Credentials load from striven-server/.env. Run: `npm start`.
 import http from 'node:http';
 import { ROUTES, DYNAMIC, getAuth, login, verifySession, logPhiAccess, refreshAll, getCacheHealth, refreshTokenOk, getMe, getCommission, getCommissionFor, viewerFor, getOrderAnalytics, getDeviceMix, getPiStages, setPiStage, getRepOverview, getRepTerritories, findTerritoryLawFirms, getSODetailFor, listDashboardViews, saveDashboardView, deleteDashboardView } from '../api/_striven.js';
+import { qbHandle } from '../api/_qb.js';
 
 const PORT = Number(process.env.PORT || 4747);
 const cookieVal = (header, name) => {
@@ -40,6 +41,16 @@ const server = http.createServer(async (req, res) => {
   const { gateEnabled } = await getAuth();
   const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
   let currentUser = null;
+
+  // QuickBooks OAuth callback (registered redirect /auth/callback) — before the gate.
+  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+    try {
+      const out = await qbHandle('/api/qb/callback', Object.fromEntries(reqUrl.searchParams));
+      if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
 
   if (gateEnabled) {
     if (pathname === '/api/login' && req.method === 'POST') {
@@ -255,6 +266,17 @@ const server = http.createServer(async (req, res) => {
   if (!OPEN_TO_REPS.has(pathname)) {
     const me = await getMe({ user: currentUser });
     if (me?.role !== 'admin') { res.writeHead(403, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'admin only' })); }
+  }
+
+  // QuickBooks (connect + the P&L report) — admin only, read-only.
+  if (pathname.startsWith('/api/qb/')) {
+    try {
+      const out = await qbHandle(pathname, Object.fromEntries(reqUrl.searchParams));
+      if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
+      if (out) { res.writeHead(out.status ?? 200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(out.json)); }
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));
+    }
   }
 
   let fn = ROUTES[pathname];
