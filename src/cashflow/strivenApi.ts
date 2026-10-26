@@ -166,7 +166,11 @@ export type PiBook = {
 };
 export type ArResult = { totalOpen: number; count: number; aging: Aging; invoices: ArInvoice[]; unappliedCredits?: number; voidedExcluded?: number; pending?: ArPending | null;
   /** The PI lien in its four tranches. `pending.pi` above is the fourth. */
-  piBook?: PiBook | null };
+  piBook?: PiBook | null;
+  /** Served from the last complete build because the order links were unreachable. */
+  stale?: boolean; staleNote?: string;
+  /** Built WITHOUT the order links (no earlier good build to fall back on). */
+  degraded?: string };
 
 export type ApBill = { id: number; number: string; vendor: string; vendorId: number | null; dueDate: string | null; total: number; open: number; currency: string };
 export type ApResult = { totalOpen: number; count: number; aging: Aging; bills: ApBill[] };
@@ -237,6 +241,18 @@ export type QbPlResult = {
   categories: QbCategory[]; series: QbPlMonth[];
 };
 export const fetchQbPL = (period?: PlPeriod) => get<QbPlResult>(`/api/qb/pl${periodQuery(period)}`);
+/** MONEY RECEIVED IN THE BANK, per QuickBooks' General Ledger on the bank
+ *  accounts: every deposit-side line, transfers between own accounts and loan
+ *  proceeds left out (and totalled). See qbBankDeposits on the server. */
+export type QbBankDeposit = { date: string; type: string; name: string; memo: string; account: string; amount: number; source: string };
+export type QbBankDeposits = {
+  ok: boolean; periodFrom?: string; periodTo?: string; accounts: string[];
+  total: number; count: number;
+  byMonth: { month: string; amount: number; count: number }[];
+  bySource: { name: string; amount: number; count: number }[];
+  deposits: QbBankDeposit[]; transfersExcluded: number; loansExcluded?: number; loans?: QbBankDeposit[];
+};
+export const fetchQbBankDeposits = (period?: PlPeriod) => get<QbBankDeposits>(`/api/qb/bank-deposits${periodQuery(period)}`);
 
 export const fetchStrivenStatus = () => get<StrivenStatus>('/api/status');
 export const fetchStrivenAR = () => get<ArResult>('/api/ar');
@@ -372,7 +388,9 @@ export type PiLienstar = {
   receivable?: { count: number; outstanding: number; invoiced: number; received: number; overFunded: number;
     /** Cases invoiced at full value with the 15% advance funded — not receivable. */
     fullInvoiced15?: { count: number; funded: number; settlementBalance: number };
-    rows: { patient: string; soId: string; ref: string; lawFirm: string; dueDate?: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
+    rows: { patient: string; soId: string; ref: string; lawFirm: string; dueDate?: string; invoiced: number; received: number; outstanding: number; reason: string;
+      /** Final status against the Lienstar tab, and the Lienstar row's own state. */
+      status?: string; lienStatus?: string; paidOn?: string; batch?: string }[] };
 };
 export const fetchPiLienstar = () => get<PiLienstar>('/api/pi-lienstar');
 
@@ -401,8 +419,14 @@ export type VaRemittances = {
   rows?: VaRemitRow[];
   /** Invoiced in Striven, not yet remitted, per patient. */
   receivable?: { count: number; outstanding: number; invoiced: number; received: number; overRemitted: number;
-    rows: { patient: string; orders: { soId: string; ref: string; status: string; date?: string; dueDate?: string; invoiced?: number; remitted?: number; state?: string }[]; payer: string; lastPaid: string; invoiced: number; received: number; outstanding: number; reason: string }[] };
+    rows: { patient: string; orders: { soId: string; ref: string; status: string; date?: string; dueDate?: string; invoiced?: number; remitted?: number; state?: string }[]; payer: string; lastPaid: string; invoiced: number; received: number; outstanding: number; reason: string }[];
+    /** The same money ORDER BY ORDER, with each order's final status. */
+    orderRows?: VaOrderDue[];
+    /** Patient differences under $2 treated as remittance rounding, not owed. */
+    roundingExcluded?: number };
 };
+export type VaOrderDue = { soId: string; ref: string; patient: string; date?: string; dueDate?: string; payer: string; lastPaid: string;
+  invoiced: number; received: number; outstanding: number; status: string };
 export const fetchVaRemittances = () => get<VaRemittances>('/api/va-remittances');
 
 /** AR REGISTER — the invoice book behind the AR tab.
