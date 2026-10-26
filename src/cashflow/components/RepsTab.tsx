@@ -82,6 +82,16 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
   // Changing the previewed rep drops the current payload FIRST, so no figure
   // from the previous identity can render while the new one is in flight.
   useEffect(() => { setData(null); setSel(null); load(); }, [viewAs]);
+  // LIVE, LIKE EVERY OTHER BOARD (26 Oct 2026). This page loaded once and never
+  // again, so a change on the server — September's commission marked paid —
+  // stayed invisible here until someone pressed Refresh, while "updated 28s
+  // ago" made the stale figures look current. Silent: a failed refresh keeps the
+  // last good payload. Re-armed per previewed rep, so it reloads the right one.
+  useEffect(() => {
+    const t = setInterval(() => load(true), 90_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewAs]);
   useEffect(() => { fetchMe().then(setMe).catch(() => setMe(null)); }, []);
   // THE LOGIN DECIDES, NOT THE PROFILE.
   //
