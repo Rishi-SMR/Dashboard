@@ -42,10 +42,15 @@ const server = http.createServer(async (req, res) => {
   const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim();
   let currentUser = null;
 
-  // QuickBooks OAuth callback (registered redirect /auth/callback) — before the gate.
-  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+  // QuickBooks OAuth callback (registered redirect /auth/connect), before the gate.
+  // Opened bare, /auth/connect starts the flow through the gated /api/qb/connect.
+  if (pathname === '/auth/connect' || pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+    const q = Object.fromEntries(reqUrl.searchParams);
+    if (pathname === '/auth/connect' && !q.code && !q.state && !q.error) {
+      res.writeHead(302, { Location: '/api/qb/connect' }); return res.end();
+    }
     try {
-      const out = await qbHandle('/api/qb/callback', Object.fromEntries(reqUrl.searchParams));
+      const out = await qbHandle('/api/qb/callback', q);
       if (out?.redirect) { res.writeHead(302, { Location: out.redirect }); return res.end(); }
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: e.message }));

@@ -27,13 +27,20 @@ export default async function handler(req, res) {
   const clientIp = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   let currentUser = null;
 
-  // ---- QuickBooks OAuth callback — Intuit redirects here after authorize.
-  // The registered redirect is /auth/callback (also accept /api/qb/callback).
+  // ---- QuickBooks OAuth callback: Intuit redirects here after authorize.
+  // The registered redirect is https://www.smr-board.com/auth/connect (also
+  // accept /auth/callback and /api/qb/callback); vercel.json routes /auth/* here.
   // Handled BEFORE the gate: Intuit's redirect carries no session, and the
   // OAuth `state` param is the CSRF guard. ----
-  if (pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+  if (pathname === '/auth/connect' || pathname === '/auth/callback' || pathname === '/api/qb/callback') {
+    const q = Object.fromEntries(url.searchParams);
+    // Opened bare, /auth/connect STARTS the flow, as it did on the old dashboard.
+    // Starting is behind the login gate, so hand it to /api/qb/connect.
+    if (pathname === '/auth/connect' && !q.code && !q.state && !q.error) {
+      res.statusCode = 302; res.setHeader('Location', '/api/qb/connect'); return res.end();
+    }
     try {
-      const out = await qbHandle('/api/qb/callback', Object.fromEntries(url.searchParams));
+      const out = await qbHandle('/api/qb/callback', q);
       if (out?.redirect) { res.statusCode = 302; res.setHeader('Location', out.redirect); return res.end(); }
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
