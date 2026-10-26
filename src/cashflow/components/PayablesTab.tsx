@@ -303,7 +303,7 @@ export function PayablesTab() {
   });
   const explainAp = () => setDrill({
     title: 'AP Open',
-    sub: `Unpaid balance across every open vendor bill, split by days past due · ${mfReady ? 'Master File AP tab' : useLedger ? 'AP ledger sheet' : 'AP sheet unavailable'} · as of ${asOfStr}`,
+    sub: `Unpaid balance across every open vendor bill, split by days past due · ${mfReady ? 'Master File AP tab' : useLedger ? 'Master File AP tab' : 'Master File AP tab unavailable'} · as of ${asOfStr}`,
     ...kv([
       ...AGING_LABELS.map((b) => ({ k: dueLabel(b.label), v: formatCurrency(agingEff[b.key] || 0, true) })),
       // The buckets add to the BILLS, and AP Open is net of credit notes — so
@@ -370,7 +370,7 @@ export function PayablesTab() {
   // question the vendor summary on the card already answers better.
   const explainPaid = () => setDrill({
     title: 'Bill Payment Details',
-    sub: `Every payment ${mfReady ? 'in the Master File AP tab (Amount Paid)' : "in the AP ledger's Debit column"} · ${paidRows.length} payment${paidRows.length === 1 ? '' : 's'} across ${paidVendors.length} vendor${paidVendors.length === 1 ? '' : 's'} · ${formatCurrency(paidTotal)}${
+    sub: `Every payment ${mfReady ? 'in the Master File AP tab (Amount Paid)' : 'in the Master File AP tab (Amount Paid)'} · ${paidRows.length} payment${paidRows.length === 1 ? '' : 's'} across ${paidVendors.length} vendor${paidVendors.length === 1 ? '' : 's'} · ${formatCurrency(paidTotal)}${
       paidTies
         ? ' · ledger ties: the debits match what the bills imply was settled'
         : ` · ledger differs: ${formatCurrency(apl?.totals?.paidImplied ?? 0)} implied by the bills`
@@ -391,7 +391,7 @@ export function PayablesTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Payables</h1>
           <div className="page-sub">
-            <span className="live-dot" /> {mfReady ? 'Master File' : useLedger ? 'AP ledger' : 'AP sheet unavailable'} · {ready ? `${apOpenBills} open bills` : 'loading…'}{agoText ? ` · updated ${agoText}` : ''}
+            <span className="live-dot" /> {mfReady ? 'Master File' : useLedger ? 'Master File' : 'Master File AP tab unavailable'} · {ready ? `${apOpenBills} open bills` : 'loading…'}{agoText ? ` · updated ${agoText}` : ''}
           </div>
         </div>
         <div className="ov-headright">
@@ -405,7 +405,7 @@ export function PayablesTab() {
 
       {error && <div className="error">{error}</div>}
       {loading && !ready && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
-      {ready && !useLedger && <div className="error">The AP ledger sheet could not be read{apl?.note ? ` - ${apl.note}` : ''}. AP is taken from that sheet only, so open bills and aging are not shown until it is reachable.</div>}
+      {ready && !useLedger && <div className="error">The Master File AP tab could not be read{apl?.note ? ` - ${apl.note}` : ''}. AP is taken from that sheet only, so open bills and aging are not shown until it is reachable.</div>}
 
       {ready && (
         <>
@@ -423,7 +423,7 @@ export function PayablesTab() {
                 Open Invoices tile on Receivables. */}
             <KpiR ico="clip" tint="#16A34A" label="# Open Bills" value={apOpenBills}
               deltaText="awaiting payment"
-              foot={mfReady ? 'Master File · Unpaid bills' : useLedger ? 'AP ledger sheet' : 'AP sheet unavailable'}
+              foot={mfReady ? 'Master File · Unpaid bills' : useLedger ? 'Master File AP tab' : 'Master File AP tab unavailable'}
               onClick={() => { setQuery(''); setDueF('All'); setPage(1); billsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
             <KpiR ico="box" tint="#7C3AED" label="PO Total" value={po?.totalValue ?? 0} format={formatCurrency}
               deltaText={`${po?.count ?? 0} active POs`} foot={po?.cancelledCount ? `${po.cancelledCount} cancelled excluded` : 'active only'} onClick={explainPo} />
@@ -432,7 +432,7 @@ export function PayablesTab() {
                 a tile and a card apart. */}
             <KpiR ico="wallet" tint="#D97706" label="Bills Paid" value={paidTotal} format={formatCurrency}
               deltaText={`${paidRows.length} payment${paidRows.length === 1 ? '' : 's'}`}
-              foot={mfReady ? 'Master File · Amount Paid' : 'AP ledger · Debit column'} onClick={explainPaid} />
+              foot={mfReady ? 'Master File · Amount Paid' : 'Master File · Amount Paid'} onClick={explainPaid} />
           </div>
 
           <div className="exec-grid12">

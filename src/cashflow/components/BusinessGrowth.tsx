@@ -6,7 +6,7 @@ import { C, gridProps, axisProps, tooltipStyle, compactMoney, monthLabel as axis
 import { LegendDots } from '../chartKit';
 import { formatCurrency } from '../format';
 import { monthLabel, thisMonthKey } from './MonthSelect';
-import { fetchStrivenPL } from '../strivenApi';
+import { fetchQbPL } from '../strivenApi';
 
 /**
  * BUSINESS GROWTH, MONTH BY MONTH — the company's own line on the team board.
@@ -21,7 +21,7 @@ import { fetchStrivenPL } from '../strivenApi';
  * be cut from one book or the ratio is meaningless: putting P&L profit over the
  * ORDER BOOK's revenue (the number in the tiles above, $1.38M against the
  * accounting book's $564k) would print a margin no statement supports. So this
- * card reads the P&L — Striven invoices as revenue, bills as expense — for both,
+ * card reads the QuickBooks P&L — income as revenue, net income as profit — for both,
  * and says so in its own subtitle rather than leaving the reader to assume it
  * matches the tiles. It does not, and it is not meant to.
  *
@@ -86,7 +86,8 @@ export function BusinessGrowth() {
           return { month: m.month, revenue: Number(m.revenue) || 0, net, running, netLine: running ? null : net };
         });
       try {
-        const p = await fetchStrivenPL();
+        // QuickBooks' P&L, year to date, one point per month — the books, live.
+        const p = await fetchQbPL();
         if (!alive) return;
         setRows(asRows(p.series ?? []));
       } catch { if (alive) setRows([]); }
@@ -126,7 +127,7 @@ export function BusinessGrowth() {
           <h2 className="section-title">Business growth</h2>
           <div className="section-sub">
             Revenue and net profit each month, accrual basis, from{' '}
-            the <b>Striven</b> P&amp;L — invoices as revenue, bills as expense.
+            the <b>QuickBooks</b> P&amp;L — income as revenue, net income as profit.
             Both come off the same statement, so the margin is the statement's own.
             Bars are each month's revenue; the curve is net profit across them.
             This is a different book from the order counts above and will not match them.

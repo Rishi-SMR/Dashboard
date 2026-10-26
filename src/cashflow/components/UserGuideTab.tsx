@@ -105,7 +105,7 @@ const GLOSSARY: Entry[] = [
   {
     term: 'AP Open', aka: ['payables', 'open bills'], cat: 'Payables',
     def: 'What the business still owes its vendors on bills that have been received.',
-    basis: 'billed − paid − credit notes, from the AP ledger sheet',
+    basis: 'billed − paid − credit notes, from the Master File AP tab',
     note: 'The AP LEDGER SHEET is the real book here, not Striven: the sheet carries 133 bills where Striven carries four. Striven’s figure is kept beside it rather than discarded.',
     locs: [
       { view: 'payables', tab: 'Payables › AP Overview', section: 'AP Open · Open Bills' },
@@ -146,8 +146,8 @@ const GLOSSARY: Entry[] = [
   {
     term: 'Bills Paid', cat: 'Payables',
     def: 'Vendor bills that have been settled.',
-    basis: 'Σ of the AP ledger sheet’s Debit column\n(Striven’s own figure = Σ credit-card charges only)',
-    note: 'Striven’s record is CARD CHARGES ONLY - a bill paid by cheque or ACH never appears in it. That is why the totals come from the ledger sheet, which records all of them.',
+    basis: 'Σ of the Master File AP tab’s Amount Paid column\n(Striven’s own figure = Σ credit-card charges only)',
+    note: 'Striven’s record is CARD CHARGES ONLY - a bill paid by cheque or ACH never appears in it. That is why the totals come from the Master File AP tab, which records all of them.',
     locs: [
       { view: 'payables', tab: 'Payables › AP Overview', section: 'Bills Paid' },
       { view: 'accounts', tab: 'Accounts', section: 'Bill Payments: Paid', differs: 'Same figure, reached from the accounting side.' },
@@ -407,7 +407,7 @@ const GLOSSARY: Entry[] = [
   },
   {
     term: 'Sub-ledger', cat: 'Payables',
-    def: 'One vendor’s block of the AP ledger sheet - their bills, their payments and their running outstanding.',
+    def: 'One vendor’s rows in the Master File AP tab - their bills, their payments and their running outstanding.',
     note: 'Payments with no invoice on the sheet to account for them are surfaced rather than netted away: obtain the bill and the row reconciles.',
     locs: [{ view: 'apsheet', tab: 'Payables › AP Register', section: 'SUB-LEDGER SUMMARY' }],
   },

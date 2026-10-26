@@ -79,6 +79,12 @@ type PiRow = {
   patient: string; payer: string;
   caseValue: number; amount: number;
   joined: boolean; overRate: boolean;
+  /** The order's value in Striven today, and what it was invoiced at — for the
+   *  case-value-difference remark. Absent on section 3's uninvoiced orders. */
+  valueNow?: number | null; invoiced?: number;
+  /** Why this invoice is not the plain 15% advance — a short tag and the exact
+   *  reason, worked out from the order, its other invoices and Lienstar. */
+  remark?: { tag: string; text: string } | null;
   status: ReactNode;
 };
 
@@ -108,6 +114,14 @@ type PiSectionDef = {
  * only thing that tells them apart.
  */
 function PiRowFlags({ r }: { r: PiRow }) {
+  // CASE VALUE DIFFERENCE. Striven's order is worth something else today than
+  // the cached value this row was worked from (an order edited after the
+  // invoice). Shown as a remark with the difference, and the "more than 15%"
+  // tag is only kept if the invoice is over 15% of TODAY's value too — SO-49's
+  // #199 is 14.3% of its current $15,187, not "over 15%" of a stale $8,492.
+  const now = r.valueNow ?? null;
+  const diff = now != null ? Math.round((now - r.caseValue) * 100) / 100 : 0;
+  const valueChanged = r.joined && now != null && Math.abs(diff) >= 1;
   return (
     <>
       {!r.joined && (
@@ -124,12 +138,18 @@ function PiRowFlags({ r }: { r: PiRow }) {
           at it there. `white-space: nowrap` because the phrase is four words in
           a cell that already sets nowrap on the invoice number beside it, and a
           badge that wrapped mid-sentence would read as two tags. */}
-      {r.overRate && (
-        <span className="pill-tag tag-warn" style={{ marginLeft: 6, whiteSpace: 'nowrap' }}
-          title="Striven billed more than 15% of the order behind this invoice. Either the whole bill was raised instead of the advance, or the invoice is matched to the wrong order - both are worth checking in Striven.">
-          Invoiced more than 15% on Striven
+      {valueChanged && (
+        <span className="pill-tag tag-info" style={{ marginLeft: 6, whiteSpace: 'nowrap' }}
+          title={`The sales order is ${formatCurrency(now!)} in Striven today; this row's figures use ${formatCurrency(r.caseValue)} from an older copy of the order. Invoiced ${formatCurrency(r.invoiced ?? 0)} = ${now ? (((r.invoiced ?? 0) / now) * 100).toFixed(1) : '-'}% of the current value.`}>
+          Case value {diff > 0 ? '+' : '−'}{formatCurrency(Math.abs(diff))} · now {formatCurrency(now!)}
         </span>
       )}
+      {r.remark?.tag && (
+        <span className="pill-tag tag-warn" style={{ marginLeft: 6, whiteSpace: 'nowrap' }} title={r.remark.text}>
+          {r.remark.tag}
+        </span>
+      )}
+      {r.remark?.text && <div className="pi-remark">{r.remark.text}</div>}
     </>
   );
 }
@@ -294,31 +314,107 @@ export function PiBook({ ar }: { ar: ArResult | null }) {
    * answers teaches a reader to distrust the other three.
    */
   const piSections = useMemo<PiSectionDef[]>(() => {
+    // ── WHY AN INVOICE IS NOT THE PLAIN 15% ADVANCE ──────────────────────────
+    // Every PI invoice should be 15% of its case. Where one is not, the row
+    // says exactly why instead of a generic "more than 15%" badge: the full
+    // case value billed, a share other than 15%, a case value changed after
+    // invoicing, other invoices on the same order — and what Lienstar did.
+    const invBySo = new Map<string, { number: string; invoiced: number }[]>();
+    const seenInv = new Set<number>();
+    for (const r of [...(piBook?.received.invoices ?? []), ...(piBook?.awaiting.invoices ?? []), ...(piBook?.balance.invoices ?? [])]) {
+      if (!r.soId || seenInv.has(r.id)) continue;
+      seenInv.add(r.id);
+      invBySo.set(String(r.soId), [...(invBySo.get(String(r.soId)) ?? []), { number: r.number, invoiced: r.invoiced }]);
+    }
+    const money = (n: number) => formatCurrency(Math.round(n * 100) / 100);
+    const remarkOf = (r: PiBookInvoice): PiRow['remark'] => {
+      if (!r.joined || !r.soId) return null;
+      const base = r.valueNow && Math.abs(r.valueNow - r.caseValue) >= 1 ? r.valueNow : r.caseValue;
+      const changed = base !== r.caseValue;
+      const fifteen = Math.round(base * 15) / 100;
+      const pctOf = base ? (r.invoiced / base) * 100 : 0;
+      const isFull = Math.abs(r.invoiced - base) < 1;
+      const isOver = r.invoiced > fifteen + 0.01;
+      if (!isOver && !changed) return null;              // a plain 15% advance: nothing to explain
+      const L = lien?.lienBySo?.[String(r.soId)];
+      const lienTxt = !L ? 'Not on the Lienstar tab, so no 15% advance was funded by Lienstar.'
+        : /^approved$/i.test(L.status)
+          ? `Lienstar funded the 15% (${money(L.toBeFunded)})${L.paidOn ? ` on ${L.paidOn}` : ', not paid yet'}.`
+          : `Lienstar: ${L.status}, nothing funded.`;
+      const sibs = (invBySo.get(String(r.soId)) ?? []).filter((x) => x.number !== r.number);
+      const orderBilled = Math.round(((invBySo.get(String(r.soId)) ?? []).reduce((t, x) => t + x.invoiced, 0)) * 100) / 100;
+      const sibTxt = sibs.length
+        ? ` ${r.ref} also has ${sibs.map((x) => `#${x.number} (${money(x.invoiced)})`).join(', ')}: ${money(orderBilled)} billed on this case in total${orderBilled > base + 1 ? `, ${money(orderBilled - base)} more than the case value` : ''}.`
+        : '';
+      if (changed && !isOver) {
+        const gap = L && /^approved$/i.test(L.status) ? Math.round((L.toBeFunded - r.invoiced) * 100) / 100 : 0;
+        return {
+          tag: '',
+          text: `Case value changed after invoicing: ${money(r.caseValue)} → ${money(base)}. Invoiced ${money(r.invoiced)} = ${pctOf.toFixed(1)}% of the current value.`
+            + (Math.abs(gap) >= 1 ? ` Lienstar's 15% is ${money(L!.toBeFunded)}, so the invoice is ${money(Math.abs(gap))} ${gap > 0 ? 'below' : 'above'} it.` : '')
+            + sibTxt,
+        };
+      }
+      if (isFull) {
+        return {
+          tag: 'Billed full case value',
+          text: `Invoiced the full case value (${money(base)}) instead of the 15% advance (${money(fifteen)}). ${lienTxt}${sibTxt}`,
+        };
+      }
+      return {
+        tag: `Billed ${Math.round(pctOf)}% of case`,
+        text: `Invoiced ${money(r.invoiced)} = ${pctOf.toFixed(1)}% of the ${money(base)} case; the 15% advance is ${money(fifteen)}. ${lienTxt}${sibTxt}`,
+      };
+    };
     const fromInvoice = (r: PiBookInvoice, amount: number, status: ReactNode): PiRow => ({
       key: `i${r.id}`, soId: r.soId, ref: r.ref, rep: r.rep,
       invoiceNo: r.number, patient: r.patient, payer: r.payer,
       caseValue: r.caseValue, amount, joined: r.joined, overRate: r.overRate, status,
+      valueNow: r.valueNow ?? null, invoiced: r.invoiced, remark: remarkOf(r),
     });
     const out: PiSectionDef[] = [];
-    if (piBook && piBook.received.count > 0) out.push({
+    // ── LIENSTAR-FUNDED ADVANCES ARE RECEIVED (26 Oct 2026, on request) ────────
+    // An advance Lienstar has funded per the Master File (Approved, To be Funded
+    // covers it) is received, even while Striven's ledger still shows the
+    // invoice open because the funding was never applied to it there. Those
+    // rows move from section 2 to section 1 — G. Posey's SO-676 (#553) sat
+    // under "Advance owed" with an "Advance received (Lienstar)" pill, which
+    // contradicted itself. So section 2 can now be BELOW the PI part of AR
+    // Open, by exactly the Lienstar money Striven has not recorded.
+    const awaitingAll = piBook?.awaiting.invoices ?? [];
+    const lienIn = awaitingAll.filter((r) => lienFunded(r));
+    const stillOwed = awaitingAll.filter((r) => !lienFunded(r));
+    const sum = (rs: PiBookInvoice[], f: (r: PiBookInvoice) => number) => Math.round(rs.reduce((s, r) => s + f(r), 0) * 100) / 100;
+    const receivedIds = new Set((piBook?.received.invoices ?? []).map((r) => r.id));
+    const lienNew = lienIn.filter((r) => !receivedIds.has(r.id));
+    const recCount = (piBook?.received.count ?? 0) + lienNew.length;
+    if (piBook && recCount > 0) out.push({
       n: 1, tone: 'ok', tab: 'Advance received', amountLabel: 'Advance received', unit: 'case', guide: 'Fifteen percent advance',
       title: 'PI advance received (the 15%)',
-      sub: <>The 15% lien advance has been collected on these cases. This is cash in the door, so it is <b>not</b> in
-        AR Open above — there is nothing left owed on it. The 85% behind them is still to come, and is section 4.</>,
-      amount: piBook.received.amount, count: piBook.received.count, caseValue: piBook.received.caseValue,
-      rows: piBook.received.invoices.map((r) => fromInvoice(r, r.advanceReceived, r.advanceOpen > 0.005
-        // A part-paid advance is in this section AND in section 2, for its own
-        // halves. Saying so on the row is what stops a reader finding the same
-        // invoice under two tabs and assuming the page has double-counted it.
-        ? <span className="pill-tag tag-warn" title="Part of the advance has arrived. The rest is in section 2.">Part received</span>
-        : <span className="pill-tag tag-ok">✓ Advance in</span>)),
+      sub: <>The 15% lien advance has been collected on these cases — in Striven, or funded by Lienstar per the
+        Master File's PI Lienstar Funding tab. There is nothing left to chase on it. The 85% behind them is still to
+        come, and is section 4.
+        {lienIn.length > 0 && <> {lienIn.length} of these ({formatCurrency(sum(lienIn, (r) => r.advanceOpen))}) are
+          Lienstar-funded but not yet recorded against the invoice in Striven, so Striven's AR still shows them open.</>}</>,
+      amount: Math.round((piBook.received.amount + sum(lienIn, (r) => r.advanceOpen)) * 100) / 100,
+      count: recCount,
+      caseValue: Math.round((piBook.received.caseValue + sum(lienNew, (r) => r.caseValue)) * 100) / 100,
+      rows: [
+        ...piBook.received.invoices.map((r) => fromInvoice(r, r.advanceReceived + (lienFunded(r) ? r.advanceOpen : 0), r.advanceOpen > 0.005 && !lienFunded(r)
+          // A part-paid advance is in this section AND in section 2, for its own
+          // halves. Saying so on the row is what stops a reader finding the same
+          // invoice under two tabs and assuming the page has double-counted it.
+          ? <span className="pill-tag tag-warn" title="Part of the advance has arrived. The rest is in section 2.">Part received</span>
+          : <span className="pill-tag tag-ok">✓ Advance in</span>)),
+        ...lienNew.map((r) => fromInvoice(r, r.advanceOpen, advanceInTag(r))),
+      ],
     });
-    if (piBook && piBook.awaiting.count > 0) out.push({
+    if (piBook && stillOwed.length > 0) out.push({
       n: 2, tone: 'warn', tab: 'Advance owed', amountLabel: 'Advance outstanding', unit: 'case', guide: 'AR Open',
       title: 'PI advance invoiced, not yet received',
-      sub: <>The 15% advance is on an invoice that has not been paid. This <b>is</b> the PI receivable — the part of
-        AR Open above that PI accounts for, and the only one of the four that is money the business can chase today.</>,
-      amount: piBook.awaiting.amount, count: piBook.awaiting.count, caseValue: piBook.awaiting.caseValue,
+      sub: <>The 15% advance is on an invoice that has not been paid, by Striven's ledger or by Lienstar. This is the
+        PI receivable — the only one of the four that is money the business can chase today.</>,
+      amount: sum(stillOwed, (r) => r.advanceOpen), count: stillOwed.length, caseValue: sum(stillOwed, (r) => r.caseValue),
       // ── "FULLY INVOICED", NOT "AWAITING PAYMENT" ────────────────────────────
       // The status column answers what has been INVOICED, and the section's own
       // title already answers what has been received ("invoiced, not yet
@@ -336,7 +432,7 @@ export function PiBook({ ar }: { ar: ArResult | null }) {
       // "Part received" stays as it was: it is a fact about MONEY that has
       // arrived, it sends the reader to section 1 for the other half, and it
       // would be lost if every row read the same.
-      rows: piBook.awaiting.invoices.map((r) => fromInvoice(r, r.advanceOpen, lienFunded(r) ? advanceInTag(r) : r.advanceReceived > 0.005
+      rows: stillOwed.map((r) => fromInvoice(r, r.advanceOpen, r.advanceReceived > 0.005
         ? <span className="pill-tag tag-warn" title="Part of the advance has arrived. What landed is in section 1.">Part received</span>
         : <span className="pill-tag tag-info" title="The 15% advance is invoiced in full — on a PI case that is the whole invoice, since the balance bills when the case settles. Nothing further is to be raised; the advance is simply unpaid.">Fully Invoiced</span>)),
     });
@@ -451,7 +547,7 @@ export function PiBook({ ar }: { ar: ArResult | null }) {
               <> Across the {piBook.totals.count} invoiced case{piBook.totals.count === 1 ? '' : 's'},
                 sections 1, 2 and 4 split {formatCurrency(piBook.totals.caseValue)} of case value between them.</>
             )}
-            {' '}Only section 2 is a receivable, and it is the PI part of AR Open on the AR / AP page.
+            {' '}Only section 2 is a receivable. It is the PI part of AR Open on the AR / AP page, less advances Lienstar has funded that Striven has not yet recorded.
           </div>
         </div>
 

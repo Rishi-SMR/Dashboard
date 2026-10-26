@@ -188,7 +188,7 @@ function BillCard({ bill, onClose }: { bill: Bill; onClose: () => void }) {
               </BillKV>
             </div>
             <div className="muted-note" style={{ marginTop: 16, lineHeight: 1.55 }}>
-              From the AP Ledgers sheet, which is where this register gets its rows. It carries no scan or
+              From the Master File's AP tab, which is where this register gets its rows. It carries no scan or
               attachment, and these vendor invoice numbers have no matching record in Striven &mdash; so this is
               everything known about {bill.no}, not a link to the document itself.
             </div>
@@ -617,8 +617,8 @@ export function ApSheetTab() {
   const mfReq = mfVendors.filter((v) => v.billsRequired > 0);
   useEffect(() => {
     fetchApLedger()
-      .then((d) => { setLedger(d); if (d && d.ok === false) setLoadErr(d.note ?? 'AP Ledgers sheet unavailable.'); })
-      .catch((e) => setLoadErr(e instanceof Error ? e.message : 'Could not reach the AP Ledgers sheet.'));
+      .then((d) => { setLedger(d); if (d && d.ok === false) setLoadErr(d.note ?? 'Master File AP tab unavailable.'); })
+      .catch((e) => setLoadErr(e instanceof Error ? e.message : 'Could not reach the Master File AP tab.'));
   }, []);
   // Bills from the Master File AP tab when it is readable (1 Oct 2026), the
   // AP Ledgers sheet otherwise - one book at a time, never a blend.
@@ -886,7 +886,7 @@ export function ApSheetTab() {
    */
   const explainPaid = () => setDrill({
     title: 'Paid to Date',
-    sub: `${ledger?.totals?.paymentRows ?? 0} payments in the sheet's Debit column · ${formatCurrency(agg.paid, true)}`,
+    sub: `${ledger?.totals?.paymentRows ?? 0} payments in the Master File AP tab (Amount Paid) · ${formatCurrency(agg.paid, true)}`,
     columns: [
       { key: 'v', label: 'SUB-LEDGER' }, { key: 'p', label: 'PAID', num: true },
       { key: 'n', label: 'PAYMENTS' }, { key: 'b', label: 'BILLED', num: true },
@@ -942,7 +942,7 @@ export function ApSheetTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>AP Register</h1>
           <div className="page-sub">
-            {mfOk ? <>Live from the <b>Master File For SMR</b> · AP tab</> : <>Live from the <b>AP Ledgers</b> sheet (Master File unavailable)</>} · {BILLS.length} bills across {ledger?.subLedgers?.length ?? 0} sub-ledgers · no patient data
+            {mfOk ? <>Live from the <b>Master File For SMR</b> · AP tab</> : <>Master File AP tab unavailable</>} · {BILLS.length} bills across {ledger?.subLedgers?.length ?? 0} sub-ledgers · no patient data
             {ledger?.fetchedAt && <> · read {new Date(ledger.fetchedAt).toLocaleTimeString()}</>}
           </div>
         </div>
@@ -951,7 +951,7 @@ export function ApSheetTab() {
       {/* The sheet is unreachable or unconfigured — say so rather than render an
           empty register that looks like "no bills". */}
       {loadErr && <div className="error" style={{ marginBottom: 12 }}>{loadErr}</div>}
-      {!ledger && !loadErr && <div className="page-sub" style={{ padding: 16 }}>Reading the AP Ledgers sheet…</div>}
+      {!ledger && !loadErr && <div className="page-sub" style={{ padding: 16 }}>Reading the Master File AP tab…</div>}
 
       {mfOk ? (
       <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
@@ -981,7 +981,7 @@ export function ApSheetTab() {
             and that is a question the tile should answer rather than raise. */}
         <KpiR ico="wallet" tint="#16A34A" label="Paid to Date" value={agg.paid} format={formatCurrency}
           deltaText={`${ledger?.totals?.paymentRows ?? 0} payments recorded`}
-          foot="from the sheet's Debit column" onClick={explainPaid} />
+          foot="Master File · Amount Paid" onClick={explainPaid} />
         {/* NET of credit notes — said on the tile, since the Unpaid Bills table
             below adds to the gross balance and the two would otherwise sit
             $51.20 apart with nothing to connect them. */}
@@ -1095,7 +1095,7 @@ export function ApSheetTab() {
               <h2 className="section-title">SUB-LEDGER SUMMARY</h2>
               <div className="section-sub">
                 What each supplier was billed, what has been paid to them, and what is left ·
-                {' '}<b>{ledger?.totals?.paymentRows ?? 0}</b> payments from the sheet's Debit column
+                {' '}<b>{ledger?.totals?.paymentRows ?? 0}</b> payments from the Master File's Amount Paid column
               </div>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { fetchStrivenPL, fetchStrivenPayments, type PlResult, type PaymentsResult, type PlPeriod } from '../strivenApi';
+import { fetchQbPL, type QbPlResult, type QbPlMonth, type QbLine, type QbCategory, type PlPeriod } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C, monthLabel } from '../chartTheme';
 import { ChartCard, RankBar, TrendArea, LegendDots, DrillModal, KpiR, useSyncAgo } from '../chartKit';
@@ -80,12 +80,23 @@ const partsFor = (year: number) => {
   };
 };
 
+
+/**
+ * THE P&L IS QUICKBOOKS' P&L.
+ *
+ * Every figure on this tab is read from QuickBooks' own Profit and Loss report
+ * (/api/qb/pl): income by account, cost of goods and expenses by the category
+ * the chart of accounts groups them under, other income, net income, and the
+ * month-by-month split. Nothing is mixed in from Striven invoices, the AP
+ * workbook or the commission book — QuickBooks is the books, and a statement
+ * assembled from three other systems disagreed with it by six figures (payroll
+ * and contract labour, recorded only there, were missing entirely).
+ */
 export function PLTab() {
   const [year, setYear] = useState<number>(THIS_YEAR);
   const [part, setPart] = useState<PlPart>('all');
   const period = periodOf(year, part);
-  const [pl, setPl] = useState<PlResult | null>(null);
-  const [payments, setPayments] = useState<PaymentsResult | null>(null);
+  const [pl, setPl] = useState<QbPlResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drill, setDrill] = useState<null | { title: string; sub: string; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] }>(null);
@@ -98,7 +109,7 @@ export function PLTab() {
     if (!v) return null;
     window.history.replaceState(null, '', window.location.pathname + window.location.hash);
     return v === 'connected'
-      ? { ok: true, text: 'QuickBooks connected. Sales now come from QuickBooks.' }
+      ? { ok: true, text: 'QuickBooks connected.' }
       : { ok: false, text: `QuickBooks connection failed: ${p.get('reason') || 'unknown error'}` };
   });
   const agoText = useSyncAgo(lastSync);
@@ -106,56 +117,64 @@ export function PLTab() {
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
     try {
-      // Striven's payments endpoint does not take a period, so `cashReceived`
-      // stays the year to date — the tile that shows it says "collected to
-      // date", not "collected this month".
-      const range = { start: period.start, end: period.end };
-      const [p, pay] = await Promise.all([fetchStrivenPL(range), fetchStrivenPayments().catch(() => null)]);
-      setPl(p); setPayments(pay);
+      setPl(await fetchQbPL({ start: period.start, end: period.end }));
       setLastSync(Date.now());
     } catch (e) {
-      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load P&L.');
+      if (!silent) setError(e instanceof Error ? e.message : 'Failed to load the QuickBooks P&L.');
     } finally { if (!silent) setLoading(false); }
   }
   // Initial load + silent live refresh every 90s.
   useEffect(() => {
     // Drop the previous period's figures FIRST, so they can never sit under the
     // new period's heading while the request is in flight.
-    setPl(null); setPayments(null);
+    setPl(null);
     load();
     const r = setInterval(() => load(true), 90_000);
     return () => clearInterval(r);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year, part]);
 
-  const revD = momDelta((pl?.series ?? []).map((m) => ({ month: m.month, value: m.revenue })));
-  const expD = momDelta((pl?.series ?? []).map((m) => ({ month: m.month, value: m.expenses })));
-  const netD = momDelta((pl?.series ?? []).map((m) => ({ month: m.month, value: m.net })));
+  const series = pl?.series ?? [];
+  const revD = momDelta(series.map((m) => ({ month: m.month, value: m.revenue })));
+  const expD = momDelta(series.map((m) => ({ month: m.month, value: m.opex ?? 0 })));
+  const netD = momDelta(series.map((m) => ({ month: m.month, value: m.net })));
 
-  const vendorData = (pl?.byVendor ?? []).slice(0, 8).map((v) => ({ name: v.name, value: v.value }));
+  // The statement's figures, each as QuickBooks reports it.
+  const income = pl?.income ?? 0;
+  const cogs = pl?.cogs ?? 0;
+  const grossProfit = pl?.grossProfit ?? income - cogs;
+  const opexTotal = pl?.expenses ?? 0;
+  const netOperating = pl?.netOperating ?? grossProfit - opexTotal;
+  const otherIncome = pl?.otherIncome ?? 0;
+  const otherExpenses = pl?.otherExpenses ?? 0;
+  const netIncome = pl?.net ?? 0;
+  const cogsCats = (pl?.categories ?? []).filter((c) => c.section === 'cogs');
+  const opexCats = (pl?.categories ?? []).filter((c) => c.section === 'opex');
+  const hasOther = otherIncome !== 0 || otherExpenses !== 0;
 
-  /** Every statement line as a share of revenue — the common-size column an
-   *  accountant reads before the dollars, because it is the only figure that
-   *  survives a change in volume. Zero revenue divides by nothing, so it prints
-   *  a dash rather than Infinity. */
-  const share = (v: number) => (pl?.revenue ? (v / pl.revenue) * 100 : 0);
-  const shareText = (v: number) => (pl?.revenue ? pct(share(v)) : '-');
+  // COLLAPSIBLE SECTIONS. The statement opens folded to its totals — the
+  // shape of the year at a glance — and a section heading unfolds its lines.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  const secHead = (k: string, step: number, title: string, hint: string, count: number) => (
+    <div className={`pl-sec pl-sec-toggle${open[k] ? ' open' : ''}`} role="button" tabIndex={0}
+      aria-expanded={!!open[k]} onClick={() => toggle(k)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(k); } }}>
+      <span className="pl-chev" aria-hidden>▸</span>
+      <span className="pl-step">{step}</span>{title}
+      <span className="pl-hint">{open[k] ? hint : `${count} line${count === 1 ? '' : 's'} · click to show`}</span>
+    </div>
+  );
+
+  /** Every statement line as a share of sales — the common-size column. Zero
+   *  sales divides by nothing, so it prints a dash rather than Infinity. */
+  const share = (v: number) => (income ? (v / income) * 100 : 0);
+  const shareText = (v: number) => (income ? pct(share(v)) : '-');
   /** A share of sales as cents of a dollar: plainer than a percentage. */
-  const cents = (v: number) => (pl?.revenue ? `${Math.round(share(v))}¢` : '-');
-  /**
-   * Months the per-month averages divide by.
-   *
-   * NOT `series.length`. On the 1st of a month the series already carries that
-   * month as a row of zeros, so YTD revenue was being divided by nine on a book
-   * with eight months of trading — an average understated by an eighth, printed
-   * as "across 9 months". A month counts once it is COMPLETE, or as soon as it
-   * has anything booked in it: a genuinely quiet February still belongs in the
-   * denominator and still drags the average down, which is the honest answer;
-   * a September that is one day old does not.
-   */
-  const monthCount = (pl?.series ?? []).filter(
-    (mo) => mo.month < nowYm || (mo.revenue ?? 0) !== 0 || (mo.expenses ?? 0) !== 0,
-  ).length;
+  const cents = (v: number) => (income ? `${Math.round(share(v))}¢` : '-');
+  /** Months the averages divide by: complete months, plus the running one only
+   *  once something is booked in it (see the git history for why). */
+  const monthCount = series.filter((mo) => mo.month < nowYm || mo.revenue !== 0 || mo.expenses !== 0).length;
   const perMonth = (v: number) => (monthCount ? v / monthCount : 0);
 
   // Tap-to-explain drills.
@@ -163,97 +182,70 @@ export function PLTab() {
     columns: [{ key: 'k', label: 'Item' }, { key: 'v', label: 'Value', num: true }],
     rows: rows.map((r) => (r.rowClass ? { k: r.k, v: r.v, rowClass: r.rowClass } : { k: r.k, v: r.v })),
   });
-
-  const explainRevenue = () => setDrill({
-    title: 'Revenue', sub: `Every customer invoice in ${period.label} (voided excluded), by month`,
+  const qbSub = (what: string) => `QuickBooks Profit & Loss · ${period.label} · ${what}`;
+  const byMonth = (title: string, pickV: (m: QbPlMonth) => number, total: number, totalLabel: string) => setDrill({
+    title, sub: qbSub('by month'),
     ...kv([
-      ...(pl?.series ?? []).map((m) => ({ k: `${monthLabel(m.month)} ${m.month.slice(0, 4)}`, v: formatCurrency(m.revenue) })),
-      { k: 'Total revenue', v: formatCurrency(pl?.revenue ?? 0), rowClass: 'total-row' },
+      ...series.map((m) => ({ k: `${monthLabel(m.month)} ${m.month.slice(0, 4)}`, v: formatCurrency(pickV(m)) })),
+      { k: totalLabel, v: formatCurrency(total), rowClass: 'total-row' },
     ]),
   });
-  // The statement's sections, with safe defaults for a server that predates them.
-  const cogs = pl?.cogs ?? 0;
-  const grossProfit = pl?.grossProfit ?? ((pl?.revenue ?? 0) - cogs);
-  const grossMargin = pl?.grossMargin ?? share(grossProfit);
-  const opex = pl?.opex ?? [];
-  const opexTotal = pl?.opexTotal ?? 0;
-  const costSource = pl?.sources?.costs === 'striven-bills' ? 'Striven vendor bills' : 'AP Ledgers workbook';
-  const fromQb = pl?.revenueSource === 'quickbooks';
-  const salesGap = fromQb ? (pl?.revenue ?? 0) - (pl?.strivenRevenue ?? 0) : 0;
-
-  const explainProgram = () => setDrill({
-    title: fromQb ? 'Sales by account' : 'Sales by program',
-    sub: fromQb
-      ? `QuickBooks Profit & Loss for ${period.label}, Income section, by account`
-      : `Every customer invoice in ${period.label} (voided excluded), by the program behind it`,
+  const explainLines = (title: string, what: string, lines: QbLine[], total: number, totalLabel: string) => setDrill({
+    title, sub: qbSub(what),
     ...kv([
-      ...(pl?.revenueByProgram ?? []).map((p) => ({ k: p.name, v: formatCurrency(p.value) })),
-      { k: 'Total revenue', v: formatCurrency(pl?.revenue ?? 0), rowClass: 'total-row' },
+      ...lines.map((l) => ({ k: l.name, v: formatCurrency(l.value) })),
+      { k: totalLabel, v: formatCurrency(total), rowClass: 'total-row' },
     ]),
   });
-  const explainCogs = () => setDrill({
-    title: 'Cost of goods sold',
-    sub: `Device suppliers' bills dated in ${period.label}, from the ${costSource}`,
-    ...kv([
-      ...(pl?.cogsByVendor ?? []).map((v) => ({ k: v.name, v: formatCurrency(v.value) })),
-      { k: 'Total cost of goods sold', v: formatCurrency(cogs), rowClass: 'total-row' },
-    ]),
-  });
-  const explainOpexLine = (o: NonNullable<PlResult['opex']>[number]) => setDrill({
-    title: o.name,
-    sub: o.source === 'commission'
-      ? `Every signed-off commission line for ${period.label}, paid or still due, by payout-cycle month`
-      : `Bills dated in ${period.label}, from the ${costSource}`,
-    ...kv(o.source === 'commission'
-      ? [
-        ...(pl?.series ?? []).filter((m) => m.commission).map((m) => ({ k: `${monthLabel(m.month)} ${m.month.slice(0, 4)}`, v: formatCurrency(m.commission ?? 0) })),
-        { k: 'Total sales commission', v: formatCurrency(o.value), rowClass: 'total-row' },
-      ]
-      : [
-        ...(o.vendors ?? []).map((v) => ({ k: v.name, v: formatCurrency(v.value) })),
-        { k: `Total ${o.name.toLowerCase()}`, v: formatCurrency(o.value), rowClass: 'total-row' },
-      ]),
-  });
-  const explainOpex = () => setDrill({
-    title: 'Operating expenses', sub: `${period.label} · commission from the Commission book, other lines from the ${costSource}`,
-    ...kv([
-      ...opex.map((o) => ({ k: o.name, v: formatCurrency(o.value) })),
-      { k: 'Total operating expenses', v: formatCurrency(opexTotal), rowClass: 'total-row' },
-    ]),
-  });
-
+  const explainCategory = (c: QbCategory) => explainLines(
+    c.category, `${c.section === 'cogs' ? 'Cost of goods sold' : 'Expenses'}, by account`,
+    c.accounts.map((a) => ({ name: a.label, value: a.value })), c.total, `Total ${c.category.toLowerCase()}`,
+  );
+  const explainSection = (title: string, cats: QbCategory[], total: number) => explainLines(
+    title, 'by category', cats.map((c) => ({ name: c.category, value: c.total })), total, `Total ${title.toLowerCase()}`,
+  );
   const explainNet = () => setDrill({
-    title: 'Net Operating Income', sub: 'Revenue − cost of goods − operating expenses · before payroll & overhead',
+    title: 'Net income', sub: qbSub('top to bottom'),
     ...kv([
-      { k: 'Revenue', v: formatCurrency(pl?.revenue ?? 0) },
+      { k: 'Income', v: formatCurrency(income) },
       { k: 'Cost of goods sold', v: `−${formatCurrency(cogs)}` },
       { k: 'Gross profit', v: formatCurrency(grossProfit) },
-      { k: 'Operating expenses', v: `−${formatCurrency(opexTotal)}` },
-      { k: 'Net operating income', v: formatCurrency(pl?.net ?? 0), rowClass: 'total-row' },
-      { k: 'Operating margin', v: pct(pl?.margin ?? 0) },
+      { k: 'Expenses', v: `−${formatCurrency(opexTotal)}` },
+      { k: 'Net operating income', v: formatCurrency(netOperating) },
+      ...(otherIncome ? [{ k: 'Other income', v: formatCurrency(otherIncome) }] : []),
+      ...(otherExpenses ? [{ k: 'Other expenses', v: `−${formatCurrency(otherExpenses)}` }] : []),
+      { k: 'Net income', v: formatCurrency(netIncome), rowClass: 'total-row' },
+      { k: 'Net margin', v: pct(pl?.margin ?? 0) },
     ]),
   });
 
-  // THE CHIP READS THE PERIOD, NOT THE CLOCK. It printed "… – today" whatever was
-  // being shown, so a closed month came with a date range running to this
-  // morning. Dates are formatted from the YYYY-MM-DD text, split by hand: a
-  // `new Date('2026-08-31')` is parsed as UTC midnight and prints as the 30th to
-  // anyone west of Greenwich.
-  //
-  // THE MONTH AND YEAR ARE NOT REPEATED WHEN BOTH ENDS SHARE THEM. "Aug 1 – Aug
-  // 31, 2026" is three words of noise in a chip that has to sit in a header row
-  // beside three other controls; "Aug 1–31, 2026" says the same thing in half
-  // the width, which is the difference between the chip fitting and wrapping.
+  // THE CHIP READS THE PERIOD, NOT THE CLOCK. Dates are formatted from the
+  // YYYY-MM-DD text, split by hand: a `new Date('2026-08-31')` is parsed as UTC
+  // midnight and prints as the 30th to anyone west of Greenwich. Month and year
+  // are not repeated when both ends share them.
   const dayParts = (d: string) => { const [y, m, day] = d.split('-').map(Number); return { y, m, day }; };
   const rangeChip = (() => {
     const a = dayParts(period.start), b = dayParts(period.end);
-    // A period one day long — the current month, opened on the 1st — is a date,
-    // not a range: "Sep 1–1, 2026" reads like a typo.
     if (period.start === period.end) return `${MONTHS[a.m - 1]} ${a.day}, ${a.y}`;
     if (a.y === b.y && a.m === b.m) return `${MONTHS[a.m - 1]} ${a.day}–${b.day}, ${b.y}`;
     if (a.y === b.y) return `${MONTHS[a.m - 1]} ${a.day} – ${MONTHS[b.m - 1]} ${b.day}, ${b.y}`;
     return `${MONTHS[a.m - 1]} ${a.day}, ${a.y} – ${MONTHS[b.m - 1]} ${b.day}, ${b.y}`;
   })();
+
+  // WHERE EACH DOLLAR GOES. Cost of goods, the three biggest expense
+  // categories, the rest of the expenses as one bar, and what operations left
+  // over — which adds back to exactly $1 of sales. Other income is not a share
+  // of sales, so it is named underneath rather than drawn as a bar.
+  const topOpex = [...opexCats].sort((a, b) => b.total - a.total).slice(0, 3);
+  const restOpex = opexTotal - topOpex.reduce((s, c) => s + c.total, 0);
+  const dollarRows = [
+    { name: 'Cost of goods sold', value: cogs, color: '#F59E0B' },
+    ...topOpex.map((c, i) => ({ name: c.category, value: c.total, color: ['#DC2626', '#EC4899', '#8B5CF6'][i] })),
+    ...(restOpex > 0.5 ? [{ name: 'All other expenses', value: restOpex, color: '#94A3B8' }] : []),
+    { name: netOperating >= 0 ? 'Left over from operations' : 'Operations short by', value: Math.abs(netOperating), color: netOperating >= 0 ? C.positive : C.negative },
+  ];
+
+  const notConnected = !!error && /not connected|reconnect|token|invalid_grant/i.test(error);
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
@@ -261,17 +253,14 @@ export function PLTab() {
         <div>
           <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Profit &amp; Loss</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · {period.label} · accrual basis ·{' '}
-            revenue from <b>Striven</b> invoices · costs from the {costSource} &amp; the commission book
+            <span className="live-dot" /> Sports Med Recovery · {period.label} · {(pl?.basis ?? 'accrual').toLowerCase()} basis ·{' '}
+            every figure from <b>QuickBooks</b>
             {agoText ? ` · updated ${agoText}` : ''}
           </div>
         </div>
         <div className="ov-headright">
-          {/* WHICH PERIOD. Year and part are two controls rather than one list of
-              every month of every year, which is 40-odd options to scroll. The
-              part list is rebuilt when the year changes, and a part that does not
-              exist in the new year (September, on a year that has not reached it)
-              falls back to the whole year rather than fetching an empty one. */}
+          {/* WHICH PERIOD. Year and part are two controls; a part that does not
+              exist in the newly picked year falls back to the whole year. */}
           <label className="ov-filter" style={{ flex: 'none' }}>
             <span className="fl">Year</span>
             <select value={year} onChange={(e) => {
@@ -305,30 +294,36 @@ export function PLTab() {
         </div>
       </div>
 
-      {error && <div className="error">{error}</div>}
+      {qbNotice && <div className={qbNotice.ok ? 'qb-banner ok' : 'qb-banner warn'}>{qbNotice.text}</div>}
 
-      {loading && !pl && <div className="page-sub" style={{ padding: 16 }}>Loading…</div>}
+      {error && (
+        <div className="qb-banner warn">
+          <span><b>QuickBooks could not be read.</b> {error}</span>
+          {notConnected && <a className="btn" href="/api/qb/connect">Connect QuickBooks →</a>}
+        </div>
+      )}
+
+      {loading && !pl && <div className="page-sub" style={{ padding: 16 }}>Loading from QuickBooks…</div>}
 
       {pl && (
         <>
-          {/* FOUR NUMBERS, IN THE ORDER THE MONEY FLOWS: what came in, what was
-              left after paying for the devices, what the running costs were,
-              and what remained. Plain words on purpose — this page is read by
-              people who do not use the words "COGS" or "operating income". */}
+          {/* FOUR NUMBERS, IN THE ORDER THE MONEY FLOWS. */}
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <KpiR ico="cash" tint="#16A34A" label="Sales" value={pl.revenue} format={formatCurrency}
-              delta={revD} deltaText={`${pl.invoiceCount.toLocaleString()} invoices`}
-              foot={fromQb ? 'from QuickBooks' : 'Striven invoices'}
-              onClick={explainRevenue} />
-            <KpiR ico="wallet" tint="#4F46E5" label="After device costs" value={grossProfit} format={formatCurrency}
+            <KpiR ico="cash" tint="#16A34A" label="Sales" value={income} format={formatCurrency}
+              delta={revD} deltaText="vs prior month"
+              foot="QuickBooks · total income"
+              onClick={() => byMonth('Sales', (m) => m.revenue, income, 'Total income')} />
+            <KpiR ico="wallet" tint="#4F46E5" label="Gross profit" value={grossProfit} format={formatCurrency}
               deltaText={`keeps ${cents(grossProfit)} of every $1`}
-              foot={`sales − ${formatCurrency(cogs)} paid for devices`} onClick={explainCogs} />
-            <KpiR ico="trend" tint="#DC2626" label="Running costs" value={opexTotal} format={formatCurrency}
+              foot={`sales − ${formatCurrency(cogs)} cost of goods`}
+              onClick={() => explainSection('Cost of goods sold', cogsCats, cogs)} />
+            <KpiR ico="trend" tint="#DC2626" label="Expenses" value={opexTotal} format={formatCurrency}
               delta={expD} deltaInvert deltaText={`${cents(opexTotal)} of every $1`}
-              foot={opex.map((o) => o.name.toLowerCase()).join(' · ') || 'none recorded'} onClick={explainOpex} />
-            <KpiR ico="pie" tint="#0A369F" label="Profit (before payroll)" value={pl.net} format={formatCurrency}
-              delta={netD} deltaText={`keeps ${cents(pl.net)} of every $1`}
-              foot="payroll & rent not included"
+              foot="payroll, contract labour & overhead"
+              onClick={() => explainSection('Expenses', opexCats, opexTotal)} />
+            <KpiR ico="pie" tint="#0A369F" label="Net income" value={netIncome} format={formatCurrency}
+              delta={netD} deltaText={`keeps ${cents(netIncome)} of every $1`}
+              foot="QuickBooks' bottom line"
               onClick={explainNet} />
           </div>
 
@@ -337,181 +332,198 @@ export function PLTab() {
               <div className="section-head">
                 <div>
                   <h2 className="section-title">Profit &amp; Loss · {period.label}</h2>
-                  <div className="section-sub">Read it top to bottom: money in, minus what it cost, equals what was left. Click any line to see what is behind it.</div>
-                  {pl.revenue === 0 && pl.expenses === 0 && (
+                  <div className="section-sub">QuickBooks' statement, read top to bottom. Click any line to see the accounts behind it.</div>
+                  {income === 0 && cogs === 0 && opexTotal === 0 && (
                     <div className="muted-note" style={{ marginTop: 6 }}>
-                      Nothing is booked in {period.label}. Try another period.
+                      Nothing is booked in QuickBooks for {period.label}. Try another period.
                     </div>
                   )}
                 </div>
               </div>
-              {/* WHERE THE SALES FIGURE COMES FROM. QuickBooks is the books, so
-                  when it is connected Sales is its figure, and Striven's invoice
-                  total is shown beside it so a gap between the two systems is
-                  seen rather than hidden. Not connected: say so, and offer the
-                  one click that fixes it. */}
-              {qbNotice && <div className={qbNotice.ok ? 'qb-banner ok' : 'qb-banner warn'}>{qbNotice.text}</div>}
-              {fromQb ? (
-                <div className="qb-banner ok">
-                  <b>Sales from QuickBooks.</b> Striven invoices for the same period total {formatCurrency(pl.strivenRevenue ?? 0)}
-                  {Math.abs(salesGap) >= 1 ? ` — QuickBooks is ${formatCurrency(Math.abs(salesGap))} ${salesGap > 0 ? 'higher' : 'lower'}.` : ' — the same.'}
-                </div>
-              ) : (
-                <div className="qb-banner warn">
-                  <span>
-                    <b>Sales are from Striven, not QuickBooks.</b>{' '}
-                    {/not connected/i.test(pl.qbError ?? '') || !pl.qbError
-                      ? 'QuickBooks is not connected yet.'
-                      : `QuickBooks could not be read: ${pl.qbError}`}
-                  </span>
-                  <a className="btn" href="/api/qb/connect">Connect QuickBooks →</a>
-                </div>
-              )}
               <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                 <div className="pl-statement" style={{ flex: '1 1 440px', maxWidth: 680 }}>
                   <div className="pl-head">
                     <span className="lbl" /><span className="pct">Of sales</span><span className="val">Amount</span>
                   </div>
 
-                  <div className="pl-sec"><span className="pl-step">1</span>Money in<span className="pl-hint">{fromQb ? 'as recorded in QuickBooks, by account' : 'what customers were billed in Striven, by program'}</span></div>
-                  {(pl.revenueByProgram ?? []).map((p) => (
-                    <div key={p.name} className="pl-line pl-indent pl-click" onClick={explainProgram}>
-                      <span className="lbl">{p.name}</span>
-                      <span className="pct">{shareText(p.value)}</span>
-                      <span className="val">{formatCurrency(p.value)}</span>
+                  {secHead('income', 1, 'Income', 'by income account', pl.incomeAccounts.length)}
+                  {open.income && pl.incomeAccounts.map((a) => (
+                    <div key={a.name} className="pl-line pl-indent pl-click"
+                      onClick={() => explainLines('Income', 'by account', pl.incomeAccounts, income, 'Total income')}>
+                      <span className="lbl">{a.name}</span>
+                      <span className="pct">{shareText(a.value)}</span>
+                      <span className="val">{formatCurrency(a.value)}</span>
                     </div>
                   ))}
-                  <div className="pl-line pl-subtotal pl-click" onClick={explainRevenue}>
-                    <span className="lbl">Total sales</span>
-                    <span className="pct">{pl.revenue ? '100%' : '-'}</span>
-                    <span className="val">{formatCurrency(pl.revenue)}</span>
+                  <div className="pl-line pl-subtotal pl-click" onClick={() => byMonth('Sales', (m) => m.revenue, income, 'Total income')}>
+                    <span className="lbl">Total income</span>
+                    <span className="pct">{income ? '100%' : '-'}</span>
+                    <span className="val">{formatCurrency(income)}</span>
                   </div>
 
-                  <div className="pl-sec"><span className="pl-step">2</span>Cost of the devices<span className="pl-hint">what suppliers billed us for the devices</span></div>
-                  {(pl.cogsByVendor ?? []).map((v) => (
-                    <div key={v.name} className="pl-line pl-indent pl-click" onClick={explainCogs}>
-                      <span className="lbl">{v.name}</span>
-                      <span className="pct">{shareText(v.value)}</span>
-                      <span className="val neg">−{formatCurrency(v.value)}</span>
+                  {secHead('cogs', 2, 'Cost of goods sold', 'devices, supplies & materials', cogsCats.length)}
+                  {open.cogs && cogsCats.map((c) => (
+                    <div key={c.category} className="pl-line pl-indent pl-click" onClick={() => explainCategory(c)}>
+                      <span className="lbl">{c.category}</span>
+                      <span className="pct">{shareText(c.total)}</span>
+                      <span className="val neg">−{formatCurrency(c.total)}</span>
                     </div>
                   ))}
-                  <div className="pl-line pl-total pl-click" onClick={explainCogs}>
-                    <span className="lbl">Left after device costs</span>
-                    <span className="pct">{pct(grossMargin)}</span>
+                  <div className="pl-line pl-subtotal pl-click" onClick={() => toggle('cogs')}>
+                    <span className="lbl">Total cost of goods sold</span>
+                    <span className="pct">{shareText(cogs)}</span>
+                    <span className="val neg">−{formatCurrency(cogs)}</span>
+                  </div>
+                  <div className="pl-line pl-total pl-click" onClick={() => explainSection('Cost of goods sold', cogsCats, cogs)}>
+                    <span className="lbl">Gross profit</span>
+                    <span className="pct">{shareText(grossProfit)}</span>
                     <span className="val">{formatCurrency(grossProfit)}</span>
                   </div>
 
-                  <div className="pl-sec"><span className="pl-step">3</span>Running costs<span className="pl-hint">rep commission and outside services</span></div>
-                  {opex.map((o) => (
-                    <div key={o.name} className="pl-line pl-indent pl-click" onClick={() => explainOpexLine(o)}>
-                      <span className="lbl">{o.name}</span>
-                      <span className="pct">{shareText(o.value)}</span>
-                      <span className="val neg">−{formatCurrency(o.value)}</span>
+                  {secHead('opex', 3, 'Expenses', 'by category, biggest first', opexCats.length)}
+                  {open.opex && [...opexCats].sort((a, b) => b.total - a.total).map((c) => (
+                    <div key={c.category} className="pl-line pl-indent pl-click" onClick={() => explainCategory(c)}>
+                      <span className="lbl">{c.category}</span>
+                      <span className="pct">{shareText(c.total)}</span>
+                      <span className="val neg">−{formatCurrency(c.total)}</span>
                     </div>
                   ))}
-                  <div className="pl-line pl-total pl-final pl-click" onClick={explainNet}>
-                    <span className="lbl">Profit before payroll &amp; rent</span>
-                    <span className="pct">{pct(pl.margin)}</span>
-                    <span className="val">{formatCurrency(pl.net)}</span>
+                  <div className="pl-line pl-subtotal pl-click" onClick={() => toggle('opex')}>
+                    <span className="lbl">Total expenses</span>
+                    <span className="pct">{shareText(opexTotal)}</span>
+                    <span className="val neg">−{formatCurrency(opexTotal)}</span>
+                  </div>
+                  <div className="pl-line pl-total pl-click" onClick={() => explainSection('Expenses', opexCats, opexTotal)}>
+                    <span className="lbl">Net operating income</span>
+                    <span className="pct">{shareText(netOperating)}</span>
+                    <span className="val">{formatCurrency(netOperating)}</span>
                   </div>
 
-                  {/* WHAT IS NOT IN IT. Without this the last line reads as the
-                      bottom line of the business, and it is not. */}
-                  {(pl.notCaptured ?? []).length > 0 && (
-                    <div className="pl-note">
-                      <b>Not included yet:</b> payroll, rent and other overhead. They are not recorded in Striven
-                      or the AP ledger, so the true profit is lower than the figure above.
-                    </div>
+                  {hasOther && (
+                    <>
+                      {secHead('other', 4, 'Other income & expenses', 'outside normal operations',
+                        (pl.otherIncomeAccounts ?? []).length + (pl.otherExpenseAccounts ?? []).length)}
+                      {open.other && (pl.otherIncomeAccounts ?? []).map((a) => (
+                        <div key={`oi-${a.name}`} className="pl-line pl-indent pl-click"
+                          onClick={() => explainLines('Other income', 'by account', pl.otherIncomeAccounts ?? [], otherIncome, 'Total other income')}>
+                          <span className="lbl">{a.name}</span>
+                          <span className="pct">{shareText(a.value)}</span>
+                          <span className="val">{formatCurrency(a.value)}</span>
+                        </div>
+                      ))}
+                      {open.other && (pl.otherExpenseAccounts ?? []).map((a) => (
+                        <div key={`oe-${a.name}`} className="pl-line pl-indent pl-click"
+                          onClick={() => explainLines('Other expenses', 'by account', pl.otherExpenseAccounts ?? [], otherExpenses, 'Total other expenses')}>
+                          <span className="lbl">{a.name}</span>
+                          <span className="pct">{shareText(a.value)}</span>
+                          <span className="val neg">−{formatCurrency(a.value)}</span>
+                        </div>
+                      ))}
+                      <div className="pl-line pl-subtotal pl-click" onClick={() => toggle('other')}>
+                        <span className="lbl">Net other income</span>
+                        <span className="pct">{shareText(otherIncome - otherExpenses)}</span>
+                        <span className="val">{formatCurrency(otherIncome - otherExpenses)}</span>
+                      </div>
+                    </>
                   )}
+                  <div className="pl-line pl-total pl-final pl-click" onClick={explainNet}>
+                    <span className="lbl">Net income</span>
+                    <span className="pct">{pct(pl.margin)}</span>
+                    <span className="val">{formatCurrency(netIncome)}</span>
+                  </div>
                 </div>
 
-                {/* WHERE EACH DOLLAR GOES — the whole statement as one picture.
-                    Every bar is a share of the same $1 of sales, so the bars add
-                    up to a dollar and nothing needs explaining. */}
                 <div className="dollar-split" style={{ flex: '0 1 300px' }}>
                   <div className="ds-title">Where each $1 of sales goes</div>
-                  {[
-                    { name: 'Devices', value: cogs, color: '#F59E0B' },
-                    ...opex.map((o, i) => ({ name: o.name, value: o.value, color: ['#DC2626', '#EC4899', '#8B5CF6'][i % 3] })),
-                    { name: pl.net >= 0 ? 'Left over' : 'Short by', value: Math.abs(pl.net), color: pl.net >= 0 ? C.positive : C.negative },
-                  ].map((r) => (
+                  {dollarRows.map((r) => (
                     <div key={r.name} className="ds-row">
                       <div className="ds-lbl"><span>{r.name}</span><b>{cents(r.value)}</b></div>
                       <div className="ds-track"><div className="ds-bar" style={{ width: `${Math.max(0, Math.min(100, share(r.value)))}%`, background: r.color }} /></div>
                     </div>
                   ))}
+                  {hasOther && (
+                    <div className="ds-foot">
+                      Plus <b>{formatCurrency(otherIncome - otherExpenses)}</b> net other income, for a net income of <b>{formatCurrency(netIncome)}</b>.
+                    </div>
+                  )}
                   {monthCount > 0 && (
                     <div className="ds-foot">
-                      On average per month: <b>{formatCurrency(perMonth(pl.revenue))}</b> in sales,{' '}
-                      <b>{formatCurrency(perMonth(pl.net))}</b> profit before payroll.
+                      On average per month: <b>{formatCurrency(perMonth(income))}</b> in sales,{' '}
+                      <b>{formatCurrency(perMonth(netIncome))}</b> net income.
                     </div>
                   )}
                 </div>
               </div>
               <div className="pl-meta">
-                <div><span>Average invoice</span><strong>{formatCurrency(pl.avgInvoice)}</strong></div>
-                <div><span>Average supplier bill</span><strong>{formatCurrency(pl.avgBill)}</strong></div>
-                <div><span>Sales per month</span><strong>{formatCurrency(perMonth(pl.revenue))}</strong></div>
-                <div><span>Kept after devices</span><strong>{pct(grossMargin)}</strong></div>
-                <div><span>Cash actually received</span><strong>{formatCurrency(pl.cashReceived)}</strong></div>
+                <div><span>Gross margin</span><strong>{shareText(grossProfit)}</strong></div>
+                <div><span>Operating margin</span><strong>{shareText(netOperating)}</strong></div>
+                <div><span>Net margin</span><strong>{pct(pl.margin)}</strong></div>
+                <div><span>Sales per month</span><strong>{formatCurrency(perMonth(income))}</strong></div>
+                <div><span>Expenses per month</span><strong>{formatCurrency(perMonth(opexTotal))}</strong></div>
               </div>
             </div>
 
-            <ChartCard className="g12-7" title="Sales vs Costs, Month by Month" sub={`${pl.series.length} month${pl.series.length === 1 ? '' : 's'} · ${period.label}`}>
-              <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Costs', color: C.negative }]} />
+            <ChartCard className="g12-7" title="Sales vs Costs, Month by Month" sub={`${series.length} month${series.length === 1 ? '' : 's'} · ${period.label}`}>
+              <LegendDots items={[{ name: 'Sales', color: C.positive }, { name: 'Cost of goods + expenses', color: C.negative }]} />
               <TrendArea
-                data={pl.series}
-                series={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expenses', color: C.negative }]}
+                data={series}
+                series={[{ key: 'revenue', name: 'Sales', color: C.positive }, { key: 'expenses', name: 'Costs', color: C.negative }]}
                 idPrefix="pl-rev" dots
               />
               <div className="cfoot">
-                <div className="cf-i"><div className="l">Sales</div><div className="v pos">{formatCurrency(pl.revenue)}</div></div>
-                <div className="cf-i"><div className="l">All costs</div><div className="v neg">{formatCurrency(pl.expenses)}</div></div>
-                <div className="cf-i"><div className="l">Profit</div><div className="v accent">{formatCurrency(pl.net)}</div></div>
+                <div className="cf-i"><div className="l">Sales</div><div className="v pos">{formatCurrency(income)}</div></div>
+                <div className="cf-i"><div className="l">All costs</div><div className="v neg">{formatCurrency(cogs + opexTotal)}</div></div>
+                <div className="cf-i"><div className="l">Net income</div><div className="v accent">{formatCurrency(netIncome)}</div></div>
                 <div className="cf-i"><div className="l">Margin</div><div className="v">{pct(pl.margin)}</div></div>
               </div>
             </ChartCard>
 
-            <ChartCard className="g12-5" title="Vendor Costs"
-              sub={`${formatCurrency(pl.expenses)} across ${pl.billCount} bill${pl.billCount === 1 ? '' : 's'}`}>
-              <RankBar data={vendorData} money colorAt={() => C.negative} />
-              <button className="card-link" style={{ marginTop: 'auto', paddingTop: 10 }} onClick={() => { location.hash = 'payables'; }}>View all bills →</button>
+            <ChartCard className="g12-5" title="Biggest Costs"
+              sub={`${formatCurrency(cogs + opexTotal)} across ${(pl.categories ?? []).length} QuickBooks categories`}>
+              <RankBar
+                data={(pl.categories ?? []).slice(0, 8).map((c) => ({ name: c.category, value: c.total }))}
+                money colorAt={() => C.negative}
+                onSelect={(name) => { const c = pl.categories.find((x) => x.category === name); if (c) explainCategory(c); }}
+              />
             </ChartCard>
 
             <div className="section chart-card g12-12">
               <div className="section-head">
-                <div><h2 className="section-title">Monthly P&amp;L</h2><div className="section-sub">The same statement, one row per month</div></div>
+                <div><h2 className="section-title">Monthly P&amp;L</h2><div className="section-sub">QuickBooks' statement, one row per month</div></div>
               </div>
               <div className="table-wrap">
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th>Month</th><th className="num">Sales</th><th className="num">Device cost</th>
-                      <th className="num">After devices</th><th className="num">Running costs</th>
-                      <th className="num">Profit</th><th className="num">Margin</th>
+                      <th>Month</th><th className="num">Sales</th><th className="num">Cost of goods</th>
+                      <th className="num">Gross profit</th><th className="num">Expenses</th>
+                      {hasOther && <th className="num">Other</th>}
+                      <th className="num">Net income</th><th className="num">Margin</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {pl.series.map((m) => (
+                    {series.map((m) => (
                       <tr key={m.month}>
                         <td><strong>{monthLabel(m.month)} {m.month.slice(0, 4)}</strong></td>
                         <td className="num">{formatCurrency(m.revenue)}</td>
                         <td className="num">{formatCurrency(m.cogs ?? 0)}</td>
                         <td className="num">{formatCurrency(m.grossProfit ?? (m.revenue - (m.cogs ?? 0)))}</td>
                         <td className="num">{formatCurrency(m.opex ?? 0)}</td>
+                        {hasOther && <td className="num">{formatCurrency(m.other ?? 0)}</td>}
                         <td className="num" style={{ color: m.net >= 0 ? '#047857' : '#b91c1c', fontWeight: 700 }}>{formatCurrency(m.net)}</td>
                         <td className="num">{m.revenue ? pct((m.net / m.revenue) * 100) : '-'}</td>
                       </tr>
                     ))}
-                    {pl.series.length === 0 && <tr><td colSpan={7} className="muted-note">No transactions in the period.</td></tr>}
-                    {pl.series.length > 0 && (
+                    {series.length === 0 && <tr><td colSpan={hasOther ? 8 : 7} className="muted-note">No transactions in the period.</td></tr>}
+                    {series.length > 0 && (
                       <tr className="total-row">
                         <td>TOTAL</td>
-                        <td className="num">{formatCurrency(pl.revenue)}</td>
+                        <td className="num">{formatCurrency(income)}</td>
                         <td className="num">{formatCurrency(cogs)}</td>
                         <td className="num">{formatCurrency(grossProfit)}</td>
                         <td className="num">{formatCurrency(opexTotal)}</td>
-                        <td className="num">{formatCurrency(pl.net)}</td>
+                        {hasOther && <td className="num">{formatCurrency(otherIncome - otherExpenses)}</td>}
+                        <td className="num">{formatCurrency(netIncome)}</td>
                         <td className="num">{pct(pl.margin)}</td>
                       </tr>
                     )}
@@ -519,7 +531,8 @@ export function PLTab() {
                 </table>
               </div>
               <div className="muted-note">
-                Accrual basis · {period.label} · {pl.invoiceCount} Striven invoices, {pl.billCount} vendor bills from the {costSource}, and the commission book. Striven's API has no P&amp;L report, so this statement is built live from those records. Payroll, rent and other overhead are not recorded in any of them and are not included.
+                {pl.basis} basis · {period.label} · QuickBooks Profit and Loss report
+                {pl.generatedAt ? `, generated ${new Date(pl.generatedAt).toLocaleString()}` : ''}. Figures are exactly what is posted in QuickBooks.
               </div>
             </div>
           </div>

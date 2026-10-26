@@ -6,6 +6,7 @@ import {
   type ArResult, type PlResult, type SoResult, type PoResult,
   type TrendsResult, type PaymentsResult, type BillPaymentsResult,
   type OrdersResult, type ExceptionsResult, type CommissionResult, type ApLedger,
+  fetchQbPL, type QbPlResult,
 } from '../strivenApi';
 import { formatCurrency, clickableProps, isCancelledStatus, isCompletedStatus } from '../format';
 import { C, SERIES, CAT6, VERTICAL_COLORS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
@@ -105,6 +106,10 @@ export function OverviewCharts() {
   const [so, setSo] = useState<SoResult | null>(null);
   const [po, setPo] = useState<PoResult | null>(null);
   const [trends, setTrends] = useState<TrendsResult | null>(null);
+  // QuickBooks' monthly P&L for the Revenue vs Expense chart — the books, live.
+  // Admin only on the server; anyone else (or a QuickBooks outage) keeps the
+  // Striven / Master File series the chart used before, and the card says so.
+  const [qbPl, setQbPl] = useState<QbPlResult | null>(null);
   const [payments, setPayments] = useState<PaymentsResult | null>(null);
   const [orders, setOrders] = useState<OrdersResult | null>(null);
   const [exc, setExc] = useState<ExceptionsResult | null>(null);
@@ -139,6 +144,12 @@ export function OverviewCharts() {
       // the last good figures rather than blanking them.
       fetchPiLienstar().then((r) => { if (r?.ok) { setPiLien(r); setPiLienErr(false); } else setPiLienErr(true); }).catch(() => setPiLienErr(true));
       fetchVaRemittances().then((r) => { if (r?.ok) { setVaRemit(r); setVaRemitErr(false); } else setVaRemitErr(true); }).catch(() => setVaRemitErr(true));
+      {
+        // The trailing twelve months, matching the trends series' window.
+        const d = new Date(); const from = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 11, 1));
+        fetchQbPL({ start: from.toISOString().slice(0, 10), end: d.toISOString().slice(0, 10) })
+          .then((r) => setQbPl(r?.ok ? r : null)).catch(() => setQbPl(null));
+      }
       const [a, p, s, o, t, pay, ord, ex, apl, mf] = await Promise.all([
         fetchStrivenAR(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
         fetchStrivenTrends(), fetchStrivenPayments(),
@@ -474,6 +485,19 @@ export function OverviewCharts() {
   const fRev = finData.reduce((s, d) => s + d.revenue, 0);
   const fExp = finData.reduce((s, d) => s + d.expenses, 0);
   const margin = fRev > 0 ? Math.round(((fRev - fExp) / fRev) * 1000) / 10 : 0;
+  // THE REVENUE vs EXPENSE CARD reads QuickBooks' P&L when it can: income as
+  // revenue, cost of goods + expenses as expense, net income as profit, month
+  // by month. Only that card — `fRev` above stays Striven's invoiced revenue,
+  // because the collection rate and the Revenue card divide it by Striven's
+  // own payments and invoice counts.
+  const finFromQb = Boolean(qbPl?.series?.length);
+  const finChart = finFromQb
+    ? qbPl!.series.filter((s) => inFy(s.month)).map((s) => ({ month: s.month, revenue: s.revenue, expenses: s.expenses, profit: s.net }))
+    : finData;
+  const cRev = finChart.reduce((s, d) => s + d.revenue, 0);
+  const cExp = finChart.reduce((s, d) => s + d.expenses, 0);
+  const cProfit = finChart.reduce((s, d) => s + d.profit, 0);
+  const cMargin = cRev > 0 ? Math.round((cProfit / cRev) * 1000) / 10 : 0;
 
   // Program-scoped AR: payer (law firm / VA / TriCare) classifies each invoice.
   //
@@ -1504,7 +1528,7 @@ export function OverviewCharts() {
                 owe" can be read against each other rather than in isolation. */}
             {(mfOk ? mfOwed.length > 0 : apBillCount > 0) && (
               <ChartCard className="g12-4" title="AP Due"
-                sub={mfOk ? 'Owed by vendor · Master File · no offsetting' : `Open bills · ${balanceScopeLabel}${apLedgerBills ? ' · AP ledger' : ''}`}>
+                sub={mfOk ? 'Owed by vendor · Master File · no offsetting' : `Open bills · ${balanceScopeLabel}${apLedgerBills ? ' · Master File AP' : ''}`}>
                 {/* apBillCount, not ap.count: the value is the ledger's, and
                     pairing it with Striven's four made this card contradict
                     itself inside a single sentence. */}
@@ -1753,16 +1777,16 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <ChartCard className={kevinLook ? "g12-3" : !hide('overview.collectionRate') ? "g12-4" : "g12-7"} title="Revenue vs Expense" sub={`Invoiced revenue vs billed expenses · ${periodLabel}`}>
-              {finData.length > 1 && <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />}
-              <BarsLine data={finData}
+            <ChartCard className={kevinLook ? "g12-3" : !hide('overview.collectionRate') ? "g12-4" : "g12-7"} title="Revenue vs Expense" sub={finFromQb ? `QuickBooks P&L · income vs cost of goods + expenses · ${periodLabel}` : `Invoiced revenue vs billed expenses · ${periodLabel} · QuickBooks unavailable`}>
+              {finChart.length > 1 && <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />}
+              <BarsLine data={finChart}
                 bars={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expense', color: C.negative }]}
                 line={{ key: 'profit', name: 'Profit', color: C.brand }} />
               <div className="cfoot">
-                <div className="cf-i"><div className="l">Revenue</div><div className="v pos">{formatCurrency(fRev)}</div></div>
-                <div className="cf-i"><div className="l">Expense</div><div className="v neg">{formatCurrency(fExp)}</div></div>
-                <div className="cf-i"><div className="l">Profit</div><div className="v accent">{formatCurrency(fRev - fExp)}</div></div>
-                <div className="cf-i"><div className="l">Margin</div><div className="v">{margin}%</div></div>
+                <div className="cf-i"><div className="l">Revenue</div><div className="v pos">{formatCurrency(cRev)}</div></div>
+                <div className="cf-i"><div className="l">Expense</div><div className="v neg">{formatCurrency(cExp)}</div></div>
+                <div className="cf-i"><div className="l">Profit</div><div className="v accent">{formatCurrency(cProfit)}</div></div>
+                <div className="cf-i"><div className="l">Margin</div><div className="v">{cMargin}%</div></div>
               </div>
             </ChartCard>
 
