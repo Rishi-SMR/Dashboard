@@ -613,6 +613,17 @@ export const PI_LABEL_STAGE = {
 // without a redeploy. Left to rot it does not go wrong loudly — it simply keeps
 // reporting the newest paid month as still owed.
 export const COMMISSION_PAID_THROUGH = {
+  // ADVANCED TO SEPTEMBER by instruction (2026-10-26): "the commission of the
+  // month September has been paid on 15 October". The 15 Oct run settles
+  // September, by the same pay-date → month rule set out below for August.
+  // What it moved, measured on the live book before the change: $74,365.00
+  // across 129 lines — Alle Ann 42,900.00, Christy 26,600.00, Maylon 3,020.00,
+  // Jillian 1,735.00, Maylon Sanders- David/Dino 110.00 — out of Payable / Due
+  // and into Paid. VA 69,500.00, PI 4,824.00 and one $41 PI line the sheet types
+  // as "Other" (SO-791), which now folds to PI through its Striven order.
+  //
+  // Previously '2026-08' for all three, set after the 15 Sep 26 run:
+  //
   // ADVANCED TO AUGUST by instruction (2026-09-23): "the commission shown in
   // the sheet source tab named 9/15/2026 has been paid — treat it as paid
   // everywhere".
@@ -632,7 +643,7 @@ export const COMMISSION_PAID_THROUGH = {
   // settled, so nothing is left owed behind it.
   //
   // Previously '2026-07' for all three, when the 15 Aug 26 run had gone out.
-  VA: '2026-08',
+  VA: '2026-09',
   // TRICARE AND PI MOVE WITH IT, as they did in July, and today that is a
   // no-op: every one of those 148 August lines is VA — TriCare and PI carry no
   // August money at all. They are advanced anyway so the three stay on one
@@ -647,8 +658,8 @@ export const COMMISSION_PAID_THROUGH = {
   // this is the line to correct, and the correction is to move that vertical
   // BACK to its true last-paid month, not to remove it. An absent vertical means
   // "nothing paid", which would swing the error the other way.
-  TriCare: '2026-08',
-  PI: '2026-08',
+  TriCare: '2026-09',
+  PI: '2026-09',
   // NO DOL KEY YET, ON PURPOSE. verticalOfCommissionLine() now folds a DOL line
   // to 'DOL', and an absent vertical means "nothing paid" — which is true: no
   // DOL payout run has gone out. Add `DOL: 'YYYY-MM'` here after the first one.
