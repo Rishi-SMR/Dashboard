@@ -153,6 +153,9 @@ export type PiBookInvoice = {
   advance: number; advanceReceived: number; advanceOpen: number;
   /** The 85% that only bills when the case settles. NOT a receivable. */
   remainder: number;
+  /** The order's value in Striven today, where it differs from the cached
+   *  `caseValue` the figures are worked from. Null where unknown. */
+  valueNow?: number | null;
 };
 /** `amount` is whichever tranche the section is about; `caseValue` is the
  *  exposure the same cases carry, reported beside it and never added to AR. */
@@ -213,10 +216,27 @@ export type PlResult = {
   opexTotal?: number;
   /** Where vendor costs came from: the AP Ledgers workbook, or Striven's bills
    *  when the workbook could not be read. */
-  sources?: { costs: 'ap-ledger' | 'striven-bills'; commission: boolean };
+  sources?: { costs: 'ap-ledger' | 'striven-bills'; apAvailable?: boolean; commission: boolean };
   /** Costs no source available to the portal records — named on the page. */
   notCaptured?: string[];
 };
+
+/** QUICKBOOKS PROFIT & LOSS — the books' own statement (api/_qb.js
+ *  qbProfitAndLoss). Every figure is QuickBooks'; nothing is mixed in from
+ *  Striven or the AP workbook. */
+export type QbLine = { name: string; value: number };
+export type QbCategory = { category: string; section: 'cogs' | 'opex'; total: number; accounts: { label: string; value: number }[] };
+export type QbPlMonth = { month: string; revenue: number; cogs?: number; grossProfit?: number; opex?: number; other?: number; expenses: number; net: number };
+export type QbPlResult = {
+  ok: boolean; source: 'quickbooks'; basis: string; currency: string;
+  periodFrom: string; periodTo: string; generatedAt: string | null;
+  income: number | null; cogs: number | null; grossProfit: number | null; expenses: number | null;
+  netOperating: number | null; netIncome: number | null; net: number; margin: number;
+  otherIncome?: number | null; otherExpenses?: number | null;
+  incomeAccounts: QbLine[]; otherIncomeAccounts?: QbLine[]; otherExpenseAccounts?: QbLine[];
+  categories: QbCategory[]; series: QbPlMonth[];
+};
+export const fetchQbPL = (period?: PlPeriod) => get<QbPlResult>(`/api/qb/pl${periodQuery(period)}`);
 
 export const fetchStrivenStatus = () => get<StrivenStatus>('/api/status');
 export const fetchStrivenAR = () => get<ArResult>('/api/ar');
