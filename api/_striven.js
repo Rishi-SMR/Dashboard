@@ -829,7 +829,13 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
     || !('tracking' in (detail[id] || {}))
     || !('orderDate' in (detail[id] || {}))
     || !('lastUpdatedDate' in (detail[id] || {}))
-    || (updatedById.get(id) && detail[id].lastUpdatedDate && updatedById.get(id) !== detail[id].lastUpdatedDate);
+    // A NULL stored date counts as different (26 Oct 2026). An order read the
+    // moment it was created has no lastUpdatedDate yet, so the entry stored
+    // null — and the old test required BOTH dates to be set, which meant such an
+    // order was never re-read however often it was edited afterwards. SO-832
+    // (DEMO) was cached at $0 on 7 Oct, edited to $160 on 16 Oct, and kept $0:
+    // October's case value read $177,684.86 against Striven's $177,844.86.
+    || (updatedById.get(id) && updatedById.get(id) !== detail[id].lastUpdatedDate);
   const missing = soRows.map((r) => r.id).filter(stale);
   const todo = missing.slice(0, maxOrders);
 
@@ -865,7 +871,10 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
           shipVia: d?.shipVia?.name ?? d?.shipVia ?? '',
           // When Striven last changed the order — compared with the order list
           // on every run, so an edit is re-read (see `stale` above).
-          lastUpdatedDate: d?.lastUpdatedDate ?? null,
+          // The ORDER LIST's date, which is what `stale` compares against: for
+          // some orders the detail endpoint returns null while the list carries
+          // a date, and storing null would re-fetch them on every cycle.
+          lastUpdatedDate: updatedById.get(id) ?? d?.lastUpdatedDate ?? null,
         };
         fetched++;
       } catch { failed++; }
@@ -1622,7 +1631,7 @@ async function getArPending(billedSoIds = new Set()) {
  * have to choose, so this works off the amounts directly and the blind spot
  * does not carry over.
  */
-export function piBookOf(rows, orderByInv = {}) {
+export function piBookOf(rows, orderByInv = {}, valueNowBySo = {}) {
   const out = [];
   for (const i of rows) {
     if (i.vertical !== 'PI') continue;
@@ -1701,6 +1710,16 @@ export function piBookOf(rows, orderByInv = {}) {
        */
       overRate: joined && invoiced > round2(caseValue * PI_AR_RATE) + 0.01,
       caseValue, invoiced, advance, advanceReceived, advanceOpen, remainder,
+      /**
+       * THE ORDER'S VALUE IN STRIVEN TODAY (so_detail), beside the cached
+       * `caseValue` the figures above are worked from. The order chain and the
+       * patient report keep the value an order had when they were built, so an
+       * order raised later reads stale: SO-49 is $15,187 in Striven since 24 Sep
+       * but $8,492 here, which made #199 ($2,173.05, 14.3%) read as over 15%.
+       * Null where the order is unknown. The page shows the difference.
+       */
+      valueNow: ord && Number.isFinite(Number(valueNowBySo[ord.soId])) && Number(valueNowBySo[ord.soId]) > 0
+        ? round2(Number(valueNowBySo[ord.soId])) : null,
     });
   }
   /** A section: its rows sorted by its OWN figure, and the totals under them.
@@ -1790,10 +1809,10 @@ async function getAR() {
   const billedSoIds = new Set();
   for (const r of netRows) {
     const no = String(r.txnNumber ?? r.id);
-    const ord = ordMap.byInvoice[no] || ordMap.byCustRef.get(`PT-${r.customer?.id}`) || null;
+    const ord = ordMap.byInvoice[no] || ordMap.pick?.(`PT-${r.customer?.id}`, r.invoiceTotal) || ordMap.byCustRef.get(`PT-${r.customer?.id}`) || null;
     if (!ord) continue;
     orderOf[no] = ord;
-    const orderTotal = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
+    const orderTotal = soValMap.byInvoice[no] ?? soValMap.pick?.(`PT-${r.customer?.id}`, r.invoiceTotal) ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
     const billed = Number(r.invoiceTotal ?? 0);
     if (Number.isFinite(orderTotal) && orderTotal > 0 && billed > 0 && billed <= round2(orderTotal) + 0.01) {
       billedSoIds.add(String(ord.soId));
@@ -1807,7 +1826,7 @@ async function getAR() {
       || vertMap.byCustRef.get(`PT-${r.customer?.id}`)
       || verticalOfPayer(payerByInv[no])
       || '';
-    const orderTotal = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
+    const orderTotal = soValMap.byInvoice[no] ?? soValMap.pick?.(`PT-${r.customer?.id}`, r.invoiceTotal) ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
     return {
       id: r.id, number: no,
       customer: maskName(r.customer?.name), customerId: r.customer?.id ?? null,
@@ -1852,7 +1871,20 @@ async function getAR() {
   // Never lets AR fail: the chain is one cache away and the register above does
   // not depend on it.
   const pending = await getArPending(billedSoIds).catch(() => null);
-  return {
+  // ── NEVER SERVE A BOOK WITHOUT ITS ORDER LINKS (26 Oct 2026) ───────────────
+  // The programme and case value of every invoice come from the order caches in
+  // Supabase. When Supabase blips, those reads come back empty rather than
+  // failing, and every invoice fell back to Striven's raw ledger: no programme,
+  // no case value, "PT-144" for a patient — and a PI invoice billed at the full
+  // case value ($10,792 on #113) reported as receivable in full instead of its
+  // 15% advance ($1,618.80). So an empty join is treated as an outage: the last
+  // good AR is served, marked stale, and a book is only remembered as good when
+  // its joins were actually there.
+  const joinsOk = Object.keys(vertMap.byInvoice).length > 0 || vertMap.byCustRef.size > 0;
+  if (!joinsOk && _lastGoodAR) {
+    return { ..._lastGoodAR, stale: true, staleNote: 'Order links were unreachable just now; showing the last complete figures.' };
+  }
+  const result = {
     totalOpen, count: invoices.length, aging,
     unappliedCredits, voidedExcluded,
     /** Orders billed to nobody yet — see getArPending(). NOT added into
@@ -1870,10 +1902,15 @@ async function getAR() {
      * money that has arrived and money that is not owed yet, and folding either
      * into an AR total is how an AR total stops meaning anything.
      */
-    piBook: piBookOf(allRows, orderOf),
+    piBook: piBookOf(allRows, orderOf, Object.fromEntries(Object.entries(await soDetailMap().catch(() => ({}))).map(([id, d]) => [id, Number(d?.total)]))),
     invoices: invoices.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')),
   };
+  if (joinsOk) _lastGoodAR = result;
+  else result.degraded = 'Order links are unreachable, so programmes and PI case values could not be applied. PI invoices may show their full ledger balance until this clears.';
+  return result;
 }
+/** The last AR built with its order links in place — see getAR. */
+let _lastGoodAR = null;
 // ── ONE VENDOR, TWO RECORDS ──────────────────────────────────────────────────
 // Striven carries "WMD" (id 33) and "Wholesale Medical Devices" (id 306) as
 // separate vendor records for the same supplier: the second took two POs in
@@ -1925,19 +1962,18 @@ const canonicalVendorWith = (map) => (name) => {
   return map.get(s.toLowerCase()) ?? s;
 };
 
+// OPEN VENDOR BILLS — from the Master File's AP tab (26 Oct 2026), not
+// Striven's bills. Same response shape as before; `vendorId` is null because
+// the sheet has no Striven vendor record behind a row.
 async function getAP() {
-  const bills = openOnly(await allBills()).filter(notVoid);
-  const canon = canonicalVendorWith(await vendorAliasMap());
-  const rows = bills.map((r) => ({
-    id: r.id, number: r.number ?? String(r.id),
-    // The NAME is folded; `vendorId` is not, because it identifies the Striven
-    // record and two records are what is actually there.
-    vendor: canon(r.vendor?.name), vendorId: r.vendor?.id ?? null,
-    dueDate: r.dueDate ?? null, total: Number(r.totalAmount ?? 0), open: Number(r.openBalance ?? 0),
-    currency: r.currency?.currencyISOCode ?? 'USD',
+  const mf = await getMasterFileAp();
+  const open = (mf?.ok ? mf.bills ?? [] : []).filter((b) => b.kind !== 'cancelled' && b.open > 0);
+  const rows = open.map((b) => ({
+    id: b.no, number: b.no, vendor: b.subLedger, vendorId: null,
+    dueDate: b.due || null, total: Number(b.total ?? 0), open: Number(b.open ?? 0), currency: 'USD',
   }));
   const totalOpen = round2(rows.reduce((s, b) => s + b.open, 0));
-  const aging = bucketAging(bills, 'dueDate', 'openBalance');
+  const aging = bucketAging(rows.map((r) => ({ ...r, dueDate: r.dueDate ? `${r.dueDate}T00:00:00` : null })), 'dueDate', 'open');
   for (const k of Object.keys(aging)) aging[k] = round2(aging[k]);
   return { totalOpen, count: rows.length, aging, bills: rows.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')) };
 }
@@ -1986,7 +2022,6 @@ async function getPL(q = {}) {
   // (same as getAR); notVoid(r) would be a no-op here and leak voided invoices.
   const invNotVoid = (r) => !isVoidStatus(INVOICE_STATUS[r.id] ?? '');
   const inv = (await allInvoices()).filter((r) => inPeriod(r) && invNotVoid(r));
-  const bills = (await allBills()).filter((r) => inPeriod(r) && notVoid(r));
   const payments = (await allPayments()).filter((r) => notVoid(r) && inRange(r.paymentDate ?? r.dateCreated));
 
   let revenue = round2(inv.reduce((s, r) => s + Number(r.invoiceTotal ?? 0), 0));
@@ -2019,14 +2054,10 @@ async function getPL(q = {}) {
     .map(([name, value]) => ({ name, value: round2(value) }))
     .sort((a, b) => (a.name === 'Unassigned') - (b.name === 'Unassigned') || b.value - a.value);
 
-  // ── VENDOR COSTS: THE AP LEDGER, NOT STRIVEN'S BILLS ───────────────────────
-  // Striven holds 20 bills for the year; the accountant's AP Ledgers workbook
-  // holds 172. Expenses taken from Striven alone left out three quarters of
-  // what the suppliers actually invoiced and printed a 92% margin. The ledger
-  // is the book the payables are kept in, so it is the accrual source here,
-  // by bill date. The two cannot be added together — the same supplier invoice
-  // sits in both under different numbers — so Striven's bills are used only
-  // when the ledger cannot be read, and `sources.costs` says which it was.
+  // ── VENDOR COSTS: THE MASTER FILE'S AP TAB, NOT STRIVEN'S BILLS ────────────
+  // Striven holds a fraction of the bills the AP book does; expenses taken from
+  // Striven alone printed a 92% margin. The AP book — since 26 Oct 2026 the
+  // Master File's AP tab — is the accrual source here, by bill date.
   //
   // COST OF GOODS vs OPERATING: a supplier of devices is cost of goods; a
   // consultancy is overhead. Classified by vendor name — anything matching
@@ -2040,11 +2071,14 @@ async function getPL(q = {}) {
     for (const [frag, cls] of Object.entries(classOver)) if (frag && v.includes(String(frag).toLowerCase())) return String(cls);
     return /consult/.test(v) ? 'Consulting & services' : 'cogs';
   };
+  // The AP book is the Master File's AP tab (getApLedger reads it). Striven's
+  // bills are no longer a fallback: if the tab cannot be read, costs are empty
+  // and `sources.costs` says so, rather than quietly switching books.
   const ledger = await getApLedger().catch(() => null);
-  const useLedger = Boolean(ledger?.ok && ledger.bills?.length);
+  const useLedger = Boolean(ledger?.ok);
   const costRows = useLedger
     ? ledger.bills.filter((b) => inRange(b.date)).map((b) => ({ vendor: b.subLedger, date: b.date, amount: Number(b.total || 0) }))
-    : bills.map((r) => ({ vendor: r.vendor?.name ?? 'Unknown', date: r.dateCreated, amount: Number(r.totalAmount ?? 0) }));
+    : [];
   const cogsVendor = {}, opexMap = {};
   for (const c of costRows) {
     const cls = classOf(c.vendor);
@@ -2078,7 +2112,7 @@ async function getPL(q = {}) {
   const opex = [
     { name: 'Sales commission', value: commission, source: 'commission' },
     ...Object.values(opexMap).map((o) => ({
-      name: o.name, value: round2(o.value), source: useLedger ? 'ap-ledger' : 'striven-bills',
+      name: o.name, value: round2(o.value), source: 'ap-ledger',
       vendors: Object.entries(o.vendors).map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value),
     })),
   ].filter((o) => o.value !== 0).sort((a, b) => b.value - a.value);
@@ -2140,7 +2174,7 @@ async function getPL(q = {}) {
     avgInvoice: inv.length ? round2(revenue / inv.length) : 0,
     avgBill: costRows.length ? round2(round2(costRows.reduce((s, c) => s + c.amount, 0)) / costRows.length) : 0,
     series, byVendor,
-    sources: { costs: useLedger ? 'ap-ledger' : 'striven-bills', commission: commission !== 0 },
+    sources: { costs: 'ap-ledger', apAvailable: useLedger, commission: commission !== 0 },
     // WHAT THIS STATEMENT CANNOT SEE. Payroll, rent and the rest of overhead
     // are kept outside Striven and outside the AP workbook, so no figure here
     // includes them. Said on the page, so "net operating income" is never
@@ -2304,9 +2338,10 @@ async function invoicePatientMap() {
  * by-invoice join is applied last and wins wherever it has an answer.
  */
 async function invoiceOrderValueMap() {
-  const [sb, rc] = await Promise.all([
+  const [sb, rc, listByCustRef] = await Promise.all([
     sbCacheRead('order_chain').catch(() => null),
     sbCacheRead('report_patient_items').catch(() => null),
+    patientOrderLists().catch(() => new Map()),
   ]);
   const byCustRef = new Map();
   for (const o of (rc?.data?.orders || [])) {
@@ -2314,15 +2349,99 @@ async function invoiceOrderValueMap() {
     if (o.custRef && Number.isFinite(v) && v > 0) byCustRef.set(String(o.custRef), round2(v));
   }
   const byInvoice = {};
-  for (const o of Object.values((sb && sb.data) || {})) {
+  const claimed = new Set();
+  for (const [soId, o] of Object.entries((sb && sb.data) || {})) {
     const v = Number(o.value);
+    if ((o.invoices || []).length) claimed.add(String(soId));
     if (!Number.isFinite(v) || v <= 0) continue;
     for (const inv of (o.invoices || [])) {
       const num = String(inv.ref || '').replace(/^#/, '');
       if (num) byInvoice[num] = round2(v);
     }
   }
-  return { byInvoice, byCustRef };
+  /** The value of the order this invoice was raised against, matched by amount
+   *  when the patient has several — see pickOrderByAmount. */
+  const pick = (custRef, invoiceTotal) => pickOrderByAmount(listByCustRef.get(String(custRef)), invoiceTotal, claimed)?.value ?? null;
+  return { byInvoice, byCustRef, pick };
+}
+
+/**
+ * EVERY ORDER A PATIENT HAS, custRef → [{ soId, ref, rep, value }].
+ *
+ * STRIVEN'S OWN ORDER BOOK DECIDES WHO AN ORDER BELONGS TO: the `so` blob
+ * carries each order's customer, valued from so_detail (the figure the Orders
+ * tab shows). The patient-items report is NOT trusted for this — it lags, and
+ * it misfiles: it lists SO-676 ("GPosey 2") under PT-759 at $9,093 with a
+ * surname of "2", where Striven has it under G. Posey (PT-482) at $3,797.
+ * Orders only the report knows are added after, under the report's customer.
+ * Cancelled / lost orders are not cases and are left out.
+ */
+async function patientOrderLists() {
+  const [rc, soBlob, det] = await Promise.all([
+    sbCacheRead('report_patient_items').catch(() => null),
+    sbCacheRead('so').then((b) => b?.data ?? []).catch(() => []),
+    soDetailMap().catch(() => ({})),
+  ]);
+  const lists = new Map();
+  const seen = new Set();
+  const add = (custRef, soId, ref, value, rep) => {
+    const v = Number(value);
+    if (!custRef || !soId || !Number.isFinite(v) || v <= 0 || seen.has(soId)) return;
+    seen.add(soId);
+    const l = lists.get(custRef) ?? [];
+    l.push({ soId, ref, value: round2(v), rep: cleanRep(rep) || '' });
+    lists.set(custRef, l);
+  };
+  for (const r of (Array.isArray(soBlob) ? soBlob : [])) {
+    const cid = r?.customer?.id;
+    if (cid == null || r.id == null) continue;
+    const d = det[r.id] || {};
+    if (/cancel|\blost\b/i.test(String(r.status?.name ?? r.status ?? d.status ?? ''))) { seen.add(String(r.id)); continue; }
+    add(`PT-${cid}`, String(r.id), `SO-${r.id}`, d.total, d.rep);
+  }
+  for (const o of (rc?.data?.orders || [])) {
+    if (o.custRef && o.soId != null) add(String(o.custRef), String(o.soId), o.so || `SO-${o.soId}`, o.value, det[o.soId]?.rep);
+  }
+  return lists;
+}
+
+/**
+ * WHICH OF A PATIENT'S ORDERS AN UNLINKED INVOICE BELONGS TO — by its amount.
+ *
+ * The customer-reference fallback kept ONE order per patient, so a patient with
+ * two PI cases had every unlinked invoice pinned to the same one. G. Posey: #553
+ * bills $569.55, exactly 15% of SO-676 ($3,797), but was joined to SO-411
+ * ($5,995) — wrong order, wrong case value, and SO-411's Lienstar funding read
+ * as this invoice's.
+ *
+ * The case value decides it, because the invoiced amount is CALCULATED from it:
+ *   1. the order whose case value × 15% equals the invoice (the PI advance);
+ *   2. else the order whose full value equals it (billed in full);
+ *   3. else null — the caller keeps its previous answer, so nothing that
+ *      resolved before changes unless an amount actually matches.
+ * Only an AMOUNT match joins. Where two orders fit equally, the one no linked
+ * invoice has claimed wins if it is the only one; otherwise no guess. A cent
+ * either way for rounding.
+ */
+function pickOrderByAmount(list, invoiceTotal, claimed = new Set()) {
+  if (!list || !list.length) return null;
+  const t = Number(invoiceTotal);
+  if (!Number.isFinite(t) || t <= 0) return null;
+  const near = (a, b) => Math.abs(a - b) <= 0.02;
+  const tiers = [
+    list.filter((o) => near(round2(o.value * PI_AR_RATE), t)),
+    list.filter((o) => near(o.value, t)),
+  ];
+  for (const hits of tiers) {
+    if (!hits.length) continue;
+    if (hits.length === 1) return hits[0];
+    // Several orders fit the amount equally: an order no linked invoice has
+    // claimed wins, but only if it is the ONLY such order. Otherwise the
+    // amount cannot decide, and guessing is worse than the old answer.
+    const free = hits.filter((o) => !claimed.has(o.soId));
+    return free.length === 1 ? free[0] : null;
+  }
+  return null;
 }
 
 /** Programme implied by the payer, for invoices neither join reaches. */
@@ -2406,7 +2525,19 @@ async function invoiceOrderMap() {
     // same name in a different spelling.
     byCustRef.set(String(o.custRef), { soId, ref: o.so || `SO-${soId}`, rep: repBySo.get(soId) || '' });
   }
-  return { byInvoice, byCustRef };
+  // Every order the patient has, for amount-matching. invoiceOrderValueMap
+  // reads the SAME lists, so both maps pick the same order for an invoice.
+  const listByCustRef = await patientOrderLists().catch(() => new Map());
+  const claimed = new Set(Object.entries(chain).filter(([, o]) => (o.invoices || []).length).map(([id]) => String(id)));
+  /** The order an unlinked invoice belongs to, matched by amount — see
+   *  pickOrderByAmount. Falls back to the single custRef order. */
+  const pick = (custRef, invoiceTotal) => {
+    const hit = pickOrderByAmount(listByCustRef.get(String(custRef)), invoiceTotal, claimed);
+    return hit
+      ? { soId: hit.soId, ref: hit.ref, rep: repBySo.get(hit.soId) || hit.rep }
+      : (byCustRef.get(String(custRef)) ?? null);
+  };
+  return { byInvoice, byCustRef, pick };
 }
 // TriCare/VA checked before PI, and PI is word-bounded, so a type merely
 // containing "pi" (e.g. "Shipping") can't be misbooked as Personal Injury.
@@ -2898,11 +3029,14 @@ export async function getSODetailFor(id, viewer = null) {
   };
 }
 async function getTrends() {
-  const [invAll, billsAll] = await Promise.all([allInvoices(), allBills()]);
+  // Expenses are vendor bills from the Master File's AP tab (26 Oct 2026), by
+  // bill date, cancelled excluded; credit notes net in at their negative face.
+  const [invAll, mf] = await Promise.all([allInvoices(), getMasterFileAp().catch(() => null)]);
   // Invoice voids come from INVOICE_STATUS (search payload omits status); notVoid
   // is a no-op on invoices and would leak voided invoices into the revenue trend.
   const inv = invAll.filter((r) => !isVoidStatus(INVOICE_STATUS[r.id] ?? ''));
-  const bills = billsAll.filter(notVoid);
+  const bills = (mf?.ok ? mf.bills ?? [] : []).filter((b) => b.kind !== 'cancelled')
+    .map((b) => ({ dateCreated: b.date, totalAmount: b.total }));
   const months = {};
   // COUNTS PER MONTH, alongside the amounts. Without them the dashboard could
   // only ever show the FY-wide invoice count, which then sat under a
@@ -4156,8 +4290,12 @@ const sheetDate = (s) => {
  *
  * NO PHI: this tab carries no Ship To / patient column. (AP Report Base does;
  * it is deliberately not read here.)
+ *
+ * RETIRED 26 Oct 2026: AP is read from the Master File's AP tab everywhere (see
+ * getApLedger below getMasterFileAp). Kept unrouted for reference only.
  */
-export async function getApLedger() {
+// eslint-disable-next-line no-unused-vars
+async function getApLedgersSheet() {
   const id = await AP_LEDGER_ID();
   const gid = await AP_LEDGER_GID();
   if (!id) return { ok: false, configured: false, bills: [], subLedgers: [], note: 'AP_LEDGER_SHEET_ID is set neither in Supabase app_config nor in the environment.' };
@@ -4616,7 +4754,7 @@ export async function getArRegister() {
       // WHAT THE ORDER BEHIND THIS INVOICE WAS WORTH. Hoisted, because the
       // expectation below and the `orderTotal` field further down were reading
       // the same map to different ends and could disagree about one invoice.
-      const orderVal = soValMap.byInvoice[no] ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
+      const orderVal = soValMap.byInvoice[no] ?? soValMap.pick?.(`PT-${r.customer?.id}`, r.invoiceTotal) ?? soValMap.byCustRef.get(`PT-${r.customer?.id}`) ?? null;
       const hasOrder = Number.isFinite(Number(orderVal)) && Number(orderVal) > 0;
       // THE 15% IS TAKEN OFF THE ORDER, NOT OFF THIS INVOICE.
       //
@@ -4710,6 +4848,7 @@ export async function getArRegister() {
     try {
       const ordMap0 = await invoiceOrderMap();
       const custByNo0 = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.customer?.id]));
+      const totByNo0 = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.invoiceTotal]));
       const idByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.id]));
       // VA too where the cached link points at an order the VA report does not
       // hold: the customer-reference fallback can land on the patient's OTHER
@@ -4717,7 +4856,7 @@ export async function getArRegister() {
       const vaSoKey = await getVaRemittances().then((v) => (v?.ok ? v.soKey : {})).catch(() => ({}));
       const need = invoices.filter((i) => {
         if (!((i.vertical === 'PI' || i.vertical === 'VA') && i.total > 0.005)) return false;
-        const cachedSo = ordMap0.byInvoice[String(i.no)]?.soId ?? ordMap0.byCustRef.get(`PT-${custByNo0.get(String(i.no))}`)?.soId;
+        const cachedSo = ordMap0.byInvoice[String(i.no)]?.soId ?? (ordMap0.pick?.(`PT-${custByNo0.get(String(i.no))}`, totByNo0.get(String(i.no))) ?? ordMap0.byCustRef.get(`PT-${custByNo0.get(String(i.no))}`))?.soId;
         return !cachedSo || (i.vertical === 'VA' && !vaSoKey[cachedSo]);
       });
       const queue = need.slice(0, 80);
@@ -4751,7 +4890,8 @@ export async function getArRegister() {
       const lienBySo = lienRes?.ok ? lienRes.lienBySo || {} : null;
       if (lienBySo) {
         const custByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.customer?.id]));
-        const soOf = (no) => ordMap.byInvoice[no]?.soId ?? ordMap.byCustRef.get(`PT-${custByNo.get(no)}`)?.soId ?? liveSoByNo.get(no) ?? null;
+        const totByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.invoiceTotal]));
+        const soOf = (no) => ordMap.byInvoice[no]?.soId ?? (ordMap.pick?.(`PT-${custByNo.get(no)}`, totByNo.get(no)) ?? ordMap.byCustRef.get(`PT-${custByNo.get(no)}`))?.soId ?? liveSoByNo.get(no) ?? null;
         const piRows = invoices.filter((i) => i.vertical === 'PI' && i.total > 0.005)
           .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }));
         // Group by order, then allocate each Approved case's funding: an invoice
@@ -4820,10 +4960,11 @@ export async function getArRegister() {
       const [vaRes, ordMap] = await Promise.all([getVaRemittances(), invoiceOrderMap()]);
       if (vaRes?.ok) {
         const custByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.customer?.id]));
+        const totByNo = new Map(all.map((r) => [String(r.txnNumber ?? r.id), r.invoiceTotal]));
         // The order: the cached link where it leads to a VA order the report
         // holds, otherwise Striven's live invoice record (see liveSoByNo).
         const soOf = (no) => {
-          const cachedSo = ordMap.byInvoice[no]?.soId ?? ordMap.byCustRef.get(`PT-${custByNo.get(no)}`)?.soId ?? null;
+          const cachedSo = ordMap.byInvoice[no]?.soId ?? (ordMap.pick?.(`PT-${custByNo.get(no)}`, totByNo.get(no)) ?? ordMap.byCustRef.get(`PT-${custByNo.get(no)}`))?.soId ?? null;
           if (cachedSo && vaRes.soKey[cachedSo]) return cachedSo;
           return liveSoByNo.get(no) ?? cachedSo;
         };
@@ -5620,7 +5761,16 @@ export async function getCommission(viewer = null) {
   // The sheet's Vertical column spells things loosely; fold it to the same three
   // names the config is keyed by, so "VA Order" and "va" both land on VA.
   // Shared with getRepOverview's commission rollup — see the config module.
-  const vertOfLine = (l) => verticalOfCommissionLine(l?.prog);
+  //
+  // FALLING BACK TO THE ORDER (26 Oct 2026). A line the sheet types loosely
+  // ("Other") folds to nothing, and a line with no vertical is never marked
+  // paid — so SO-791's $41, a PI order in Striven paid in the 15 Oct run, sat in
+  // Payable for good. Where the sheet's column cannot be read, the order's own
+  // type in Striven (so_detail) decides.
+  const soTypeById = await soDetailMap().catch(() => ({}));
+  const vertOfLine = (l) => verticalOfCommissionLine(l?.prog)
+    // soClass, as every other order count: it files a PIP Order under PI.
+    || verticalOfCommissionLine(soClass(soTypeById[String(l?.ref ?? '').replace(/^SO-/i, '')]?.type || ''));
   // An UNDATED line is never marked paid. Its cycle could not be resolved to a
   // month, so there is no way to tell which side of the cut-off it falls — and
   // calling money paid when it may not be is the worse error of the two.
@@ -5632,6 +5782,9 @@ export async function getCommission(viewer = null) {
   const splitPaid = (lines) => {
     let paid = 0, due = 0;
     for (const l of lines) {
+      // The programme the cut-off was looked up by, so a reader (and the test)
+      // can see why a loosely-typed line landed where it did.
+      l.vertical = vertOfLine(l) || '';
       if (isPaidLine(l)) { l.state = 'paid'; paid += l.comm; } else due += l.comm;
     }
     return { paid: round2(paid), due: round2(due) };
@@ -7848,6 +8001,81 @@ export async function getMasterFileAp() {
   });
 }
 
+// ── THE AP BOOK, EVERYWHERE: THE MASTER FILE'S AP TAB ────────────────────────
+// From 26 Oct 2026, on request, every AP figure in the dashboard — the AP
+// Register, Payables, the Overview's AP cards, the P&L's vendor costs, the
+// expense trend and /api/ap — comes from the "AP" tab of the Master File For
+// SMR. The separate AP Ledgers workbook and Striven's vendor bills are no
+// longer read for AP.
+//
+// /api/ap-ledger keeps its response SHAPE (bills, payments, subLedgers, totals)
+// so the pages that read it change source without changing code paths; it is
+// simply built from getMasterFileAp. Fields that only meant something on the
+// old sheet (its per-block subtotal rows, its header-row recovery) report as
+// "nothing to check" rather than inventing a figure.
+export async function getApLedger() {
+  const mf = await getMasterFileAp();
+  if (!mf?.ok) return { ok: false, configured: true, bills: [], subLedgers: [], note: mf?.note ?? 'Master File "AP" tab is unreachable.' };
+  const terms = await apTermsMap();
+  // A bill with no Payment Terms in the tab takes the vendor's agreed term.
+  const bills = (mf.bills ?? []).map((b) => {
+    if (b.termsDays != null) return b;
+    const agreed = apTermsFor(terms, b.subLedger);
+    return agreed == null ? b : { ...b, termsDays: agreed, termsSource: 'agreed' };
+  });
+  const paidBy = new Map();
+  for (const p of mf.payments ?? []) {
+    const e = paidBy.get(p.subLedger) ?? { amount: 0, rows: 0 };
+    e.amount = round2(e.amount + p.amount); e.rows += 1;
+    paidBy.set(p.subLedger, e);
+  }
+  const bySub = new Map();
+  for (const b of bills) {
+    const g = bySub.get(b.subLedger) ?? { subLedger: b.subLedger, bills: 0, billed: 0, open: 0, openBills: 0, oldestDays: 0, terms: '', termsDays: null, termsSource: 'none', creditNotes: 0, creditNoteAmount: 0 };
+    g.bills += 1;
+    g.billed = round2(g.billed + b.total);
+    g.open = round2(g.open + b.open);
+    if (b.kind === 'credit-note') { g.creditNotes += 1; g.creditNoteAmount = round2(g.creditNoteAmount + Math.abs(b.total)); }
+    if (b.open > 0) { g.openBills += 1; g.oldestDays = Math.max(g.oldestDays, b.dueDays); }
+    if (!g.terms && b.terms) g.terms = b.terms;
+    if (g.termsDays == null && b.termsDays != null) { g.termsDays = b.termsDays; g.termsSource = b.termsSource; }
+    bySub.set(b.subLedger, g);
+  }
+  for (const g of bySub.values()) {
+    const p = paidBy.get(g.subLedger) ?? { amount: 0, rows: 0 };
+    g.paidRecorded = p.amount;
+    g.paymentRows = p.rows;
+    g.paidGap = round2(p.amount - round2(g.billed - g.open));
+    g.sheetOpen = null; g.openGap = null;           // the AP tab has no per-vendor subtotal rows
+  }
+  const open = round2(bills.reduce((s, b) => s + b.open, 0));
+  const billed = round2(bills.reduce((s, b) => s + b.total, 0));
+  return {
+    ok: true, configured: true, source: 'master-file',
+    bills,
+    payments: (mf.payments ?? []).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))),
+    subLedgers: [...bySub.values()].sort((a, b) => b.open - a.open || b.billed - a.billed),
+    totals: {
+      bills: bills.length, billed, open,
+      openBills: bills.filter((b) => b.open > 0).length,
+      paidRecorded: round2(mf.paid ?? 0),
+      paymentRows: (mf.payments ?? []).length,
+      paidImplied: round2(billed - open),
+      blocksChecked: 0, blocksMatched: 0, blockOpenTotal: 0, blockMismatches: [],
+      creditNotes: bills.filter((b) => b.kind === 'credit-note').length,
+      creditNoteAmount: round2(bills.filter((b) => b.kind === 'credit-note').reduce((s, b) => s + Math.abs(b.total), 0)),
+      headerFound: true,
+      termsFromSheet: bills.filter((b) => b.termsSource === 'sheet').length,
+      termsFilled: bills.filter((b) => b.termsSource === 'agreed').length,
+      termsMissing: bills.filter((b) => b.termsSource === 'none').length,
+      cancelled: bills.filter((b) => b.kind === 'cancelled').length,
+      cancelledAmount: round2(bills.filter((b) => b.kind === 'cancelled').reduce((s, b) => s + b.faceValue, 0)),
+    },
+    droppedHeaderRows: 0,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 // ── PI · STRIVEN AGAINST THE MASTER FILE'S LIENSTAR FUNDING ──────────────────
 // The comparison asked for on 3 Oct 2026: what Striven holds for PI (order value
 // and what was invoiced) beside the Master File's "PI Lienstar Funding" tab, and
@@ -7898,7 +8126,7 @@ async function invoiceDueBySo() {
   const out = new Map();
   for (const r of inv) {
     const no = String(r.txnNumber ?? r.id);
-    const soId = ordMap.byInvoice[no]?.soId ?? ordMap.byCustRef.get(`PT-${r.customer?.id}`)?.soId;
+    const soId = ordMap.byInvoice[no]?.soId ?? (ordMap.pick?.(`PT-${r.customer?.id}`, r.invoiceTotal) ?? ordMap.byCustRef.get(`PT-${r.customer?.id}`))?.soId;
     const due = String(r.dueDate ?? r.dateCreated ?? '').slice(0, 10);
     if (!soId || !due) continue;
     if (!out.has(soId) || due > out.get(soId)) out.set(soId, due);
@@ -8181,6 +8409,11 @@ export async function getPiLienstar() {
             dueDate: (r.soId && dueBySo.get(r.soId)) || '',
             invoiced: r.invoiced, received: r.toBeFunded, outstanding: round2(Math.max(0, r.invoiced - r.toBeFunded)),
             reason: r.kind === 'striven-only' ? 'Invoiced, no Approved Lienstar row' : r.toBeFunded > 0 ? 'Funded less than invoiced' : 'Not funded',
+            // FINAL STATUS against the Lienstar tab, for AR Due's per-order drill.
+            status: r.kind === 'striven-only'
+              ? (r.lienHold ? `On the Lienstar tab as ${r.lienHold}` : 'Not on the Lienstar tab')
+              : r.toBeFunded > 0 ? `Lienstar funded ${r.toBeFunded.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} of the invoice` : 'Approved, nothing funded',
+            lienStatus: r.kind === 'striven-only' ? (r.lienHold || '') : r.status, paidOn: r.paidOn || '', batch: r.batch || '',
           }))
           .filter((r) => r.outstanding > 0.005)
           .sort((a, b) => b.outstanding - a.outstanding);
@@ -8463,8 +8696,12 @@ export async function getVaRemittances() {
       // RECEIVABLE PER THE REMITTANCES: invoiced in Striven, not yet remitted,
       // per patient. Remitted above invoiced is `overRemitted`, not a negative.
       receivable: (() => {
+        // UNDER $2 IS ROUNDING, NOT A RECEIVABLE (26 Oct 2026): a distributor
+        // paying $1,619.04 on a $1,620.74 invoice is a fee or a rounding in the
+        // payout, and listing it as "not remitted" buried the real cases.
+        const TOL = 2;
         const list = rows
-          .filter((r) => r.kind !== 'remit-only' && r.diff > 0.005)
+          .filter((r) => r.kind !== 'remit-only' && r.diff >= TOL)
           .map((r) => ({
             patient: r.patient, orders: r.orders, payer: r.payer, lastPaid: r.lastPaid,
             invoiced: r.invoiced, received: r.remitted, outstanding: r.diff,
@@ -8472,9 +8709,24 @@ export async function getVaRemittances() {
           }))
           .sort((a, b) => b.outstanding - a.outstanding);
         const over = rows.filter((r) => r.kind !== 'remit-only' && r.diff < -0.005);
+        // ORDER BY ORDER, for AR Due's drill: each Striven VA order matched to
+        // the remittances, what was invoiced, what has been remitted against it,
+        // what is still to come and its final status.
+        const orderRows = list.flatMap((r) => (r.orders ?? [])
+          .map((o) => ({ ...o, owed: round2(o.invoiced - o.remitted) }))
+          .filter((o) => o.owed >= TOL)
+          .map((o) => ({
+            soId: o.soId, ref: o.ref, patient: r.patient, date: o.date, dueDate: o.dueDate, payer: r.payer, lastPaid: r.lastPaid,
+            invoiced: o.invoiced, received: o.remitted, outstanding: o.owed,
+            status: o.state === 'part-remitted' ? 'Part remitted'
+              : o.state === 'awaiting' ? 'Invoiced after the last remittance on the tab'
+                : 'Not remitted',
+          })))
+          .sort((a, b) => b.outstanding - a.outstanding);
         return {
           count: list.length, outstanding: sum(list, 'outstanding'), invoiced: sum(list, 'invoiced'), received: sum(list, 'received'),
-          overRemitted: round2(over.reduce((t, r) => t - r.diff, 0)), rows: list,
+          overRemitted: round2(over.reduce((t, r) => t - r.diff, 0)), rows: list, orderRows,
+          roundingExcluded: round2(rows.filter((r) => r.kind !== 'remit-only' && r.diff > 0.005 && r.diff < TOL).reduce((t, r) => t + r.diff, 0)),
         };
       })(),
       rows: rows.sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind) || Math.abs(b.diff) - Math.abs(a.diff)),

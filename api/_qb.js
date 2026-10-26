@@ -360,13 +360,22 @@ async function qbMonthlySeries(startDate, endDate, basis) {
   };
   const pick = (group) => plFindGroup(r.Rows, group) ?? [];
   const inc = pick('Income'); const cogs = pick('COGS'); const exp = pick('Expenses'); const net = pick('NetIncome');
+  const otherInc = pick('OtherIncome'); const otherExp = pick('OtherExpenses');
   const out = [];
   for (let i = 1; i < cols.length; i += 1) {
     const month = keyOf(cols[i]);
     if (!month) continue;                       // skips the trailing "Total" column
     const revenue = plNum(inc[i]?.value);
-    const expenses = plNum(cogs[i]?.value) + plNum(exp[i]?.value);
-    out.push({ month, revenue, expenses, net: net[i] ? plNum(net[i].value) : revenue - expenses });
+    const cogsM = plNum(cogs[i]?.value);
+    const opex = plNum(exp[i]?.value);
+    // Other income / other expenses sit BELOW net operating income; carried
+    // separately so the month's columns add across to its net income.
+    const other = plNum(otherInc[i]?.value) - plNum(otherExp[i]?.value);
+    const expenses = cogsM + opex;
+    out.push({
+      month, revenue, cogs: cogsM, grossProfit: revenue - cogsM, opex, other, expenses,
+      net: net[i] ? plNum(net[i].value) : revenue - expenses + other,
+    });
   }
   return out;
 }
@@ -391,6 +400,8 @@ export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
   const expenses = byGroup('Expenses');
   const netIncome = byGroup('NetIncome');
   const netOperating = byGroup('NetOperatingIncome');
+  const otherIncome = byGroup('OtherIncome');
+  const otherExpenses = byGroup('OtherExpenses');
 
   // The leaf accounts, for the breakdown table: real accounts only, never the
   // subtotals — otherwise a group and its children both appear and the column
@@ -433,6 +444,11 @@ export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
     /** Sales by income account — see plIncomeAccounts. */
     incomeAccounts: plIncomeAccounts(r.Rows),
     categories: plExpenseCategories(r.Rows),
+    /** Below the operating line: other income and other expenses, by account.
+     *  Null/empty when the company has none in the period. */
+    otherIncome, otherExpenses,
+    otherIncomeAccounts: plIncomeAccounts(r.Rows, 'OtherIncome'),
+    otherExpenseAccounts: plIncomeAccounts(r.Rows, 'OtherExpenses'),
     /** One point per month, for the trend chart. Empty if QuickBooks refused
      *  the monthly variant — the headline figures still stand without it. */
     series,
@@ -449,9 +465,11 @@ export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
  * SALES, ACCOUNT BY ACCOUNT — the leaf accounts under QuickBooks' Income
  * section, plus any money a parent account carries that its children do not
  * itemise (see plUnitemised), so the lines always add to total income.
+ * `group` reads another top-level section the same way (OtherIncome,
+ * OtherExpenses).
  */
-export function plIncomeAccounts(rows) {
-  const income = (rows?.Row ?? []).find((r) => r.group === 'Income');
+export function plIncomeAccounts(rows, group = 'Income') {
+  const income = (rows?.Row ?? []).find((r) => r.group === group);
   if (!income) return [];
   const out = [];
   const walk = (n) => {
@@ -470,11 +488,103 @@ export function plIncomeAccounts(rows) {
 }
 
 /**
+ * ── MONEY RECEIVED IN THE BANK, STRAIGHT FROM THE BOOKS (26 Oct 2026) ─────────
+ *
+ * Cash Received used Striven's customer-payment records, which are not the
+ * bank: a Lienstar wire or a distributor payout lands in the account whether or
+ * not anyone applied it to an invoice in Striven. This reads QuickBooks' General
+ * Ledger for every BANK-type account and keeps the money coming IN — deposits,
+ * received payments, sales receipts, anything that raised a bank balance.
+ *
+ * TRANSFERS ARE LEFT OUT: money moved between SMR's own accounts raises one
+ * balance and lowers another, and counting it would report SMR paying itself.
+ * They are totalled separately so the card can say what it excluded.
+ *
+ * Each line is named by its QuickBooks payee where the books have one, else by
+ * the bank's own description with the wire/ACH boilerplate stripped
+ * ("INCOMING WIRE TRANSFER LIENSTAR …" → "LIENSTAR").
+ */
+const BOILER = /\s+(incoming|wire|transfer|payroll|ach|misc|pay|quickbooks|distributor|payout|smr|xx\S*|\d{4,}\S*)\b.*$/i;
+const sourceOf = (name, memo) => {
+  if (String(name || '').trim()) return String(name).trim();
+  const m = String(memo || '').replace(/\s+/g, ' ').trim()
+    .replace(/^(incoming wire transfer|wire transfer|ach credit|ach|deposit|mobile deposit|remote deposit)\s+/i, '')
+    .replace(BOILER, '').trim();
+  const t = m.split(' ').slice(0, 3).join(' ');
+  // Bank descriptions are SHOUTED; a payee name reads better in title case.
+  return t ? t.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()) : 'Unnamed deposit';
+};
+/** One payer however the bank spelled it: "Hi-Dow International Incorporated",
+ *  "HI-DOW INTERNATI…" and "Hi Dow International" all key to "hidowi". */
+const sourceKey = (src) => String(src || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6) || 'unnamed';
+/** Borrowed money is not money received from customers. */
+const isLoan = (d) => /\bloan\b/i.test(`${d.name} ${d.memo}`);
+
+export async function qbBankDeposits({ start, end } = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(String(start ?? '')) ? start : `${today.slice(0, 4)}-01-01`;
+  const endDate = /^\d{4}-\d{2}-\d{2}$/.test(String(end ?? '')) ? end : today;
+  const acc = await qbApi(`query?query=${encodeURIComponent("select Id, Name from Account where AccountType = 'Bank'")}`);
+  const banks = acc.QueryResponse?.Account ?? [];
+  if (!banks.length) return { ok: true, accounts: [], total: 0, count: 0, byMonth: [], bySource: [], deposits: [], transfersExcluded: 0, loansExcluded: 0, loans: [] };
+  const gl = await qbApi(`reports/GeneralLedger?start_date=${startDate}&end_date=${endDate}&account=${banks.map((a) => a.Id).join(',')}&columns=tx_date,txn_type,doc_num,name,memo,account_name,subt_nat_amount`);
+  const cols = (gl.Columns?.Column ?? []).map((c) => String(c.MetaData?.find((m) => m.Name === 'ColKey')?.Value ?? c.ColTitle ?? ''));
+  const at = (key, title) => { const i = cols.findIndex((c) => c === key || c.toLowerCase() === title); return i; };
+  const iDate = at('tx_date', 'date'), iType = at('txn_type', 'transaction type'), iName = at('name', 'name'),
+    iMemo = at('memo', 'memo/description'), iAcct = at('account_name', 'account'), iAmt = at('subt_nat_amount', 'amount');
+  const deposits = [];
+  let transfersExcluded = 0;
+  const loans = [];
+  const walk = (node) => {
+    for (const r of node?.Row ?? []) {
+      if (r.ColData) {
+        const v = (i) => (i >= 0 ? String(r.ColData[i]?.value ?? '') : '');
+        const date = v(iDate);
+        const amount = plNum(v(iAmt));
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && amount > 0.005) {
+          const type = v(iType);
+          const d = { date, type, name: v(iName), memo: v(iMemo), account: v(iAcct), amount: Math.round(amount * 100) / 100, source: sourceOf(v(iName), v(iMemo)) };
+          if (/^transfer$/i.test(type)) transfersExcluded = Math.round((transfersExcluded + amount) * 100) / 100;
+          else if (isLoan(d)) loans.push(d);
+          else deposits.push(d);
+        }
+      }
+      if (r.Rows) walk(r.Rows);
+    }
+  };
+  walk(gl.Rows);
+  deposits.sort((a, b) => a.date.localeCompare(b.date) || b.amount - a.amount);
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const group = (keyOf) => {
+    const m = new Map();
+    for (const d of deposits) { const k = keyOf(d); const e = m.get(k) ?? { amount: 0, count: 0 }; e.amount = r2(e.amount + d.amount); e.count += 1; m.set(k, e); }
+    return m;
+  };
+  return {
+    ok: true, periodFrom: startDate, periodTo: endDate,
+    accounts: banks.map((a) => a.Name),
+    total: r2(deposits.reduce((s, d) => s + d.amount, 0)), count: deposits.length,
+    byMonth: [...group((d) => d.date.slice(0, 7))].map(([month, e]) => ({ month, ...e })).sort((a, b) => a.month.localeCompare(b.month)),
+    // Grouped by payer key; named by the payee QuickBooks records, else the
+    // first spelling seen.
+    bySource: [...group((d) => sourceKey(d.source))].map(([k, e]) => {
+      const named = deposits.find((d) => sourceKey(d.source) === k && d.name) ?? deposits.find((d) => sourceKey(d.source) === k);
+      return { name: named?.source ?? k, ...e };
+    }).sort((a, b) => b.amount - a.amount),
+    deposits, transfersExcluded,
+    /** Loan proceeds into the bank — real money in, but borrowed, so not
+     *  counted as received; listed so the card can say so. */
+    loansExcluded: r2(loans.reduce((s, d) => s + d.amount, 0)), loans,
+  };
+}
+
+/**
  * Only the read side is routed. QuickBooks is the books; the portal reads its
  * statement and never writes into it.
  */
 export async function qbHandle(pathname, q) {
   if (pathname === '/api/qb/pl') return { json: await qbProfitAndLoss({ start: q.start, end: q.end, basis: q.basis }) };
+  if (pathname === '/api/qb/bank-deposits') return { json: await qbBankDeposits({ start: q.start, end: q.end }) };
   if (pathname === '/api/qb/status') return { json: await qbStatus() };
   if (pathname === '/api/qb/connect') return { redirect: await qbAuthUrl() };
   if (pathname === '/api/qb/disconnect') return { json: await qbDisconnect() };
