@@ -92,6 +92,28 @@ const partsFor = (year: number) => {
  * assembled from three other systems disagreed with it by six figures (payroll
  * and contract labour, recorded only there, were missing entirely).
  */
+/**
+ * DISPLAY NAMES FOR QUICKBOOKS ACCOUNTS (26 Oct 2026, on request). QuickBooks
+ * keeps its own names; this page shows the business's. "Contract labor" is what
+ * the reps are paid, so it reads as Rep Commissions — on the category, its
+ * accounts and any "(not itemised)" remainder. Matched case-insensitively on the
+ * start of the name, so the books renaming the account to its own new name just
+ * stops matching rather than breaking anything.
+ */
+const QB_DISPLAY_NAMES: [RegExp, string][] = [
+  [/^contract labou?r(?![a-z])/i, 'Rep Commissions'],
+];
+const qbName = (name: string) => {
+  for (const [re, to] of QB_DISPLAY_NAMES) if (re.test(name)) return name.replace(re, to);
+  return name;
+};
+const relabelQb = (r: QbPlResult): QbPlResult => ({
+  ...r,
+  categories: (r.categories ?? []).map((c) => ({
+    ...c, category: qbName(c.category), accounts: c.accounts.map((a) => ({ ...a, label: qbName(a.label) })),
+  })),
+});
+
 export function PLTab() {
   const [year, setYear] = useState<number>(THIS_YEAR);
   const [part, setPart] = useState<PlPart>('all');
@@ -117,7 +139,7 @@ export function PLTab() {
   async function load(silent = false) {
     if (!silent) { setLoading(true); setError(null); }
     try {
-      setPl(await fetchQbPL({ start: period.start, end: period.end }));
+      setPl(relabelQb(await fetchQbPL({ start: period.start, end: period.end })));
       setLastSync(Date.now());
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : 'Failed to load the QuickBooks P&L.');
@@ -319,7 +341,7 @@ export function PLTab() {
               onClick={() => explainSection('Cost of goods sold', cogsCats, cogs)} />
             <KpiR ico="trend" tint="#DC2626" label="Expenses" value={opexTotal} format={formatCurrency}
               delta={expD} deltaInvert deltaText={`${cents(opexTotal)} of every $1`}
-              foot="payroll, contract labour & overhead"
+              foot="payroll, rep commissions & overhead"
               onClick={() => explainSection('Expenses', opexCats, opexTotal)} />
             <KpiR ico="pie" tint="#0A369F" label="Net income" value={netIncome} format={formatCurrency}
               delta={netD} deltaText={`keeps ${cents(netIncome)} of every $1`}

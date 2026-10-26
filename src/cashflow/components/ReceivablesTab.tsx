@@ -674,6 +674,14 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
                   </select>
                 </div>
               </div>
+              {/* The book could not be joined to its orders just now. Stale:
+                  last complete figures are shown. Degraded: no good build to
+                  fall back on, so PI may read at its full ledger balance. */}
+              {(ar.degraded || ar.stale) && (
+                <div className={ar.degraded ? 'qb-banner warn' : 'info-banner'} style={{ marginBottom: 12 }}>
+                  <span>{ar.degraded || ar.staleNote}</span>
+                </div>
+              )}
               {progFilter !== 'All' && PROG_NOTE[progFilter] && (
                 <div className="info-banner" style={{ marginBottom: 12 }}>
                   <span className="info-banner-icon">ℹ</span>

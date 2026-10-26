@@ -6,7 +6,8 @@ import {
   type ArResult, type PlResult, type SoResult, type PoResult,
   type TrendsResult, type PaymentsResult, type BillPaymentsResult,
   type OrdersResult, type ExceptionsResult, type CommissionResult, type ApLedger,
-  fetchQbPL, type QbPlResult,
+  fetchQbPL, type QbPlResult, fetchQbBankDeposits, type QbBankDeposits,
+  fetchArRegister, type ArRegister,
 } from '../strivenApi';
 import { formatCurrency, clickableProps, isCancelledStatus, isCompletedStatus } from '../format';
 import { C, SERIES, CAT6, VERTICAL_COLORS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
@@ -110,6 +111,10 @@ export function OverviewCharts() {
   // Admin only on the server; anyone else (or a QuickBooks outage) keeps the
   // Striven / Master File series the chart used before, and the card says so.
   const [qbPl, setQbPl] = useState<QbPlResult | null>(null);
+  // Money received in the bank, per QuickBooks — the Cash Received card.
+  const [qbBank, setQbBank] = useState<QbBankDeposits | null>(null);
+  // Every Striven invoice with its date — the Revenue card's invoiced detail.
+  const [arReg, setArReg] = useState<ArRegister | null>(null);
   const [payments, setPayments] = useState<PaymentsResult | null>(null);
   const [orders, setOrders] = useState<OrdersResult | null>(null);
   const [exc, setExc] = useState<ExceptionsResult | null>(null);
@@ -149,6 +154,10 @@ export function OverviewCharts() {
         const d = new Date(); const from = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 11, 1));
         fetchQbPL({ start: from.toISOString().slice(0, 10), end: d.toISOString().slice(0, 10) })
           .then((r) => setQbPl(r?.ok ? r : null)).catch(() => setQbPl(null));
+        // This year and last, so any FY or month the board is set to is covered.
+        fetchQbBankDeposits({ start: `${d.getUTCFullYear() - 1}-01-01`, end: d.toISOString().slice(0, 10) })
+          .then((r) => setQbBank(r?.ok ? r : null)).catch(() => setQbBank(null));
+        fetchArRegister().then((r) => setArReg(r?.ok ? r : null)).catch(() => setArReg(null));
       }
       const [a, p, s, o, t, pay, ord, ex, apl, mf] = await Promise.all([
         fetchStrivenAR(), fetchStrivenPL(), fetchStrivenSO(), fetchStrivenPO(),
@@ -446,6 +455,77 @@ export function OverviewCharts() {
     : null;
   const cashD = momDelta(cashSeries, asOfYm);
   const cashFY = cashSeries.reduce((s, p) => s + p.value, 0);
+  // CASH RECEIVED = MONEY THAT REACHED THE BANK (26 Oct 2026, on request): read
+  // from QuickBooks' bank ledger for the selected period, not Striven's payment
+  // records. Only the Cash Received card uses it — Collection Rate and Cash Flow
+  // still set Striven's payments against Striven's invoicing, like with like.
+  const bankFromQb = Boolean(qbBank?.ok);
+  const bankSeries = (qbBank?.byMonth ?? []).filter((m) => inFy(m.month)).map((m) => ({ month: m.month, value: m.amount }));
+  const bankDeps = (qbBank?.deposits ?? []).filter((d) => inFy(d.date.slice(0, 7)));
+  const bankTotal = bankSeries.reduce((s, p) => s + p.value, 0);
+  const bankTop = (() => {
+    const m = new Map<string, { name: string; amount: number }>();
+    for (const d of bankDeps) {
+      const k = d.source.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6);
+      const e = m.get(k) ?? { name: d.name || d.source, amount: 0 };
+      e.amount += d.amount; m.set(k, e);
+    }
+    return [...m.values()].sort((a, b) => b.amount - a.amount)[0] ?? null;
+  })();
+  const bankBest = bankSeries.reduce<{ month: string; value: number } | null>((b, p) => (!b || p.value > b.value ? p : b), null);
+  const bankLoans = (qbBank?.loans ?? []).filter((d) => inFy(d.date.slice(0, 7))).reduce((s, d) => s + d.amount, 0);
+  // ── REVENUE: CASE VALUE BOOKED vs INVOICED (26 Oct 2026, on request) ───────
+  // Case value = the sales orders booked in the period (order date), at their
+  // order value, cancelled left out. Invoiced = the Striven invoices dated in
+  // the period. They are different cohorts — an invoice this month can be for
+  // an order booked earlier — so both are shown, never one derived from the
+  // other.
+  const caseOrders = (so?.recent ?? []).filter((o) => o.date && inFy(String(o.date).slice(0, 7)) && !isCancelledStatus(o.status));
+  const caseValueP = caseOrders.reduce((t, o) => t + (Number(o.value) || 0), 0);
+  const caseSeries = (() => {
+    const m = new Map<string, number>();
+    for (const o of caseOrders) { const k = String(o.date).slice(0, 7); m.set(k, (m.get(k) ?? 0) + (Number(o.value) || 0)); }
+    return [...m].sort(([a], [b]) => a.localeCompare(b)).map(([month, value]) => ({ month, value }));
+  })();
+  const invRowsP = (arReg?.invoices ?? []).filter((i) => i.date && inFy(i.date.slice(0, 7)));
+  const invoicedP = arReg ? invRowsP.reduce((t, i) => t + (i.total || 0), 0) : revSeries.reduce((t, p) => t + p.value, 0);
+  const invoicedCountP = arReg ? invRowsP.length : invCountP;
+  /** The detail behind the Revenue card: every order booked and every invoice
+   *  raised in the period, with a per-programme summary on top. */
+  const drillRevenue = () => {
+    const prog = new Map<string, { orders: number; caseValue: number; invoices: number; invoiced: number }>();
+    const bump = (k: string) => prog.get(k) ?? { orders: 0, caseValue: 0, invoices: 0, invoiced: 0 };
+    for (const o of caseOrders) { const k = o.type || 'Other'; const e = bump(k); e.orders += 1; e.caseValue += Number(o.value) || 0; prog.set(k, e); }
+    for (const i of invRowsP) { const k = i.vertical || 'Unassigned'; const e = bump(k); e.invoices += 1; e.invoiced += i.total || 0; prog.set(k, e); }
+    const progRows = [...prog].sort((a, b) => (b[1].caseValue + b[1].invoiced) - (a[1].caseValue + a[1].invoiced));
+    setDrill({
+      title: `Revenue · ${periodLabel}`,
+      sub: `Case value booked ${formatCurrency(caseValueP)} (${caseOrders.length} orders) · invoiced ${formatCurrency(invoicedP)} (${invoicedCountP ?? 0} invoices)`,
+      summary: (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px', fontSize: 13 }}>
+          {progRows.map(([k, e]) => (
+            <span key={k}><b>{k}</b> case {formatCurrency(e.caseValue)}<span style={{ color: C.muted }}> · {e.orders} order{e.orders === 1 ? '' : 's'}</span>
+              {' '}· invoiced {formatCurrency(e.invoiced)}<span style={{ color: C.muted }}> · {e.invoices} inv</span></span>
+          ))}
+        </div>
+      ),
+      columns: [{ key: 'r', label: 'Order / Invoice' }, { key: 'd', label: 'Date' }, { key: 'g', label: 'Programme' }, { key: 'p', label: 'Patient' }, { key: 's', label: 'Status' }, { key: 'v', label: 'Amount', num: true }],
+      rows: [
+        { r: <b>Orders booked · case value</b>, d: '', g: '', p: '', s: `${caseOrders.length} orders`, v: <b>{formatCurrency(caseValueP)}</b>, rowClass: 'total-row' },
+        ...[...caseOrders].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((o) => ({
+          r: o.ref, d: shortDate(o.date), g: o.type || '-', p: o.patient || '-',
+          s: <span style={{ color: C.muted }}>{o.status}{o.invStatus ? ` · invoiced: ${o.invStatus}` : ''}</span>,
+          v: formatCurrency(Number(o.value) || 0),
+        })),
+        { r: <b>Invoices raised · invoiced</b>, d: '', g: '', p: '', s: `${invoicedCountP ?? 0} invoices`, v: <b>{formatCurrency(invoicedP)}</b>, rowClass: 'total-row' },
+        ...[...invRowsP].sort((a, b) => b.date.localeCompare(a.date)).map((i) => ({
+          r: `#${i.no}`, d: shortDate(i.date), g: i.vertical || '-', p: i.patient || '-',
+          s: <span style={{ color: C.muted }}>{i.open > 0.005 ? `${formatCurrency(i.open)} open` : 'paid'}</span>,
+          v: formatCurrency(i.total || 0),
+        })),
+      ],
+    });
+  };
 
   // Cash flow: customer payments in vs vendor bill payments out, by month (FY-scoped).
   //
@@ -1001,7 +1081,14 @@ export function OverviewCharts() {
   // the card worth reading: it isolates orders that are DONE BUT NOT BILLED —
   // delivered work earning nothing — which the funnel hid entirely.
   const orderStates = (() => {
-    const rows = (so?.recent ?? []).filter((o) => !isCancelledStatus(o.status));
+    // THE PERIOD AND PROGRAMME ON THE BOARD (26 Oct 2026, on request): the
+    // orders BOOKED in the selected period (order date — the same cohort as the
+    // Revenue card's case value), in the selected programme, by where each one
+    // stands today. It counted the whole book whatever the board was set to.
+    const inScope = (o: { date?: string | null; type?: string }) =>
+      Boolean(o.date) && inFy(String(o.date).slice(0, 7)) && (prog === 'All' || o.type === prog);
+    const scoped = (so?.recent ?? []).filter(inScope);
+    const rows = scoped.filter((o) => !isCancelledStatus(o.status));
     const done = (o: { status: string }) => isCompletedStatus(o.status);
     const billed = (o: { invStatus: string }) => /full/i.test(o.invStatus || '');
     const n = { workOpen: 0, workBilled: 0, doneUnbilled: 0, doneBilled: 0 };
@@ -1019,7 +1106,7 @@ export function OverviewCharts() {
         { name: 'Done · not billed', value: n.doneUnbilled, color: C.negative },
         { name: 'Done · billed', value: n.doneBilled, color: C.positive },
       ],
-      cancelled: so?.statusGroups?.cancelled?.count ?? 0,
+      cancelled: scoped.length - rows.length,
     };
   })();
 
@@ -1117,6 +1204,37 @@ export function OverviewCharts() {
 
   // ---- click-through drills: every list/donut leads to its underlying rows ----
   // Every open invoice for one payer. Mirrors drillApBill.
+  /** CASH RECEIVED, DEPOSIT BY DEPOSIT: who the money came from, per
+   *  QuickBooks' bank ledger, for the board's period — payers totalled on top. */
+  const drillBank = () => {
+    const bySrc = new Map<string, { name: string; amount: number; n: number }>();
+    for (const d of bankDeps) {
+      const k = d.source.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6);
+      const e = bySrc.get(k) ?? { name: d.name || d.source, amount: 0, n: 0 };
+      e.amount += d.amount; e.n += 1; bySrc.set(k, e);
+    }
+    const payers = [...bySrc.values()].sort((a, b) => b.amount - a.amount);
+    setDrill({
+      title: `Received in Bank · ${periodLabel}`,
+      sub: `${bankDeps.length} deposit${bankDeps.length === 1 ? '' : 's'} into the bank · QuickBooks · ${formatCurrency(bankTotal)}`,
+      summary: (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px', fontSize: 13 }}>
+          {payers.map((p) => (
+            <span key={p.name}><b>{p.name}</b> {formatCurrency(p.amount)}{p.n > 1 ? <span style={{ color: C.muted }}> · {p.n} deposits</span> : null}</span>
+          ))}
+        </div>
+      ),
+      columns: [{ key: 'd', label: 'Date' }, { key: 'f', label: 'Received from' }, { key: 'm', label: 'Bank description' }, { key: 'a', label: 'Account' }, { key: 'v', label: 'Amount', num: true }],
+      rows: [
+        ...[...bankDeps].sort((x, y) => y.date.localeCompare(x.date) || y.amount - x.amount).map((d) => ({
+          d: shortDate(d.date), f: <b>{d.name || d.source}</b>,
+          m: <span title={d.memo} style={{ color: C.muted }}>{trunc(d.memo || d.type, 48)}</span>,
+          a: d.account, v: formatCurrency(d.amount),
+        })),
+        { d: <b>Total</b>, f: '', m: '', a: '', v: <b>{formatCurrency(bankTotal)}</b>, rowClass: 'total-row' },
+      ],
+    });
+  };
   const drillArPayer = (payer: string) => setDrill({
     title: payer || 'Payer', sub: 'Open invoices for this payer',
     // Same PATIENT column the Due drills carry, for the same reason: a list of
@@ -1447,7 +1565,7 @@ export function OverviewCharts() {
                 <div className="rank-list is-scroll">
                   {[
                     { k: 'pi' as const, ico: 'PI', name: 'PI · not funded by Lienstar', sub: recvPi ? `${recvPi.count} case${recvPi.count === 1 ? '' : 's'} · ${formatCurrency(recvPi.invoiced)} invoiced` : piLienErr ? 'Master File unavailable · retrying' : 'Loading the Master File…', v: recvPi?.outstanding ?? 0, tint: VERTICAL_COLORS.PI },
-                    { k: 'va' as const, ico: 'VA', name: 'VA · not remitted', sub: recvVa ? `${recvVa.count} patient${recvVa.count === 1 ? '' : 's'} · ${formatCurrency(recvVa.invoiced)} invoiced` : vaRemitErr ? 'Master File unavailable · retrying' : 'Loading the Master File…', v: recvVa?.outstanding ?? 0, tint: VERTICAL_COLORS.VA },
+                    { k: 'va' as const, ico: 'VA', name: 'VA · not remitted', sub: recvVa ? `${recvVa.orderRows ? `${recvVa.orderRows.length} order${recvVa.orderRows.length === 1 ? '' : 's'} · ` : ''}${recvVa.count} patient${recvVa.count === 1 ? '' : 's'} · ${formatCurrency(recvVa.invoiced)} invoiced` : vaRemitErr ? 'Master File unavailable · retrying' : 'Loading the Master File…', v: recvVa?.outstanding ?? 0, tint: VERTICAL_COLORS.VA },
                     { k: 'ledger' as const, ico: 'ST', name: 'Other programmes · Striven', sub: `${ledgerOther.length} open invoice${ledgerOther.length === 1 ? '' : 's'} · TriCare, DOL, unassigned`, v: ledgerOtherSum, tint: C.muted },
                   ].map((r) => (
                     <div key={r.k} className="rk-row" style={{ cursor: 'pointer' }} {...clickableProps(() => setArView(r.k))}>
@@ -1465,21 +1583,35 @@ export function OverviewCharts() {
                   </div>
                 </div>
               )}
+              {/* ORDER BY ORDER (26 Oct 2026, on request): each Striven order
+                  matched to the Master File — PI to the Lienstar Funding tab,
+                  VA to the Remittances tab — with what was invoiced, what has
+                  arrived, what is still to come and its final status. */}
               {(arView === 'pi' || arView === 'va') && (
                 <div className="rank-list is-scroll">
-                  {(arView === 'pi' ? recvPi?.rows ?? [] : recvVa?.rows ?? []).map((r, i) => (
-                    <div key={`${r.patient}-${i}`} className="rk-row"
-                      title={`${r.patient} · invoiced ${formatCurrency(r.invoiced)} · received ${formatCurrency(r.received)}`}>
+                  {(arView === 'pi'
+                    ? (recvPi?.rows ?? []).map((r) => ({ ref: r.ref, patient: r.patient, invoiced: r.invoiced, received: r.received, outstanding: r.outstanding, status: r.status || r.reason, sub: r.lawFirm }))
+                    : (recvVa?.orderRows ?? (recvVa?.rows ?? []).map((r) => ({ ref: r.orders.map((o) => o.ref).join(', '), patient: r.patient, invoiced: r.invoiced, received: r.received, outstanding: r.outstanding, status: r.reason, payer: r.payer })))
+                      .map((r) => ({ ref: r.ref, patient: r.patient, invoiced: r.invoiced, received: r.received, outstanding: r.outstanding, status: r.status, sub: r.payer }))
+                  ).map((r, i) => (
+                    <div key={`${r.ref}-${r.patient}-${i}`} className="rk-row"
+                      title={`${r.ref || 'No order'} · ${r.patient} · invoiced ${formatCurrency(r.invoiced)} · received ${formatCurrency(r.received)} · yet to receive ${formatCurrency(r.outstanding)}${r.sub ? ` · ${r.sub}` : ''}`}>
                       <span className="rk-ico" style={{ background: 'rgba(13,148,136,0.10)', color: '#0D9488' }}>{initials(r.patient || '-')}</span>
                       <span className="rk-name">
-                        {trunc(r.patient || '-', 20)}
+                        <b>{r.ref || '-'}</b> · {trunc(r.patient || '-', 16)}
                         <span style={{ display: 'block', fontSize: 10.5, color: r.received > 0 ? C.warning : C.negative, fontWeight: 600 }}>
-                          {r.reason}{r.received > 0 ? ` · ${formatCurrency(r.received)} in` : ''}
+                          {r.status}
+                        </span>
+                        <span style={{ display: 'block', fontSize: 10.5, color: C.muted, fontWeight: 600 }}>
+                          invoiced {formatCurrency(r.invoiced)} · received {formatCurrency(r.received)}
                         </span>
                       </span>
                       <span className="rk-val">{formatCurrency(r.outstanding)}</span>
                     </div>
                   ))}
+                  {arView === 'va' && (recvVa?.roundingExcluded ?? 0) > 0 && (
+                    <div className="muted-note">{formatCurrency(recvVa!.roundingExcluded!)} of remittance rounding (under $2 per patient) is treated as received.</div>
+                  )}
                   {(arView === 'pi' ? !recvPi : !recvVa) && (
                     <div className="muted-note">
                       {(arView === 'pi' ? piLienErr : vaRemitErr)
@@ -1518,7 +1650,7 @@ export function OverviewCharts() {
                   <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Invoices</div><div className="v accent">{arInv.length}</div></div>
                 </>) : (<>
                   <div className="cf-i"><div className="l">{arView === 'pi' ? 'Not funded' : 'Not remitted'}</div><div className="v">{formatCurrency((arView === 'pi' ? recvPi?.outstanding : recvVa?.outstanding) ?? 0)}</div></div>
-                  <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">{arView === 'pi' ? 'Cases' : 'Patients'}</div><div className="v accent">{(arView === 'pi' ? recvPi?.count : recvVa?.count) ?? 0}</div></div>
+                  <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">{arView === 'pi' ? 'Cases' : 'Orders'}</div><div className="v accent">{(arView === 'pi' ? recvPi?.count : (recvVa?.orderRows?.length ?? recvVa?.count)) ?? 0}</div></div>
                 </>)}
               </div>
               <button className="card-link" onClick={go('receivables')}>Open receivables →</button>
@@ -1700,10 +1832,10 @@ export function OverviewCharts() {
                 are mutually exclusive and sum to the book. */}
             {orderStates.total > 0 && (
               <ChartCard className="g12-4" title="Order book"
-                sub={`Every live order, by where it stands · ${PROG_LABEL[prog]}`}>
+                sub={`Orders booked in ${periodLabel}, by where they stand · ${PROG_LABEL[prog]}`}>
                 <MetricDetail
                   value={orderStates.total} format={(n) => Math.round(n).toLocaleString()}
-                  sub={<>live orders · {orderStates.cancelled} cancelled excluded</>}
+                  sub={<>live orders booked in this period · {orderStates.cancelled} cancelled excluded</>}
                   rail={orderStates.rail}
                   facts={[
                     { label: 'Completed', value: String(orderStates.doneBilled + orderStates.doneUnbilled),
@@ -1721,29 +1853,58 @@ export function OverviewCharts() {
             {/* REVENUE — the rail is the months INSIDE the active period, which
                 sum to the headline. Under a single-month period it is one
                 segment, which is the honest picture. */}
-            {fRev > 0 && (
+            {(caseValueP > 0 || invoicedP > 0) && (
               <ChartCard className="g12-4" title={`Revenue · ${periodLabel}`}
-                sub={`Invoiced${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}`}>
+                sub={`Case value booked vs invoiced${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}`}>
+                {/* The whole card opens the orders and invoices behind it. */}
+                <div style={{ cursor: 'pointer' }} title="See every order booked and every invoice raised" {...clickableProps(drillRevenue)}>
                 <MetricDetail
-                  value={fRev} format={formatCurrency}
-                  sub={<>{invCountP != null ? `${invCountP} invoice${invCountP === 1 ? '' : 's'}` : `${pl.invoiceCount} invoices · FY${fy}`} in this period</>}
-                  rail={monthRail(revSeries, C.brand)}
+                  value={caseValueP} format={formatCurrency}
+                  sub={<>case value · {caseOrders.length} order{caseOrders.length === 1 ? '' : 's'} booked in this period</>}
+                  rail={monthRail(caseSeries, C.brand)}
                   facts={[
-                    { label: 'Avg invoice', value: invCountP ? formatCurrency(fRev / invCountP) : formatCurrency(pl.avgInvoice ?? 0), note: 'per invoice' },
-                    ...(bestRev ? [{ label: 'Best month', value: monthLabel(bestRev.month), note: formatCurrency(bestRev.value) }] : []),
-                    { label: 'Expenses', value: formatCurrency(fExp), note: 'billed in period' },
-                    { label: 'Margin', value: fRev > 0 ? `${Math.round(((fRev - fExp) / fRev) * 100)}%` : '-', note: formatCurrency(fRev - fExp) },
+                    { label: 'Invoiced', value: formatCurrency(invoicedP), note: `${invoicedCountP ?? 0} invoice${invoicedCountP === 1 ? '' : 's'}` },
+                    { label: 'Avg case', value: caseOrders.length ? formatCurrency(caseValueP / caseOrders.length) : '-', note: 'per order' },
+                    { label: 'Invoiced ÷ case', value: caseValueP > 0 ? `${Math.round((invoicedP / caseValueP) * 100)}%` : '-', note: 'same period' },
                   ]}
+                  note={<>Case value is the orders booked in the period; invoiced is the invoices dated in it. An invoice can be for an order booked earlier, so the two are not the same cases.</>}
                 />
+                <button type="button" className="card-link" style={{ marginTop: 8 }} onClick={(e) => { e.stopPropagation(); drillRevenue(); }}>
+                  Details · {caseOrders.length} orders, {invoicedCountP ?? 0} invoices →
+                </button>
+                </div>
               </ChartCard>
             )}
 
             {/* CASH RECEIVED — collection rate compares cash and revenue over
                 the SAME period, so it can never divide a month of cash by a
                 year of invoicing. */}
-            {cashFY > 0 && (
+            {bankFromQb ? (
+              <ChartCard className="g12-4" title={`Received in Bank · ${periodLabel}`}
+                sub={`Money received in the bank · QuickBooks · ${qbBank!.accounts.join(', ')}`}>
+                {/* The whole card opens the deposit list: who paid, when, how much. */}
+                <div style={{ cursor: 'pointer' }} title="See every deposit and who it came from" {...clickableProps(drillBank)}>
+                <MetricDetail
+                  value={bankTotal} format={formatCurrency}
+                  sub={<>{bankDeps.length} deposit{bankDeps.length === 1 ? '' : 's'} in this period</>}
+                  rail={monthRail(bankSeries, C.positive)}
+                  facts={[
+                    ...(bankTop ? [{ label: 'Top source', value: trunc(bankTop.name, 16), note: formatCurrency(bankTop.amount) }] : []),
+                    { label: 'Avg deposit', value: bankDeps.length ? formatCurrency(bankTotal / bankDeps.length) : '-', note: 'per deposit' },
+                    ...(bankBest ? [{ label: 'Best month', value: monthLabel(bankBest.month), note: formatCurrency(bankBest.value) }] : []),
+                  ]}
+                  note={bankLoans > 0.005
+                    ? <>Excludes {formatCurrency(bankLoans)} of loan proceeds — borrowed money, not money received. Transfers between SMR's own accounts are excluded too.</>
+                    : <>Every deposit into the bank accounts in QuickBooks. Transfers between SMR's own accounts are excluded.</>}
+                />
+                <button type="button" className="card-link" style={{ marginTop: 8 }} onClick={(e) => { e.stopPropagation(); drillBank(); }}>
+                  Who paid · {bankDeps.length} deposit{bankDeps.length === 1 ? '' : 's'} →
+                </button>
+                </div>
+              </ChartCard>
+            ) : cashFY > 0 && (
               <ChartCard className="g12-4" title={`Cash Received · ${periodLabel}`}
-                sub="Customer payments">
+                sub="Customer payments · Striven (QuickBooks unavailable)">
                 <MetricDetail
                   value={cashFY} format={formatCurrency}
                   sub={<>{payCountP != null ? `${payCountP} payment${payCountP === 1 ? '' : 's'}` : `${payments.count} payments · all time`} in this period</>}
