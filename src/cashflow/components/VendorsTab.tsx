@@ -6,7 +6,7 @@ import {
 import { formatCurrency, formatPhone } from '../format';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
-import { ChartCard, RankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
+import { ChartCard, RankBar, DrillModal, KpiR, useSyncAgo, SourceTag } from '../chartKit';
 
 const PAGE_SIZE = 10;
 type SortKey = 'name' | 'number' | 'status' | 'terms';
@@ -197,13 +197,13 @@ export function VendorsTab() {
             {/* "Vendors by Status" removed on request. Its two figures are not
                 lost: the Suppliers / Active / Prospect KPI tiles above carry the
                 same counts and open the same `openStatusDrill`. */}
-            <ChartCard className="g12-12" title="PO Spend by Vendor" sub={`Active POs only${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar for detail`}>
+            <ChartCard className="g12-12" title="PO Spend by Vendor" source="Striven" sub={`Active POs only${po.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar for detail`}>
               <RankBar data={spendData} money colorAt={() => C.brand} onSelect={openDrillFor} />
             </ChartCard>
 
             <div className="section chart-card g12-12">
               <div className="section-head">
-                <div><h2 className="section-title">Vendor Directory</h2><div className="section-sub">{filtered.length.toLocaleString()} suppliers</div></div>
+                <div><h2 className="section-title">Vendor Directory</h2><SourceTag /><div className="section-sub">{filtered.length.toLocaleString()} suppliers</div></div>
                 <div className="tbl-controls">
                   <input className="tbl-search" style={{ width: 230 }} type="text" value={query}
                     onChange={(e) => { setQuery(e.target.value); setPage(1); }}

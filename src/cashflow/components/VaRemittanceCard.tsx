@@ -56,9 +56,9 @@ export function VaRemittanceCard({ className = 'g12-12' }: { className?: string 
   }, []);
 
   const title = 'VA · Striven vs Remittances';
-  if (!d) return <ChartCard className={className} title={title} sub="Loading the Master File…"><div className="muted-note">Loading…</div></ChartCard>;
+  if (!d) return <ChartCard className={className} title={title} source="Striven & Master File" sub="Loading the Master File…"><div className="muted-note">Loading…</div></ChartCard>;
   if (!d.ok || !d.striven || !d.remit || !d.diff || !d.match) {
-    return <ChartCard className={className} title={title} sub="Master File · VA Remmittances"><div className="muted-note">{d.note ?? 'Comparison unavailable.'}</div></ChartCard>;
+    return <ChartCard className={className} title={title} source="Striven & Master File" sub="Master File · VA Remmittances"><div className="muted-note">{d.note ?? 'Comparison unavailable.'}</div></ChartCard>;
   }
   const { striven: s, remit: r, diff, match } = d;
   const ex = d.excluded;
@@ -68,7 +68,7 @@ export function VaRemittanceCard({ className = 'g12-12' }: { className?: string 
   const tot = (k: 'value' | 'invoiced' | 'remitted' | 'diff') => list.reduce((t, x) => t + (x[k] || 0), 0);
 
   return (
-    <ChartCard className={className} title={title}
+    <ChartCard className={className} title={title} source="Striven & Master File"
       sub="Striven (live VA order report) against the Master File's VA Remmittances tab · cancelled orders excluded · difference is invoiced − remitted · click an outcome for its patients">
       <div className="table-wrap">
         <table className="data-table">

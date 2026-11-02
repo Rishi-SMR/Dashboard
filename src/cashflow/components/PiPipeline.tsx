@@ -4,6 +4,7 @@ import { SoLink } from './SoLink';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
 import { DeviceChips } from './DeviceChips';
+import { SourceTag } from '../chartKit';
 import { TrackingCell } from './TrackingCell';
 import { ColumnFilter, SortHead } from './ColumnFilter';
 import { ALL_TIME, MonthSelect, monthLabel } from './MonthSelect';
@@ -424,6 +425,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
               : board === 'VA' ? 'VA pipeline'
                 : board === 'PIP' ? 'PIP pipeline' : 'Personal Injury pipeline'}
           </h2>
+          <SourceTag />
           <div className="section-sub">
             {board === 'VA' ? (
               <>
@@ -637,6 +639,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                 <h2 className="section-title">
                   {reviewLabels.length} label{reviewLabels.length === 1 ? '' : 's'} carrying no stage
                 </h2>
+                <SourceTag />
                 <div className="section-sub">
                   Unrecognised labels first - those are a mapping gap. Exceptions below them are working as intended and are cases to chase.
                 </div>
@@ -677,6 +680,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
                 <h2 className="section-title">
                   {reviewOrders.length} order{reviewOrders.length === 1 ? '' : 's'} affected
                 </h2>
+                <SourceTag />
                 <div className="section-sub">Newest first. The label that put the order here is marked; the rest are shown for context.</div>
               </div></div>
               <div className="table-wrap">
@@ -760,6 +764,7 @@ export function PiPipeline({ viewAs, kind = 'PI' }: { viewAs?: string | null; ki
             <h2 className="section-title" style={{ color: stageColor(open) }}>
               {open} · {openOrders.length === inStage.length ? `${inStage.length}` : `${openOrders.length} of ${inStage.length}`} order{inStage.length === 1 ? '' : 's'}
             </h2>
+            <SourceTag />
             <div className="section-sub">
               {scopeEff === 'now'
                 ? <>The orders <b>standing at this stage now</b> &mdash; the figure on the card. </>

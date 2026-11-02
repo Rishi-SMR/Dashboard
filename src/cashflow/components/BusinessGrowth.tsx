@@ -6,7 +6,7 @@ import { C, gridProps, axisProps, tooltipStyle, compactMoney, monthLabel as axis
 import { LegendDots } from '../chartKit';
 import { formatCurrency } from '../format';
 import { monthLabel, thisMonthKey } from './MonthSelect';
-import { fetchQbPL } from '../strivenApi';
+import { fetchQbPL, peekQbPL } from '../strivenApi';
 
 /**
  * BUSINESS GROWTH, MONTH BY MONTH — the company's own line on the team board.
@@ -72,25 +72,35 @@ function Chip({ value, label, tone }: { value: string; label: string; tone?: str
   );
 }
 
+function asRows(series: { month: string; revenue: number; net: number }[], now: string): Row[] {
+  return series.map((m) => {
+    const running = m.month === now;
+    const net = Number(m.net) || 0;
+    return { month: m.month, revenue: Number(m.revenue) || 0, net, running, netLine: running ? null : net };
+  });
+}
+
 export function BusinessGrowth() {
-  const [rows, setRows] = useState<Row[] | null>(null);
   const now = thisMonthKey();
+  // Drawn at once from the last statement this session saw (see peekQbPL);
+  // the live fetch below replaces it when it lands.
+  const [rows, setRows] = useState<Row[] | null>(() => {
+    const cached = peekQbPL();
+    return cached ? asRows(cached.series ?? [], now) : null;
+  });
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      const asRows = (series: { month: string; revenue: number; net: number }[]) => series
-        .map((m) => {
-          const running = m.month === now;
-          const net = Number(m.net) || 0;
-          return { month: m.month, revenue: Number(m.revenue) || 0, net, running, netLine: running ? null : net };
-        });
       try {
         // QuickBooks' P&L, year to date, one point per month — the books, live.
         const p = await fetchQbPL();
         if (!alive) return;
-        setRows(asRows(p.series ?? []));
-      } catch { if (alive) setRows([]); }
+        setRows(asRows(p.series ?? [], now));
+      } catch {
+        // A failed refresh keeps the statement already on screen.
+        if (alive) setRows((r) => r ?? []);
+      }
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps

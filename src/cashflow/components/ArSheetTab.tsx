@@ -1,7 +1,7 @@
 import { useMemo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
-import { KpiR, ChartCard, AgingBar, MonthBars, DrillModal } from '../chartKit';
+import { KpiR, ChartCard, AgingBar, MonthBars, DrillModal, SourceTag } from '../chartKit';
 import { fetchArRegister, fetchStrivenAR, type ArRegister, type ArRegisterInvoice, type ArResult } from '../strivenApi';
 import { PiBook } from './PiBook';
 import { ColumnFilter } from './ColumnFilter';
@@ -1863,7 +1863,7 @@ export function ArSheetTab() {
             {/* 4 / 3 / 5 rather than the old 5 / 7. AR EXPECTED is three figures
                 and a bar, so it needs the least room of the three; the two
                 charts keep the rest. */}
-            <ChartCard className="g12-4" title="AR AGING" sub="Open receivables by days past due">
+            <ChartCard className="g12-4" title="AR AGING" source="Striven & AR Register" sub="Open receivables by days past due">
               <AgingBar aging={reg.aging} />
             </ChartCard>
 
@@ -1871,7 +1871,7 @@ export function ArSheetTab() {
                 The figure existed only as a phrase in the Invoice Book subtitle
                 below, where the reader had to hold two totals in their head to
                 see the gap. Here the gap IS the card. */}
-            <ChartCard className="g12-4" title="AR RECEIVABLE" sub="What is still owed - PI after the advance, every other programme its open invoices">
+            <ChartCard className="g12-4" title="AR RECEIVABLE" source="Striven & AR Register" sub="What is still owed - PI after the advance, every other programme its open invoices">
               <div className="ar-exp">
                 <div className="ar-exp-head">
                   <div>
@@ -1936,7 +1936,7 @@ export function ArSheetTab() {
               </div>
             </ChartCard>
 
-            <ChartCard className="g12-4" title="BILLED BY MONTH"
+            <ChartCard className="g12-4" title="BILLED BY MONTH" source="Striven & AR Register"
               sub={`Invoice value raised each month · ${t.invoices} invoices · click a month for its invoices${
                 monthHidden > 0
                   ? ` · ${monthHidden} month${monthHidden === 1 ? '' : 's'} with nothing billed hidden${
@@ -2014,6 +2014,7 @@ export function ArSheetTab() {
                       missing; the programme in the heading is what says it is
                       not. */}
                   <h2 className="section-title">{vert === 'all' ? 'INVOICE BOOK' : `${vert.toUpperCase()} INVOICE BOOK`}</h2>
+                  <SourceTag source="Striven & AR Register" />
                   <div className="section-sub">
                     <b>{book.invoices}</b> invoices · {WORD.billed} <b>{formatCurrency(book.billed, true)}</b> ·
                     {' '}{WORD.expected} <b>{formatCurrency(book.arExpected, true)}</b>

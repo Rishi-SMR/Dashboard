@@ -3,7 +3,7 @@ import { fetchStrivenExceptions, type ExceptionsResult, type ExceptionGroup } fr
 import { formatCurrency } from '../format';
 import { StatusPill } from './StatusPill';
 import { C } from '../chartTheme';
-import { DrillModal, useSyncAgo } from '../chartKit';
+import { DrillModal, useSyncAgo, SourceTag } from '../chartKit';
 
 const PREVIEW_ROWS = 6;
 
@@ -99,6 +99,7 @@ export function ExceptionsTab() {
                       <span className={`pill-tag tag-${tone(g.severity)}`} style={{ marginRight: 8, textTransform: 'uppercase', fontSize: 10 }}>{g.severity}</span>
                       {g.title}
                     </h2>
+                    <SourceTag />
                     <div className="section-sub">{g.note}</div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>

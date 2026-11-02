@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { fetchRepOverview, fetchMe, type Me, type RepOverview, type RepRow, type RepVertical } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C, VERTICAL_COLORS as V_C } from '../chartTheme';
-import { KpiExec, HUE, useSyncAgo } from '../chartKit';
+import { KpiExec, HUE, useSyncAgo, SourceTag } from '../chartKit';
 import { OrderDashboard } from './OrderDashboard';
 import { PiPipeline } from './PiPipeline';
 import { DashboardOverview } from './DashboardOverview';
@@ -456,6 +456,7 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               <div className="section-head">
                 <div>
                   <h2 className="section-title">The team</h2>
+                  <SourceTag source="Striven (orders) & Commission sheets (pay)" />
                   <div className="section-sub">
                     {isManager
                       ? 'Every rep in full. Click a row for their vertical breakdown.'
@@ -562,10 +563,12 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                     const scoped = month !== ALL_TIME;
                     const tm = scoped ? (data.teamByMonth ?? []).find((x) => x.month === month) : null;
                     const proj = reps.map((r) => repInPeriod(r, month));
+                    const un = isManager ? data.unassigned ?? null : null;
                     const sum = (pick: (p: ReturnType<typeof repInPeriod>) => number | null | undefined) =>
                       proj.reduce((s, p) => s + (Number(pick(p)) || 0), 0);
                     return (
-                      <tfoot><tr className="total-row">
+                      <tfoot>
+                      <tr className="total-row">
                         <td /><td>{isManager ? 'All reps' : 'Team'}</td>
                         <td className="num">{scoped ? (tm?.orders ?? 0) : t?.orders}</td>
                         <td className="num">{scoped ? n(tm?.units ?? 0) : n(t?.units)}</td>
@@ -581,7 +584,31 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
                         <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{pay(sum((p) => p.payable))}</td>
                         <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{pay(sum((p) => p.waiting))}</td>
                         <td className="num" style={{ fontWeight: 800 }}>{pay(scoped ? sum((p) => p.earned) : t?.commission)}</td><td />
-                      </tr></tfoot>
+                      </tr>
+                      {/* UNASSIGNED REP, a CHECK LINE under the total and not a
+                          part of it (on instruction: it is "just to keep a check
+                          on the Unassigned amount"). Commission-sheet money with
+                          no rep — blank Rep cells, CMC direct, Cassie — and
+                          Cassie's orders. All reps + this line = the sheet.
+                          Admin only; the server sends it to no one else. */}
+                      {un && (() => {
+                        const p = repInPeriod(un, month);
+                        return (
+                          <tr style={{ color: C.muted, fontStyle: 'italic' }}
+                            title="Commission-sheet money with no rep to own it: blank Rep cells, CMC direct and Cassie. Not counted in All reps or on any leaderboard.">
+                            <td /><td>Unassigned Rep <span style={{ fontSize: 11 }}>· not in totals</span></td>
+                            <td className="num">{p.orders}</td>
+                            <td className="num">{n(p.units)}</td>
+                            <td className="num">{n(p.accounts)}</td>
+                            <td className="num">{money(p.revenue)}</td>
+                            <td className="num">{pay(p.payable)}</td>
+                            <td className="num">{pay(p.waiting)}</td>
+                            <td className="num" style={{ fontWeight: 700 }}>{pay(p.earned)}</td>
+                            <td><VerticalCounts parts={p.byVertical} total={p.orders} /></td>
+                          </tr>
+                        );
+                      })()}
+                      </tfoot>
                     );
                   })()}
                 </table>
@@ -1138,6 +1165,7 @@ export function TeamStandings({ viewAs }: { viewAs?: string | null }) {
       <div className="section chart-card">
         <div className="section-head"><div>
           <h2 className="section-title">Leaderboard</h2>
+          <SourceTag />
           <div className="section-sub">Order count only: revenue and commission are private to each rep.</div>
         </div></div>
         <div className="table-wrap">
@@ -1453,6 +1481,7 @@ function BoardTile({ rows, leader, totalOrders, pct, canOpen, openableCount, onP
       <div className="section-head" style={{ minHeight: 52, alignItems: 'flex-start' }}>
         <div>
           <h2 className="section-title">Leaderboard</h2>
+          <SourceTag />
           <div className="section-sub">
             {openableCount > 1
               ? 'Reps by orders booked · click a rep for their full breakdown'
@@ -1714,6 +1743,7 @@ function TeamShape({ reps }: { reps: RepRow[] }) {
     <div className="section chart-card" style={{ marginBottom: 14 }}>
       <div className="section-head"><div>
         <h2 className="section-title">Leaders &amp; reconciliation</h2>
+        <SourceTag source="Striven (orders) & Commission sheets (pay)" />
         <div className="section-sub">
           Across the {total} orders booked to the reps.
           {' '}Everything above covers the full order book, including orders booked to house and clinic accounts.
@@ -1840,6 +1870,7 @@ function RepDetail({ rep, inline = false }: { rep: RepRow; inline?: boolean }) {
     <div className="section chart-card">
       <div className="section-head"><div>
         <h2 className="section-title">{rep.rep}</h2>
+        <SourceTag source="Striven (orders) & Commission sheets (pay)" />
         <div className="section-sub">Your commission and the orders behind it.</div>
       </div></div>
       {body}

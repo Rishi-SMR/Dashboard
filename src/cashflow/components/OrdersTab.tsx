@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { C, isDol } from '../chartTheme';
 import { formatCurrency, isCompletedStatus, isCancelledStatus } from '../format';
-import { ChartCard, RankBar, ShareRankBar, DrillModal, KpiR, useSyncAgo } from '../chartKit';
+import { ChartCard, RankBar, ShareRankBar, DrillModal, KpiR, useSyncAgo, SourceTag } from '../chartKit';
 import {
   fetchStrivenSO,
   fetchStrivenPO,
@@ -468,7 +468,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                 demo out (it was hiding 29 orders worth $18,169). The subtitle
                 now names what IS held back: cancelled orders, 24 of them worth
                 $125,011, which is the only thing missing from these bars. */}
-            <ChartCard className="g12-6" title="Order Value by Type" sub="PI vs VA vs Tri-Care vs DEMO · cancelled orders excluded"
+            <ChartCard className="g12-6" title="Order Value by Type" source="Striven" sub="PI vs VA vs Tri-Care vs DEMO · cancelled orders excluded"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={typeMode === 'value' ? 'active' : ''} onClick={() => setTypeMode('value')}>By Order Value</button>
@@ -487,7 +487,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
                 }} />
             </ChartCard>
 
-            <ChartCard className="g12-6" title="Sales Orders by Status" sub={`${so.count.toLocaleString()} orders · click a row to drill in`}
+            <ChartCard className="g12-6" title="Sales Orders by Status" source="Striven" sub={`${so.count.toLocaleString()} orders · click a row to drill in`}
               right={<span className="deck-pill muted">by count</span>}>
               <RankBar data={statusData} colorAt={(i) => STATUS_COLOR(statusData[i]?.name ?? '')} onSelect={drillSoStatus} />
             </ChartCard>
@@ -495,7 +495,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
             {/* `so.byRep` is the ROSTER now (folded to canonical names server-
                 side), so what it leaves out has to be said rather than left as
                 a gap between this board and the 501 on the tiles above. */}
-            <ChartCard className="g12-12" title="Top Sales Reps · Leaderboard"
+            <ChartCard className="g12-12" title="Top Sales Reps · Leaderboard" source="Striven"
               sub={`PI reps by order count, VA reps by units (VA pays per unit): dollar value varies by program. No patient data.${
                 (() => {
                   const onRoster = so.byRep.reduce((s, r) => s + r.count, 0);
@@ -533,6 +533,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
           <div className="section chart-card" style={{ marginTop: 16 }} ref={soTableRef}>
             <div className="section-head">
               <div><h2 className="section-title">All Sales Orders</h2>
+                <SourceTag />
                 <div className="section-sub">
                   {soRecentFiltered.length} of {so.recent.length} orders
                   {soLabelF ? ` · label: ${soLabelF}` : ''}
@@ -683,6 +684,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
           <div className="exec-grid12">
             <ChartCard className="g12-12"
               title="Top Vendors by PO Spend"
+              source="Striven"
               sub={`Active purchase orders only${po.cancelledCount ? ` · excludes ${po.cancelledCount} cancelled (${formatCurrency(po.cancelledValue ?? 0)})` : ''}${po.demoCount ? ` and ${po.demoCount} raised for DEMO orders (${formatCurrency(po.demoValue ?? 0)})` : ''} · click a bar to drill in`}
             >
               {/* ShareRankBar, not RankBar: on a scale that reaches $52k the
@@ -699,7 +701,7 @@ export function OrdersTab({ initialMode = 'sales' }: { initialMode?: Mode } = {}
 
           <div className="section chart-card" style={{ marginTop: 16 }}>
             <div className="section-head">
-              <div><h2 className="section-title">All Purchase Orders</h2><div className="section-sub">{poRecentFiltered.length} of {(po.recent ?? []).length} active POs · click a row for full detail</div></div>
+              <div><h2 className="section-title">All Purchase Orders</h2><SourceTag /><div className="section-sub">{poRecentFiltered.length} of {(po.recent ?? []).length} active POs · click a row for full detail</div></div>
               <div className="tbl-controls">
                 <input className="tbl-search" style={{ width: 180 }} value={poQuery} onChange={(e) => { setPoQuery(e.target.value); setPoPage(1); }} placeholder="Search PO / vendor" />
                 <select className="tbl-select" value={poStatusF} onChange={(e) => { setPoStatusF(e.target.value); setPoPage(1); }}>

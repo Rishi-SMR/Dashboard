@@ -190,10 +190,10 @@ export function AccountsTab() {
           </div>
 
           <div className="exec-grid12">
-            <ChartCard className="g12-5" title="Accounts by Type" sub={`${accounts.length.toLocaleString()} GL accounts · click a bar to drill in`}>
+            <ChartCard className="g12-5" title="Accounts by Type" source="Striven" sub={`${accounts.length.toLocaleString()} GL accounts · click a bar to drill in`}>
               <RankBar data={typeData} colorAt={(i) => SERIES[i % SERIES.length]} onSelect={openTypeDrill} />
             </ChartCard>
-            <ChartCard className="g12-7" title="Payments Received by Month" sub={`${formatCurrency(pay.total)} across ${pay.count.toLocaleString()} payments`}>
+            <ChartCard className="g12-7" title="Payments Received by Month" source="Striven" sub={`${formatCurrency(pay.total)} across ${pay.count.toLocaleString()} payments`}>
               <TrendArea data={pay.byMonth} series={[{ key: 'amount', name: 'Received', color: C.positive }]} idPrefix="acct-pay" dots />
             </ChartCard>
           </div>
@@ -230,7 +230,7 @@ export function AccountsTab() {
           {/* `pay.recent` is the server's 30-row slice, not all `pay.count` — so
               the sub names both figures. "Latest of 198" read as though the
               table held 198 rows and scrolling would reach them. */}
-          <ChartCard title="Recent Customer Payments Received" sub={`Latest ${pay.recent.length} of ${pay.count.toLocaleString()} customer payments · patient names masked`}>
+          <ChartCard title="Recent Customer Payments Received" source="Striven" sub={`Latest ${pay.recent.length} of ${pay.count.toLocaleString()} customer payments · patient names masked`}>
             {/* Capped and scrolled: the register is as tall as the card lets it
                 be, and the column titles stay put while it moves. */}
             <div className="table-wrap scroll-y">
@@ -261,7 +261,7 @@ export function AccountsTab() {
           </ChartCard>
 
           {/* ── Chart of accounts (full ledger, every field) ────────── */}
-          <ChartCard title="Chart of Accounts" sub={`${accounts.length.toLocaleString()} GL accounts · every field Striven's API returns`}>
+          <ChartCard title="Chart of Accounts" source="Striven" sub={`${accounts.length.toLocaleString()} GL accounts · every field Striven's API returns`}>
             <div className="info-banner">
               <span className="info-banner-icon">ℹ</span>
               <span>

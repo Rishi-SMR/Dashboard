@@ -66,7 +66,7 @@ export const COMPANY_NAV: Array<{ key: ViewKey; label: string }> = [
   // which split each side's figures across two places.
   { key: 'receivables', label: 'Receivables' },
   { key: 'payables', label: 'Payables' },
-  { key: 'pl', label: 'P&L' },
+  { key: 'pl', label: 'P&L/Balance Sheet' },
   { key: 'orders', label: 'Orders' },
   { key: 'vendors', label: 'Vendors & Items' },
   { key: 'accounts', label: 'Accounts' },

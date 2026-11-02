@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { ArPending } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { SoLink } from './SoLink';
+import { SourceTag } from '../chartKit';
 
 // Sales orders that exist in Striven and have never been invoiced, every
 // vertical. The list is getArPending() on the server: cancelled, lost, DEMO and
@@ -31,6 +32,7 @@ export function YetToInvoice({ pending, className, listHeight = 300, fill = fals
       <div className="section-head">
         <div>
           <h2 className="section-title">Yet to be Invoiced</h2>
+          <SourceTag />
           <div className="section-sub">{orders.length.toLocaleString()} sales orders · all verticals · cancelled &amp; lost excluded</div>
         </div>
       </div>

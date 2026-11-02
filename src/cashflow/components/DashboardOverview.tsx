@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { fetchOrderAnalytics, fetchPiStages, type OrderAnalytics, type PiStages, type RepRow } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
+import { SourceTag } from '../chartKit';
 import { shortDeviceName } from './DeviceChips';
 
 // Palettes below were checked with the categorical validator, not chosen by eye.
@@ -184,6 +185,7 @@ function BarList({ title, sub, slices, total, fmt = (n: number) => String(n), em
     <div className="section chart-card" style={{ marginTop: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="section-head" style={{ minHeight: 52, alignItems: 'flex-start' }}><div>
         <h2 className="section-title">{title}</h2>
+        <SourceTag />
         {sub && <div className="section-sub">{sub}</div>}
       </div></div>
 
@@ -344,6 +346,7 @@ function StageStrip({ slices, unfiltered, noLabels, boardTotal }: {
     <div className="section chart-card" style={{ marginTop: 0, marginBottom: 14 }}>
       <div className="section-head"><div>
         <h2 className="section-title">PI pipeline</h2>
+        <SourceTag />
         {/* Before the strip, because it is about every cell in it. */}
         {noLabels && (
           <div style={{

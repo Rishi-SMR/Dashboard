@@ -5,7 +5,7 @@ import { StatusPill } from './StatusPill';
 import { SoLink } from './SoLink';
 import { soIdFromRef } from '../soRef';
 import { C } from '../chartTheme';
-import { KpiR, useSyncAgo } from '../chartKit';
+import { KpiR, useSyncAgo, SourceTag } from '../chartKit';
 
 const PAGE_SIZE = 15;
 type SortKey = 'value' | 'ref' | 'po' | 'inv';
@@ -149,7 +149,7 @@ export function OrderTrackingTab({ embedded = false }: { embedded?: boolean } = 
 
           <div className="section chart-card">
             <div className="section-head">
-              <div><h2 className="section-title">Orders</h2><div className="section-sub">{filtered.length.toLocaleString()} orders · click a row to see its POs &amp; invoices</div></div>
+              <div><h2 className="section-title">Orders</h2><SourceTag /><div className="section-sub">{filtered.length.toLocaleString()} orders · click a row to see its POs &amp; invoices</div></div>
               <div className="tbl-controls">
                 <input className="tbl-search" style={{ width: 220 }} type="text" value={query}
                   onChange={(e) => { setQuery(e.target.value); setPage(1); }}

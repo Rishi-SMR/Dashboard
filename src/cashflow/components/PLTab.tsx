@@ -1,4 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { BalanceSheetView } from './BalanceSheetView';
+import { HealthRemarks, type HealthRemark } from './HealthRemarks';
 import { fetchQbPL, type QbPlResult, type QbPlMonth, type QbLine, type QbCategory, type PlPeriod } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C, monthLabel } from '../chartTheme';
@@ -114,7 +116,18 @@ const relabelQb = (r: QbPlResult): QbPlResult => ({
   })),
 });
 
+/** "2026-10-27" → "Oct 27, 2026", split by hand so no timezone moves the day. */
+const fmtDay = (d: string) => { const [y, m, day] = d.split('-').map(Number); return `${MONTHS[m - 1]} ${day}, ${y}`; };
+
 export function PLTab() {
+  // ── TWO VIEWS OF THE BOOKS (27 Oct 2026, on request) ──────────────────────
+  // Profit & Loss (a period's performance) and Balance Sheet (the position at
+  // the END of that same period). One period picker drives both. Remembered
+  // for the session so a reload lands on the view the reader was using.
+  const [view, setView] = useState<'pl' | 'bs'>(() => {
+    try { return sessionStorage.getItem('smr.plView') === 'bs' ? 'bs' : 'pl'; } catch { return 'pl'; }
+  });
+  const pickView = (v: 'pl' | 'bs') => { setView(v); try { sessionStorage.setItem('smr.plView', v); } catch { /* private mode: not remembered */ } };
   const [year, setYear] = useState<number>(THIS_YEAR);
   const [part, setPart] = useState<PlPart>('all');
   const period = periodOf(year, part);
@@ -173,6 +186,116 @@ export function PLTab() {
   const cogsCats = (pl?.categories ?? []).filter((c) => c.section === 'cogs');
   const opexCats = (pl?.categories ?? []).filter((c) => c.section === 'opex');
   const hasOther = otherIncome !== 0 || otherExpenses !== 0;
+
+  // ── P&L HEALTH, IN WORDS (27 Oct 2026, on request) ─────────────────────────
+  // The Balance Sheet's remarks, for the P&L: every finding worked out from the
+  // figures on this page, its threshold stated here and in the footnote.
+  // Trends compare COMPLETE months only — the running month is a part-month and
+  // would always read as a fall.
+  const plRemarks: HealthRemark[] = [];
+  if (pl && income > 0) {
+    const pc = (n: number) => `${n.toFixed(1)}%`;
+    const cents = (n: number) => `${Math.round((n / income) * 100)}¢`;
+    // 1. NET MARGIN: >= 15% healthy, above 0 thin, at or below 0 a loss.
+    const nm = (netIncome / income) * 100;
+    plRemarks.push({
+      tone: nm >= 15 ? 'good' : nm > 0 ? 'watch' : 'concern',
+      title: nm >= 15 ? 'Profitable, with a healthy margin' : nm > 0 ? 'Profitable, on a thin margin' : 'Losing money',
+      text: <>Net income {formatCurrency(netIncome)} on {formatCurrency(income)} of sales: <b>{pc(nm)}</b> of every dollar is kept after every cost.</>,
+    });
+    // 2. GROSS MARGIN: >= 50% healthy, 30-50% watch, below 30% a concern.
+    const gm = (grossProfit / income) * 100;
+    plRemarks.push({
+      tone: gm >= 50 ? 'good' : gm >= 30 ? 'watch' : 'concern',
+      title: gm >= 50 ? 'Strong mark-up on the devices' : gm >= 30 ? 'Modest mark-up on the devices' : 'Devices cost too much of the sale',
+      text: <>Cost of goods is {formatCurrency(cogs)}, {cents(cogs)} of every $1 of sales, leaving a <b>{pc(gm)}</b> gross margin to pay for everything else.</>,
+    });
+    // 3. OPERATING MARGIN: >= 10% healthy, 0-10% watch, below 0 a concern.
+    const om = (netOperating / income) * 100;
+    plRemarks.push({
+      tone: om >= 10 ? 'good' : om >= 0 ? 'watch' : 'concern',
+      title: om >= 10 ? 'The core business makes money on its own' : om >= 0 ? 'The core business barely covers its costs' : 'The core business loses money before other income',
+      text: <>Net operating income {formatCurrency(netOperating)}, a <b>{pc(om)}</b> operating margin, before other income and expenses.</>,
+    });
+    // 4. COST CONCENTRATION: one expense category above 35% of sales is
+    //    worth watching; all running costs above 70% of sales too.
+    const top = [...opexCats].sort((a, b) => b.total - a.total)[0];
+    if (top && top.total / income > 0.35) {
+      plRemarks.push({ tone: 'watch', title: `${top.category} takes ${cents(top.total)} of every $1 of sales`,
+        text: <>{formatCurrency(top.total)} so far. It is the single biggest cost, larger than cost of goods ({formatCurrency(cogs)}), so the margin moves with it more than with anything else.</> });
+    }
+    if (opexTotal / income > 0.7) {
+      plRemarks.push({ tone: 'watch', title: 'Running costs are high against sales',
+        text: <>Expenses are {formatCurrency(opexTotal)}, {cents(opexTotal)} of every $1 of sales, leaving little room if sales dip.</> });
+    }
+    // 5. TRENDS — complete months only.
+    const done = series.filter((m) => m.month < nowYm && (m.revenue !== 0 || (m.cogs ?? 0) !== 0 || (m.opex ?? 0) !== 0));
+    const mon = (ym: string) => `${monthLabel(ym)} ${ym.slice(0, 4)}`;
+    if (done.length >= 2) {
+      const [prev, last] = done.slice(-2);
+      if (prev.revenue > 0) {
+        const ch = ((last.revenue - prev.revenue) / prev.revenue) * 100;
+        plRemarks.push({
+          tone: ch >= 0 ? 'good' : ch > -25 ? 'watch' : 'concern',
+          title: ch >= 0 ? `Sales grew ${Math.round(ch)}% in ${monthLabel(last.month)}` : `Sales fell ${Math.round(-ch)}% in ${monthLabel(last.month)}`,
+          text: <>{formatCurrency(last.revenue)} in {mon(last.month)} against {formatCurrency(prev.revenue)} in {mon(prev.month)} (the last two complete months).</>,
+        });
+      }
+      if (last.net < 0) {
+        plRemarks.push({ tone: 'concern', title: `${monthLabel(last.month)} made a loss`, text: <>Net income {formatCurrency(last.net)} in {mon(last.month)}, the latest complete month.</> });
+      } else if (prev.net > 0) {
+        const ch = ((last.net - prev.net) / prev.net) * 100;
+        plRemarks.push({
+          tone: ch >= 0 ? 'good' : ch > -25 ? 'watch' : 'concern',
+          title: ch >= 0 ? `Profit rose ${Math.round(ch)}% in ${monthLabel(last.month)}` : `Profit fell ${Math.round(-ch)}% in ${monthLabel(last.month)}`,
+          text: <>Net income {formatCurrency(last.net)} in {mon(last.month)} against {formatCurrency(prev.net)} in {mon(prev.month)}.</>,
+        });
+      }
+    }
+    // 6. COSTS AGAINST SALES: last 3 complete months against the 3 before.
+    //    Costs growing 5+ points faster than sales is worth watching.
+    if (done.length >= 6) {
+      const sumOf = (ms: typeof done, f: (m: (typeof done)[number]) => number) => ms.reduce((t, m) => t + f(m), 0);
+      const a = done.slice(-6, -3), b = done.slice(-3);
+      const salesA = sumOf(a, (m) => m.revenue), salesB = sumOf(b, (m) => m.revenue);
+      const costA = sumOf(a, (m) => (m.cogs ?? 0) + (m.opex ?? 0)), costB = sumOf(b, (m) => (m.cogs ?? 0) + (m.opex ?? 0));
+      if (salesA > 0 && costA > 0) {
+        const gs = ((salesB - salesA) / salesA) * 100, gc = ((costB - costA) / costA) * 100;
+        plRemarks.push({
+          tone: gc - gs >= 5 ? 'watch' : 'good',
+          title: gc - gs >= 5 ? 'Costs are growing faster than sales' : 'Sales are growing at least as fast as costs',
+          text: <>Last three complete months against the three before: sales {gs >= 0 ? 'up' : 'down'} {Math.abs(Math.round(gs))}%, costs {gc >= 0 ? 'up' : 'down'} {Math.abs(Math.round(gc))}% (cost of goods + expenses).</>,
+        });
+      }
+    }
+    // 7. LOSS-MAKING MONTHS in the period (complete months).
+    const losses = done.filter((m) => m.net < 0);
+    if (losses.length) {
+      plRemarks.push({ tone: 'watch', title: `${losses.length} month${losses.length === 1 ? '' : 's'} made a loss`,
+        text: <>{losses.map((m) => `${mon(m.month)} (${formatCurrency(m.net)})`).join(', ')}.</> });
+    }
+    // 8. OTHER INCOME: above 15% of net income means the bottom line leans on
+    //    reimbursements and one-offs rather than the core business.
+    const netOther = otherIncome - otherExpenses;
+    if (netIncome > 0 && netOther / netIncome > 0.15) {
+      plRemarks.push({ tone: 'watch', title: 'Profit leans on other income',
+        text: <>{formatCurrency(netOther)} of the {formatCurrency(netIncome)} net income ({Math.round((netOther / netIncome) * 100)}%) is other income (reimbursements, demo sales and the like), not the core business.</> });
+    }
+    // 9. BOOK-KEEPING: money QuickBooks could not place.
+    const uncategorised = (pl.incomeAccounts ?? []).filter((a) => /uncategori[sz]ed/i.test(a.name)).reduce((t, a) => t + a.value, 0)
+      + (pl.categories ?? []).flatMap((c) => c.accounts).filter((a) => /uncategori[sz]ed/i.test(a.label)).reduce((t, a) => t + a.value, 0);
+    if (uncategorised > 0.5) {
+      plRemarks.push({ tone: 'watch', book: true, title: 'Uncategorised amounts in the books',
+        text: <>{formatCurrency(uncategorised)} sits in an "Uncategorized" account. Assign it to the right income or expense account in QuickBooks.</> });
+    }
+    const unitemised = [...(pl.incomeAccounts ?? []).filter((a) => /not itemised/i.test(a.name)).map((a) => ({ label: a.name, value: a.value })),
+      ...(pl.categories ?? []).flatMap((c) => c.accounts).filter((a) => /not itemised/i.test(a.label))];
+    if (unitemised.length) {
+      const amt = unitemised.reduce((t, a) => t + a.value, 0);
+      plRemarks.push({ tone: 'watch', book: true, title: 'Amounts posted to parent accounts',
+        text: <>{formatCurrency(amt)} is posted straight to a parent account with no sub-account under it: {unitemised.map((a) => `${a.label.replace(/\s*\(not itemised\)/i, '')} ${formatCurrency(a.value)}`).join(', ')}. Moving it to the right sub-account makes the breakdown complete.</> });
+    }
+  }
 
   // COLLAPSIBLE SECTIONS. The statement opens folded to its totals — the
   // shape of the year at a glance — and a section heading unfolds its lines.
@@ -271,13 +394,21 @@ export function PLTab() {
 
   return (
     <div className="exec-deck" style={{ padding: '4px 2px' }}>
+      {/* THE VIEW TOGGLE — the same full-width tab bar as Payables' AP Overview |
+          AP Register (ArApTab's SideTabs), at the top of the page. */}
+      <div className="ov-tabs" role="tablist" aria-label="Statement" style={{ marginBottom: 4 }}>
+        <button type="button" role="tab" aria-selected={view === 'pl'} className={`ov-tab${view === 'pl' ? ' active' : ''}`} onClick={() => pickView('pl')}>Profit &amp; Loss</button>
+        <button type="button" role="tab" aria-selected={view === 'bs'} className={`ov-tab${view === 'bs' ? ' active' : ''}`} onClick={() => pickView('bs')}>Balance Sheet</button>
+      </div>
       <div className="page-head deck-head" style={{ marginBottom: 16 }}>
         <div>
-          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>Profit &amp; Loss</h1>
+          <h1 className="page-title" style={{ fontSize: 24, fontWeight: 800 }}>{view === 'bs' ? 'Balance Sheet' : <>Profit &amp; Loss</>}</h1>
           <div className="page-sub">
-            <span className="live-dot" /> Sports Med Recovery · {period.label} · {(pl?.basis ?? 'accrual').toLowerCase()} basis ·{' '}
-            every figure from <b>QuickBooks</b>
-            {agoText ? ` · updated ${agoText}` : ''}
+            {view === 'bs'
+              ? <><span className="live-dot" /> Sports Med Recovery · as of {fmtDay(period.end)} · accrual basis · every figure from <b>QuickBooks</b></>
+              : <><span className="live-dot" /> Sports Med Recovery · {period.label} · {(pl?.basis ?? 'accrual').toLowerCase()} basis ·{' '}
+                every figure from <b>QuickBooks</b>
+                {agoText ? ` · updated ${agoText}` : ''}</>}
           </div>
         </div>
         <div className="ov-headright">
@@ -311,23 +442,44 @@ export function PLTab() {
               </optgroup>
             </select>
           </label>
-          <span className="ov-filter"><span className="fl">📅</span><b>{rangeChip}</b></span>
-          <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
+          <span className="ov-filter"><span className="fl">📅</span><b>{view === 'bs' ? `As of ${fmtDay(period.end)}` : rangeChip}</b></span>
+          {view === 'pl' && <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>}
         </div>
       </div>
 
+      {view === 'bs' && (
+        <BalanceSheetView asOf={period.end} asOfLabel={fmtDay(period.end)}
+          plNetYtd={part === 'all' && pl ? pl.net : null}
+          pl={pl ? {
+            label: period.label, income, net: pl.net, margin: pl.margin,
+            // RUNWAY USES CURRENT SPENDING: the last three COMPLETE months'
+            // average cost of goods + expenses. The page's own per-month
+            // average divides by every month of the year, including months
+            // before trading began, which understates the monthly burn.
+            costsPerMonth: (() => {
+              const done = series.filter((m) => m.month < nowYm).slice(-3);
+              return done.length ? done.reduce((t, m) => t + (m.cogs ?? 0) + (m.opex ?? 0), 0) / done.length : perMonth(cogs + opexTotal);
+            })(),
+            costsBasis: (() => {
+              const done = series.filter((m) => m.month < nowYm).slice(-3);
+              return done.length ? `the last ${done.length} complete month${done.length === 1 ? '' : 's'}'` : `the ${period.label}`;
+            })(),
+            months: monthCount,
+          } : null} />
+      )}
+
       {qbNotice && <div className={qbNotice.ok ? 'qb-banner ok' : 'qb-banner warn'}>{qbNotice.text}</div>}
 
-      {error && (
+      {view === 'pl' && error && (
         <div className="qb-banner warn">
           <span><b>QuickBooks could not be read.</b> {error}</span>
           {notConnected && <a className="btn" href="/api/qb/connect">Connect QuickBooks →</a>}
         </div>
       )}
 
-      {loading && !pl && <div className="page-sub" style={{ padding: 16 }}>Loading from QuickBooks…</div>}
+      {view === 'pl' && loading && !pl && <div className="page-sub" style={{ padding: 16 }}>Loading from QuickBooks…</div>}
 
-      {pl && (
+      {view === 'pl' && pl && (
         <>
           {/* FOUR NUMBERS, IN THE ORDER THE MONEY FLOWS. */}
           <div className="kpi-r-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
@@ -557,6 +709,14 @@ export function PLTab() {
                 {pl.generatedAt ? `, generated ${new Date(pl.generatedAt).toLocaleString()}` : ''}. Figures are exactly what is posted in QuickBooks.
               </div>
             </div>
+
+            {/* P&L HEALTH — the same grouped remarks as the Balance Sheet. */}
+            {plRemarks.length > 0 && (
+              <div className="section chart-card g12-12">
+                <HealthRemarks title={`P&L health · ${period.label}`} subject="the P&L" remarks={plRemarks}
+                  footnote={<>Thresholds: net margin 15%; gross margin 50% and 30%; operating margin 10% and 0%; one expense above 35% of sales or all expenses above 70%; month-on-month falls of 25%; costs growing 5 points faster than sales; other income above 15% of net income. Trends use complete months only.</>} />
+              </div>
+            )}
           </div>
         </>
       )}

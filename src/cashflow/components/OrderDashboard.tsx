@@ -11,7 +11,7 @@ const RepScope = createContext(false);
 const useIsRep = () => useContext(RepScope);
 import { formatCurrency, isCompletedStatus, isCancelledStatus, isRealAccount } from '../format';
 import { C, VERTICAL_COLORS as V_C } from '../chartTheme';
-import { KpiR, useSyncAgo } from '../chartKit';
+import { KpiR, useSyncAgo, SourceTag } from '../chartKit';
 import { PiPipeline } from './PiPipeline';
 import { DeviceChips, deviceVertical, shortDeviceName } from './DeviceChips';
 import { TrackingCell } from './TrackingCell';
@@ -645,6 +645,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
       <div className="section chart-card dg-vertical" style={CARD_EQUAL}>
         <div className="section-head"><div>
           <h2 className="section-title">Figures by vertical</h2>
+          <SourceTag />
           {/* The old copy named DOL specifically as "live but has no orders yet".
               Verticals without orders are no longer listed, so that sentence
               described a row the reader could not see. */}
@@ -715,6 +716,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
                 · {accountRows.length === byAccount.length ? byAccount.length : `${accountRows.length} of ${byAccount.length}`}
               </span>
             </h2>
+            <SourceTag />
             <div className="section-sub">The vendor billed on the order: Veterans Affairs, TriCare, or the PI law firm. Click a row for its orders and devices.</div>
           </div>
           {/* search + minimum orders: narrow this table only */}
@@ -833,6 +835,7 @@ export function OrderDashboard({ viewAs }: { viewAs?: string | null }) {
           {/* 12px, not 13: the heading around it is 12.5px caps now, and a
               muted count set LARGER than its own heading reads as the headline. */}
           <h2 className="section-title">By device type <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {byDevice.list.length}</span></h2>
+          <SourceTag />
           <div className="section-sub">
             Across every account, ranked by units dispensed. Every device type on these orders is listed.
           </div>
@@ -1095,7 +1098,8 @@ function StatusBreakdown({ orders, title, sub, compact = false }: {
     <div className="section chart-card" style={CARD_EQUAL}>
       <div className="section-head"><div>
         <h2 className="section-title">{title}</h2>
-        {sub && <div className="section-sub">{sub}</div>}
+        <SourceTag />
+        {sub &&<div className="section-sub">{sub}</div>}
       </div></div>
       {body}
     </div>

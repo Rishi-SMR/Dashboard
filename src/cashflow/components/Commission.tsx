@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { printToPdf } from '../export';
-import { fetchCommission, fetchMe, type Me, type CommissionResult, type StrivenCommRep, type StrivenOrderLine } from '../strivenApi';
+import { fetchCommission, fetchMe, UNASSIGNED_REP, type Me, type CommissionResult, type StrivenCommRep, type StrivenOrderLine } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C } from '../chartTheme';
-import { KpiR, useSyncAgo } from '../chartKit';
+import { KpiR, useSyncAgo, SourceTag } from '../chartKit';
 import { isKevinLogin } from '../viewProfile';
 import { Portal } from './Portal';
 import { WaitPopup } from './WaitPopup';
@@ -160,6 +160,13 @@ export function CommissionTab() {
   // their own row alone, so this is a no-op on their view.
   const rosterSet = new Set(data?.roster ?? []);
   const reps = rosterSet.size ? allReps.filter((r) => rosterSet.has(r.rep)) : allReps;
+  // UNASSIGNED REP, kept OUT of `reps` and every total: on instruction it is
+  // "just to keep a check on the Unassigned amount", so it prints as a check
+  // line under the Total — Total + this line = the commission sheet. Only an
+  // admin's payload carries it.
+  const unRow = isAdmin ? allReps.find((r) => r.rep === UNASSIGNED_REP) ?? null : null;
+  // The selected month has no payout in the commission sheets yet.
+  const awaitingSheet = sel?.reconciled === false;
   // `trimmed` (rows.length !== allReps.length) is gone: it existed only to pick
   // between re-summing the rendered rows and trusting a server aggregate, and
   // every total re-sums the rows now, so there is no branch left for it to
@@ -398,6 +405,7 @@ export function CommissionTab() {
               <h2 className="section-title">
                 {sel ? monthLabel(sel.month) : 'All months'} · {!isAdmin && myRep ? myRep : 'by rep'}
               </h2>
+              <SourceTag source="Striven (orders) & Commission sheets (pay)" />
               <div className="section-sub">
                 {!isAdmin && myRep
                   // The old copy promised "order counts for every rep", which
@@ -438,8 +446,18 @@ export function CommissionTab() {
                       the row order and took a fifth of the width to do it. */}
                 </tr></thead>
                 <tbody>
-                  {reps.length === 0 && <tr><td colSpan={11} style={{ color: C.muted }}>No orders in this period.</td></tr>}
-                  {reps.map((r, i) => {
+                  {/* A MONTH NOT YET IN THE COMMISSION SHEETS shows nothing —
+                      no Striven estimate and no Striven order counts (on
+                      instruction). One line says why, instead of a table of
+                      zeros that would read as "nobody sold anything". */}
+                  {awaitingSheet && (
+                    <tr><td colSpan={11} style={{ color: C.muted, padding: '18px 12px' }}>
+                      <b>{monthLabel(sel!.month)}</b>'s payout has not been entered in the commission sheets yet.
+                      Its commission and order counts will show here once it is.
+                    </td></tr>
+                  )}
+                  {!awaitingSheet && reps.length === 0 && <tr><td colSpan={11} style={{ color: C.muted }}>No orders in this period.</td></tr>}
+                  {!awaitingSheet && reps.map((r, i) => {
                     const mine = myRep === r.rep;
                     const open = isAdmin || mine;
                     return (
@@ -492,7 +510,7 @@ export function CommissionTab() {
                       longer include it, so this table now describes the reps
                       above and nothing else. */}
                 </tbody>
-                {reps.length > 0 && (
+                {!awaitingSheet && reps.length > 0 && (
                   <tfoot><tr className="total-row">
                     <td /><td>Total</td>
                     <td className="num">{vt.TriCare}</td><td className="num">{vt.VA}</td><td className="num">{vt.PI}</td><td className="num">{vt.DOL}</td>
@@ -505,7 +523,19 @@ export function CommissionTab() {
                     <td className="num" style={{ color: C.positive, fontWeight: 700 }}>{money(payableSum)}</td>
                     <td className="num" style={{ color: C.warning, fontWeight: 700 }}>{money(waitingSum)}</td>
                     <td className="num" style={{ fontWeight: 800 }}>{money(total)}</td>
-                  </tr></tfoot>
+                  </tr>
+                  {unRow && (
+                    <tr style={{ color: C.muted, fontStyle: 'italic', cursor: 'pointer' }} onClick={() => setRepSel(unRow)}
+                      title="Commission-sheet money with no rep to own it: blank Rep cells, CMC direct and Cassie. Not counted in the Total or on any leaderboard. Click for the lines.">
+                      <td /><td>Unassigned Rep <span style={{ fontSize: 11 }}>· not in total</span></td>
+                      <OrderCountCells t={num(unRow.nTricare)} v={num(unRow.nVa)} p={num(unRow.nPi)} d={num(unRow.nDol)} />
+                      <td className="num">{num(unRow.orders)}</td><td className="num">{num(unRow.units)}</td>
+                      <td className="num">{money(unRow.payableTotal)}</td>
+                      <td className="num">{money(unRow.waitingTotal)}</td>
+                      <td className="num" style={{ fontWeight: 700 }}>{money(unRow.total)}</td>
+                    </tr>
+                  )}
+                  </tfoot>
                 )}
               </table>
             </div>

@@ -8,7 +8,7 @@ import { arDueParts, arDueAging, AR_DUE_BUCKETS, type ArDueBucket } from '../arD
 import { formatCurrency, pageList, clickableProps } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING, AGING_LABELS, programOfPayer, type Program } from '../chartTheme';
-import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo, pctText } from '../chartKit';
+import { ChartCard, AgingBar, TrendArea, DrillModal, GaugeRing, KpiR, useSyncAgo, pctText, SourceTag } from '../chartKit';
 import { SoLink } from './SoLink';
 import { soIdFromRef } from '../soRef';
 import { GuideMark } from '../guideTrail';
@@ -535,7 +535,7 @@ export function ReceivablesTab() {
 
 
           <div className="exec-grid12">
-            <ChartCard className="g12-4" title="AR Aging" guide="Aging bucket" anchor="ar-aging" sub="Open receivables by days past due · click a bar"
+            <ChartCard className="g12-4" title="AR Aging" guide="Aging bucket" anchor="ar-aging" source="Striven" sub="Open receivables by days past due · click a bar"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={agingMode === 'amount' ? 'active' : ''} onClick={() => setAgingMode('amount')}>By Amount</button>
@@ -545,7 +545,7 @@ export function ReceivablesTab() {
               <AgingBar aging={agingMode === 'amount' ? agingEff : agingCount} money={agingMode === 'amount'} onSelect={drillBucket} />
             </ChartCard>
 
-            <ChartCard className="g12-4" title="Cash Received by Month" guide="Cash Received" anchor="cash-received" sub="Customer payments collected"
+            <ChartCard className="g12-4" title="Cash Received by Month" guide="Cash Received" anchor="cash-received" source="Striven" sub="Customer payments collected"
               right={
                 <div className="smr-seg" style={{ margin: 0 }}>
                   <button className={payRange === 'year' ? 'active' : ''} onClick={() => setPayRange('year')}>12 mo</button>
@@ -558,7 +558,7 @@ export function ReceivablesTab() {
             {/* INSIGHTS beside Cash Received by Month (2 Oct 2026, on request):
                 AR Aging · Cash Received · Insights, a third each. */}
             <div className="section chart-card g12-4" data-guide-anchor="ar-insights">
-              <div className="section-head"><div><h2 className="section-title">Insights<GuideMark term="Unapplied credit" /></h2><div className="section-sub">Computed from live data</div></div></div>
+              <div className="section-head"><div><h2 className="section-title">Insights<GuideMark term="Unapplied credit" /></h2><SourceTag /><div className="section-sub">Computed from live data</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 <div className="ins-list">
                   {insights.map((ins, i) => (
@@ -579,6 +579,7 @@ export function ReceivablesTab() {
               <div className="section chart-card g12-12" data-guide-anchor="ar-cei">
                 <div className="section-head"><div>
                   <h2 className="section-title">Collection Effectiveness (CEI) · by month<GuideMark term="Collection Effectiveness Index" /></h2>
+                  <SourceTag />
                   <div className="section-sub">(Opening AR + Invoiced − Closing AR) ÷ (Opening AR + Invoiced − Closing current AR) · target 90+ · ≥90 Excellent · ≥75 Good · ≥60 Fair · below Low</div>
                 </div></div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
@@ -610,7 +611,7 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
               </div>
             )}
 
-            <ChartCard className="g12-3" title="A/R Health Score" guide="A/R Health Score" anchor="ar-health" sub="Collected ÷ (collected + open AR)">
+            <ChartCard className="g12-3" title="A/R Health Score" guide="A/R Health Score" anchor="ar-health" source="Striven" sub="Collected ÷ (collected + open AR)">
               <div className="card-body">
                 <GaugeRing arc="semi" value={healthPct} centerValue={String(healthPct)} centerLabel={healthBand} color={healthColor} height={150} />
               </div>
@@ -621,7 +622,7 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
             </ChartCard>
 
             <div className="section chart-card g12-9">
-              <div className="section-head"><div><h2 className="section-title">Overdue Summary</h2><div className="section-sub">AR Due by days past due · PI per Lienstar · VA per remittances · others per Striven · click a bucket for the items</div></div></div>
+              <div className="section-head"><div><h2 className="section-title">Overdue Summary</h2><SourceTag source="Striven & Master File" /><div className="section-sub">AR Due by days past due · PI per Lienstar · VA per remittances · others per Striven · click a bucket for the items</div></div></div>
               <div className="card-body" style={{ justifyContent: 'flex-start' }}>
                 {!(arDue.piReady && arDue.vaReady) && <div className="muted-note">Loading the Master File…</div>}
                 <div className="rank-list">
@@ -652,6 +653,7 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
               <div className="section-head">
                 <div>
                   <h2 className="section-title">Open PI Invoices<GuideMark term="AR Open" /></h2>
+                  <SourceTag />
                   <div className="section-sub">
                     Unpaid invoices with a remaining balance: matches Striven's A/R aging
                     {pendingRows.length > 0 && <> · <span style={{ color: C.negative, fontWeight: 700 }}>{pendingRows.length} PI orders</span> with no invoice are flagged in red and excluded from the total</>}
@@ -887,7 +889,7 @@ Opening AR + invoiced − closing current AR ${formatCurrency(mo.closingCurrent)
 
             <div className="section chart-card g12-12" data-guide-anchor="recent-payments">
               <div className="section-head">
-                <div><h2 className="section-title">Recent Customer Payments Received<GuideMark term="PHI masking" /></h2><div className="section-sub">Latest customer payments received</div></div>
+                <div><h2 className="section-title">Recent Customer Payments Received<GuideMark term="PHI masking" /></h2><SourceTag /><div className="section-sub">Latest customer payments received</div></div>
                 <button className="card-link" style={{ marginTop: 0 }} onClick={viewAllPayments}>View All →</button>
               </div>
               <div className="table-wrap">

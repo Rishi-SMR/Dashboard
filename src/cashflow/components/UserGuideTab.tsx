@@ -86,7 +86,7 @@ const GLOSSARY: Entry[] = [
     def: 'Accrual counts revenue when it is billed; cash counts it when the money actually arrives.',
     note: 'Revenue, the P&L and the cash-flow chart are ACCRUAL. Cash Received is CASH. They will not agree, and are not meant to.',
     locs: [
-      { view: 'pl', tab: 'P&L', section: 'Income Statement' },
+      { view: 'pl', tab: 'P&L/Balance Sheet', section: 'Income Statement' },
       { view: 'overview', tab: 'Overview', section: 'Revenue vs Expense · Cash Flow Overview' },
     ],
   },
@@ -171,7 +171,7 @@ const GLOSSARY: Entry[] = [
     locs: [
       { view: 'receivables', tab: 'Receivables › AR Overview', section: 'Cash Received tile · Cash Received by Month', anchor: 'cash-received', differs: 'The tile is all-time; the chart beside it is monthly.' },
       { view: 'accounts', tab: 'Accounts', section: 'Payments Received by Month · Recent Customer Payments Received' },
-      { view: 'pl', tab: 'P&L', section: 'Cash Received tile', differs: 'Year to date, not all-time.' },
+      { view: 'pl', tab: 'P&L/Balance Sheet', section: 'Cash Received tile', differs: 'Year to date, not all-time.' },
       { view: 'overview', tab: 'Overview', section: 'Cash Received · Collection Rate' },
     ],
   },
@@ -244,7 +244,7 @@ const GLOSSARY: Entry[] = [
     def: 'What the business spent, on the operational view of the books.',
     basis: 'Σ vendor bill totals in the period · voided excluded',
     locs: [
-      { view: 'pl', tab: 'P&L', section: 'Income Statement · Revenue vs Expenses by Month' },
+      { view: 'pl', tab: 'P&L/Balance Sheet', section: 'Income Statement · Revenue vs Expenses by Month' },
       { view: 'overview', tab: 'Overview', section: 'Revenue vs Expense' },
     ],
   },
@@ -282,7 +282,7 @@ const GLOSSARY: Entry[] = [
     basis: 'net = revenue − expenses\nmargin = net ÷ revenue',
     note: 'Only meaningful when revenue and costs come from the same book - which is why the growth card reads the P&L rather than the order book.',
     locs: [
-      { view: 'pl', tab: 'P&L', section: 'Income Statement' },
+      { view: 'pl', tab: 'P&L/Balance Sheet', section: 'Income Statement' },
       { view: 'overview', tab: 'Overview', section: 'Cash Flow Overview (Profit · Margin)' },
     ],
   },
@@ -374,7 +374,7 @@ const GLOSSARY: Entry[] = [
     basis: 'Σ invoice totals in the period · voided excluded · ACCRUAL',
     note: 'On PI an invoice is only the 15% advance, so PI revenue here is the advance billed, not the case value written.',
     locs: [
-      { view: 'pl', tab: 'P&L', section: 'Income Statement · Monthly P&L' },
+      { view: 'pl', tab: 'P&L/Balance Sheet', section: 'Income Statement · Monthly P&L' },
       { view: 'overview', tab: 'Overview', section: 'Revenue · Revenue vs Expense' },
     ],
   },

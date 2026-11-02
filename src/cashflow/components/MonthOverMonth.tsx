@@ -8,6 +8,7 @@ import {
   VERTICAL_COLORS, VERTICAL_ORDER, SERIES,
 } from '../chartTheme';
 import { formatCurrency } from '../format';
+import { SourceTag } from '../chartKit';
 import { monthLabel, thisMonthKey } from './MonthSelect';
 import type { RepRow, RepOverview } from '../strivenApi';
 
@@ -405,6 +406,7 @@ export function MonthOverMonth({ months, rep, team, reps }: {
               "the reps", so theirs says so; the card is the same card either way.
               Sentence case, like every other section title in this app. */}
           <h2 className="section-title">{isRep ? 'Your growth' : 'Reps growth'}</h2>
+          <SourceTag source={hasMoney ? 'Striven & Commission sheets' : 'Striven'} />
           <div className="section-sub">
             {isRep ? 'How your book has moved.' : "How the team's book has moved."}
             {' '}Orders and devices by order date; commission by payout cycle, matching Commission.

@@ -6,7 +6,7 @@ import {
 import { formatCurrency, formatPhone, pageList } from '../format';
 import { StatusPill } from './StatusPill';
 import { C, AGING_LABELS } from '../chartTheme';
-import { ChartCard, RankBar, AgingBar, DrillModal, KpiR, useSyncAgo, dueLabel } from '../chartKit';
+import { ChartCard, RankBar, AgingBar, DrillModal, KpiR, useSyncAgo, dueLabel, SourceTag } from '../chartKit';
 
 const VENDOR_CAP = 50;
 const PAGE_SIZE = 8;
@@ -436,7 +436,7 @@ export function PayablesTab() {
           </div>
 
           <div className="exec-grid12">
-            <ChartCard className="g12-4" title="Top Vendors by PO Spend" sub={`Active POs only${po?.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar`}>
+            <ChartCard className="g12-4" title="Top Vendors by PO Spend" source="Striven" sub={`Active POs only${po?.cancelledCount ? ` · ${po.cancelledCount} cancelled excluded` : ''} · click a bar`}>
               <RankBar data={vendorData} money colorAt={() => C.brand} onSelect={openVendorDrill} />
             </ChartCard>
 
@@ -628,7 +628,7 @@ export function PayablesTab() {
 
             {/* Vendors takes the full row now that Bills Paid has moved up. */}
             <div className="section chart-card g12-6">
-              <div className="section-head"><div><h2 className="section-title">Vendors</h2><div className="section-sub">{vendors?.count ?? 0} suppliers on record · scroll for more</div></div></div>
+              <div className="section-head"><div><h2 className="section-title">Vendors</h2><SourceTag /><div className="section-sub">{vendors?.count ?? 0} suppliers on record · scroll for more</div></div></div>
               <div className="table-wrap" style={{ maxHeight: 430, overflowY: 'auto' }}>
                 <table className="data-table">
                   <thead>

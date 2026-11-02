@@ -50,10 +50,10 @@ export function PiLienstarCard({ className = 'g12-12' }: { className?: string })
   }, []);
 
   if (!d) {
-    return <ChartCard className={className} title="PI · Striven vs Lienstar" sub="Loading the Master File…"><div className="muted-note">Loading…</div></ChartCard>;
+    return <ChartCard className={className} title="PI · Striven vs Lienstar" source="Striven & Master File" sub="Loading the Master File…"><div className="muted-note">Loading…</div></ChartCard>;
   }
   if (!d.ok || !d.striven || !d.lienstar || !d.diff || !d.match) {
-    return <ChartCard className={className} title="PI · Striven vs Lienstar" sub="Master File · PI Lienstar Funding"><div className="muted-note">{d.note ?? 'Comparison unavailable.'}</div></ChartCard>;
+    return <ChartCard className={className} title="PI · Striven vs Lienstar" source="Striven & Master File" sub="Master File · PI Lienstar Funding"><div className="muted-note">{d.note ?? 'Comparison unavailable.'}</div></ChartCard>;
   }
   const { striven: s, lienstar: l, diff, match } = d;
   const ex = d.excluded;
@@ -70,7 +70,7 @@ export function PiLienstarCard({ className = 'g12-12' }: { className?: string })
   const drillTotal = (k: keyof PiLienRow) => list.reduce((t, r) => t + (Number(r[k]) || 0), 0);
 
   return (
-    <ChartCard className={className} title="PI · Striven vs Lienstar"
+    <ChartCard className={className} title="PI · Striven vs Lienstar" source="Striven & Master File"
       sub={`Striven ${fromReport ? '(live PI order report)' : '(cached order book)'} against the Master File's PI Lienstar Funding tab, Approved rows only · cancelled orders excluded · difference is Striven − Lienstar · click an outcome for its cases`}>
       <div className="table-wrap">
         <table className="data-table">

@@ -7,13 +7,13 @@ import {
   type TrendsResult, type PaymentsResult, type BillPaymentsResult,
   type OrdersResult, type ExceptionsResult, type CommissionResult, type ApLedger,
   fetchQbPL, type QbPlResult, fetchQbBankDeposits, type QbBankDeposits,
-  fetchArRegister, type ArRegister,
+  fetchArRegister, type ArRegister, fetchCacheHealth, type CacheHealth, UNASSIGNED_REP,
 } from '../strivenApi';
 import { formatCurrency, clickableProps, isCancelledStatus, isCompletedStatus } from '../format';
 import { C, SERIES, CAT6, VERTICAL_COLORS, compactMoney, monthLabel, programOfPayer, type Program } from '../chartTheme';
 import { sectionHref } from '../guideTrail';
 import { arDueParts } from '../arDue';
-import { ChartCard, BarsLine, LegendDots, BarList, DonutList, GaugeRing, DrillModal, useSyncAgo, pctText, HUE, AnimatedNumber } from '../chartKit';
+import { ChartCard, BarsLine, LegendDots, BarList, DonutList, GaugeRing, DrillModal, useSyncAgo, pctText, HUE, AnimatedNumber, SourceTag } from '../chartKit';
 import { shortDeviceName } from './DeviceChips';
 import { UnitsByDevice } from './UnitsByDevice';
 import { CommissionBreakdown } from './CommissionBreakdown';
@@ -49,6 +49,7 @@ const shade = (base: string, i: number, n: number): string => {
 import { fetchDeviceMix, fetchMe, fetchMasterFileAp, fetchArCei, fetchPiLienstar, fetchVaRemittances, type DeviceMixRow, type MasterFileAp, type ArCei, type PiLienstar, type VaRemittances } from '../strivenApi';
 import { useHidden, useViewProfile, setViewProfile, isKevinLogin, PROFILE_LABEL, type ViewProfile } from '../viewProfile';
 import { BusinessGrowth } from './BusinessGrowth';
+import { VerticalProfit } from './VerticalProfit';
 
 const trunc = (v: string, n = 22) => (v && v.length > n ? v.slice(0, n - 1) + '…' : v);
 const shortDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '-');
@@ -90,7 +91,7 @@ export function OverviewCharts() {
   // AP TOTAL'S SOURCE (1 Oct 2026): Master File For SMR "AP" tab, by vendor,
   // no offsetting - the same figure as the Payables tab's AP Open card.
   const [mfAp, setMfAp] = useState<MasterFileAp | null>(null);
-  // Monthly Collection Effectiveness Index, for the CEI tile beside Collection Rate.
+  // Monthly Collection Effectiveness Index, for the CEI tile.
   const [cei, setCei] = useState<ArCei | null>(null);
   useEffect(() => { fetchArCei().then(setCei).catch(() => setCei(null)); }, []);
   // PI / VA RECEIVABLE PER THE MASTER FILE, for the AR Due card: invoiced in
@@ -123,6 +124,9 @@ export function OverviewCharts() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const agoText = useSyncAgo(lastSync);
+  // When the figures were last pulled FROM STRIVEN, which is what "Live" has to
+  // mean — lastSync above is only when this browser re-read the server's copy.
+  const [health, setHealth] = useState<CacheHealth | null>(null);
   type Drill = { title: string; sub?: string; summary?: ReactNode; columns: { key: string; label: string; num?: boolean }[]; rows: Record<string, ReactNode>[] };
   const [drill, setDrill] = useState<Drill | null>(null);
 
@@ -142,6 +146,8 @@ export function OverviewCharts() {
       // tile whenever it lands. Not awaited, so a slow or failed commission
       // derivation can never hold up the rest of the board.
       fetchCommission().then(setComm).catch(() => setComm(null));
+      // Admin only; a rep is refused and keeps the plain "Live" pill.
+      fetchCacheHealth().then(setHealth).catch(() => setHealth(null));
       // PI / VA RECEIVABLE PER THE MASTER FILE, refreshed WITH the board. It was
       // fetched once on mount, so a request that failed (e.g. landing during a
       // server restart) left AR Due reading "comparison unavailable" for the
@@ -457,7 +463,7 @@ export function OverviewCharts() {
   const cashFY = cashSeries.reduce((s, p) => s + p.value, 0);
   // CASH RECEIVED = MONEY THAT REACHED THE BANK (26 Oct 2026, on request): read
   // from QuickBooks' bank ledger for the selected period, not Striven's payment
-  // records. Only the Cash Received card uses it — Collection Rate and Cash Flow
+  // records. Only the Cash Received card uses it — Cash Flow
   // still set Striven's payments against Striven's invoicing, like with like.
   const bankFromQb = Boolean(qbBank?.ok);
   const bankSeries = (qbBank?.byMonth ?? []).filter((m) => inFy(m.month)).map((m) => ({ month: m.month, value: m.amount }));
@@ -697,7 +703,8 @@ export function OverviewCharts() {
   const expPi = prog === 'All' || prog === 'PI' ? recvPi : null;
   const expVa = prog === 'All' || prog === 'VA' ? recvVa : null;
   // From the shared helper, the same call the Receivables tab's AR Open makes.
-  const arDueTotal = arDueParts(piLien, vaRemit, arInv, prog).total;
+  const arDueAll = arDueParts(piLien, vaRemit, arInv, prog);
+  const arDueTotal = arDueAll.total;
   const recvTotal = arDueTotal;
   const arExp = arDueTotal;
   const arExpDetail = (() => {
@@ -934,7 +941,9 @@ export function OverviewCharts() {
           ref: l.ref, patient: l.patient ?? '', item: l.item ?? '', prog: l.prog ?? '', comm: l.comm ?? 0,
         })),
       };
-    }).filter((r) => r.payable > 0);
+    // Unassigned Rep is not a rep and is never ranked among them (on
+    // instruction); its owed money still counts in the card's off-roster total.
+    }).filter((r) => r.payable > 0 && r.rep !== UNASSIGNED_REP);
   })();
   // The payout run(s) the owed lines belong to, off the sheet's own cycle text
   // ("Paid ~10/15/2026" → "15 Oct 2026"), so the card says WHEN it is due.
@@ -1123,22 +1132,6 @@ export function OverviewCharts() {
 
   // Program-scoped sales orders.
   const soCount = so ? (prog === 'All' ? so.count : (so.piva[prog === 'Unassigned' ? 'Other' : prog]?.count ?? 0)) : 0;
-
-  // Cap at 100 so the printed label can't exceed the gauge arc (which clamps).
-  const collectionPct = fRev > 0 ? Math.min(100, Math.round((cashFY / fRev) * 100)) : 0;
-  // DSO restricted to PI (client SOW): VA / TriCare pay on fixed cycles, so DSO
-  // is meaningless there. Computed by the aging method: the amount-weighted
-  // average age of OPEN PI receivables: because revenue isn't program-split, so
-  // a sales-based DSO can't be scoped to PI honestly. Always PI, regardless of
-  // the header program filter (DSO is inherently a PI metric here).
-  const piOpenInv = (ar?.invoices ?? []).filter((i) => i.open > 0 && programOfPayer(i.payer) === 'PI');
-  const piOpenSum = piOpenInv.reduce((s, i) => s + i.open, 0);
-  const piDso = piOpenSum > 0
-    ? Math.round(piOpenInv.reduce((s, i) => {
-        const age = i.dueDate ? Math.max(0, Math.floor((refMs - new Date(i.dueDate).getTime()) / 86_400_000)) : 0;
-        return s + i.open * age;
-      }, 0) / piOpenSum)
-    : null;
 
   // Action Center: items derived live from the same datasets.
   const soon = refMs + 7 * 86_400_000;
@@ -1390,7 +1383,26 @@ export function OverviewCharts() {
               </select>
             </label>
           )}
-          <span className="deck-pill"><span className="live-dot" /> Live{agoText ? ` · ${agoText}` : ' sync'}</span>
+          {(() => {
+            // The order book's pull time stands for the board: invoices, bills,
+            // payments and orders are refreshed in the same pass, seconds apart.
+            const so = health?.caches.find((c) => c.key === 'so');
+            if (!so?.updatedAt) return <span className="deck-pill"><span className="live-dot" /> Live{agoText ? ` · ${agoText}` : ' sync'}</span>;
+            const mins = Math.max(0, Math.round((Date.now() - new Date(so.updatedAt).getTime()) / 60_000));
+            const ago = mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+            const staleKeys = health!.caches.filter((c) => c.stale).map((c) => c.key);
+            const tip = [
+              'Last pulled from Striven (refreshed every 6 hours):',
+              ...health!.caches.map((c) => `${c.key}: ${c.updatedAt ? new Date(c.updatedAt).toLocaleString() : 'never'}${c.stale ? '  ← STALE' : ''}`),
+              agoText ? `Board re-read ${agoText}` : '',
+            ].filter(Boolean).join('\n');
+            return (
+              <span className="deck-pill" title={tip} style={staleKeys.length ? { color: C.negative } : undefined}>
+                <span className="live-dot" style={staleKeys.length ? { background: C.negative } : undefined} />
+                {staleKeys.length ? `Stale: ${staleKeys.join(', ')}` : `Striven synced ${ago}`}
+              </span>
+            );
+          })()}
           <button className="btn ghost" onClick={() => load()} disabled={loading}>↻ Refresh</button>
           <button className="ov-bell" onClick={go('exceptions')} aria-label="Notifications" title="Items needing attention">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -1507,6 +1519,16 @@ export function OverviewCharts() {
               listed on Receivables and in the PI Invoice Book. */}
           {!hide('overview.growth') && <BusinessGrowth />}
 
+          {/* Commission spend by programme, month by month (27 Oct 2026, on
+              request; the profitability table above it was removed the same day).
+              Follows the board's period. Admin only: the server refuses anyone
+              else and it renders nothing. */}
+          {!hide('overview.verticalProfit') && (
+            <div className="exec-grid12">
+              <VerticalProfit inPeriod={inFy} periodLabel={periodLabel} />
+            </div>
+          )}
+
           <div className="exec-grid12">
             {/* COMMISSION, INTERACTIVE. Replaces the flat tile: same headline,
                 but ranked by rep with a drill into programme split and the
@@ -1547,6 +1569,7 @@ export function OverviewCharts() {
             <div className="section chart-card g12-4">
               <div className="section-head"><div>
                 <h2 className="section-title">AR Due</h2>
+                <SourceTag source={arView === 'ledger' ? 'Striven' : 'Striven & Master File'} />
                 <div className="section-sub">
                   {arView === 'all' ? 'Complete receivable · PI per Lienstar · VA per remittances · others per Striven'
                     : arView === 'pi' ? 'PI invoiced in Striven, not yet funded by Lienstar (Approved = funded)'
@@ -1718,7 +1741,7 @@ export function OverviewCharts() {
                 whole year; it is September's, and the sub-line saying so was
                 being missed. See periodLabel. */}
             {donutSlices.length > 0 && (
-              <ChartCard className="g12-3" title={`Open balances${balScoped ? ` · ${periodLabel}` : ''}`}
+              <ChartCard className="g12-3" title={`Open balances${balScoped ? ` · ${periodLabel}` : ''}`} source="Striven, Master File & Commission sheets"
                 sub={`${formatCurrency(arDueTotal)} owed to us (AR Due) · ${formatCurrency(apTotal + commDue.payable)} owed out`}>
                 <DonutList data={donutSlices} totalLabel="Total outstanding"
                   onSelect={(n) => { location.hash = n === 'AR Expected' ? 'receivables' : n === 'AP Due' ? 'payables' : 'commission'; }} />
@@ -1735,7 +1758,7 @@ export function OverviewCharts() {
                 ledger balance (and its ageing, payers and unapplied credits,
                 which were all ledger facts) is no longer in this card. */}
             {(recvPi || recvVa) && (
-              <ChartCard className="g12-4" title="AR Expected"
+              <ChartCard className="g12-4" title="AR Expected" source="Striven & Master File"
                 sub={`Invoiced, not yet received · PI per Lienstar · VA per remittances · others per Striven · ${PROG_LABEL[prog]}`}>
                 <div className="ard">
                   <div className="ard-top"><AnimatedNumber value={arExp} format={formatCurrency} duration={700} /></div>
@@ -1809,7 +1832,7 @@ export function OverviewCharts() {
                 comparison as VA. The note below carries the figure instead, and
                 the Units by Device card lists the devices themselves. */}
             {unitSlices.length > 0 && (
-              <ChartCard className="g12-3" title="Units by programme"
+              <ChartCard className="g12-3" title="Units by programme" source="Striven"
                 sub={`${devMixTotal.toLocaleString()} units on the order book${devMixDemoUnits > 0 ? ` · ${devMixDemoUnits} demo units apart` : ''}`}>
                 <DonutList data={unitSlices} money={false} totalLabel="Total units" onSelect={go('orders')} />
                 {demoOrders > 0 && (
@@ -1831,7 +1854,7 @@ export function OverviewCharts() {
                 last step framed work-in-progress as drop-off. These four states
                 are mutually exclusive and sum to the book. */}
             {orderStates.total > 0 && (
-              <ChartCard className="g12-4" title="Order book"
+              <ChartCard className="g12-4" title="Order book" source="Striven"
                 sub={`Orders booked in ${periodLabel}, by where they stand · ${PROG_LABEL[prog]}`}>
                 <MetricDetail
                   value={orderStates.total} format={(n) => Math.round(n).toLocaleString()}
@@ -1854,7 +1877,7 @@ export function OverviewCharts() {
                 sum to the headline. Under a single-month period it is one
                 segment, which is the honest picture. */}
             {(caseValueP > 0 || invoicedP > 0) && (
-              <ChartCard className="g12-4" title={`Revenue · ${periodLabel}`}
+              <ChartCard className="g12-4" title={`Revenue · ${periodLabel}`} source={arReg ? 'Striven & AR Register' : 'Striven'}
                 sub={`Case value booked vs invoiced${asOfPick ? ` · as of ${shortDate(asOfStr)}` : ''}`}>
                 {/* The whole card opens the orders and invoices behind it. */}
                 <div style={{ cursor: 'pointer' }} title="See every order booked and every invoice raised" {...clickableProps(drillRevenue)}>
@@ -1903,7 +1926,7 @@ export function OverviewCharts() {
                 </div>
               </ChartCard>
             ) : cashFY > 0 && (
-              <ChartCard className="g12-4" title={`Cash Received · ${periodLabel}`}
+              <ChartCard className="g12-4" title={`Cash Received · ${periodLabel}`} source="Striven"
                 sub="Customer payments · Striven (QuickBooks unavailable)">
                 <MetricDetail
                   value={cashFY} format={formatCurrency}
@@ -1926,7 +1949,7 @@ export function OverviewCharts() {
           <div className="exec-grid12">
             {/* Kevin's board: Cash Flow, Revenue vs Expense and Sales Orders by
                 Program sit across one row with the CEI tile (a quarter each), on request. */}
-            <ChartCard className={kevinLook ? "g12-3" : "g12-5"} title="Cash Flow Overview" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>
+            <ChartCard className={kevinLook ? "g12-3" : "g12-5"} title="Cash Flow Overview" source="Striven & Master File" sub={`Customer payments in vs vendor bill payments out · ${periodLabel}`}>
               {cashData.length > 1 && <LegendDots items={[{ name: 'Cash In', color: C.positive }, { name: 'Cash Out', color: C.negative }, { name: 'Net Cash', color: C.brand }]} />}
               <BarsLine data={cashData}
                 bars={[{ key: 'cashIn', name: 'Cash In', color: C.positive }, { key: 'cashOut', name: 'Cash Out', color: C.negative }]}
@@ -1938,7 +1961,7 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            <ChartCard className={kevinLook ? "g12-3" : !hide('overview.collectionRate') ? "g12-4" : "g12-7"} title="Revenue vs Expense" sub={finFromQb ? `QuickBooks P&L · income vs cost of goods + expenses · ${periodLabel}` : `Invoiced revenue vs billed expenses · ${periodLabel} · QuickBooks unavailable`}>
+            <ChartCard className={kevinLook ? "g12-3" : "g12-7"} title="Revenue vs Expense" source={finFromQb ? undefined : 'Striven'} sub={finFromQb ? `QuickBooks P&L · income vs cost of goods + expenses · ${periodLabel}` : `Invoiced revenue vs billed expenses · ${periodLabel} · QuickBooks unavailable`}>
               {finChart.length > 1 && <LegendDots items={[{ name: 'Revenue', color: C.positive }, { name: 'Expense', color: C.negative }, { name: 'Profit', color: C.brand }]} />}
               <BarsLine data={finChart}
                 bars={[{ key: 'revenue', name: 'Revenue', color: C.positive }, { key: 'expenses', name: 'Expense', color: C.negative }]}
@@ -1951,35 +1974,22 @@ export function OverviewCharts() {
               </div>
             </ChartCard>
 
-            {!hide('overview.collectionRate') && (
-            <ChartCard className="g12-3" title="Collection Rate" sub={`Cash received ÷ revenue · ${periodLabel}`}>
-              <div className="card-body">
-                <GaugeRing value={collectionPct} centerValue={`${collectionPct}%`} centerLabel="Collected" color={C.positive} height={150} />
-              </div>
-              <div className="cfoot">
-                <div className="cf-i"><div className="l">Collected</div><div className="v pos">{formatCurrency(cashFY)}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">Outstanding (AR Due)</div><div className="v">{formatCurrency(arDueTotal)}</div></div>
-              </div>
-              <div className="cfoot" style={{ marginTop: 0 }}>
-                <div className="cf-i"><div className="l">vs Last Month</div><div className={`v ${cashD ? (cashD.up ? 'pos' : 'neg') : ''}`}>{cashD ? `${cashD.up ? '▲' : '▼'} ${pctText(cashD.pct)}` : '-'}</div></div>
-                <div className="cf-i" style={{ textAlign: 'right' }}><div className="l">PI DSO</div><div className="v">{piDso != null ? `${piDso} days` : '-'}</div></div>
-              </div>
-            </ChartCard>
-            )}
+            {/* COLLECTION RATE WAS HERE, removed on request (30 Oct 2026): cash
+                received ÷ revenue for the period ran to 100% whenever payments
+                settled earlier invoices, which misled. CEI below is the measure
+                that counts only what was collectible. */}
 
             {/* CEI · SALES ORDERS BY PROGRAM · PO SPEND, one row of three on
                 Crystal's board (2 Oct 2026, on request). This zero-height
                 full-width spacer forces the line break before CEI, so Cash Flow,
-                Revenue vs Expense and Collection Rate keep the row above. Kevin's
+                Revenue vs Expense keep the row above. Kevin's
                 board keeps its own four-across row and does not get the break. */}
             {!kevinLook && <div className="g12-12" aria-hidden style={{ height: 0, margin: 0, padding: 0, border: 0 }} />}
             {/* CEI - the last COMPLETED month's Collection Effectiveness Index,
-                beside Collection Rate (2 Oct 2026, on request). Collection Rate
-                is this period's cash ÷ invoicing and runs past 100% early in a
-                month; CEI only counts what was collectible. Full history is on
+                (2 Oct 2026, on request). CEI only counts what was collectible. Full history is on
                 Receivables › AR Overview. */}
             {!hide('overview.cei') && ceiLast && (
-            <ChartCard className={kevinLook ? "g12-3" : "g12-4"} title="Collection Effectiveness" guide="Collection Effectiveness Index"
+            <ChartCard className={kevinLook ? "g12-3" : "g12-4"} title="Collection Effectiveness" guide="Collection Effectiveness Index" source="Striven"
               sub={`CEI · ${new Date(`${ceiLast.month}-01T00:00:00`).toLocaleString('en-US', { month: 'long', year: 'numeric' })} · last full month`}
               right={<button className="card-link" style={{ marginTop: 0 }} onClick={() => { location.hash = sectionHref('receivables', `ar-cei-${ceiLast.month}`); }}>By month →</button>}>
               <div className="card-body">
@@ -2013,7 +2023,7 @@ export function OverviewCharts() {
             {/* The sub names the demo split rather than leaving a muted bar to
                 explain itself — it is the one row on this card that is in the
                 total but not in the business. */}
-            <ChartCard className={kevinLook ? "g12-3" : "g12-4"} title="Sales Orders by Program"
+            <ChartCard className={kevinLook ? "g12-3" : "g12-4"} title="Sales Orders by Program" source="Striven"
               sub={`${so.count} orders · click a program to filter${(so.piva.DEMO?.count ?? 0) > 0 ? ` · includes ${so.piva.DEMO.count} DEMO / test` : ''}`}>
               <div className="card-body">
                 <BarList data={programBars} money={false}
@@ -2032,7 +2042,7 @@ export function OverviewCharts() {
                 (2 Oct 2026). The Exceptions page itself is unchanged and still in
                 the sidebar. */}
             {!hide('overview.poSpendTop5') && (
-            <ChartCard className="g12-4" title="PO Spend by Vendor (Top 5)" sub="Committed spend · active POs only">
+            <ChartCard className="g12-4" title="PO Spend by Vendor (Top 5)" source="Striven" sub="Committed spend · active POs only">
               <div className="card-body">
                 <BarList data={vendorBars} showPct={false} onSelect={go('tracking')} />
               </div>
@@ -2049,6 +2059,7 @@ export function OverviewCharts() {
               <div className="section-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
                 <div>
                   <h2 className="section-title">Financial Insights</h2>
+                  <SourceTag source="Striven, Master File & Commission sheets" />
                   <div className="section-sub">
                     {qLabel} · balances are as of today
                     {/* Says why a quarter is absent. Without this the picker
@@ -2086,7 +2097,7 @@ export function OverviewCharts() {
             {/* Kevin's board: Units by device beside Financial Insights, on
                 request, instead of at the foot of the board. */}
             {kevinUnits && (
-            <ChartCard className="g12-6" title="Units by device">
+            <ChartCard className="g12-6" title="Units by device" source="Striven">
               <UnitsByDevice
                 rows={devMixRows}
                 subtitle={`${devMixTotal.toLocaleString()} units across ${devMixRealRows} device${devMixRealRows === 1 ? '' : 's'} · ${PROG_LABEL[prog]}${devMixDemoUnits > 0 ? ` · plus ${devMixDemoUnits} demo unit${devMixDemoUnits === 1 ? '' : 's'} across ${demoOrders} DEMO order${demoOrders === 1 ? '' : 's'}, listed separately` : ''}`}
@@ -2101,7 +2112,7 @@ export function OverviewCharts() {
               wording, so this reads as the tag list staff maintain rather than
               as another interpretation of it. Click a label to list its orders. */}
           {labelStats.rows.length > 0 && (
-            <ChartCard title="Order status by Striven label"
+            <ChartCard title="Order status by Striven label" source="Striven"
               sub={`${labelStats.orders.toLocaleString()} order${labelStats.orders === 1 ? '' : 's'} · ${labelStats.rows.length} label${labelStats.rows.length === 1 ? '' : 's'} in use · ${PROG_LABEL[prog]}`}
               right={(
                 <span style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2176,7 +2187,7 @@ export function OverviewCharts() {
               have a question about the mix, not on the way in. The cards above
               answer "how are we doing"; this answers "made of what". */}
           {!kevinUnits && !hide('overview.devices') && devMixRows.length > 0 && (
-            <ChartCard title="Units by device">
+            <ChartCard title="Units by device" source="Striven">
               <UnitsByDevice
                 rows={devMixRows}
                 subtitle={`${devMixTotal.toLocaleString()} units across ${devMixRealRows} device${devMixRealRows === 1 ? '' : 's'} · ${PROG_LABEL[prog]}${devMixDemoUnits > 0 ? ` · plus ${devMixDemoUnits} demo unit${devMixDemoUnits === 1 ? '' : 's'} across ${demoOrders} DEMO order${demoOrders === 1 ? '' : 's'}, listed separately` : ''}`}

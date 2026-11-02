@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { C, VERTICAL_COLORS as V_C } from '../chartTheme';
-import { AnimatedNumber } from '../chartKit';
+import { AnimatedNumber, SourceTag } from '../chartKit';
 import { fetchOrderAnalytics, type RepRow, type AnalyticsOrder } from '../strivenApi';
 import { shortDeviceName } from './DeviceChips';
 import { Portal } from './Portal';
@@ -727,6 +727,7 @@ export function Leaderboard({ reps, months, viewAs, boardScoped, onPeriod }: {
       <div className="section-head" style={{ minHeight: 0, marginBottom: 8, alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
         <div>
           <h2 className="section-title">Leaderboard</h2>
+          <SourceTag />
           <div className="section-sub">
             By orders booked, {scoped ? <b>{monthLabel(period)}</b> : 'all time'}.
             {self ? ' Tap your row for your full breakdown.' : ''}
