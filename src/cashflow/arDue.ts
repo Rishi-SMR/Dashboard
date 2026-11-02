@@ -25,11 +25,16 @@ export type ArDueParts = {
   va: number; vaCount: number;
   other: number; otherCount: number;
   total: number;
+  /** What was billed on the items still owed, and what has already come in
+   *  against them: due − received = total, line by line. PI and VA take the
+   *  Master File's invoiced/received on its open cases; the ledger part is
+   *  each open invoice's `paid` plus its `open`, so credits don't break the sum. */
+  due: number; received: number;
   /** False while the Master File comparisons have not arrived (or failed). */
   piReady: boolean; vaReady: boolean;
 };
 
-type LedgerInvoice = { open: number; vertical?: string; payer?: string | null };
+type LedgerInvoice = { open: number; paid?: number; vertical?: string; payer?: string | null };
 
 export function arDueParts(
   pi: PiLienstar | null | undefined,
@@ -46,11 +51,14 @@ export function arDueParts(
   const piAmt = usePi ? recvPi?.outstanding ?? 0 : 0;
   const vaAmt = useVa ? recvVa?.outstanding ?? 0 : 0;
   const otherAmt = other.reduce((s, i) => s + i.open, 0);
+  const received = (usePi ? recvPi?.received ?? 0 : 0) + (useVa ? recvVa?.received ?? 0 : 0)
+    + other.reduce((s, i) => s + (i.paid ?? 0), 0);
   return {
     pi: piAmt, piCount: usePi ? recvPi?.count ?? 0 : 0,
     va: vaAmt, vaCount: useVa ? recvVa?.count ?? 0 : 0,
     other: otherAmt, otherCount: other.length,
     total: piAmt + vaAmt + otherAmt,
+    due: piAmt + vaAmt + otherAmt + received, received,
     piReady: Boolean(recvPi), vaReady: Boolean(recvVa),
   };
 }

@@ -240,7 +240,75 @@ export type QbPlResult = {
   incomeAccounts: QbLine[]; otherIncomeAccounts?: QbLine[]; otherExpenseAccounts?: QbLine[];
   categories: QbCategory[]; series: QbPlMonth[];
 };
-export const fetchQbPL = (period?: PlPeriod) => get<QbPlResult>(`/api/qb/pl${periodQuery(period)}`);
+/** WHEN EACH DATASET WAS LAST PULLED FROM STRIVEN (api getCacheHealth). The
+ *  dashboard never calls Striven itself; it reads copies refreshed every 6h, so
+ *  this — not the moment the browser fetched — is how current the figures are.
+ *  Admin only: a rep's request is refused. */
+export type CacheHealth = {
+  generatedAt: string; anyStale: boolean;
+  caches: { key: string; updatedAt: string | null; ageHours: number | null; stale: boolean }[];
+};
+export const fetchCacheHealth = () => get<CacheHealth>('/api/cache-health');
+/** The commission bucket for money with no rep to own it — must match
+ *  UNASSIGNED_REP in api/_striven.js. */
+export const UNASSIGNED_REP = 'Unassigned Rep';
+export const fetchQbPL = (period?: PlPeriod) => remember(`/api/qb/pl${periodQuery(period)}`, get<QbPlResult>(`/api/qb/pl${periodQuery(period)}`));
+/** THE LAST P&L THIS SESSION SAW, for the same period — or null. A tab switch
+ *  unmounts the board, and every remount waited on two live QuickBooks reports
+ *  before drawing anything. A card reads this first, draws it at once, and lets
+ *  its own fetchQbPL replace it when the fresh statement lands. */
+export const peekQbPL = (period?: PlPeriod) => peek<QbPlResult>(`/api/qb/pl${periodQuery(period)}`);
+
+/**
+ * LAST GOOD ANSWER PER URL — memory first, then sessionStorage so a reload in
+ * the same browser tab is instant too. Only successful answers are kept; a
+ * failure leaves the previous one in place. Storage can be blocked or full,
+ * so every touch of it is allowed to fail quietly.
+ */
+const lastGood = new Map<string, unknown>();
+const SS_PREFIX = 'smr_last:';
+function peek<T>(key: string): T | null {
+  if (lastGood.has(key)) return lastGood.get(key) as T;
+  try {
+    const raw = sessionStorage.getItem(SS_PREFIX + key);
+    if (raw) { const v = JSON.parse(raw) as T; lastGood.set(key, v); return v; }
+  } catch { /* blocked or corrupt — fall through to a live fetch */ }
+  return null;
+}
+function remember<T>(key: string, p: Promise<T>): Promise<T> {
+  return p.then((v) => {
+    lastGood.set(key, v);
+    try { sessionStorage.setItem(SS_PREFIX + key, JSON.stringify(v)); } catch { /* quota or blocked */ }
+    return v;
+  });
+}
+/** PROFITABILITY BY PROGRAMME, by month — see getVerticalPL on the server.
+ *  Admin only. `gaps` lists everything that could not be worked out. */
+export type VerticalPlRow = {
+  month: string; prog: string; orders: number; units: number; caseValue: number; deviceCost: number;
+  invoiced: number; invoices: number; collected: number; commission: number; commissionPaid: number; commissionOwed: number; fees: number;
+};
+export type VerticalPl = {
+  ok: boolean; programmes: string[]; rows: VerticalPlRow[];
+  overheadByMonth: Record<string, number>; qbCommissionByMonth: Record<string, number>;
+  arNow: Record<string, number>; costedItems: number;
+  gaps: { kind: string; text: string; amount: number | null; count?: number; byProg?: string }[];
+};
+export const fetchVerticalPl = () => get<VerticalPl>('/api/vertical-pl');
+
+/** QUICKBOOKS BALANCE SHEET as of a date, kept as QuickBooks' own tree: a
+ *  section carries its QuickBooks `total`, an account its `value`. See
+ *  qbBalanceSheet on the server. */
+export type QbBsNode = { label: string; group: string; total?: number; value?: number; children?: QbBsNode[] };
+export type QbBalanceSheet = {
+  ok: boolean; asOf: string; basis: string; generatedAt: string | null; currency: string;
+  sections: QbBsNode[];
+  totals: Record<'assets' | 'currentAssets' | 'bank' | 'ar' | 'fixedAssets' | 'liabilities' | 'currentLiabilities' | 'ap'
+    | 'longTermLiabilities' | 'equity' | 'netIncome' | 'liabilitiesAndEquity', number | null>;
+  balanced: boolean;
+};
+export const fetchQbBalanceSheet = (asOf: string) => get<QbBalanceSheet>(`/api/qb/balance-sheet?end=${encodeURIComponent(asOf)}`);
+
 /** MONEY RECEIVED IN THE BANK, per QuickBooks' General Ledger on the bank
  *  accounts: every deposit-side line, transfers between own accounts and loan
  *  proceeds left out (and totalled). See qbBankDeposits on the server. */
@@ -792,6 +860,9 @@ export type RepRow = {
   rep: string; isSelf: boolean; own: boolean;
   /** House/ops/departed names: they carry orders but are not ranked. */
   standingsExcluded?: boolean;
+  /** The Unassigned Rep bucket (admin only): commission and orders with no rep
+   *  to own them. Unranked, listed last. */
+  unassigned?: boolean;
   /** Position on the all-time board by order count, 1-based, stamped over the
    *  WHOLE producing field BEFORE any row is withheld. A viewer who may not see
    *  a rep (REP_BLINDSPOTS) therefore gets a gap in the numbering rather than
@@ -872,6 +943,10 @@ export type RepOverview = {
    *  the rows, so it never offers a period with nothing to rank. */
   months?: string[];
   reps: RepRow[];
+  /** UNASSIGNED REP, admin only: commission and orders with no rep to own them
+   *  (blank Rep cells, CMC direct, Cassie). Kept OUT of `reps` so no leaderboard,
+   *  rank or total counts it — the team table shows it as a check line only. */
+  unassigned?: RepRow | null;
   /** A producing rep was withheld from this viewer, so `boardRank` is a
    *  renumbering of what they can see and not the true field position. */
   boardScoped?: boolean;

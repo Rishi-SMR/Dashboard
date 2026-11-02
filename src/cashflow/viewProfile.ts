@@ -78,7 +78,7 @@ const KEVIN_HIDDEN: string[] = [
   // Exceptions tab itself is untouched and still reachable from the nav and the
   // header bell, so the 64 items are not hidden, just not on this board.
   'overview.exceptions',
-  'overview.collectionRate',    // dropped on request
+  // 'overview.collectionRate' is GONE: the tile was removed from every board (30 Oct 2026).
 
   // ── AR / AP · Receivables ──
   'ar.accounts',                // count only, low value

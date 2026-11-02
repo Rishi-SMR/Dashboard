@@ -804,6 +804,14 @@ code {
   font-size: 12px;
   margin-top: 2px;
 }
+/* "As per Striven" — the tile's data source, directly under its heading. */
+.src-tag {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-style: italic;
+  margin-top: 2px;
+}
 
 /* --- Filter tabs (Orders Included style) --- */
 .filter-row {
@@ -4936,3 +4944,104 @@ body { line-height: 1.55; -webkit-font-smoothing: antialiased; text-rendering: o
 
 /* PI Book: the exact reason an invoice is not the plain 15% advance. */
 .pi-remark { white-space: normal; max-width: 360px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: var(--muted, #64748b); }
+
+/* ── Balance Sheet: an accountant's statement layout ──────────────────────
+   One amount column (tabular figures), a fixed indent per level (--d), headings
+   with no amount, a single rule over subtotals, a double rule under grand totals. */
+.bs-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 32px; align-items: start; margin-top: 4px; }
+.bs-statement { font-size: 14px; color: var(--text); }
+.bs-row { display: grid; grid-template-columns: minmax(0, 1fr) 132px; align-items: baseline; gap: 12px;
+  padding: 5px 8px 5px calc(8px + var(--d, 0) * 20px); line-height: 1.35; }
+.bs-amt { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bs-lbl { min-width: 0; overflow-wrap: anywhere; }
+.bs-colhead { padding-left: 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted, #64748b); border-bottom: 1px solid var(--border, #d9e1ec); }
+.bs-block + .bs-block { margin-top: 18px; }
+.bs-top { margin-top: 10px; padding-top: 8px; padding-bottom: 8px; font-size: 13px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--accent); border-bottom: 2px solid var(--accent); cursor: pointer; }
+.bs-head { margin-top: 6px; font-weight: 700; cursor: pointer; }
+.bs-acct { color: var(--muted-strong, #334155); }
+.bs-acct .bs-lbl { padding-left: 18px; }
+.bs-sub { font-weight: 700; cursor: pointer; }
+.bs-sub .bs-amt { border-top: 1px solid var(--muted, #94a3b8); padding-top: 3px; }
+.bs-grand { margin-top: 6px; font-weight: 800; font-size: 15px; background: var(--accent-soft); border-radius: 8px; cursor: pointer; }
+.bs-grand .bs-amt { border-top: 1px solid var(--text); border-bottom: 3px double var(--text); padding: 2px 0; }
+.bs-top:hover, .bs-head:hover, .bs-sub:hover { background: var(--accent-soft); border-radius: 6px; }
+.bs-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
+.bs-chev { display: inline-block; width: 14px; font-size: 11px; color: var(--muted, #64748b); transition: transform .15s ease; }
+.bs-chev.open { transform: rotate(90deg); }
+.bs-amt .neg { color: var(--negative, #b91c1c); }
+@media (max-width: 600px) { .bs-columns { grid-template-columns: 1fr; } .bs-row { grid-template-columns: minmax(0, 1fr) 110px; } }
+
+/* ── Balance Sheet: business health remarks ─────────────────────────────── */
+.bh { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border, #d9e1ec); }
+.bh-title { margin: 0 0 10px; font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--text); }
+.bh-verdict { margin-bottom: 12px; padding: 10px 14px; border-radius: 10px; font-weight: 700; font-size: 14px; }
+.bh-verdict.good { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; }
+.bh-verdict.watch { background: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; }
+.bh-verdict.concern { background: #FEF2F2; color: #991B1B; border: 1px solid #FECACA; }
+.bh-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.bh-item { display: block; padding: 10px 12px;
+  border-radius: 10px; border: 1px solid var(--border, #d9e1ec); font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.bh-tag { justify-self: start; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+.bh-item.good .bh-tag { background: #DCFCE7; color: #166534; }
+.bh-item.watch .bh-tag { background: #FEF3C7; color: #92400E; }
+.bh-item.concern .bh-tag { background: #FEE2E2; color: #991B1B; }
+.bh-book { color: var(--muted, #64748b); font-size: 12px; }
+@media (max-width: 600px) { .bh-item { grid-template-columns: 1fr; gap: 6px; } }
+/* Health remarks grouped by tone, each group collapsible. */
+.bh-group { margin-top: 8px; border: 1px solid var(--border, #d9e1ec); border-radius: 12px; overflow: hidden; }
+.bh-group.concern { border-left: 4px solid #DC2626; }
+.bh-group.watch { border-left: 4px solid #D97706; }
+.bh-group.good { border-left: 4px solid #16A34A; }
+.bh-ghead { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; user-select: none; min-width: 0; }
+.bh-ghead:hover { background: var(--accent-soft); }
+.bh-ghead:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bh-ghead.open .bs-chev { transform: rotate(90deg); }
+.bh-group.concern .bh-tag { background: #FEE2E2; color: #991B1B; }
+.bh-group.watch .bh-tag { background: #FEF3C7; color: #92400E; }
+.bh-group.good .bh-tag { background: #DCFCE7; color: #166534; }
+.bh-gcount { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.bh-gpeek { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted, #64748b); }
+.bh-group .bh-list { padding: 0 12px 12px; }
+.bh-group .bh-item { border-color: var(--border, #e2e8f0); }
+
+/* ── Balance Sheet as one two-sided table: Assets | Liabilities & Equity ──
+   Row for row, both grand totals on the same bottom row. */
+.bt-wrap { overflow-x: auto; margin-top: 4px; border: 1px solid var(--border, #d9e1ec); border-radius: 12px; }
+.bt { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 14px; color: var(--text); table-layout: fixed; }
+.bt .bt-colamt { width: 150px; }
+.bt th, .bt td { padding: 6px 12px; vertical-align: baseline; }
+.bt thead th { background: var(--accent); color: #fff; font-size: 12.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; text-align: left; }
+.bt thead th.bt-amt { text-align: right; }
+.bt-amt { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bt-split { border-left: 2px solid var(--border, #d9e1ec); }
+.bt thead .bt-split { border-left-color: rgba(255,255,255,.35); }
+.bt tbody tr:nth-child(even) td { background: rgba(10, 54, 159, 0.025); }
+.bt-head { font-weight: 700; }
+.bt td.bt-head { padding-top: 10px; }
+.bt-acct { color: var(--muted-strong, #334155); }
+.bt-sub { font-weight: 700; }
+.bt-amt.bt-sub { box-shadow: inset 0 1px 0 var(--muted, #94a3b8); }
+.bt-click { cursor: pointer; }
+.bt-click:hover { color: var(--accent); }
+.bt tfoot .bt-grand td { font-weight: 800; font-size: 15px; background: var(--accent-soft); border-top: 2px solid var(--text); }
+.bt tfoot .bt-grand .bt-amt { border-bottom: 3px double var(--text); }
+.bt tfoot .bt-check td { text-align: center; font-weight: 700; font-size: 13px; padding: 9px 12px; }
+.bt-check.ok td { color: #065F46; background: #ECFDF5; }
+.bt-check.bad td { color: #991B1B; background: #FEF2F2; }
+.bt .bt-amt .neg { color: var(--negative, #b91c1c); }
+
+/* ── Overview: profitability by programme ──────────────────────────────── */
+.vp-gaps { margin: 0 0 14px; border: 1px solid #FED7AA; background: #FFF7ED; border-radius: 12px; color: #9A3412; font-size: 13px; line-height: 1.5; }
+.vp-gaps-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; cursor: pointer; user-select: none; }
+.vp-gaps-head .bs-chev { color: #9A3412; }
+.vp-gaps-note { font-size: 12px; color: #B45309; }
+.vp-gaps ul { margin: 0; padding: 0 16px 12px 40px; display: grid; gap: 6px; }
+.vp-table td, .vp-table th { white-space: nowrap; }
+.vp-row { cursor: pointer; }
+.vp-row:hover td { background: var(--accent-soft); }
+.vp-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+.vp-warn { color: #B45309; font-weight: 800; }
+.vp-table tfoot .vp-oh td { color: var(--muted-strong, #475569); font-style: italic; }
+.vp-table tfoot .vp-net td { font-weight: 800; font-size: 15px; border-top: 2px solid var(--text); background: var(--accent-soft); }

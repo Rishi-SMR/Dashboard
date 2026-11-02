@@ -262,19 +262,29 @@ export function StatCards({ data, total, onSelect }: {
  *  gets it in exactly the same place, at the same size, with the same label —
  *  where letting callers pass a node would have produced a different-looking
  *  mark per card. See guideTrail.tsx. */
-export function ChartCard({ title, sub, span, right, className, guide, anchor, children }: { title: string; sub?: string; span?: number; right?: ReactNode; className?: string; guide?: string; anchor?: string; children: ReactNode }) {
+/** `source` prints "As per <source>" under the title — set it on every tile
+ *  whose figures come from Striven (see SourceTag). */
+export function ChartCard({ title, sub, span, right, className, guide, anchor, source, children }: { title: string; sub?: string; span?: number; right?: ReactNode; className?: string; guide?: string; anchor?: string; source?: string; children: ReactNode }) {
   return (
     /* `data-guide-anchor` is how the User Guide lands ON this card rather than
        merely on the tab containing it — see GuideLanding in guideTrail.tsx. One
        attribute, read from the shell, so nothing else here has to know. */
     <div className={`section chart-card${span ? ` span-${span}` : ''}${className ? ` ${className}` : ''}`} data-guide-anchor={anchor}>
-      <div className="section-head"><div><h2 className="section-title">{title}{guide && <GuideMark term={guide} />}</h2>{sub && <div className="section-sub">{sub}</div>}</div>{right}</div>
+      <div className="section-head"><div><h2 className="section-title">{title}{guide && <GuideMark term={guide} />}</h2>{source && <SourceTag source={source} />}{sub && <div className="section-sub">{sub}</div>}</div>{right}</div>
       {children}
     </div>
   );
 }
 
 // Tiny inline legend row (colored dot + label) for combo charts.
+/** WHERE A TILE'S FIGURES COME FROM, printed directly under its heading (on
+ *  instruction: "mention the source As per Striven just below the heading of
+ *  the tile if the data is fetched from Striven"). One component so every
+ *  tile words and styles it the same way. */
+export function SourceTag({ source = 'Striven' }: { source?: string }) {
+  return <div className="src-tag">As per {source}</div>;
+}
+
 export function LegendDots({ items }: { items: { name: string; color: string }[] }) {
   return (
     <div className="mini-legend">
