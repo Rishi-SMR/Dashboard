@@ -488,6 +488,99 @@ export function plIncomeAccounts(rows, group = 'Income') {
 }
 
 /**
+ * EVERY P&L LINE, MONTH BY MONTH — for the Overview's profitability by
+ * programme, which needs a few named accounts per month (Lienstar funding
+ * fees, the rep-commission account, total expenses) rather than the totals the
+ * statement view carries. Returns each row QuickBooks reports — sections by
+ * their subtotal, accounts by their own line — keyed by YYYY-MM.
+ */
+export async function qbMonthlyLines({ start, end } = {}) {
+  const r = await qbApi(`reports/ProfitAndLoss?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(end)}&accounting_method=Accrual&summarize_column_by=Month`);
+  const MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const keyOf = (title) => {
+    const m = /^([A-Za-z]{3})[^,]*,?\s*(\d{4})$/.exec(String(title || '').trim());
+    if (!m) return null;
+    const i = MON.indexOf(m[1].toLowerCase());
+    return i < 0 ? null : `${m[2]}-${String(i + 1).padStart(2, '0')}`;
+  };
+  const cols = (r.Columns?.Column ?? []).map((c) => keyOf(c.ColTitle));
+  const lines = [];
+  const take = (label, group, cd, kind) => {
+    const byMonth = {};
+    cols.forEach((k, i) => { if (k && i > 0) byMonth[k] = Math.round(plNum(cd?.[i]?.value) * 100) / 100; });
+    lines.push({ label: String(label || '').trim(), group: group || '', kind, byMonth });
+  };
+  const walk = (node) => {
+    for (const row of node?.Row ?? []) {
+      if (row.ColData) take(row.ColData[0]?.value, row.group, row.ColData, 'account');
+      if (row.Summary?.ColData) take(String(row.Summary.ColData[0]?.value ?? '').replace(/^Total\s+/i, ''), row.group, row.Summary.ColData, 'section');
+      if (row.Rows) walk(row.Rows);
+    }
+  };
+  walk(r.Rows);
+  return { months: cols.filter(Boolean), lines };
+}
+
+/**
+ * ── BALANCE SHEET, STRAIGHT FROM THE BOOKS (27 Oct 2026) ──────────────────────
+ *
+ * QuickBooks' own Balance Sheet as of a date, kept as the TREE QuickBooks
+ * reports — Assets → Current Assets → Bank Accounts → each account — because a
+ * balance sheet is read by drilling, and flattening it would lose which
+ * subtotal an account belongs to. A Section carries its QuickBooks-computed
+ * `total`; an account carries its `value`. Nothing is re-added here: every
+ * subtotal on the page is QuickBooks' own.
+ *
+ * `balanced` is the one check that matters on any balance sheet — assets equal
+ * liabilities plus equity — computed from the two grand totals QuickBooks
+ * reports, so a broken report shows as broken rather than being trusted.
+ */
+export async function qbBalanceSheet({ asOf } = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(asOf ?? '')) ? asOf : today;
+  const r = await qbApi(`reports/BalanceSheet?start_date=${end.slice(0, 4)}-01-01&end_date=${end}&accounting_method=Accrual`);
+  const toNode = (row) => {
+    if (row.Rows) {
+      const head = row.Header?.ColData?.[0]?.value ?? String(row.Summary?.ColData?.[0]?.value ?? '').replace(/^Total\s+/i, '');
+      return {
+        label: String(head || '').trim(), group: row.group || '',
+        total: Math.round(plNum(row.Summary?.ColData?.[1]?.value) * 100) / 100,
+        children: (row.Rows.Row ?? []).map(toNode).filter(Boolean),
+      };
+    }
+    if (!row.ColData) return null;
+    return {
+      label: String(row.ColData[0]?.value ?? '').trim(), group: row.group || '',
+      value: Math.round(plNum(row.ColData[1]?.value) * 100) / 100,
+    };
+  };
+  const sections = (r.Rows?.Row ?? []).map(toNode).filter(Boolean);
+  const find = (nodes, g) => {
+    for (const n of nodes) {
+      if (n.group === g) return n;
+      if (n.children) { const hit = find(n.children, g); if (hit) return hit; }
+    }
+    return null;
+  };
+  const amt = (g) => { const n = find(sections, g); return n ? (n.total ?? n.value ?? 0) : null; };
+  const totals = {
+    assets: amt('TotalAssets'), currentAssets: amt('CurrentAssets'), bank: amt('BankAccounts'),
+    ar: amt('AR'), fixedAssets: amt('FixedAssets'),
+    liabilities: amt('Liabilities'), currentLiabilities: amt('CurrentLiabilities'), ap: amt('AP'),
+    longTermLiabilities: amt('LongTermLiabilities'),
+    equity: amt('Equity'), netIncome: amt('NetIncome'),
+    liabilitiesAndEquity: amt('TotalLiabilitiesAndEquity'),
+  };
+  return {
+    ok: true, asOf: r.Header?.EndPeriod ?? end, basis: r.Header?.ReportBasis ?? 'Accrual',
+    generatedAt: r.Header?.Time ?? null, currency: r.Header?.Currency ?? 'USD',
+    sections, totals,
+    balanced: totals.assets != null && totals.liabilitiesAndEquity != null
+      && Math.abs(totals.assets - totals.liabilitiesAndEquity) < 0.01,
+  };
+}
+
+/**
  * ── MONEY RECEIVED IN THE BANK, STRAIGHT FROM THE BOOKS (26 Oct 2026) ─────────
  *
  * Cash Received used Striven's customer-payment records, which are not the
@@ -584,6 +677,7 @@ export async function qbBankDeposits({ start, end } = {}) {
  */
 export async function qbHandle(pathname, q) {
   if (pathname === '/api/qb/pl') return { json: await qbProfitAndLoss({ start: q.start, end: q.end, basis: q.basis }) };
+  if (pathname === '/api/qb/balance-sheet') return { json: await qbBalanceSheet({ asOf: q.end || q.asOf }) };
   if (pathname === '/api/qb/bank-deposits') return { json: await qbBankDeposits({ start: q.start, end: q.end }) };
   if (pathname === '/api/qb/status') return { json: await qbStatus() };
   if (pathname === '/api/qb/connect') return { redirect: await qbAuthUrl() };

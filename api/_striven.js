@@ -740,6 +740,16 @@ async function refreshAll() {
       : 'skipped: out of time, next cycle';
   } catch (e) { out.so_detail = `FAIL ${e.message}`; }
 
+  // The order → invoice / PO links, on the same cycle (30 Oct 2026). Built only
+  // by gen-order-chain.mjs until now, and last run 7 Sep: 330 of 956 orders had
+  // no entry and 322 invoices ($441,602) were tied to no order. After so_detail,
+  // which it reads for each order's type, rep and value.
+  try {
+    out.order_chain = leftMs() > 2_000
+      ? await refreshOrderChain({ budgetMs: Math.min(12_000, leftMs()) })
+      : 'skipped: out of time, next cycle';
+  } catch (e) { out.order_chain = `FAIL ${e.message}`; }
+
   // The device lines, on the same cycle and for the same reason. This used to be
   // rebuilt only by a script someone had to remember to run, so every order
   // newer than the last run showed a blank Devices column and 0 units while its
@@ -896,6 +906,125 @@ export async function refreshDerived({ budgetMs = 25_000, maxOrders = 400 } = {}
     remaining: Math.max(0, missing.length - fetched),
     complete: fetched >= missing.length,
     ms: Date.now() - started,
+  };
+}
+
+/**
+ * ORDER → INVOICE / PO LINKS, KEPT CURRENT INCREMENTALLY.
+ *
+ * Neither search endpoint says which sales order an invoice or PO belongs to —
+ * only the detail does (invoice `order.id`, a PO line's `order.id`). Fetching
+ * every detail is minutes of work, so the links are kept in `order_links` and
+ * only an invoice or PO that is NEW, or whose lastUpdatedDate has moved since it
+ * was read, is fetched again. The chain itself is then rebuilt from scratch on
+ * every run, and the MONEY on it — total, open balance, PO value — comes off the
+ * search rows refreshed minutes earlier, never off the stored detail. A payment
+ * therefore reaches the chain on the next cycle whether or not it re-dated the
+ * invoice.
+ *
+ * SEEDED FROM THE OLD CHAIN on the first run, so the links it already knew stay
+ * in use while the backlog is worked through rather than vanishing until each
+ * is re-read. Seeded entries carry no date, so they are re-read too, after the
+ * unlinked ones.
+ *
+ * Same deadline contract as refreshDerived: it stops fetching at `budgetMs`,
+ * writes what it has, and the next cycle carries on.
+ */
+export async function refreshOrderChain({ budgetMs = 12_000, dryRun = false } = {}) {
+  const started = Date.now();
+  const rd = async (k) => (await sbCacheRead(k))?.data;
+  const [soDet, invRows, poRows, prevLinks, prevChain] = await Promise.all([
+    rd('so_detail'), rd('invoices'), rd('po'), rd('order_links'), rd('order_chain'),
+  ]);
+  const detail = soDet || {};
+  const invList = invRows || [];
+  const poList = poRows || [];
+  const links = { inv: { ...(prevLinks?.inv || {}) }, po: { ...(prevLinks?.po || {}) } };
+
+  if (!prevLinks && prevChain) {
+    const invIdByRef = new Map(invList.map((r) => [`#${r.txnNumber || r.id}`, String(r.id)]));
+    for (const [soId, c] of Object.entries(prevChain)) {
+      for (const i of c.invoices || []) {
+        const id = invIdByRef.get(i.ref);
+        if (id) links.inv[id] = { so: soId, status: i.status || '', upd: null };
+      }
+      for (const p of c.pos || []) {
+        const id = String(p.ref || '').replace(/^PO-/, '');
+        if (id) links.po[id] = { so: soId, status: p.status || '', upd: null };
+      }
+    }
+  }
+
+  // Unlinked first: an invoice tied to no order is a wrong number today, while
+  // a re-dated one most likely still points at the same order.
+  const queue = (rows, map, kind) => {
+    const fresh = [], changed = [];
+    for (const r of rows) {
+      const id = String(r.id), have = map[id];
+      if (!have) fresh.push({ kind, id, upd: r.lastUpdatedDate ?? null });
+      else if (have.upd !== (r.lastUpdatedDate ?? null)) changed.push({ kind, id, upd: r.lastUpdatedDate ?? null });
+    }
+    return [fresh, changed];
+  };
+  const [invNew, invChanged] = queue(invList, links.inv, 'inv');
+  const [poNew, poChanged] = queue(poList, links.po, 'po');
+  const todo = [...invNew, ...poNew, ...invChanged, ...poChanged];
+
+  let fetched = 0, failed = 0, i = 0;
+  const worker = async () => {
+    while (i < todo.length) {
+      if (Date.now() - started > budgetMs) return;
+      const t = todo[i++];
+      try {
+        if (t.kind === 'inv') {
+          const d = await striven('GET', `/v1/invoices/${t.id}`);
+          links.inv[t.id] = { so: d?.order?.id != null ? String(d.order.id) : null, status: d?.status?.name ?? '', upd: t.upd };
+        } else {
+          const d = await striven('GET', `/v1/purchase-orders/${t.id}`);
+          const soId = (d?.lineItems || []).map((li) => li.order?.id).find(Boolean);
+          links.po[t.id] = { so: soId != null ? String(soId) : null, status: d?.status?.name ?? '', upd: t.upd };
+        }
+        fetched++;
+      } catch { failed++; }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+
+  const invBySo = {}, poBySo = {};
+  for (const r of invList) {
+    const l = links.inv[String(r.id)];
+    if (!l?.so) continue;
+    (invBySo[l.so] ??= []).push({
+      ref: `#${r.txnNumber || r.id}`, total: Number(r.invoiceTotal || 0), open: Number(r.openBalance || 0), status: l.status,
+    });
+  }
+  for (const r of poList) {
+    const l = links.po[String(r.id)];
+    if (!l?.so) continue;
+    (poBySo[l.so] ??= []).push({ ref: `PO-${r.id}`, vendor: r.vendor?.name || '', value: Number(r.poTotal || 0), status: l.status });
+  }
+  const chain = {};
+  for (const [soId, s] of Object.entries(detail)) {
+    chain[soId] = {
+      ref: `SO-${soId}`, type: s.type || '', rep: s.rep || '', payer: s.payer || '', value: Number(s.total || 0),
+      status: s.status || '', invStatus: s.invStatus || '', pos: poBySo[soId] || [], invoices: invBySo[soId] || [],
+    };
+  }
+
+  const linkedInv = invList.filter((r) => links.inv[String(r.id)]?.so).length;
+  if (!dryRun) {
+    await sbCacheWrite('order_links', links);
+    await sbCacheWrite('order_chain', chain);
+    for (const k of [..._cache.keys()]) if (k.startsWith('derived:')) _cache.delete(k);
+  }
+  return {
+    orders: Object.keys(chain).length,
+    invoices: invList.length, invoicesLinked: linkedInv,
+    queued: todo.length, fetched, failed,
+    remaining: Math.max(0, todo.length - fetched - failed),
+    complete: fetched + failed >= todo.length,
+    ms: Date.now() - started,
+    ...(dryRun ? { dryRun: true } : {}),
   };
 }
 
@@ -1130,7 +1259,9 @@ export async function refreshDemoItems({ budgetMs = 12_000, maxOrders = 200, log
  * reportable rather than something you discover by reconciling against Striven.
  */
 export async function getCacheHealth() {
-  const KEYS = ['so', 'so_detail', 'report_patient_items', 'invoices', 'customers'];
+  // order_chain joined 30 Oct 2026: it sat 53 days unrefreshed while this
+  // check reported every cache fresh, because it was not on the list.
+  const KEYS = ['so', 'so_detail', 'order_chain', 'report_patient_items', 'invoices', 'customers'];
   // Nothing here is manual any more. report_patient_items used to be — new
   // orders got their device lines only when someone ran the generator — and it
   // is now topped up incrementally on the same 6h cycle as so_detail. A FULL
@@ -3451,6 +3582,26 @@ const reconConfig = async () => ({
 export const isExcludedRep = (rep) => (EXCLUDED_REPS || [])
   .some((s) => String(s).trim().toLowerCase() === String(rep ?? '').trim().toLowerCase());
 
+/**
+ * UNASSIGNED REP — where money and volume with no rep to own it are reported
+ * (30 Oct 2026, on instruction: "the Figure in Sheet and the data in Dashboard
+ * should match exactly").
+ *
+ * Commission rows with a blank Rep cell, and rows for an EXCLUDED name (Cassie,
+ * CMC direct), used to be dropped before any total was taken, so the dashboard
+ * read $169,909.20 against a reconciliation sheet of $192,394.20 and Christy's
+ * workbook lost a $650 row. They are now kept under this one name instead:
+ * every dollar the sheet pays is on the page, and no excluded person's name is.
+ *
+ * isExcludedRep() is unchanged and still keeps those names out of the roster,
+ * logins, pickers and leaderboard — this only decides where their MONEY goes.
+ */
+export const UNASSIGNED_REP = 'Unassigned Rep';
+export const toUnassigned = (rep) => {
+  const s = String(rep ?? '').trim();
+  return !s || /^unassigned$/i.test(s) || isExcludedRep(s) ? UNASSIGNED_REP : s;
+};
+
 // The sheet spells one rep two ways ("Jillian" and "Jillian Colin"), which would
 // otherwise split her total across two rows. Names are folded onto the portal's
 // REP_DIRECTORY spelling here, at the boundary, so nothing downstream has to
@@ -3661,14 +3812,11 @@ export async function getCommissionRecon() {
     for (const r of rows.slice(hIdx + 1)) {
       const repRaw = String(r[C.rep] ?? '').trim();
       const amt = sheetMoney(r[C.amt]);
-      if (!repRaw || !amt) continue;
-      const rep = reconRep(repRaw);
-      // Dropped BEFORE `totals` is touched, so an excluded name contributes to
-      // no figure the page can print — not the payable headline, not the
-      // auto/review/unmatched split, not the row count. Skipping later (at the
-      // byRep merge, say) would have left their money inside `totals` with no
-      // row to explain it, which is the one outcome worse than either choice.
-      if (isExcludedRep(rep)) continue;
+      if (!amt) continue;
+      // A blank Rep cell, or an excluded name, is filed under Unassigned Rep
+      // rather than dropped — see UNASSIGNED_REP. Dropping them is what left
+      // the page $22,485 short of the sheet it is reconciled to.
+      const rep = toUnassigned(repRaw ? reconRep(repRaw) : '');
       const tier = tierOf(r[C.status]);
       const e = byRep.get(rep) ?? {
         rep, payableTotal: 0, reviewTotal: 0, unmatchedTotal: 0,
@@ -3972,7 +4120,8 @@ function commissionBookRows(buffer, defaultRep = '') {
       const comm = sheetMoney(r[cols.amt]);
       if (!patient || !(comm > 0)) continue;
       const repRaw = cols.rep >= 0 ? String(r[cols.rep] ?? '').trim() : String(defaultRep ?? '').trim();
-      if (!repRaw) continue;                     // a row with no owner pays nobody
+      // A row with no owner is still paid by the book, so it is kept under
+      // Unassigned Rep rather than dropped (Christy's 15 Sep tab has one, $650).
       // ── A BONUS, not a device commission ────────────────────────────────
       // Commission in this business is units × a PER-DEVICE rate, so a row
       // with no device in it cannot be one. Maylon's book carries such a row —
@@ -3995,16 +4144,27 @@ function commissionBookRows(buffer, defaultRep = '') {
       const itemRaw = String(r[cols.item] ?? '').trim();
       const bonus = !itemRaw;
       out.push({
-        rep: reconRep(repRaw),
+        rep: repRaw ? reconRep(repRaw) : '',   // owner settled after the loop
         cycle,
         month,
         patient: bonus ? '' : commInitialLastDisp(patient),
-        item: bonus ? 'Bonus' : itemRaw,
+        // An underpayment correction is named as one: Christy's 15 Sep tab
+        // carries "Underpayment from Aug" (a formula error in her August pay),
+        // which is back-pay, not a bonus.
+        item: bonus ? (/underpay/i.test(patient) ? 'Underpayment adjustment' : 'Bonus') : itemRaw,
         bonus,
         comm: round2(comm),
       });
     }
   }
+  // A ROW WITH NO REP, in a book that names only ONE rep, is that rep's
+  // (30 Oct 2026, on instruction). Christy's book has a single such row — her
+  // own $650 August underpayment — and it is counted in her commission. In a
+  // shared book (the Team book names three people) a blank row cannot be
+  // placed, so it goes to Unassigned Rep rather than being guessed at.
+  const named = new Set(out.map((r) => r.rep).filter(Boolean));
+  const owner = named.size === 1 ? [...named][0] : '';
+  for (const r of out) r.rep = toUnassigned(r.rep || owner);
   return out;
 }
 
@@ -4052,7 +4212,9 @@ async function commissionSourceIndex() {
       if (!buffers[i]) continue;
       read += 1;
       for (const row of commissionBookRows(Buffer.from(buffers[i]), books[i].rep)) {
-        if (isExcludedRep(row.rep)) continue;
+        // Unassigned money is checked against nothing: the sheet's figure for
+        // it stands as signed off, so the page matches the sheet exactly.
+        if (row.rep === UNASSIGNED_REP || isExcludedRep(row.rep)) continue;
         const k = `${row.rep}|${row.month}`;
         byRepMonth.set(k, [...(byRepMonth.get(k) ?? []), row]);
       }
@@ -4127,7 +4289,7 @@ export async function getCommissionWorkbooks() {
       // commissionBookRows() — see it for the rules this reader used to spell
       // out inline.
       for (const row of commissionBookRows(Buffer.from(buffers[bi]), w.rep)) {
-        if (isExcludedRep(row.rep)) continue;
+        row.rep = toUnassigned(row.rep);
         // These workbooks carry no order number at all, so the patient is the
         // only join available.
         // A bonus ties to no order by design, so it is not offered to the join
@@ -5913,17 +6075,31 @@ export async function getCommission(viewer = null) {
     // run exists there is no signed-off figure and the engine's number is an
     // estimate, not an entitlement.
     //
-    // So its money moves to WAITING rather than being deleted: the rep still
-    // sees what the month has earned, in the column that says "not yet". Marked
-    // `reconciled: false` so the page can say why.
+    // NO STRIVEN ESTIMATE (30 Oct 2026, on instruction: "do not fetch the
+    // commissions from Striven until the data for that month is fed into the
+    // commission sheets"). The engine's units × rate figure used to be moved
+    // into WAITING here — $76,450 for October before its payout was entered —
+    // and it is now dropped: the month reads $0 in every money column until the
+    // sheet or a workbook carries it. Order and unit counts are untouched.
+    // `reconciled: false` still marks it, so the page can say it is awaiting
+    // the sheet rather than that nothing was earned.
     for (const M of striven.months) {
       if (byMonth.has(M.month)) continue;
+      // NOR ITS VOLUME (30 Oct 2026, on instruction): the order and unit counts
+      // per vertical were still Striven's, so the month read 113 VA orders
+      // beside $0 of commission. Until the sheet carries the month this page
+      // shows nothing for it at all. The order book itself (Reps, Orders) is
+      // a different question and is untouched.
       for (const row of M.reps) {
-        const earned = round2((row.payableTotal || 0) + (row.waitingTotal || 0));
         zeroMoney(row);
-        row.waitingTotal = earned;
+        row.waitingTotal = 0;
+        row.orders = 0; row.units = 0; row.value = 0;
+        row.nTricare = 0; row.nVa = 0; row.nPi = 0; row.nDol = 0;
+        row.uTricare = 0; row.uVa = 0; row.uPi = 0; row.uDol = 0;
       }
-      M.waitingTotal = round2(M.reps.reduce((s, r) => s + (r.waitingTotal || 0), 0));
+      M.waitingTotal = 0;
+      M.orders = 0; M.units = 0; M.value = 0;
+      M.oTriCare = 0; M.oVA = 0; M.oPI = 0; M.oDOL = 0;
       M.payableTotal = 0; M.paidTotal = 0; M.total = 0; M.TriCare = 0; M.VA = 0; M.PI = 0; M.DOL = 0;
       M.reconciled = false;
     }
@@ -5999,7 +6175,7 @@ export async function getCommission(viewer = null) {
         // A split summing more than the total it belongs to is the exact defect
         // this block was written to fix, only in the other direction.
         if (l.state !== 'paid') continue;
-        const k = verticalOfCommissionLine(l.prog);
+        const k = (l.vertical || verticalOfCommissionLine(l.prog));
         if (k) v[k] = round2(v[k] + (l.comm || 0));
         else unassigned = round2(unassigned + (l.comm || 0));
       }
@@ -6035,11 +6211,19 @@ export async function getCommission(viewer = null) {
     const an = await cached('derived:analytics:admin', () => getOrderAnalytics({ repName: null, role: 'admin' }), 60_000);
     const book = new Map();
     for (const o of an.orders || []) {
-      const e = book.get(o.rep) || { orders: 0, units: 0, TriCare: 0, VA: 0, PI: 0, DOL: 0 };
+      // Cassie's orders (and any with no rep) count under Unassigned Rep, the
+      // row her commission now sits on — see UNASSIGNED_REP.
+      const bk = toUnassigned(o.rep);
+      const e = book.get(bk) || { orders: 0, units: 0, TriCare: 0, VA: 0, PI: 0, DOL: 0 };
       e.orders += 1;
       e.units += Number(o.units || 0);
       if (e[o.vertical] != null) e[o.vertical] += 1;
-      book.set(o.rep, e);
+      book.set(bk, e);
+    }
+    // Volume with no commission behind it still needs its row, or it would be
+    // dropped from the table and (below) from off-roster alike.
+    if (book.has(UNASSIGNED_REP) && !striven.byRep.some((r) => r.rep === UNASSIGNED_REP)) {
+      striven.byRep.push({ ...zeroRepRow(UNASSIGNED_REP), strivenPayable: 0, reviewTotal: 0, unmatchedTotal: 0, paidTotal: 0, lines: [] });
     }
     for (const r of striven.byRep) {
       const b = book.get(r.rep);
@@ -6063,7 +6247,9 @@ export async function getCommission(viewer = null) {
     // and a synthetic rep in that list would be one more thing to special-case
     // everywhere. Reported alongside instead, for the table to render as a row.
     const rosterNames = new Set(REP_NAMES);
-    const offRows = (an.orders || []).filter((o) => !rosterNames.has(o.rep));
+    // Not the Unassigned Rep's orders: they have a row of their own now, and
+    // counting them here as well would put them in the table twice.
+    const offRows = (an.orders || []).filter((o) => !rosterNames.has(o.rep) && toUnassigned(o.rep) !== UNASSIGNED_REP);
     striven.offRoster = {
       orders: offRows.length,
       units: offRows.reduce((s, o) => s + Number(o.units || 0), 0),
@@ -6089,10 +6275,13 @@ export async function getCommission(viewer = null) {
   // carrying what that rep's orders actually support. There is no second source
   // to disagree with, so there is nothing to reconcile and no verification gate.
   const svByRep2 = new Map(striven.byRep.map((r) => [r.rep, r]));
-  const reps = REP_NAMES.map((rep) => {
+  // The roster, plus Unassigned Rep wherever it carries money or orders, so
+  // this table sums to the reconciliation sheet — see UNASSIGNED_REP.
+  const reps = [...REP_NAMES, ...(svByRep2.has(UNASSIGNED_REP) ? [UNASSIGNED_REP] : [])].map((rep) => {
     const sv = svByRep2.get(rep);
     return {
       rep,
+      unassigned: rep === UNASSIGNED_REP,
       tricare: round2(sv?.tricare ?? 0), va: round2(sv?.va ?? 0), pi: round2(sv?.pi ?? 0), dol: round2(sv?.dol ?? 0),
       total: round2(sv?.total ?? 0),
       count: sv?.orders ?? 0,
@@ -6155,7 +6344,8 @@ export async function getCommission(viewer = null) {
     roster: [...new Set([
       ...producerNames(),
       ...(striven.byRep || []).filter((r) => (r.payableTotal || 0) > 0 || (r.lines || []).length).map((r) => r.rep),
-    ])].filter((n) => !isExcludedRep(n)),
+    // Unassigned Rep is a bucket, not a person: there is no board to view as.
+    ])].filter((n) => !isExcludedRep(n) && n !== UNASSIGNED_REP),
     sources: [],
   };
   // Redaction happens HERE, before serialization — another rep's dollars must
@@ -6496,7 +6686,7 @@ export async function getRepOverview(viewer = null) {
     let total = 0; let undated = 0;
     const months = new Map();
     for (const l of lines) {
-      const v = verticalOfCommissionLine(l.prog);
+      const v = (l.vertical || verticalOfCommissionLine(l.prog));
       const amt = Number(l.comm) || 0;
       total += amt;
       if (v && all[v] != null) all[v] += amt;
@@ -6596,7 +6786,7 @@ export async function getRepOverview(viewer = null) {
       .flatMap(([, subs]) => (subs || []).map((s) => String(s).trim().toLowerCase())),
   );
 
-  const rows = REP_NAMES.map((rep) => {
+  const buildRow = (rep) => {
     const own = isAdmin || isOwn(rep);
     // A REP THE VIEWER SUPERVISES. Their row carries the OPERATIONAL detail a
     // supervisor needs — units, accounts, devices, last order, the per-vertical
@@ -6605,7 +6795,11 @@ export async function getRepOverview(viewer = null) {
     // between the rep and finance. Commission, payable, waiting and revenue are
     // null on a sub-rep's row exactly as on any other peer's.
     const supervised = !own && supervises.has(String(rep).trim().toLowerCase());
-    const orders = analytics.orders.filter((o) => o.rep === rep);
+    // Unassigned Rep's orders are the ones with no rep and the excluded names'
+    // (Cassie's) — the same fold its commission is filed by. See UNASSIGNED_REP.
+    const orders = rep === UNASSIGNED_REP
+      ? analytics.orders.filter((o) => toUnassigned(o.rep) === UNASSIGNED_REP)
+      : analytics.orders.filter((o) => o.rep === rep);
     const cm = commByRep.get(rep) || null;
     const sh = sheetByRep.get(rep) || null;
 
@@ -6810,7 +7004,8 @@ export async function getRepOverview(viewer = null) {
       matchRate: sh?.matchRate ?? null,       // operational, shared
       verified: sh?.verified ?? false,
     };
-  });
+  };
+  const rows = REP_NAMES.map(buildRow);
 
   // ONE scope for the whole tile row. These figures describe the
   // REP-ATTRIBUTED book, so orders, units, accounts and revenue all count the
@@ -7066,6 +7261,14 @@ export async function getRepOverview(viewer = null) {
       ...shown.flatMap((r) => (r.commissionByCycle ?? []).map((m) => m.month)),
     ])].sort(),
     reps: shown.sort((a, b) => (b.revenue ?? -1) - (a.revenue ?? -1) || b.orders - a.orders),
+    // UNASSIGNED REP — admin only, and deliberately NOT in `reps`: every
+    // leaderboard, rank, KPI and team total reads that list, and this is not a
+    // rep (on instruction: "do not count it in the leaderboard anywhere, it is
+    // just to keep a check on the unassigned amount"). The team table prints it
+    // as a check line under its total. See UNASSIGNED_REP.
+    unassigned: isAdmin && (commByRep.has(UNASSIGNED_REP) || analytics.orders.some((o) => toUnassigned(o.rep) === UNASSIGNED_REP))
+      ? { ...buildRow(UNASSIGNED_REP), unassigned: true, standingsExcluded: true, rank: null, boardRank: null, subRepOf: null }
+      : null,
     // True when a producing rep was withheld from this viewer, so `boardRank`
     // and `rank` disagree and the board can say which one it is drawing.
     boardScoped,
@@ -8906,6 +9109,206 @@ export async function findTerritoryLawFirms(viewer = null, { q = '', rep = '', c
   };
 }
 
+// ── PROFITABILITY BY PROGRAMME, MONTH BY MONTH (27 Oct 2026, on request) ─────
+// For the Overview: each programme's own money, so its profitability can be read
+// on its own, and the commission spent on it each month.
+//
+//   orders, units, case value   the order book, by ORDER DATE (cancelled out)
+//   device cost                 each order's device lines × the Master File
+//                               Inventory tab's Cost Per Device + Shipping &
+//                               Handling, by order date
+//   invoiced, collected         Striven invoices by INVOICE DATE; collected is
+//                               what has been settled on those invoices (cash +
+//                               credit), not a bank figure
+//   commission                  the commission book's lines, by PAYOUT MONTH and
+//                               the programme each line resolved to (paid + owed)
+//   fees                        QuickBooks "Lienstar Funding Fees" → PI
+//   overhead                    QuickBooks expenses that belong to no programme:
+//                               total expenses less the rep-commission account
+//                               (Contract labor, Upwork contractors kept in) and
+//                               the Lienstar fees — shown ONCE, never split
+//
+// PI REVENUE IS WHAT WAS INVOICED — the 15% advance — by decision (27 Oct 2026),
+// so PI's margin reads low until cases settle; the 85% still to come is not
+// counted as revenue anywhere here.
+//
+// WHAT COULD NOT BE WORKED OUT IS RETURNED, NOT HIDDEN (`gaps`): devices with
+// no cost in the Inventory tab, orders with no device lines, invoices and
+// commission lines with no programme, and QuickBooks being unreachable. The
+// page prints every one of them, so a figure is never quietly understated.
+export async function getVerticalPL() {
+  const ADMIN = { repName: null, role: 'admin' };
+  const [so, rc, invItems, reg, comm, ar, pi, va] = await Promise.all([
+    getSO(),
+    sbCacheRead('report_patient_items').then((b) => b?.data?.orders ?? []).catch(() => []),
+    getInventoryItems().catch(() => null),
+    getArRegister().catch(() => null),
+    getCommissionFor(ADMIN).catch(() => null),
+    getAR().catch(() => null),
+    getPiLienstar().catch(() => null),
+    getVaRemittances().catch(() => null),
+  ]);
+  const gaps = [];
+  const PROGS = ['PI', 'VA', 'TriCare', 'DOL', 'DEMO', 'Other'];
+  const progOf = (t) => { const c = soClass(t || ''); return PROGS.includes(c) ? c : 'Other'; };
+  const cell = new Map();                                   // `${month}|${prog}` → figures
+  const get = (month, prog) => {
+    const k = `${month}|${prog}`;
+    let e = cell.get(k);
+    if (!e) { e = { month, prog, orders: 0, units: 0, caseValue: 0, deviceCost: 0, invoiced: 0, invoices: 0, collected: 0, commission: 0, commissionPaid: 0, commissionOwed: 0, fees: 0 }; cell.set(k, e); }
+    return e;
+  };
+
+  // ── Device unit cost, from the Master File Inventory tab ──────────────────
+  const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const costOf = new Map();
+  const listedNoCost = new Set();                           // in the Inventory tab, cost cell blank
+  if (invItems?.ok) {
+    const c = invItems.columns;
+    const iName = c.findIndex((h) => /item name/i.test(h)), iCost = c.findIndex((h) => /cost per device/i.test(h)), iShip = c.findIndex((h) => /shipping/i.test(h));
+    for (const r of invItems.rows) {
+      const name = r[iName]; if (!name) continue;
+      const cost = sheetMoney(r[iCost]) + (iShip >= 0 ? sheetMoney(r[iShip]) : 0);
+      if (String(r[iCost] ?? '').trim() === '') listedNoCost.add(norm(name));
+      else costOf.set(norm(name), round2(cost));
+    }
+  } else {
+    gaps.push({ kind: 'inventory', text: 'The Master File Inventory tab could not be read, so no device cost is included.', amount: null });
+  }
+
+  // ── Orders: volume, case value, device cost — by order date ───────────────
+  const itemsBySo = new Map(rc.map((o) => [String(o.soId), o.items || []]));
+  const uncosted = new Map();                               // item → { units, orders }
+  let noLines = 0, noLinesValue = 0, demoNoLines = 0, demoValue = 0;
+  for (const o of so.recent || []) {
+    if (!o.date || isCancelledStatusSrv(o.status)) continue;
+    const month = String(o.date).slice(0, 7);
+    const prog = PROGS.includes(o.type) ? o.type : 'Other';
+    const e = get(month, prog);
+    e.orders += 1; e.caseValue += Number(o.value) || 0;
+    const items = itemsBySo.get(String(o.id));
+    if (!items || !items.length) {
+      if (prog !== 'DEMO') { noLines += 1; noLinesValue += Number(o.value) || 0; } else { demoNoLines += 1; demoValue += Number(o.value) || 0; }
+      continue;
+    }
+    for (const it of items) {
+      const q = Number(it.qty) || 0;
+      e.units += q;
+      // Striven's item names often carry a stock code in front ("SMR T/N 10 -
+      // PI TENS/NMES") or a body part after ("… Lumbar (Back)"); the Master
+      // File names the device plainly. Exact first, then without the code,
+      // then without the trailing bracket.
+      const tries = [it.item, String(it.item).replace(/^.*?\s-\s/, ''), String(it.item).replace(/^.*?\s-\s/, '').replace(/\s*\([^)]*\)\s*$/, '')].map(norm);
+      const key = tries.find((k) => costOf.has(k)) ?? tries.find((k) => listedNoCost.has(k));
+      const c = key != null ? costOf.get(key) : undefined;
+      if (c != null) e.deviceCost += c * q;
+      else {
+        const u = uncosted.get(it.item) ?? { units: 0, orders: 0, prog, listed: key != null };
+        u.units += q; u.orders += 1; uncosted.set(it.item, u);
+      }
+    }
+  }
+  if (uncosted.size) {
+    const all = [...uncosted].sort((a, b) => b[1].units - a[1].units);
+    const units = (l) => l.reduce((t, [, u]) => t + u.units, 0);
+    const byProg = (l) => { const m = {}; for (const [, u] of l) m[u.prog] = (m[u.prog] ?? 0) + u.units; return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([p, n]) => `${p} ${n}`).join(', '); };
+    const blank = all.filter(([, u]) => u.listed), missing = all.filter(([, u]) => !u.listed);
+    if (blank.length) gaps.push({ kind: 'uncosted', count: units(blank), amount: null, byProg: byProg(blank),
+      text: `${units(blank)} device unit(s) (${byProg(blank)}) are listed in the Master File Inventory tab with a BLANK Cost Per Device, so their cost cannot be included: ${blank.slice(0, 8).map(([n, u]) => `${n} (${u.units})`).join(', ')}${blank.length > 8 ? '…' : ''}. Fill in the cost in the sheet and it is picked up automatically.` });
+    if (missing.length) gaps.push({ kind: 'uncosted', count: units(missing), amount: null, byProg: byProg(missing),
+      text: `${units(missing)} device unit(s) (${byProg(missing)}) are not in the Master File Inventory tab at all, so their cost cannot be included: ${missing.slice(0, 8).map(([n, u]) => `${n} (${u.units})`).join(', ')}${missing.length > 8 ? '…' : ''}. Add them to the sheet with a cost.` });
+  }
+  if (demoNoLines) gaps.push({ kind: 'demo', amount: round2(demoValue), count: demoNoLines,
+    text: `${demoNoLines} DEMO order(s) carry no device lines in Striven's report (it leaves DEMO out by design), so the cost of demo devices given out is not included.` });
+  if (noLines) gaps.push({ kind: 'nolines', amount: round2(noLinesValue), count: noLines,
+    text: `${noLines} order(s) worth ${round2(noLinesValue).toLocaleString('en-US', { style: 'currency', currency: 'USD' })} have no device lines in Striven's report, so they carry no device cost.` });
+
+  // ── Invoices: invoiced and collected — by invoice date ────────────────────
+  if (reg?.ok) {
+    let unassigned = 0, unassignedN = 0;
+    for (const i of reg.invoices || []) {
+      if (!i.date) continue;
+      const v = i.vertical && PROGS.includes(i.vertical) ? i.vertical : (i.vertical ? 'Other' : 'Other');
+      if (!i.vertical) { unassigned += i.total || 0; unassignedN += 1; }
+      const e = get(String(i.date).slice(0, 7), v);
+      e.invoiced += i.total || 0; e.invoices += 1; e.collected += i.paid || 0;
+    }
+    if (unassignedN) gaps.push({ kind: 'invoices', amount: round2(unassigned), count: unassignedN,
+      text: `${unassignedN} invoice(s) worth ${round2(unassigned).toLocaleString('en-US', { style: 'currency', currency: 'USD' })} could not be tied to a programme, so they sit under "Other".` });
+  } else {
+    gaps.push({ kind: 'invoices', amount: null, text: 'The invoice register could not be read, so invoiced and collected are missing.' });
+  }
+
+  // ── Commission: by payout month and the line's resolved programme ─────────
+  if (comm?.striven) {
+    let noProg = 0, noProgAmt = 0, noMonth = 0, noMonthAmt = 0;
+    for (const r of comm.striven.byRep || []) {
+      for (const l of r.lines || []) {
+        const amt = Number(l.comm) || 0;
+        if (!l.month) { noMonth += 1; noMonthAmt += amt; continue; }
+        const v = l.vertical || verticalOfCommissionLine(l.prog);
+        if (!v) { noProg += 1; noProgAmt += amt; }
+        const e = get(l.month, v && PROGS.includes(v) ? v : 'Other');
+        e.commission += amt;
+        if (l.state === 'paid') e.commissionPaid += amt; else e.commissionOwed += amt;
+      }
+    }
+    if (noProg) gaps.push({ kind: 'commission', amount: round2(noProgAmt), count: noProg, text: `${noProg} commission line(s) worth ${round2(noProgAmt).toLocaleString('en-US', { style: 'currency', currency: 'USD' })} name no programme, so they sit under "Other".` });
+    if (noMonth) gaps.push({ kind: 'commission', amount: round2(noMonthAmt), count: noMonth, text: `${noMonth} commission line(s) worth ${round2(noMonthAmt).toLocaleString('en-US', { style: 'currency', currency: 'USD' })} have no payout month, so they appear in no month.` });
+  } else {
+    gaps.push({ kind: 'commission', amount: null, text: 'The commission book could not be read, so commission is missing.' });
+  }
+
+  // ── QuickBooks: Lienstar fees (PI) and shared overheads ───────────────────
+  const overheadByMonth = {};
+  const qbCommissionByMonth = {};
+  try {
+    const { qbMonthlyLines } = await import('./_qb.js');
+    const months = [...new Set([...cell.values()].map((e) => e.month))].sort();
+    if (months.length) {
+      const today = new Date().toISOString().slice(0, 10);
+      const q = await qbMonthlyLines({ start: `${months[0]}-01`, end: today });
+      const line = (re, kind) => q.lines.find((l) => l.kind === kind && re.test(l.label));
+      const expenses = q.lines.find((l) => l.kind === 'section' && l.group === 'Expenses');
+      const contract = line(/^contract labou?r$/i, 'section') || line(/^contract labou?r$/i, 'account');
+      const upwork = line(/upwork/i, 'account');
+      const lien = line(/lienstar funding fees/i, 'account');
+      for (const m of q.months) {
+        const repComm = (contract?.byMonth[m] ?? 0) - (upwork?.byMonth[m] ?? 0);
+        const fees = lien?.byMonth[m] ?? 0;
+        if (fees) get(m, 'PI').fees += fees;
+        overheadByMonth[m] = round2((expenses?.byMonth[m] ?? 0) - repComm - fees);
+        qbCommissionByMonth[m] = round2(repComm);
+      }
+    }
+  } catch (e) {
+    gaps.push({ kind: 'quickbooks', amount: null, text: `QuickBooks could not be read (${e.message}), so Lienstar fees and shared overheads are missing.` });
+  }
+
+  // ── What is still owed to SMR today, per programme ────────────────────────
+  const arNow = {};
+  if (pi?.ok) arNow.PI = round2(pi.receivable?.outstanding ?? 0);
+  else gaps.push({ kind: 'ar', amount: null, text: 'The PI Lienstar comparison could not be read, so PI\'s amount owed is missing.' });
+  if (va?.ok) arNow.VA = round2(va.receivable?.outstanding ?? 0);
+  else gaps.push({ kind: 'ar', amount: null, text: 'The VA remittance comparison could not be read, so VA\'s amount owed is missing.' });
+  for (const i of ar?.invoices || []) {
+    if (!(i.open > 0)) continue;
+    const v = i.vertical && PROGS.includes(i.vertical) ? i.vertical : 'Other';
+    if (v === 'PI' || v === 'VA') continue;               // counted from Lienstar / remittances above
+    arNow[v] = round2((arNow[v] ?? 0) + i.open);
+  }
+
+  const rows = [...cell.values()].map((e) => {
+    for (const k of ['caseValue', 'deviceCost', 'invoiced', 'collected', 'commission', 'commissionPaid', 'commissionOwed', 'fees']) e[k] = round2(e[k]);
+    return e;
+  }).sort((a, b) => a.month.localeCompare(b.month) || PROGS.indexOf(a.prog) - PROGS.indexOf(b.prog));
+  return {
+    ok: true, programmes: PROGS, rows, overheadByMonth, qbCommissionByMonth, arNow, gaps,
+    costedItems: costOf.size,
+  };
+}
+const isCancelledStatusSrv = (st) => soGroupOf(st) === 'cancelled' || /\blost\b/i.test(String(st || ''));
+
 export const ROUTES = {
   '/api/health': async () => { const { clientId, clientSecret } = await getConfig(); return { ok: true, configured: Boolean(clientId && clientSecret), phiMasked: MASK_PHI }; },
   '/api/reports/vendor-items': getReportVendorItems,
@@ -8918,6 +9321,8 @@ export const ROUTES = {
   '/api/ar-cei': getArCei,
   // AP Open by vendor, from the Master File's AP tab - see getMasterFileAp().
   '/api/master-file-ap': getMasterFileAp,
+  // Profitability by programme, by month — see getVerticalPL(). Admin only (allow-list).
+  '/api/vertical-pl': getVerticalPL,
   // PI: Striven order value / invoiced against the Master File's Lienstar tab.
   // Carries patient initial + surname, so — like the route below — it is closed
   // to reps by the allow-list in index.js.
