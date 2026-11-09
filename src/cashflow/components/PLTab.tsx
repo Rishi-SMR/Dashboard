@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { BalanceSheetView } from './BalanceSheetView';
 import { HealthRemarks, type HealthRemark } from './HealthRemarks';
-import { fetchQbPL, type QbPlResult, type QbPlMonth, type QbLine, type QbCategory, type PlPeriod } from '../strivenApi';
+import { fetchQbPL, type QbPlResult, type QbPlMonth, type QbLine, type QbCategory, type QbSalesVertical, type PlPeriod } from '../strivenApi';
 import { formatCurrency } from '../format';
-import { C, monthLabel } from '../chartTheme';
+import { C, VERTICAL_COLORS, monthLabel } from '../chartTheme';
 import { ChartCard, RankBar, TrendArea, LegendDots, DrillModal, KpiR, useSyncAgo } from '../chartKit';
 
 const pct = (n: number) => `${(Number(n) || 0).toFixed(1)}%`;
@@ -342,6 +342,51 @@ export function PLTab() {
       { k: totalLabel, v: formatCurrency(total), rowClass: 'total-row' },
     ]),
   });
+  // SALES BY VERTICAL (9 Nov 2026, on request): who paid, matched on the
+  // deposit's payer — CMC → TriCare, Integrated Surg / Hi-Dow → VA, Lienstar →
+  // PI. See salesByVertical in api/_qb.js.
+  const verticals = pl?.salesByVertical ?? [];
+  const VERTICAL_PAYERS: Record<string, string> = {
+    TriCare: 'CMC Solutions', VA: 'Integrated Surg Distributor, Hi-Dow', PI: 'Lienstar', Other: 'all other payers',
+  };
+  // Every receipt with its date and amount (9 Nov 2026, on request), oldest
+  // first; a vertical paid by several payers closes with each payer's total.
+  const explainVertical = (v: QbSalesVertical) => {
+    const deps = v.deposits ?? [];
+    if (!deps.length) {
+      setDrill({
+        title: `Sales · ${v.vertical}`, sub: qbSub(`by payer · ${v.count} deposit${v.count === 1 ? '' : 's'}`),
+        ...kv([
+          ...v.payers.map((p) => ({ k: `${p.name}${p.count ? ` (${p.count})` : ''}`, v: formatCurrency(p.value) })),
+          { k: `Total ${v.vertical}`, v: formatCurrency(v.value), rowClass: 'total-row' },
+        ]),
+      });
+      return;
+    }
+    const money = (n: number) => formatCurrency(n, true);
+    const rows: Record<string, ReactNode>[] = deps.map((d) => ({
+      date: d.date ? fmtDay(d.date) : '-', payer: d.payer, amount: money(d.amount),
+    }));
+    // A gap between the detail report and the statement has no deposit row.
+    const listed = deps.reduce((t, d) => t + d.amount, 0);
+    if (Math.abs(v.value - listed) >= 0.01) rows.push({ date: '-', payer: 'Not itemised in the detail report', amount: money(v.value - listed) });
+    if (v.payers.length > 1) {
+      for (const p of v.payers) rows.push({ date: '', payer: `${p.name} total${p.count ? ` (${p.count})` : ''}`, amount: money(p.value), rowClass: 'sub-row' });
+    }
+    rows.push({ date: '', payer: `Total ${v.vertical}`, amount: money(v.value), rowClass: 'total-row' });
+    setDrill({
+      title: `Sales · ${v.vertical}`, sub: qbSub(`${deps.length} receipt${deps.length === 1 ? '' : 's'}, oldest first`),
+      columns: [{ key: 'date', label: 'Date received' }, { key: 'payer', label: 'Received from' }, { key: 'amount', label: 'Amount', num: true }],
+      rows,
+    });
+  };
+  const explainVerticals = () => setDrill({
+    title: 'Sales by vertical', sub: qbSub('by who paid'),
+    ...kv([
+      ...verticals.map((v) => ({ k: `${v.vertical} · ${VERTICAL_PAYERS[v.vertical]}`, v: `${formatCurrency(v.value)} · ${shareText(v.value)}` })),
+      { k: 'Total income', v: formatCurrency(income), rowClass: 'total-row' },
+    ]),
+  });
   const explainCategory = (c: QbCategory) => explainLines(
     c.category, `${c.section === 'cogs' ? 'Cost of goods sold' : 'Expenses'}, by account`,
     c.accounts.map((a) => ({ name: a.label, value: a.value })), c.total, `Total ${c.category.toLowerCase()}`,
@@ -520,7 +565,7 @@ export function PLTab() {
                     <span className="lbl" /><span className="pct">Of sales</span><span className="val">Amount</span>
                   </div>
 
-                  {secHead('income', 1, 'Income', 'by income account', pl.incomeAccounts.length)}
+                  {secHead('income', 1, 'Income', verticals.length ? 'by income account, then by vertical' : 'by income account', pl.incomeAccounts.length + verticals.length)}
                   {open.income && pl.incomeAccounts.map((a) => (
                     <div key={a.name} className="pl-line pl-indent pl-click"
                       onClick={() => explainLines('Income', 'by account', pl.incomeAccounts, income, 'Total income')}>
@@ -529,6 +574,26 @@ export function PLTab() {
                       <span className="val">{formatCurrency(a.value)}</span>
                     </div>
                   ))}
+                  {open.income && verticals.length > 0 && (
+                    <>
+                      <div className="pl-line pl-indent pl-click" onClick={explainVerticals}>
+                        <span className="lbl" style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>Sales by vertical</span>
+                        <span className="pct" /><span className="val" />
+                      </div>
+                      {verticals.map((v) => (
+                        <div key={v.vertical} className="pl-line pl-indent pl-click" style={{ paddingLeft: 28 }}
+                          title={`Click for the payers behind ${v.vertical}`} onClick={() => explainVertical(v)}>
+                          <span className="lbl">
+                            <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, marginRight: 8, background: VERTICAL_COLORS[v.vertical] ?? C.muted }} />
+                            <b style={{ color: 'var(--text)' }}>{v.vertical}</b>
+                            <span style={{ marginLeft: 6, fontSize: 12.5 }}>{VERTICAL_PAYERS[v.vertical]}</span>
+                          </span>
+                          <span className="pct">{shareText(v.value)}</span>
+                          <span className="val">{formatCurrency(v.value)}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
                   <div className="pl-line pl-subtotal pl-click" onClick={() => byMonth('Sales', (m) => m.revenue, income, 'Total income')}>
                     <span className="lbl">Total income</span>
                     <span className="pct">{income ? '100%' : '-'}</span>
