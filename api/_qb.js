@@ -380,13 +380,103 @@ async function qbMonthlySeries(startDate, endDate, basis) {
   return out;
 }
 
+/**
+ * SALES BY VERTICAL (9 Nov 2026, on request) — who paid each dollar of Sales.
+ *
+ * The books post almost every receipt as a bank Deposit straight to Sales, most
+ * with no customer on it, so QuickBooks' by-customer P&L leaves ~$900k as "Not
+ * Specified". The payer is still there, though: on the Deposit's Name, or in the
+ * bank's memo text ("INCOMING WIRE TRANSFER LIENSTAR LLC …"). Each line is read
+ * from the ProfitAndLossDetail report and matched on Name + memo:
+ *
+ *   CMC Solutions                              → TriCare
+ *   Integrated Surg(ical) Distributor, Hi-Dow  → VA
+ *   Lienstar                                   → PI
+ *   anything else (Amazon, Intuit cents, …)    → Other
+ *
+ * First match wins, in that order. Unmatched money is never dropped: it lands in
+ * Other, and if the detail report and the statement disagree the gap is named as
+ * its own Other payer, so the verticals always add to total income.
+ */
+export const SALES_VERTICAL_RULES = [
+  { vertical: 'TriCare', payer: 'CMC Solutions', re: /\bcmc\b/i },
+  { vertical: 'VA', payer: 'Integrated Surg Distributor', re: /integrated\s+surg/i },
+  { vertical: 'VA', payer: 'Hi-Dow International', re: /hi[\s-]?dow/i },
+  { vertical: 'PI', payer: 'Lienstar', re: /lienstar/i },
+];
+export const SALES_VERTICALS = ['TriCare', 'VA', 'PI', 'Other'];
+
+/** Section rows of a detail report: walks to the "Income" section (or `head`)
+ *  and returns its transaction lines as { date, type, name, memo, amount }. */
+export function plDetailLines(report, head = 'Income') {
+  const cols = (report?.Columns?.Column ?? []).map((c) => String(c.ColTitle || c.ColType || ''));
+  const at = (t) => cols.findIndex((c) => c.toLowerCase() === t);
+  const iDate = at('date'), iType = at('transaction type'), iName = at('name'), iMemo = at('memo/description');
+  const iAmt = at('amount') >= 0 ? at('amount') : cols.length - 1;
+  const find = (node) => {
+    for (const row of node?.Row ?? []) {
+      if (row.type === 'Section' && String(row.Header?.ColData?.[0]?.value ?? '').trim() === head) return row;
+      if (row.Rows) { const hit = find(row.Rows); if (hit) return hit; }
+    }
+    return null;
+  };
+  const sec = find(report?.Rows);
+  const out = [];
+  const walk = (node) => {
+    for (const row of node?.Row ?? []) {
+      if (row.type === 'Data' && row.ColData) {
+        const v = (i) => (i >= 0 ? String(row.ColData[i]?.value ?? '').trim() : '');
+        out.push({ date: v(iDate), type: v(iType), name: v(iName), memo: v(iMemo), amount: plNum(row.ColData[iAmt]?.value) });
+      }
+      if (row.Rows) walk(row.Rows);
+    }
+  };
+  if (sec) walk(sec.Rows);
+  return out;
+}
+
+/** Group income lines into verticals, each with its payers. `income` is the
+ *  statement's total; any difference from the lines is named under Other. */
+export function salesByVertical(lines, income) {
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const acc = Object.fromEntries(SALES_VERTICALS.map((v) => [v, { vertical: v, value: 0, count: 0, payers: {}, deposits: [] }]));
+  for (const l of lines) {
+    const text = `${l.name} ${l.memo}`;
+    const rule = SALES_VERTICAL_RULES.find((x) => x.re.test(text));
+    // No rule: the payee Name, else the memo's first three words (bank memos
+    // repeat themselves and trail reference numbers).
+    const payer = rule?.payer ?? (l.name || l.memo.split(/\s+/).slice(0, 3).join(' ') || 'Unnamed deposit');
+    const v = acc[rule?.vertical ?? 'Other'];
+    v.value += l.amount; v.count += 1;
+    const p = (v.payers[payer] ??= { name: payer, value: 0, count: 0 });
+    p.value += l.amount; p.count += 1;
+    // Each receipt as booked: when it came in, from whom, how much.
+    v.deposits.push({ date: l.date || '', payer, type: l.type || '', memo: l.memo || '', amount: r2(l.amount) });
+  }
+  const gap = r2((income ?? 0) - lines.reduce((t, l) => t + l.amount, 0));
+  if (Math.abs(gap) >= 0.01) {
+    acc.Other.value += gap;
+    acc.Other.payers['Not itemised in the detail report'] = { name: 'Not itemised in the detail report', value: gap, count: 0 };
+  }
+  return SALES_VERTICALS.map((k) => acc[k])
+    .map((v) => ({
+      vertical: v.vertical, value: r2(v.value), count: v.count,
+      payers: Object.values(v.payers).map((p) => ({ ...p, value: r2(p.value) })).sort((a, b) => b.value - a.value),
+      deposits: [...v.deposits].sort((a, b) => a.date.localeCompare(b.date)),
+    }))
+    .filter((v) => v.value !== 0 || v.count > 0);
+}
+
 export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
   const today = new Date().toISOString().slice(0, 10);
   const startDate = start || `${today.slice(0, 4)}-01-01`;
   const endDate = end || today;
-  const [r, series] = await Promise.all([
+  const [r, series, detail] = await Promise.all([
     qbApi(`reports/ProfitAndLoss?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}&accounting_method=${encodeURIComponent(basis)}`),
     qbMonthlySeries(startDate, endDate, basis).catch(() => []),
+    // The vertical split is extra: if QuickBooks refuses the detail report the
+    // statement still stands, just without it.
+    qbApi(`reports/ProfitAndLossDetail?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}&accounting_method=${encodeURIComponent(basis)}&columns=tx_date,txn_type,name,memo,subt_nat_amount`).catch(() => null),
   ]);
   const flat = plFlatten(r.Rows);
 
@@ -443,6 +533,9 @@ export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
      *  QuickBooks subtotals at. See plExpenseCategories. */
     /** Sales by income account — see plIncomeAccounts. */
     incomeAccounts: plIncomeAccounts(r.Rows),
+    /** Sales split by who paid — see salesByVertical. Null when the detail
+     *  report could not be read. */
+    salesByVertical: detail ? salesByVertical(plDetailLines(detail), income) : null,
     categories: plExpenseCategories(r.Rows),
     /** Below the operating line: other income and other expenses, by account.
      *  Null/empty when the company has none in the period. */

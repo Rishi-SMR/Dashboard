@@ -4164,7 +4164,14 @@ function commissionBookRows(buffer, defaultRep = '') {
   // placed, so it goes to Unassigned Rep rather than being guessed at.
   const named = new Set(out.map((r) => r.rep).filter(Boolean));
   const owner = named.size === 1 ? [...named][0] : '';
-  for (const r of out) r.rep = toUnassigned(r.rep || owner);
+  for (const r of out) {
+    // An excluded PERSON's row (not CMC direct, not a blank cell) is still a
+    // real commission line the reconciliation sheet transcribed, so
+    // commissionSourceIndex() checks it. Flagged here because the name itself
+    // is gone once the row is folded to Unassigned Rep.
+    r.excludedPerson = Boolean(r.rep) && isExcludedRep(r.rep) && !/cmc/i.test(r.rep);
+    r.rep = toUnassigned(r.rep || owner);
+  }
   return out;
 }
 
@@ -4212,9 +4219,16 @@ async function commissionSourceIndex() {
       if (!buffers[i]) continue;
       read += 1;
       for (const row of commissionBookRows(Buffer.from(buffers[i]), books[i].rep)) {
-        // Unassigned money is checked against nothing: the sheet's figure for
-        // it stands as signed off, so the page matches the sheet exactly.
-        if (row.rep === UNASSIGNED_REP || isExcludedRep(row.rep)) continue;
+        // UNASSIGNED MONEY IS CHECKED ONLY WHERE THE BOOK NAMES A PERSON
+        // (9 Nov 2026, on request). Cassie's rows fold to Unassigned Rep, and
+        // skipping them here silently undid the correction this index exists
+        // for: her 15 Jul 2026 cycle went back to the sheet's $8,325 against a
+        // workbook that pays $7,025 (five $80 L1833 braces transcribed at $425,
+        // one $425 combo missing). They are checked under Unassigned Rep, the
+        // key the sheet's own lines are filed under. Blank-rep and CMC rows
+        // still are not: CMC's tab carries claim values in the commission
+        // column, and a blank row has no person to check against.
+        if (row.rep === UNASSIGNED_REP && !row.excludedPerson) continue;
         const k = `${row.rep}|${row.month}`;
         byRepMonth.set(k, [...(byRepMonth.get(k) ?? []), row]);
       }
