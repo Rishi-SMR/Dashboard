@@ -238,7 +238,16 @@ export type QbPlResult = {
   netOperating: number | null; netIncome: number | null; net: number; margin: number;
   otherIncome?: number | null; otherExpenses?: number | null;
   incomeAccounts: QbLine[]; otherIncomeAccounts?: QbLine[]; otherExpenseAccounts?: QbLine[];
+  /** Sales by who paid: CMC → TriCare, Integrated Surg / Hi-Dow → VA,
+   *  Lienstar → PI, the rest → Other. Adds to `income`. Null if unavailable. */
+  salesByVertical?: QbSalesVertical[] | null;
   categories: QbCategory[]; series: QbPlMonth[];
+};
+export type QbSalesVertical = {
+  vertical: 'TriCare' | 'VA' | 'PI' | 'Other'; value: number; count: number;
+  payers: { name: string; value: number; count: number }[];
+  /** Every receipt in the vertical, oldest first (YYYY-MM-DD dates). */
+  deposits?: { date: string; payer: string; type: string; memo: string; amount: number }[];
 };
 /** WHEN EACH DATASET WAS LAST PULLED FROM STRIVEN (api getCacheHealth). The
  *  dashboard never calls Striven itself; it reads copies refreshed every 6h, so
