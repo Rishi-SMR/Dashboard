@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { BalanceSheetView } from './BalanceSheetView';
 import { HealthRemarks, type HealthRemark } from './HealthRemarks';
-import { fetchQbPL, type QbPlResult, type QbPlMonth, type QbLine, type QbCategory, type QbSalesVertical, type PlPeriod } from '../strivenApi';
+import { fetchQbPL, type QbPlResult, type QbPlMonth, type QbLine, type QbCategory, type QbSalesVertical, type QbCommissionTeam, type PlPeriod } from '../strivenApi';
 import { formatCurrency } from '../format';
 import { C, VERTICAL_COLORS, monthLabel } from '../chartTheme';
 import { ChartCard, RankBar, TrendArea, LegendDots, DrillModal, KpiR, useSyncAgo } from '../chartKit';
@@ -387,10 +387,159 @@ export function PLTab() {
       { k: 'Total income', v: formatCurrency(income), rowClass: 'total-row' },
     ]),
   });
-  const explainCategory = (c: QbCategory) => explainLines(
+  // REP COMMISSIONS BY TEAM (10 Nov 2026, on request): Operations is a named
+  // list of payees, Upwork stands on its own, everyone else is Sales. See
+  // qbCommissionTeams and COMMISSION_ALLOCATIONS in api/_qb.js.
+  const teams = pl?.commissionTeams ?? [];
+  const isRepComm = (c: QbCategory) => /^rep commissions/i.test(c.category);
+  const TEAM_COLORS: Record<string, string> = { Sales: '#0A369F', Operations: '#D97706', Upwork: '#6B7280' };
+  const teamName = (t: QbCommissionTeam) => (t.team === 'Upwork' ? 'Upwork' : `${t.team} team`);
+  // A team opens as one row per payee (collective); clicking a payee lists
+  // that payee's payments, with a way back to the team.
+  const linkBtn = (label: string, onClick: () => void, title?: string) => (
+    <button type="button" onClick={onClick} title={title}
+      style={{ background: 'none', border: 0, padding: 0, font: 'inherit', color: 'var(--accent, #0A369F)', cursor: 'pointer', textDecoration: 'underline' }}>{label}</button>
+  );
+  const paymentsOf = (t: QbCommissionTeam, name: string) =>
+    t.payments.filter((p) => p.payee === name || p.payee.startsWith(`${name} (`));
+  // A payee paid to several people (Maverick Medical: Alle Ann, Jillian) opens
+  // as one row per person; clicking a person lists that person's payments.
+  const personOf = (name: string, label: string) => (label.startsWith(`${name} (`) ? label.slice(name.length + 2, -1) : name);
+  const explainPayments = (t: QbCommissionTeam, name: string, person: string | null) => {
+    const money = (n: number) => formatCurrency(n, true);
+    const all = paymentsOf(t, name);
+    const pays = person == null ? all : all.filter((p) => personOf(name, p.payee) === person);
+    const value = person == null ? (t.payees.find((p) => p.name === name)?.value ?? 0) : pays.reduce((x, p) => x + p.amount, 0);
+    const rows: Record<string, ReactNode>[] = pays.map((p) => ({
+      date: p.date ? fmtDay(p.date) : '-', payee: p.payee, amount: money(p.amount),
+    }));
+    if (!pays.length) rows.push({ date: '-', payee: 'Not itemised in the detail report', amount: money(value) });
+    const who = person == null || person === name ? name : `${person} (${name})`;
+    rows.push({ date: '', payee: `Total ${who}`, amount: money(value), rowClass: 'total-row' });
+    const people = new Set(all.map((p) => personOf(name, p.payee)));
+    rows.push({ date: '', payee: person != null && people.size > 1
+      ? linkBtn(`← Back to ${name}`, () => explainPayee(t, name))
+      : linkBtn(`← Back to ${teamName(t).toLowerCase()}`, () => explainTeam(t)), amount: '' });
+    setDrill({
+      title: `${who} · ${teamName(t)}`, sub: qbSub(`${pays.length} payment${pays.length === 1 ? '' : 's'}, oldest first`),
+      columns: [{ key: 'date', label: 'Date paid' }, { key: 'payee', label: 'Paid to' }, { key: 'amount', label: 'Amount', num: true }],
+      rows,
+    });
+  };
+  const explainPayee = (t: QbCommissionTeam, name: string) => {
+    const all = paymentsOf(t, name);
+    const people = [...new Set(all.map((p) => personOf(name, p.payee)))];
+    if (people.length < 2) return explainPayments(t, name, null);
+    const money = (n: number) => formatCurrency(n, true);
+    const groups = people.map((person) => {
+      const pays = all.filter((p) => personOf(name, p.payee) === person);
+      return { person, pays, value: pays.reduce((x, p) => x + p.amount, 0) };
+    }).sort((x, y) => y.value - x.value);
+    const rows: Record<string, ReactNode>[] = groups.map((g) => ({
+      payee: linkBtn(g.person, () => explainPayments(t, name, g.person), `Click for every payment to ${g.person}`),
+      count: String(g.pays.length), last: fmtDay(g.pays[g.pays.length - 1].date), amount: money(g.value),
+    }));
+    rows.push({ payee: `Total ${name}`, count: String(all.length), last: '', amount: money(t.payees.find((p) => p.name === name)?.value ?? 0), rowClass: 'total-row' });
+    rows.push({ payee: linkBtn(`← Back to ${teamName(t).toLowerCase()}`, () => explainTeam(t)), count: '', last: '', amount: '' });
+    setDrill({
+      title: `${name} · ${teamName(t)}`, sub: qbSub('by person · click a name for its payments'),
+      columns: [{ key: 'payee', label: 'Paid to' }, { key: 'count', label: 'Payments', num: true }, { key: 'last', label: 'Last paid' }, { key: 'amount', label: 'Amount', num: true }],
+      rows,
+    });
+  };
+  const explainTeamByPayee = (t: QbCommissionTeam) => {
+    const money = (n: number) => formatCurrency(n, true);
+    const rows: Record<string, ReactNode>[] = t.payees.map((p) => {
+      const pays = paymentsOf(t, p.name);
+      const last = pays.length ? pays[pays.length - 1].date : '';
+      return {
+        payee: pays.length ? linkBtn(p.name, () => explainPayee(t, p.name), `Click for every payment to ${p.name}`) : p.name,
+        count: String(pays.length || '-'), last: last ? fmtDay(last) : '-', amount: money(p.value),
+      };
+    });
+    rows.push({ payee: `Total ${teamName(t).toLowerCase()}`, count: String(t.count), last: '', amount: money(t.value), rowClass: 'total-row' });
+    setDrill({
+      title: `Rep Commissions · ${teamName(t)}`, sub: qbSub('by payee, biggest first · click a name for its payments'),
+      columns: [{ key: 'payee', label: 'Paid to' }, { key: 'count', label: 'Payments', num: true }, { key: 'last', label: 'Last paid' }, { key: 'amount', label: 'Amount', num: true }],
+      rows,
+    });
+  };
+  // SALES TEAM BY VERTICAL (owner's sheet, 10 Nov 2026): Sales team opens by
+  // vertical, a vertical by rep, a rep by its dated payments. The vertical of
+  // each payment is set in api/_qb.js (QuickBooks has none).
+  const NO_VERTICAL = 'Not yet split by vertical';
+  const vOf = (p: QbCommissionTeam['payments'][number]) => p.vertical ?? NO_VERTICAL;
+  const repName = (label: string) => {
+    const m = /^(.*) \((.*)\)$/.exec(label);
+    return m && m[1] === 'Maverick Medical' ? `${m[2]} (${m[1]})` : label;
+  };
+  const explainVerticalRep = (t: QbCommissionTeam, v: string, label: string) => {
+    const money = (n: number) => formatCurrency(n, true);
+    const pays = t.payments.filter((p) => vOf(p) === v && p.payee === label);
+    const value = pays.reduce((x, p) => x + p.amount, 0);
+    const rows: Record<string, ReactNode>[] = pays.map((p) => ({ date: p.date ? fmtDay(p.date) : '-', payee: repName(p.payee), amount: money(p.amount) }));
+    rows.push({ date: '', payee: `Total ${repName(label)} · ${v}`, amount: money(value), rowClass: 'total-row' });
+    rows.push({ date: '', payee: linkBtn(`← Back to ${v}`, () => explainTeamVertical(t, v)), amount: '' });
+    setDrill({
+      title: `${repName(label)} · ${v}`, sub: qbSub(`Sales team · ${pays.length} payment${pays.length === 1 ? '' : 's'}, oldest first`),
+      columns: [{ key: 'date', label: 'Date paid' }, { key: 'payee', label: 'Paid to' }, { key: 'amount', label: 'Amount', num: true }],
+      rows,
+    });
+  };
+  const explainTeamVertical = (t: QbCommissionTeam, v: string) => {
+    const money = (n: number) => formatCurrency(n, true);
+    const pays = t.payments.filter((p) => vOf(p) === v);
+    const total = pays.reduce((x, p) => x + p.amount, 0);
+    const reps = [...new Set(pays.map((p) => p.payee))].map((label) => {
+      const ps = pays.filter((p) => p.payee === label);
+      return { label, ps, value: ps.reduce((x, p) => x + p.amount, 0) };
+    }).sort((a, b) => b.value - a.value);
+    const rows: Record<string, ReactNode>[] = reps.map((r) => ({
+      payee: linkBtn(repName(r.label), () => explainVerticalRep(t, v, r.label), `Click for every ${v} payment to ${repName(r.label)}`),
+      count: String(r.ps.length), share: total ? `${((r.value / total) * 100).toFixed(1)}%` : '-', amount: money(r.value),
+    }));
+    rows.push({ payee: `Total ${v}`, count: String(pays.length), share: '', amount: money(total), rowClass: 'total-row' });
+    rows.push({ payee: linkBtn('← Back to sales team', () => explainTeam(t)), count: '', share: '', amount: '' });
+    setDrill({
+      title: `Sales team · ${v}`, sub: qbSub('by rep, biggest first · click a name for its payments'),
+      columns: [{ key: 'payee', label: 'Rep' }, { key: 'count', label: 'Payments', num: true }, { key: 'share', label: 'Share', num: true }, { key: 'amount', label: 'Amount', num: true }],
+      rows,
+    });
+  };
+  const explainTeam = (t: QbCommissionTeam) => {
+    if (t.team !== 'Sales' || !t.payments.some((p) => p.vertical)) return explainTeamByPayee(t);
+    const money = (n: number) => formatCurrency(n, true);
+    const order = ['VA', 'TriCare', 'PI', NO_VERTICAL];
+    const vs = [...new Set(t.payments.map(vOf))].map((v) => ({ v, value: t.payments.filter((p) => vOf(p) === v).reduce((x, p) => x + p.amount, 0) }))
+      .sort((a, b) => (a.v === NO_VERTICAL ? 1 : b.v === NO_VERTICAL ? -1 : b.value - a.value || order.indexOf(a.v) - order.indexOf(b.v)));
+    const listed = vs.reduce((x, r) => x + r.value, 0);
+    const rows: Record<string, ReactNode>[] = vs.map((r) => ({
+      vertical: <span><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, marginRight: 8, background: (VERTICAL_COLORS as Record<string, string>)[r.v] ?? C.muted }} />
+        {linkBtn(r.v, () => explainTeamVertical(t, r.v), `Click for ${r.v} by rep`)}</span>,
+      share: t.value ? `${((r.value / t.value) * 100).toFixed(1)}%` : '-', amount: money(r.value),
+    }));
+    if (Math.abs(t.value - listed) >= 0.01) rows.push({ vertical: 'Not itemised in the detail report', share: '', amount: money(t.value - listed) });
+    rows.push({ vertical: 'Total sales team', share: '', amount: money(t.value), rowClass: 'total-row' });
+    rows.push({ vertical: linkBtn('See the sales team by rep instead', () => explainTeamByPayee(t)), share: '', amount: '' });
+    setDrill({
+      title: 'Rep Commissions · Sales team', sub: qbSub('by vertical · click a vertical for its reps'),
+      columns: [{ key: 'vertical', label: 'Vertical' }, { key: 'share', label: 'Share', num: true }, { key: 'amount', label: 'Amount', num: true }],
+      rows,
+    });
+  };
+  const explainCategory = (c: QbCategory) => (isRepComm(c) && teams.length ? setDrill({
+    title: c.category, sub: qbSub('by team, then by payee'),
+    ...kv([
+      ...teams.flatMap((t) => [
+        { k: <b>{teamName(t)}</b>, v: <b>{formatCurrency(t.value, true)}</b> },
+        ...t.payees.map((p) => ({ k: `${p.name}${p.count ? ` (${p.count})` : ''}`, v: formatCurrency(p.value, true) })),
+      ]),
+      { k: `Total ${c.category.toLowerCase()}`, v: formatCurrency(c.total, true), rowClass: 'total-row' },
+    ]),
+  }) : explainLines(
     c.category, `${c.section === 'cogs' ? 'Cost of goods sold' : 'Expenses'}, by account`,
     c.accounts.map((a) => ({ name: a.label, value: a.value })), c.total, `Total ${c.category.toLowerCase()}`,
-  );
+  ));
   const explainSection = (title: string, cats: QbCategory[], total: number) => explainLines(
     title, 'by category', cats.map((c) => ({ name: c.category, value: c.total })), total, `Total ${title.toLowerCase()}`,
   );
@@ -621,10 +770,24 @@ export function PLTab() {
 
                   {secHead('opex', 3, 'Expenses', 'by category, biggest first', opexCats.length)}
                   {open.opex && [...opexCats].sort((a, b) => b.total - a.total).map((c) => (
-                    <div key={c.category} className="pl-line pl-indent pl-click" onClick={() => explainCategory(c)}>
-                      <span className="lbl">{c.category}</span>
-                      <span className="pct">{shareText(c.total)}</span>
-                      <span className="val neg">−{formatCurrency(c.total)}</span>
+                    <div key={c.category}>
+                      <div className="pl-line pl-indent pl-click" onClick={() => explainCategory(c)}>
+                        <span className="lbl">{c.category}</span>
+                        <span className="pct">{shareText(c.total)}</span>
+                        <span className="val neg">−{formatCurrency(c.total)}</span>
+                      </div>
+                      {isRepComm(c) && teams.map((t) => (
+                        <div key={t.team} className="pl-line pl-indent pl-click" style={{ paddingLeft: 28 }}
+                          title={`Click for every payment to ${teamName(t)}`} onClick={() => explainTeam(t)}>
+                          <span className="lbl">
+                            <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 3, marginRight: 8, background: TEAM_COLORS[t.team] ?? C.muted }} />
+                            <b style={{ color: 'var(--text)' }}>{teamName(t)}</b>
+                            <span style={{ marginLeft: 6, fontSize: 12.5 }}>{t.payees.length} payee{t.payees.length === 1 ? '' : 's'}</span>
+                          </span>
+                          <span className="pct">{shareText(t.value)}</span>
+                          <span className="val neg">−{formatCurrency(t.value)}</span>
+                        </div>
+                      ))}
                     </div>
                   ))}
                   <div className="pl-line pl-subtotal pl-click" onClick={() => toggle('opex')}>
