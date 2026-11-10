@@ -241,7 +241,16 @@ export type QbPlResult = {
   /** Sales by who paid: CMC → TriCare, Integrated Surg / Hi-Dow → VA,
    *  Lienstar → PI, the rest → Other. Adds to `income`. Null if unavailable. */
   salesByVertical?: QbSalesVertical[] | null;
+  /** Rep Commissions (QuickBooks' Contract labor) by who was paid: the named
+   *  Operations payees, everyone else Sales. Adds to that category's total. */
+  commissionTeams?: QbCommissionTeam[] | null;
   categories: QbCategory[]; series: QbPlMonth[];
+};
+export type QbCommissionTeam = {
+  team: 'Sales' | 'Operations' | 'Upwork'; value: number; count: number;
+  payees: { name: string; value: number; count: number }[];
+  /** Every payment, oldest first (YYYY-MM-DD dates). */
+  payments: { date: string; payee: string; type: string; amount: number; vertical?: 'TriCare' | 'VA' | 'PI' | null }[];
 };
 export type QbSalesVertical = {
   vertical: 'TriCare' | 'VA' | 'PI' | 'Other'; value: number; count: number;
