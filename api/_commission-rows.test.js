@@ -24,9 +24,9 @@ import { readFileSync } from 'node:fs';
 
 const SRC = readFileSync(new URL('./_striven.js', import.meta.url), 'utf8');
 
-/** The `REP_NAMES.map(...)` that builds the serialized rep rows. */
+/** The `REP_NAMES` (+ Unassigned Rep) `.map(...)` that builds the serialized rep rows. */
 function repRowBuilder() {
-  const start = SRC.indexOf('const reps = REP_NAMES.map((rep) => {');
+  const start = SRC.indexOf('const reps = [...REP_NAMES, ...(svByRep2.has(UNASSIGNED_REP) ? [UNASSIGNED_REP] : [])].map((rep) => {');
   assert.notEqual(start, -1, 'could not find the rep-row builder in _striven.js');
   const end = SRC.indexOf('}).sort(', start);
   assert.notEqual(end, -1, 'could not find the end of the rep-row builder');

@@ -406,8 +406,9 @@ export const SALES_VERTICAL_RULES = [
 ];
 export const SALES_VERTICALS = ['TriCare', 'VA', 'PI', 'Other'];
 
-/** Section rows of a detail report: walks to the "Income" section (or `head`)
- *  and returns its transaction lines as { date, type, name, memo, amount }. */
+/** Section rows of a detail report: walks to the "Income" section (or `head`,
+ *  a name or a RegExp) and returns its transaction lines as
+ *  { date, type, id, name, memo, amount } — `id` is the transaction's own. */
 export function plDetailLines(report, head = 'Income') {
   const cols = (report?.Columns?.Column ?? []).map((c) => String(c.ColTitle || c.ColType || ''));
   const at = (t) => cols.findIndex((c) => c.toLowerCase() === t);
@@ -415,7 +416,8 @@ export function plDetailLines(report, head = 'Income') {
   const iAmt = at('amount') >= 0 ? at('amount') : cols.length - 1;
   const find = (node) => {
     for (const row of node?.Row ?? []) {
-      if (row.type === 'Section' && String(row.Header?.ColData?.[0]?.value ?? '').trim() === head) return row;
+      const title = String(row.Header?.ColData?.[0]?.value ?? '').trim();
+      if (row.type === 'Section' && (head instanceof RegExp ? head.test(title) : title === head)) return row;
       if (row.Rows) { const hit = find(row.Rows); if (hit) return hit; }
     }
     return null;
@@ -426,7 +428,10 @@ export function plDetailLines(report, head = 'Income') {
     for (const row of node?.Row ?? []) {
       if (row.type === 'Data' && row.ColData) {
         const v = (i) => (i >= 0 ? String(row.ColData[i]?.value ?? '').trim() : '');
-        out.push({ date: v(iDate), type: v(iType), name: v(iName), memo: v(iMemo), amount: plNum(row.ColData[iAmt]?.value) });
+        out.push({
+          date: v(iDate), type: v(iType), id: iType >= 0 ? String(row.ColData[iType]?.id ?? '') : '',
+          name: v(iName), memo: v(iMemo), amount: plNum(row.ColData[iAmt]?.value),
+        });
       }
       if (row.Rows) walk(row.Rows);
     }
@@ -465,6 +470,163 @@ export function salesByVertical(lines, income) {
       deposits: [...v.deposits].sort((a, b) => a.date.localeCompare(b.date)),
     }))
     .filter((v) => v.value !== 0 || v.count > 0);
+}
+
+/**
+ * REP COMMISSIONS BY TEAM (10 Nov 2026, on request) — who the "Contract labor"
+ * account (shown as Rep Commissions) actually paid, split Operations / Sales.
+ *
+ * OPERATIONS is a named list, given by the business: Taryn Griffy, ProRecovery
+ * Network, Precision Healing, Alek Sigman, Alyssa Parker, Cameron Archer.
+ * Upwork is shown on its own. EVERYONE ELSE IS SALES — so a payee nobody has listed yet lands in Sales, by
+ * name, where it is visible, rather than vanishing.
+ *
+ * WHERE THE NAME IS. From mid-September the books write it on the line
+ * ("Contractor Payment for Alek Sigman"). Earlier journal entries leave the
+ * Contract labor line blank and name the payee on the bank side ("Debit for
+ * Taryn Griffy") or in the entry's note — and spell it loosely ("Preision
+ * Healing", "PRecision"). So the line is tried first, then the whole
+ * transaction's text: note, every line's description, every entity.
+ *
+ * Read live from the same detail report as the statement, so a bank
+ * transaction categorised to Contract labor shows here on the next refresh.
+ */
+export const COMMISSION_PAYEES = [
+  { team: 'Operations', name: 'Taryn Griffy', re: /griff/i },
+  { team: 'Operations', name: 'ProRecovery Network', re: /pro\s*recovery/i },
+  { team: 'Operations', name: 'Precision Healing', re: /\bp\w*sion\s+healing/i },
+  { team: 'Operations', name: 'Alek Sigman', re: /sigman/i },
+  { team: 'Operations', name: 'Alyssa Parker', re: /alyssa/i },
+  { team: 'Operations', name: 'Cameron Archer', re: /cameron/i },
+  // Sales: named so the drill reads as people, not as bank memos.
+  { team: 'Sales', name: 'Maverick Medical', re: /maverick|jillian|alle\s*ann/i },
+  { team: 'Sales', name: 'CVT Medical (Christy Tan)', re: /\bcvt\b|christy/i },
+  { team: 'Sales', name: 'Maylon Sanders', re: /maylon/i },
+  // Upwork is neither team: freelancer platform charges, shown on their own.
+  { team: 'Upwork', name: 'Upwork', re: /upwork/i },
+];
+export const COMMISSION_TEAMS = ['Sales', 'Operations', 'Upwork'];
+
+/**
+ * Journal entries that moved commission out of Payroll:Wages without naming
+ * anyone (Mar–May 2026), and Maverick Medical's monthly payments (Jun–Oct).
+ * Who each one was for, as given by the owner on 10 Nov 2026. Matched on date
+ * + amount, and on the payee named in `of` (or on no payee named at all).
+ * Alle Ann and Jillian are Maverick Medical; the part nobody is owed is
+ * Unassigned.
+ */
+const A = (amount, vertical) => ({ team: 'Sales', payee: 'Maverick Medical', who: 'Alle Ann', amount, vertical });
+const J = (amount, vertical) => ({ team: 'Sales', payee: 'Maverick Medical', who: 'Jillian', amount, vertical });
+const U = (amount, vertical) => ({ team: 'Sales', payee: 'Unassigned', who: 'Unassigned', amount, vertical });
+export const COMMISSION_ALLOCATIONS = [
+  { date: '2026-03-31', amount: 930, split: [
+    U(930, 'TriCare')] },
+  { date: '2026-04-30', amount: 21030, split: [
+    A(8925, 'VA'), J(425, 'TriCare'), U(11680, 'TriCare')] },
+  { date: '2026-05-31', amount: 16823.74, split: [
+    J(2748.74, 'PI'), J(4800, 'TriCare'), A(8075, 'VA'), U(1200, 'TriCare')] },
+  { date: '2026-05-31', amount: 850, split: [
+    { team: 'Sales', payee: 'CVT Medical (Christy Tan)', who: 'CVT Medical (Christy Tan)', amount: 850, vertical: 'VA' }] },
+  // Maverick Medical's monthly payments, split by person (owner, 10 Nov 2026).
+  // These lines DO name a payee, so `of` says whose payment is being split.
+  // Jul 15 and Aug 14 were given as 14,604.50 and 21,946.30; the books pay
+  // 1¢ and 3¢ less, taken off Jillian's share so the split adds to the cent.
+  { date: '2026-06-15', amount: 28359.70, of: 'Maverick Medical', split: [
+    A(15300, 'VA'), J(129.70, 'PI'), J(12580, 'TriCare'), U(350, 'TriCare')] },
+  { date: '2026-07-15', amount: 34379.49, of: 'Maverick Medical', split: [
+    A(12750, 'VA'), J(3114.49, 'PI'), J(11490, 'TriCare'), U(7025, 'TriCare')] },
+  { date: '2026-08-14', amount: 39921.27, of: 'Maverick Medical', split: [
+    A(17975, 'VA'), J(3931.27, 'PI'), J(18015, 'TriCare')] },
+  { date: '2026-09-15', amount: 53862.69, of: 'Maverick Medical', split: [
+    A(52000, 'VA'), J(1512.69, 'PI'), J(350, 'TriCare')] },
+  { date: '2026-10-15', amount: 44635, of: 'Maverick Medical', split: [
+    A(42900, 'VA'), J(1735, 'PI')] },
+];
+
+/**
+ * SALES COMMISSION BY VERTICAL (owner's sheet, 10 Nov 2026, Mar–Oct 2026).
+ * QuickBooks carries no vertical on a commission payment, so it is set here:
+ * Alle Ann and CVT Medical are VA, Maylon Sanders is PI, Unassigned is
+ * TriCare, and Jillian's pay is split PI / TriCare month by month (above).
+ * Payments after VERTICAL_SPLIT_THROUGH carry no vertical until the month's
+ * split is given — they show as "Not yet split by vertical".
+ */
+export const VERTICAL_SPLIT_THROUGH = '2026-10-31';
+export const COMMISSION_VERTICAL_DEFAULTS = { 'CVT Medical (Christy Tan)': 'VA', 'Maylon Sanders': 'PI' };
+
+/**
+ * Group commission lines into teams. `txText(line)` returns the text of the
+ * line's whole transaction (or ''), consulted only when the line itself names
+ * no known payee. `total` is the account's statement total; a gap is named.
+ */
+export function commissionByTeam(lines, txText = () => '', total = null) {
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const acc = Object.fromEntries(COMMISSION_TEAMS.map((t) => [t, { team: t, value: 0, count: 0, payees: {}, payments: [] }]));
+  const ruleOf = (text) => COMMISSION_PAYEES.find((p) => p.re.test(text));
+  const add = (team, payee, label, l, amount, vertical = null) => {
+    const t = acc[team];
+    t.value += amount; t.count += 1;
+    const p = (t.payees[payee] ??= { name: payee, value: 0, count: 0 });
+    p.value += amount; p.count += 1;
+    const v = vertical ?? (team === 'Sales' && (l.date || '') <= VERTICAL_SPLIT_THROUGH ? COMMISSION_VERTICAL_DEFAULTS[payee] ?? null : null);
+    t.payments.push({ date: l.date || '', payee: label, type: l.type || '', amount: r2(amount), vertical: team === 'Sales' ? v : null });
+  };
+  for (const l of lines) {
+    const own = `${l.name || ''} ${l.memo || ''}`;
+    const rule = ruleOf(own) ?? ruleOf(txText(l) || '');
+    const alloc = COMMISSION_ALLOCATIONS.find((a) => a.date === l.date && Math.abs(a.amount - l.amount) < 0.005
+      && (a.of ? rule?.name === a.of : !rule));
+    if (alloc) {
+      for (const s of alloc.split) add(s.team, s.payee, s.who === s.payee ? s.payee : `${s.payee} (${s.who})`, l, s.amount, s.vertical ?? null);
+      continue;
+    }
+    const payee = rule?.name
+      ?? (/wages|gusto|payroll/i.test(txText(l) || '') ? 'Moved from Wages (no payee named)' : (l.name || l.memo || 'Unnamed payment'));
+    add(rule?.team ?? 'Sales', payee, payee, l, l.amount);
+  }
+  if (total != null) {
+    const gap = r2(total - lines.reduce((s, l) => s + l.amount, 0));
+    if (Math.abs(gap) >= 0.01) {
+      acc.Sales.value += gap;
+      acc.Sales.payees['Not itemised in the detail report'] = { name: 'Not itemised in the detail report', value: gap, count: 0 };
+    }
+  }
+  return COMMISSION_TEAMS.map((k) => acc[k]).map((t) => ({
+    team: t.team, value: r2(t.value), count: t.count,
+    payees: Object.values(t.payees).map((p) => ({ ...p, value: r2(p.value) })).sort((a, b) => b.value - a.value),
+    payments: [...t.payments].sort((a, b) => a.date.localeCompare(b.date)),
+  }));
+}
+
+/** The Contract labor lines of a detail report, split by team. Fetches the
+ *  full journal entries / expenses only for lines that name nobody — at most
+ *  two QuickBooks queries, usually fewer. */
+async function qbCommissionTeams(detail, total) {
+  const lines = plDetailLines(detail, /^contract labou?r$/i);
+  if (!lines.length) return null;
+  const named = (l) => COMMISSION_PAYEES.some((p) => p.re.test(`${l.name} ${l.memo}`));
+  const want = { JournalEntry: new Set(), Purchase: new Set() };
+  for (const l of lines) {
+    if (named(l) || !l.id) continue;
+    if (l.type === 'Journal Entry') want.JournalEntry.add(l.id);
+    else if (l.type === 'Expense' || l.type === 'Check') want.Purchase.add(l.id);
+  }
+  const text = new Map();
+  for (const [entity, ids] of Object.entries(want)) {
+    if (!ids.size) continue;
+    const q = `select * from ${entity} where Id in (${[...ids].map((i) => `'${i.replace(/\D/g, '')}'`).join(',')}) MAXRESULTS 1000`;
+    const res = await qbApi(`query?query=${encodeURIComponent(q)}`).catch(() => null);
+    for (const t of res?.QueryResponse?.[entity] ?? []) {
+      const parts = [t.PrivateNote, t.EntityRef?.name];
+      for (const ln of t.Line ?? []) {
+        const d = ln.JournalEntryLineDetail ?? ln.AccountBasedExpenseLineDetail ?? {};
+        parts.push(ln.Description, d.Entity?.EntityRef?.name, d.CustomerRef?.name, d.AccountRef?.name);
+      }
+      text.set(`${entity}:${t.Id}`, parts.filter(Boolean).join(' | '));
+    }
+  }
+  const kind = (type) => (type === 'Journal Entry' ? 'JournalEntry' : 'Purchase');
+  return commissionByTeam(lines, (l) => text.get(`${kind(l.type)}:${l.id}`) || '', total);
 }
 
 export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
@@ -536,6 +698,11 @@ export async function qbProfitAndLoss({ start, end, basis = 'Accrual' } = {}) {
     /** Sales split by who paid — see salesByVertical. Null when the detail
      *  report could not be read. */
     salesByVertical: detail ? salesByVertical(plDetailLines(detail), income) : null,
+    /** Rep Commissions (Contract labor) split Sales / Operations — see
+     *  qbCommissionTeams. Null when the detail report could not be read. */
+    commissionTeams: detail
+      ? await qbCommissionTeams(detail, plExpenseCategories(r.Rows).find((c) => /^contract labou?r/i.test(c.category))?.total ?? null).catch(() => null)
+      : null,
     categories: plExpenseCategories(r.Rows),
     /** Below the operating line: other income and other expenses, by account.
      *  Null/empty when the company has none in the period. */

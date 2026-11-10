@@ -775,7 +775,7 @@ test('a payout cycle resolves to the month it pays for', () => {
 // dates every line stay one statement. Whoever next advances this only has to
 // keep the cycle string in step with the month.
 test('paid-through names the month its cycle pays for, not the month it pays in', () => {
-  const CURRENT_CYCLE = '15 Sep 26';
+  const CURRENT_CYCLE = '15 Oct 26';
   for (const [v, through] of Object.entries(COMMISSION_PAID_THROUGH)) {
     assert.equal(through, monthOfPayoutCycle(CURRENT_CYCLE),
       `${v}: paid-through must be the month the ${CURRENT_CYCLE} run settles`);
@@ -904,7 +904,11 @@ test('commission counts paid money, and the split loses nothing', opts, async ()
       : /\bpi\b|personal injury/i.test(l.prog || '') ? 'PI' : '');
   for (const r of s.byRep) {
     for (const l of r.lines || []) {
-      const cut = through[vertOf(l)];
+      // The sheet's own programme wins whenever it can be read; only a line it
+      // types loosely ("Other") falls back to its order's type in Striven —
+      // SO-791, a PIP order, paid in the 15 Oct run.
+      if (vertOf(l)) assert.equal(l.vertical, vertOf(l), `${r.rep} ${l.ref}: the sheet's programme decides when it is readable`);
+      const cut = through[vertOf(l) || l.vertical];
       const shouldBePaid = Boolean(cut && l.month && String(l.month) <= String(cut));
       assert.equal(l.state === 'paid', shouldBePaid,
         `${r.rep} ${l.ref || l.patient} ${l.prog} ${l.month}: paid state follows the cut-off`);
