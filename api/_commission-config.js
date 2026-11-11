@@ -660,9 +660,11 @@ export const COMMISSION_PAID_THROUGH = {
   // "nothing paid", which would swing the error the other way.
   TriCare: '2026-09',
   PI: '2026-09',
-  // NO DOL KEY YET, ON PURPOSE. verticalOfCommissionLine() now folds a DOL line
-  // to 'DOL', and an absent vertical means "nothing paid" — which is true: no
-  // DOL payout run has gone out. Add `DOL: 'YYYY-MM'` here after the first one.
+  // DOL ADDED 11 Nov 2026, on instruction: "everything is paid for previous
+  // months than October". The first DOL money (Cami Montanari's September
+  // $2,335) went out in the 15 Oct 26 run — QuickBooks books it as "Contractor
+  // Payment for Cameron Archer" — so DOL joins the others on one cut-off.
+  DOL: '2026-09',
 };
 
 // ── Standings masking ────────────────────────────────────────────────────────
