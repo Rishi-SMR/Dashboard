@@ -1019,6 +1019,12 @@ export const REP_NAMES = [
   // that possible, and it must sit BEFORE the plain /maylon/ test or every one
   // of these orders is quietly paid to Maylon instead.
   'Maylon Sanders- David/Dino',     //   sub-rep of Maylon, paid separately
+  // ── ADDED 11 Nov 2026, with their commission workbooks ─────────────────────
+  // Striven books them as "Alex Andros" (VA) and "Axis" (DOL); their sheets
+  // spell them "Alex" and "Axis". commRep() and RECON_REP_ALIASES fold all of
+  // those onto these names.
+  'Alex Andros',                    //   VA — own workbook
+  'Axis Medical',                   //   DOL — own workbook
   // ── REMOVED, by instruction: Alek Sigman and Alyssa Parker ─────────────────
   // They are OPERATIONS, not sales. They were added here when orders were seen
   // booked under their names in Striven's Sales Rep field, but appearing in that

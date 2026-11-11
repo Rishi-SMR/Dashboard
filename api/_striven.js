@@ -3612,9 +3612,13 @@ export const toUnassigned = (rep) => {
 // splits into two rows again — which is the exact bug this table was written to
 // fix. Both now land on the full name.
 const RECON_REP_ALIASES = [
-  [/^alle/i, 'Alle Ann Dubberley'],
-  [/^jillian/i, 'Jillian Colin'],
-  [/^christy/i, 'Christy Tan'],
+  // The company-prefixed spellings ("Maverick Medical - Alle Ann Dubberley",
+  // "Maverick Medical- Jillian Colin", "CVT Medical - Christy Tan") are folded
+  // too: the Team book's 11/15/2026 tab switched to them, and its October
+  // $50,050 and $870 landed on separate rows nobody is rostered under.
+  [/^alle|maverick medical\s*-\s*alle/i, 'Alle Ann Dubberley'],
+  [/^jillian|maverick medical\s*-\s*jillian/i, 'Jillian Colin'],
+  [/^christy|cvt medical\s*-\s*christy/i, 'Christy Tan'],
   [/^cassie/i, 'Cassie'],
   // AHEAD OF /^maylon/, because this table is ordered and the first match wins:
   // listed after it, "Maylon Sanders- David/Dino" folded onto Maylon and the
@@ -3636,6 +3640,10 @@ const RECON_REP_ALIASES = [
   // spelling and lands on her VA row; anything else lands on the plain one.
   [/^cvt medical\s*-\s*cami/i, 'CVT Medical - Cami Montanari'],
   [/^cami|montanari/i, 'Cami Montanari'],
+  // 11 Nov 2026: their workbooks write "Alex" and "Axis". Not caught above —
+  // /^alle/ needs a double L, /^alek/ a K.
+  [/^alex\b|andros/i, 'Alex Andros'],
+  [/^axis/i, 'Axis Medical'],
 ];
 export const reconRep = (raw) => {
   const s = String(raw ?? '').trim();
@@ -4057,13 +4065,31 @@ export async function getCommissionRecon() {
 // Configure with COMMISSION_WORKBOOKS: a JSON array of
 //   { "id": "<google sheet id>", "rep": "<name>", "vertical": "PI" }
 // `rep` is required only for the three-column layout; `vertical` defaults to PI.
+// ALL SIX BOOKS ARE BUILT IN (11 Nov 2026, on instruction: "read all 6
+// sheets"). The configured list is still read and MERGED over this one by id,
+// so a host can add a book or change a label without a deploy, but no host can
+// silently read fewer than these six because its config predates them.
+export const DEFAULT_COMMISSION_WORKBOOKS = [
+  { id: '13IDR3aG2CLpxbwtYUtkKkYu7FJFG6Isx9NSl_SryYA8', rep: 'Maylon Sanders', vertical: 'PI' },
+  { id: '1C3_X-Rf3ZKZBSHgd-D0zvxSbO2nbvPGgnIdwpwCE49w', label: 'Team', vertical: 'VA' },
+  { id: '16aBJZSCNbkPU6h8kUTw7u44NTsi21XxRVIkxyyazZI0', label: 'Christy', vertical: 'VA' },
+  // Added 11 Nov 2026. Each names its rep per row ("Alex", "Axis", "Cami").
+  { id: '1w5pw0hH-sqxBDO8lLPw7lYXZpXMO_GQYw9swAcwP1Fo', label: 'Alex', rep: 'Alex Andros', vertical: 'VA' },
+  { id: '15UC2SMjKX0hwOcB06gm6LYK3TRUG-IOoSmOrbeq9_Ms', label: 'Axis', rep: 'Axis Medical', vertical: 'DOL' },
+  { id: '1qvx4-WlX_OzP8iqxLuyT2hgIXhlQkj5hxt0bgoYg8_0', label: 'Cami', rep: 'Cami Montanari', vertical: 'DOL' },
+];
 const workbookConfig = async () => {
   const raw = String(await cfgValue('COMMISSION_WORKBOOKS', '')).trim();
-  if (!raw) return [];
-  try {
-    const v = JSON.parse(raw);
-    return (Array.isArray(v) ? v : [v]).filter((w) => w && w.id);
-  } catch { return []; }
+  let configured = [];
+  if (raw) {
+    try {
+      const v = JSON.parse(raw);
+      configured = (Array.isArray(v) ? v : [v]).filter((w) => w && w.id);
+    } catch { configured = []; }
+  }
+  const byId = new Map(DEFAULT_COMMISSION_WORKBOOKS.map((w) => [w.id, { ...w }]));
+  for (const w of configured) byId.set(w.id, { ...(byId.get(w.id) ?? {}), ...w });
+  return [...byId.values()];
 };
 
 const isPatientHeader = (r) => /^patient$/i.test(String(r[0] ?? '').trim());
@@ -5378,6 +5404,10 @@ export const commRep = (r, vertical) => {
       : 'Cami Montanari';
   }
   if (/cassie/i.test(s)) return 'Cassie';
+  // 11 Nov 2026. Ahead of the Alle Ann fold so no later edit to that looser
+  // pattern can swallow "Alex Andros". Striven writes "Axis" bare.
+  if (/alex\s+andros|^alex$/i.test(s)) return 'Alex Andros';
+  if (/^axis\b/i.test(s)) return 'Axis Medical';
   if (/jillian/i.test(s)) return 'Jillian Colin';
   if (/all?e ?ann?e?/i.test(s)) return 'Alle Ann Dubberley';
   if (/christ/i.test(s)) return 'Christy Tan';
