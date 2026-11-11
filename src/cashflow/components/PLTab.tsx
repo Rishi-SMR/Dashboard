@@ -509,7 +509,7 @@ export function PLTab() {
   const explainTeam = (t: QbCommissionTeam) => {
     if (t.team !== 'Sales' || !t.payments.some((p) => p.vertical)) return explainTeamByPayee(t);
     const money = (n: number) => formatCurrency(n, true);
-    const order = ['VA', 'TriCare', 'PI', NO_VERTICAL];
+    const order = ['VA', 'TriCare', 'PI', 'DOL', NO_VERTICAL];
     const vs = [...new Set(t.payments.map(vOf))].map((v) => ({ v, value: t.payments.filter((p) => vOf(p) === v).reduce((x, p) => x + p.amount, 0) }))
       .sort((a, b) => (a.v === NO_VERTICAL ? 1 : b.v === NO_VERTICAL ? -1 : b.value - a.value || order.indexOf(a.v) - order.indexOf(b.v)));
     const listed = vs.reduce((x, r) => x + r.value, 0);
