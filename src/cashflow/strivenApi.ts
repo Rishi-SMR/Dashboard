@@ -250,7 +250,7 @@ export type QbCommissionTeam = {
   team: 'Sales' | 'Operations' | 'Upwork'; value: number; count: number;
   payees: { name: string; value: number; count: number }[];
   /** Every payment, oldest first (YYYY-MM-DD dates). */
-  payments: { date: string; payee: string; type: string; amount: number; vertical?: 'TriCare' | 'VA' | 'PI' | null }[];
+  payments: { date: string; payee: string; type: string; amount: number; vertical?: 'TriCare' | 'VA' | 'PI' | 'DOL' | null }[];
 };
 export type QbSalesVertical = {
   vertical: 'TriCare' | 'VA' | 'PI' | 'Other'; value: number; count: number;
