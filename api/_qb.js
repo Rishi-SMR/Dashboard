@@ -477,7 +477,7 @@ export function salesByVertical(lines, income) {
  * account (shown as Rep Commissions) actually paid, split Operations / Sales.
  *
  * OPERATIONS is a named list, given by the business: Taryn Griffy, ProRecovery
- * Network, Precision Healing, Alek Sigman, Alyssa Parker, Cameron Archer.
+ * Network, Precision Healing, Alek Sigman, Alyssa Parker.
  * Upwork is shown on its own. EVERYONE ELSE IS SALES — so a payee nobody has listed yet lands in Sales, by
  * name, where it is visible, rather than vanishing.
  *
@@ -497,11 +497,14 @@ export const COMMISSION_PAYEES = [
   { team: 'Operations', name: 'Precision Healing', re: /\bp\w*sion\s+healing/i },
   { team: 'Operations', name: 'Alek Sigman', re: /sigman/i },
   { team: 'Operations', name: 'Alyssa Parker', re: /alyssa/i },
-  { team: 'Operations', name: 'Cameron Archer', re: /cameron/i },
   // Sales: named so the drill reads as people, not as bank memos.
   { team: 'Sales', name: 'Maverick Medical', re: /maverick|jillian|alle\s*ann/i },
   { team: 'Sales', name: 'CVT Medical (Christy Tan)', re: /\bcvt\b|christy/i },
   { team: 'Sales', name: 'Maylon Sanders', re: /maylon/i },
+  // "Contractor Payment for Cameron Archer", 15 Oct 2026, $2,335, is Cami
+  // Montanari's commission: it is her DOL book's 10/15 tab to the cent.
+  // Confirmed by the owner on 11 Nov 2026 and moved from Operations to Sales.
+  { team: 'Sales', name: 'Cami Montanari', re: /cameron|\bcami\b|montanari/i },
   // Upwork is neither team: freelancer platform charges, shown on their own.
   { team: 'Upwork', name: 'Upwork', re: /upwork/i },
 ];
@@ -552,7 +555,7 @@ export const COMMISSION_ALLOCATIONS = [
  * split is given — they show as "Not yet split by vertical".
  */
 export const VERTICAL_SPLIT_THROUGH = '2026-10-31';
-export const COMMISSION_VERTICAL_DEFAULTS = { 'CVT Medical (Christy Tan)': 'VA', 'Maylon Sanders': 'PI' };
+export const COMMISSION_VERTICAL_DEFAULTS = { 'CVT Medical (Christy Tan)': 'VA', 'Maylon Sanders': 'PI', 'Cami Montanari': 'DOL' };
 
 /**
  * Group commission lines into teams. `txText(line)` returns the text of the
