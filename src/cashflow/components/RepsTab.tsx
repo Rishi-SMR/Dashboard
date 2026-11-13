@@ -12,6 +12,7 @@ import { Portal } from './Portal';
 import { StatStrip } from './StatStrip';
 import { MonthOverMonth } from './MonthOverMonth';
 import { BusinessGrowth } from './BusinessGrowth';
+import { PayoutStatusCard } from './PayoutStatusCard';
 import { ALL_TIME, MonthSelect, monthLabel, defaultMonth } from './MonthSelect';
 
 const money = (v: number | null | undefined) => (v == null ? '-' : formatCurrency(v));
@@ -383,6 +384,10 @@ export function RepsTab({ initialSub = 'overview' }: { initialSub?: RepSub }) {
               spelling exactly, and this card then has no source and renders
               nothing. That is a DIRECTORY fault, not a fault here — the same
               mismatch zeroes the KPI tiles above it. See REP_NAMES. */}
+          {/* PAYOUT RECEIVED? (12 Nov 2026) — Striven orders against the Master
+              File's Lienstar funding and VA remittances, unpaid ones listed by
+              sales-order month. Manager only: rows name patients. */}
+          {view === 'overview' && isManager && <PayoutStatusCard />}
           {view === 'overview' && (
             <MonthOverMonth
               months={data.months ?? []}
