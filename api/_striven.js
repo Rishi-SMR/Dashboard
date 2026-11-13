@@ -8361,6 +8361,45 @@ export async function getApLedger() {
  * "Grizzell" both read "grisel". Used only together with an EXACT money match,
  * so a sound-alike name alone never pairs two cases.
  */
+
+// ── SPELLING SLIPS IN A PATIENT'S SURNAME (12 Nov 2026, on instruction:
+// "spelling error of patient's name while verifying can be ignored") ────────
+// The Master File and Striven are typed by different people, so one patient's
+// surname can be two or three letters apart ("Mcdonald" / "Macdonald",
+// "Rodriguez" / "Rodriquez", "Garcia" / "Garcia-Figueroa"). nameClose() says
+// whether two surnames are plausibly ONE name mistyped:
+//   • edit distance (insert, delete, change, or two neighbours swapped) of at
+//     most 1 for names up to 5 letters, 2 up to 10, 3 beyond — a short name
+//     has too little room for slips to stay recognisable;
+//   • or one surname wholly inside the other, the shorter being 5+ letters (a
+//     double-barrelled surname written in part).
+// It never decides a match by itself: every pass that uses it ALSO needs the
+// money or the first initial to agree, and runs after the exact passes so it
+// only ever sees what they could not pair.
+const editDistance = (a, b) => {
+  const m = a.length, n = b.length;
+  const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 1; j <= n; j += 1) d[0][j] = j;
+  for (let i = 1; i <= m; i += 1) {
+    for (let j = 1; j <= n; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[m][n];
+};
+export const nameClose = (a, b) => {
+  a = String(a ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  b = String(b ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  if (a.length < 3 || b.length < 3) return false;
+  if (a === b) return true;
+  const short = Math.min(a.length, b.length);
+  if (short >= 5 && (a.includes(b) || b.includes(a))) return true;
+  const allow = short <= 5 ? 1 : short <= 10 ? 2 : 3;
+  return Math.abs(a.length - b.length) <= allow && editDistance(a, b) <= allow;
+};
+
 const soundKey = (sur) => String(sur ?? '').toLowerCase().replace(/[^a-z]/g, '').replace(/z/g, 's').replace(/(.)\1+/g, '$1');
 /**
  * SALES ORDER → THE DUE DATE OF ITS (LATEST) INVOICE, from Striven's invoices
@@ -8528,8 +8567,12 @@ export async function getPiLienstar() {
       // Sound-alike surname, same value: "Grissell" on Lienstar is "Grizzell"
       // in Striven (SO-540) — two letters apart, so the one-edit rule misses it.
       (s, l) => soundKey(s.sur) && soundKey(s.sur) === soundKey(l.sur) && sameVal(s, l),
+      // Misspelt surname (see nameClose), same case value.
+      (s, l) => nameClose(s.sur, l.sur) && sameVal(s, l),
       (s, l) => s.key && s.key === l.key,
       (s, l) => s.sur && s.sur === l.sur,
+      // Misspelt surname, different value — only with the first initial agreeing.
+      (s, l) => nameClose(s.sur, l.sur) && s.key && l.key && s.key[0] === l.key[0],
     ];
     const pairUp = (S, L, rules) => {
       const out = []; const usedS = new Set(); const usedL = new Set();
@@ -8566,6 +8609,9 @@ export async function getPiLienstar() {
     for (const { s, l } of pairs) if (s.soId) lienBySo[s.soId] = lienInfo(l);
     for (const { s, l } of holdPairs) if (s.soId) lienBySo[s.soId] = lienInfo(l);
 
+    // The order's own date (Striven), so a caller can say which month's sale
+    // a case is — the Payout Received tile groups unpaid orders by it.
+    const soDate = new Map((Array.isArray(soBlob) ? soBlob : []).map((o) => [String(o.id), String(o.dateCreated ?? '').slice(0, 10)]));
     const sum = (list, k) => round2(list.reduce((t, x) => t + (x[k] || 0), 0));
     const rows = [
       ...pairs.map(({ s, l }) => ({
@@ -8575,6 +8621,7 @@ export async function getPiLienstar() {
         reason: Math.abs(s.caseValue - l.caseValue) > 0.5 ? 'Case value differs'
           : Math.abs(s.invoiced - l.toBeFunded) <= 0.5 ? ''
             : s.invoiced === 0 ? 'Not invoiced in Striven' : 'Invoice ≠ To be Funded',
+        date: soDate.get(String(s.soId)) || '',
         patient: s.patient || l.patient, soId: s.soId, ref: s.ref, rep: s.rep, lawFirm: l.lawFirm || s.payer, status: l.status, paidOn: l.paidOn, batch: l.batch,
         strivenValue: s.caseValue, lienValue: l.caseValue, valueDiff: round2(s.caseValue - l.caseValue),
         invoiced: s.invoiced, toBeFunded: l.toBeFunded, fundDiff: round2(s.invoiced - l.toBeFunded),
@@ -8585,7 +8632,7 @@ export async function getPiLienstar() {
         // or any other status) — named so the card can flag it in red.
         lienHold: holdBySo.has(s.soId) ? holdBySo.get(s.soId).status : '',
         reason: holdBySo.has(s.soId) ? `On the Lienstar tab as ${holdBySo.get(s.soId).status}`
-          : s.invoices ? 'Invoiced, not on the Lienstar tab' : 'Not on the Lienstar tab', patient: s.patient || '(no patient on order)', soId: s.soId, ref: s.ref, rep: s.rep, lawFirm: s.payer, status: s.status, paidOn: '', batch: '',
+          : s.invoices ? 'Invoiced, not on the Lienstar tab' : 'Not on the Lienstar tab', date: soDate.get(String(s.soId)) || '', patient: s.patient || '(no patient on order)', soId: s.soId, ref: s.ref, rep: s.rep, lawFirm: s.payer, status: s.status, paidOn: '', batch: '',
         strivenValue: s.caseValue, lienValue: 0, valueDiff: s.caseValue, invoiced: s.invoiced, toBeFunded: 0, fundDiff: s.invoiced,
       })),
       ...unmatchedL.map((l) => ({
@@ -8820,6 +8867,12 @@ export async function getVaRemittances() {
       (s, r) => s.sur && s.sur === r.sur,
       (s, r) => near(s.sur, r.sur) && Math.abs(s.amount - r.amount) < 1,
       (s, r) => soundKey(s.sur) && soundKey(s.sur) === soundKey(r.sur) && Math.abs(s.amount - r.amount) < 1,
+      // Misspelt surname (see nameClose) with the money agreeing — the invoiced
+      // amount, or for an order not invoiced yet its order value.
+      (s, r) => nameClose(s.sur, r.sur) && (Math.abs(s.amount - r.amount) < 1
+        || Math.abs(s.items.reduce((t, o) => t + (o.value || 0), 0) - r.amount) < 1),
+      // Misspelt surname, money differs — only with the first initial agreeing.
+      (s, r) => nameClose(s.sur, r.sur) && s.key && r.key && s.key[0] === r.key[0],
     ];
     const pairs = []; const usedS = new Set(); const usedR = new Set();
     for (const ok of passes) {
@@ -8882,7 +8935,7 @@ export async function getVaRemittances() {
                 : lastRemitAll && o.date && o.date > lastRemitAll ? 'awaiting' : 'not-remitted';
           // dueDate: the order's invoice due date, for ageing AR Due; the order
           // date where no invoice joins.
-          return { soId: o.soId, ref: o.ref, status: o.status, date: o.date, dueDate: (o.soId && dueBySo.get(o.soId)) || o.date, invoiced: o.invoiced, remitted: rec, state };
+          return { soId: o.soId, ref: o.ref, status: o.status, date: o.date, dueDate: (o.soId && dueBySo.get(o.soId)) || o.date, value: o.value, invoiced: o.invoiced, remitted: rec, state };
         });
       })();
       const n = (st) => perOrder.filter((o) => o.state === st).length;
